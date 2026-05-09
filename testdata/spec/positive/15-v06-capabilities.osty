@@ -37,8 +37,11 @@ fn test_mainBareAmbient() {
 #[ambient(clock, rng, env)]
 fn test_mainManyAmbient() {
 }
-// ---- #[reproducible_capability] remains a separate interface annotation ----
-#[reproducible_capability]
+// ---- Reproducible-capability classification is INFERRED from per-method
+// ----  annotations. cut D pre-release amendment removed
+// ----  `#[reproducible_capability]` — the interface below is auto-classified
+// ----  as a deterministic capability because every method carries
+// ----  `#[reproducible]`.
 interface MyCap {
     #[reproducible]
     fn now(self) -> Int

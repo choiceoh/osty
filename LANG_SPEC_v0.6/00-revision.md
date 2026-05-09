@@ -938,13 +938,13 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 |---|---:|---:|---:|
 | Reserved keywords | 17 | 17 | 0 |
 | Contextual keywords | 10 | 10 | 0 |
-| Fixed annotation set | 11 | 27 | +16 |
+| Fixed annotation set | 11 | 26 | +15 |
 | EBNF productions | 191 | 192 | +1 |
 | Lexer token classes | 36 | 36 | 0 |
 
-신규 어노테이션 20:
+신규 어노테이션 19:
 
-| Capability (§20) | `#[ambient]`, `#[reproducible_capability]` |
+| Capability (§20) | `#[ambient]` |
 | Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` |
 | Spec / intent | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` |
 | Construction | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
@@ -1287,7 +1287,6 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[trusted_declassify]` | ✓ | | | | | | ✓ | |
 | `#[taint_field]` | | | | | ✓ | | | |
 | `#[reproducible]` | ✓ | | | | | | ✓ | |
-| `#[reproducible_capability]` | | | | | | | | ✓ |
 | `#[spec]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[sealed_construct]` | | ✓ | | | | | | |
 | `#[trusted_construct]` | ✓ | | | | | | ✓ | |

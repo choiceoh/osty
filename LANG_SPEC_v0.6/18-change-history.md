@@ -21,7 +21,7 @@ Four annotation families implement the principle:
 
 | Family | New surface |
 |---|---|
-| **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
+| **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]` |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` (§3.12, §3.4.5, §7.5, §11.5, §13.4) |
@@ -54,7 +54,7 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
 
 - *Reserved keyword*: 변경 없음 (17 → 17).
 - *Contextual keyword*: 변경 없음.
-- *Fixed annotation set*: 11 → 27 (+16 신규).
+- *Fixed annotation set*: 11 → 26 (+15 신규).
 - *EBNF productions*: 변경 없음. 새 grammar surface 는 parameter 위치
   annotation (§21) 한 곳.
 
@@ -65,8 +65,9 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
   (§20.6) 을 가진다.
 - `#[ambient(name1, ...)]` — script / `fn main` / `#[test]` /
   `#[bench]` 진입점에서만 허용. 그 외 함수: E0780.
-- `#[reproducible_capability]` — 사용자 정의 deterministic
-  capability 등록.
+- 사용자 정의 deterministic capability 는 interface 의 모든 method 가
+  `#[reproducible]` / `#[pure]` 일 때 자동 추론된다 (§20.5) — 명시
+  marker 어노테이션 없음.
 - 호환 모드 `--legacy-globals` v0.6.x 한정 — v0.5 의 전역 함수
   (`time.now()` / `random.next()` 등) 자동 desugar. v0.7 제거.
 

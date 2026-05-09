@@ -327,8 +327,9 @@ adapter authors:
 
 Adapters that do *not* honor cancellation are not added to the
 canonical capability surface. A bespoke capability that wraps such
-an adapter must document the limitation and is *not* automatically
-acceptable to `#[reproducible_capability]` enforcement.
+an adapter must document the limitation and will *not* be
+auto-classified as a reproducible capability (§20.5) — the wrapping
+method cannot truthfully claim `#[reproducible]`.
 
 ### 8.5 Channels
 

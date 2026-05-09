@@ -743,9 +743,11 @@ fn buildId(clock: Clock, rng: Rng) -> String { ... }
 //          Clock, Rng 는 평범한 interface 타입.
 ```
 
-검사기 (toolchain/check_gates.osty::runReproducibleCapabilityGate)
+검사기 (toolchain/check_gates.osty::runCapabilitySignatureGate)
 가 `#[reproducible]` 함수의 capability parameter 검사 — type system
-위 *추가 enforcement layer* 만 추가됐다 (§20.4 / §3.11).
+위 *추가 enforcement layer* 만 추가됐다 (§20.4 / §3.11). 사용자
+정의 capability 의 deterministic 분류는 interface 의 모든 method 가
+`#[reproducible]` / `#[pure]` 일 때 자동 추론 (§20.5).
 
 #### 2.12.2 Flow tags — type-orthogonal annotation
 

@@ -223,8 +223,9 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - ambient 는 함수 boundary 에서 멈춤 — callee 가 capability 를 받지 않으면
   자동 주입 없음.
 - closure 는 ambient 를 *값으로 capture* — 다른 함수로 넘겨도 동작.
-- 사용자 정의 capability 도 가능. `#[reproducible_capability]` 로 deterministic
-  capability 등록 — interface 의 모든 메서드가 `#[reproducible]` 보장.
+- 사용자 정의 capability 도 가능. interface 의 모든 method 가
+  `#[reproducible]` / `#[pure]` 일 때 컴파일러가 deterministic capability 로
+  자동 추론 — marker 어노테이션 없음.
 
 ## 10. Information Flow Tracking (G37)
 
@@ -282,12 +283,12 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6 stdlib sealed types: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`,
   `Uuid`. `--legacy-construct` 호환 모드 v0.6.x 한정.
 
-## 14. Annotations Catalog (v0.6, +20 from v0.5)
+## 14. Annotations Catalog (v0.6, +19 from v0.5)
 
 | 카테고리 | Annotation | 영역 |
 |---|---|---|
 | **Existing (v0.5)** | `#[json]`, `#[deprecated]`, `#[op]`, `#[cfg]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr]`, `#[export]`, `#[c_abi]`, `#[no_alloc]` | 기존 |
-| **Capability (G36)** | `#[ambient]`, `#[reproducible_capability]` | §9 |
+| **Capability (G36)** | `#[ambient]` | §9 |
 | **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` | §10 |
 | **Intent (G42)** | `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
 | **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |

@@ -2651,7 +2651,9 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     if name == "noalias" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md).
     if name == "ambient" { return srAnnotTargetTopLevel() }
-    if name == "reproducible_capability" { return srAnnotTargetTopLevel() }
+    // Note: `#[reproducible_capability]` was removed in cut D pre-release
+    // amendment — interface determinism is inferred from per-method
+    // `#[reproducible]` / `#[pure]` annotations (§20.5 / §3.6.4).
     // v0.6 G37 — Information flow (LANG_SPEC_v0.6/21-information-flow.md).
     // Note: `#[requires]` on parameters (sink trust tag) reuses the v0.5
     // annotation name — see the existing entry above. Phase 5 will add
@@ -4042,7 +4044,8 @@ fn srAnnotationNameList() -> List<String> {
         "noalias",
         // v0.6 G36 — Capabilities.
         "ambient",
-        "reproducible_capability",
+        // (cut D pre-release amendment removed `reproducible_capability` —
+        //  determinism inferred from per-method `#[reproducible]` / `#[pure]`.)
         // v0.6 G37 — Information flow.
         "taint",
         "sanitizes",

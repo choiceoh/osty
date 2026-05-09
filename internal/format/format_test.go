@@ -33,9 +33,13 @@ x
 	}
 }
 
+// (cut D pre-release amendment removed `#[reproducible_capability]` —
+//  capability determinism is inferred from per-method annotations.
+//  This test still pins that the formatter preserves per-method
+//  `#[reproducible]` on interface members, which is the contract that
+//  carries the inference.)
 func TestSourcePreservesInterfaceMethodAnnotations(t *testing.T) {
-	src := []byte(`#[reproducible_capability]
-interface HashCap {
+	src := []byte(`interface HashCap {
     #[reproducible]
     fn hash(self, value: String) -> String
 }

@@ -57,9 +57,10 @@ use std.strings as strings
 //     `#[ambient(...)]` is only allowed at entry-point functions and
 //     only accepts the canonical stdlib capability names.
 //
-//   runReproducibleCapabilityGate — E0783 (v0.6 G36/G39)
-//     `#[reproducible_capability]` interfaces must expose only methods
-//     explicitly marked `#[reproducible]`.
+//   (cut D pre-release amendment removed `#[reproducible_capability]`
+//    annotation + `runReproducibleCapabilityGate` — capability
+//    determinism is inferred from per-method `#[reproducible]` /
+//    `#[pure]`, surfaced at the call site via `E0784`.)
 //
 //   runCapabilitySignatureGate — E0784 / E0785 (v0.6 G36/G39)
 //     `#[reproducible]` functions reject non-deterministic capability
@@ -77,7 +78,6 @@ pub fn runCheckGates(cx: ElabCx) {
     runNoAllocGate(cx)
     runPureGate(cx)
     runAmbientGate(cx)
-    runReproducibleCapabilityGate(cx)
     runCapabilitySignatureGate(cx)
     runSpecLinkGate(cx)
     runReproducibleScopeGate(cx)
@@ -1630,40 +1630,14 @@ fn isUserAmbientCapabilityName(name: String, userCapabilities: List<String>) -> 
 }
 
 // ---------------------------------------------------------------------
-// E0783 — `#[reproducible_capability]` promise gate (G36/G39, v0.6 §20.5).
-//
-// A deterministic user capability is only sound when every method on the
-// interface carries an explicit reproducibility promise. This gate keeps the
-// v0.6 surface honest while the deeper transitive reproducibility checks land
-// in later G39 phases.
+// (cut D pre-release amendment — `#[reproducible_capability]` and
+//  `E0783` removed. Capability determinism is *inferred* from the
+//  interface surface: every method must carry `#[reproducible]` or
+//  `#[pure]` for the interface to be classified as a reproducible
+//  capability. The classification is consumed by
+//  `runCapabilitySignatureGate` below — a non-reproducible interface
+//  surfaces as `E0784` at the call site, not at the declaration.)
 // ---------------------------------------------------------------------
-
-fn runReproducibleCapabilityGate(cx: ElabCx) {
-    let arena = cx.ast.arena
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        if node.kind == AstNInterfaceDecl {
-            checkReproducibleCapabilityInterface(cx, arena, node)
-        }
-    }
-}
-
-fn checkReproducibleCapabilityInterface(cx: ElabCx, arena: AstArena, iface: AstNode) {
-    if iface.extra < 0 {
-        return
-    }
-    if !checkGateAnnotationContains(arena, iface.extra, "reproducible_capability") {
-        return
-    }
-    for memberIdx in iface.children {
-        let member = astArenaNodeAt(arena, memberIdx)
-        if member.kind == AstNFnDecl && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
-            cx.env.local.diagnostics.push(
-                diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end),
-            )
-        }
-    }
-}
 
 // ---------------------------------------------------------------------
 // E0784 / E0785 — capability parameters on effect-annotated functions.
@@ -1682,15 +1656,45 @@ fn runCapabilitySignatureGate(cx: ElabCx) {
     }
 }
 
+// Infer a capability's deterministic class from its interface surface.
+// An interface is classified as a *reproducible capability* iff every
+// `fn` member carries `#[reproducible]` or `#[pure]`. Empty surfaces
+// and non-method members do not count against the classification, but
+// any single non-annotated method disqualifies the entire interface.
+//
+// The classification is conservative: any uncertainty (no methods,
+// missing annotations) returns "not reproducible" — call sites then
+// surface `E0784` if such an interface is received in a `#[reproducible]`
+// context.
 fn collectReproducibleCapabilityNames(arena: AstArena) -> List<String> {
     let mut out: List<String> = []
     for declIdx in arena.decls {
         let node = astArenaNodeAt(arena, declIdx)
-        if node.kind == AstNInterfaceDecl && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+        if node.kind == AstNInterfaceDecl && interfaceIsReproducibleCapability(arena, node) {
             out.push(node.text)
         }
     }
     out
+}
+
+fn interfaceIsReproducibleCapability(arena: AstArena, iface: AstNode) -> Bool {
+    let mut hasMethod = false
+    for memberIdx in iface.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind != AstNFnDecl {
+            continue
+        }
+        hasMethod = true
+        if member.extra < 0 {
+            return false
+        }
+        let isReproducible = checkGateAnnotationContains(arena, member.extra, "reproducible")
+        let isPure = checkGateAnnotationContains(arena, member.extra, "pure")
+        if !isReproducible && !isPure {
+            return false
+        }
+    }
+    hasMethod
 }
 
 fn checkCapabilitySignatureDecl(cx: ElabCx, arena: AstArena, node: AstNode, reproducibleCapabilities: List<String>) {

@@ -75,13 +75,14 @@ uses the normal structural interface rule from §3.6: any value whose
 method set satisfies `Clock` may be passed to a parameter declared
 `clock: Clock`. Capability *classification* is nominal: the
 determinism/effect table in §20.6 is keyed by the resolved interface
-identity named in the parameter type (or by an interface explicitly
-annotated `#[reproducible_capability]`). Therefore a user
+identity named in the parameter type (or by a user interface whose
+methods all carry `#[reproducible]` / `#[pure]` — the compiler infers
+the deterministic class from the surface). Therefore a user
 `struct FakeClock { fn now(...) }` can satisfy a `Clock` parameter, but
 a function that declares `clock: Clock` still receives the canonical
 non-deterministic `Clock` effect for `#[reproducible]` checking. To
 create a deterministic user capability, declare a distinct interface
-and mark it `#[reproducible_capability]`.
+where every method is annotated `#[reproducible]` (or `#[pure]`).
 
 **Implementation note.** 현재 stdlib 는 이 canonical protocol set 을
 `std.capability` 에 compile-checked interface surface 로 노출한다. 기존
@@ -96,8 +97,9 @@ Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 �
 현재 구현은 `#[ambient]` 의 entry-point 위치 제한, canonical name 검증, user-defined
 capability ambient 금지를 active checker gate 로 고정한다 (`E0780` / `E0781` / `E0789`). `#[reproducible]` /
 `#[pure]` 의 direct capability parameter 제한도 signature gate 로 고정한다
-(`E0784` / `E0785`). 실제 ambient auto-forward/desugar 와 transitive
-reproducibility analysis 는 후속 단계이다.
+(`E0784` / `E0785`) — user-defined capability 의 deterministic 분류는 interface 의
+모든 method 에 `#[reproducible]` / `#[pure]` 가 부착되었는지로 자동 추론한다 (§20.5).
+실제 ambient auto-forward/desugar 와 transitive reproducibility analysis 는 후속 단계이다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
@@ -418,8 +420,8 @@ fn buildId(clock: Clock, rng: Rng) -> String {  // E0784
 
 `#[pure]` 도 동일한 모델로 단순화:
 - `#[pure]` 함수는 *어떤* capability 도 받을 수 없다 (`E0785`). 현재 구현은
-  canonical capability 와 `#[reproducible_capability]` 로 선언된 local
-  deterministic capability 를 direct signature 에서 검증한다.
+  canonical capability 와 user-defined deterministic capability (자동 추론된)
+  를 direct signature 에서 검증한다.
 
 ### 20.5 사용자 정의 capability
 
@@ -428,20 +430,21 @@ pub interface MyDb {
     fn query(self, sql: SqlIdent) -> Result<Rows, DbError>
 }
 
-#[reproducible_capability]
+// 컴파일러가 자동으로 reproducible capability 로 분류 — 모든 method 가
+// `#[reproducible]` 또는 `#[pure]` 이기 때문. 별도 marker 어노테이션 없음.
 pub interface Hash {
     #[reproducible]
     fn hash(self, data: Bytes) -> Bytes32
 }
 ```
 
-`#[reproducible_capability]` 어노테이션은 해당 capability 가
-"deterministic 함수만 노출함"을 컴파일러에 약속. `#[reproducible]` 검사는 이런
-capability 수신을 허용한다.
-
-**약속 검증**: 현재 구현은 `#[reproducible_capability]` interface 가
-`#[reproducible]` 함수만 포함하도록 active checker gate 로 검증한다 (`E0783`).
-즉 capability 자체가 sealed.
+**자동 추론**: 컴파일러는 interface 의 모든 method 시그니처를 검사하여
+*every* method 가 `#[reproducible(scope = X)]` 또는 `#[pure]` 일 때 해당
+interface 를 reproducible capability 로 분류한다. 어떤 method 라도 그
+부착이 빠져 있으면 interface 는 그 scope 에서 *non-reproducible* 로 분류되며
+`#[reproducible]` 함수가 receive 시도 시 호출 site 에서 `E0784` 가 난다.
+이 추론은 conservative — capability 가 deterministic 임을 명시할 어노테이션은
+없으며, 도큐멘테이션이 필요하면 `///` doc comment 로 의도 표시.
 
 ### 20.6 Capability deterministic 등급
 
@@ -470,13 +473,14 @@ A deterministic capability is permitted as a parameter of a
 `#[reproducible(scope ≤ X)]` function. Non-deterministic capabilities
 are forbidden in any reproducible context.
 
-The compiler cannot in general prove a capability is deterministic
-— it relies on the `#[reproducible_capability]` attestation
-(§3.6.4). The attestation is checked structurally: every method on
-a `#[reproducible_capability]` interface must carry
-`#[reproducible(scope = X)]`; missing or weaker annotations are
-`E0783`. Implementing method bodies are then checked by the ordinary
-reproducibility diagnostics for their declared scope (`E0786`–`E0788`).
+The compiler infers a capability is deterministic by inspecting the
+interface surface (§3.6.4): every method must carry
+`#[reproducible(scope = X)]` or `#[pure]`. If any method lacks the
+annotation, the interface is treated as non-deterministic at that
+scope and a `#[reproducible]` caller that receives such a value
+surfaces `E0784` at the call site. Implementing method bodies are
+then checked by the ordinary reproducibility diagnostics for their
+declared scope (`E0786`–`E0788`).
 
 #### 20.6.2 Console at scope `"run"`
 
@@ -497,7 +501,6 @@ Future stdlib additions (e.g. `Hash`-shaped interfaces for SHA-3,
 BLAKE3, etc.) follow the same pattern:
 
 ```osty
-#[reproducible_capability]
 pub interface Sha3 {
     #[reproducible(scope = "portable")]
     fn sha3_256(self, data: Bytes) -> Bytes32
@@ -509,7 +512,8 @@ pub interface Sha3 {
 
 The interface is registered in §10.46.4 (Runtime adapter factories)
 with a host adapter; the deterministic class is auto-derived from
-the `#[reproducible_capability]` annotation.
+the per-method `#[reproducible]` annotations on the interface
+surface — no interface-level marker is required.
 
 ### 20.7 Capability 와 G15 arity erasure
 
@@ -530,7 +534,6 @@ f(systemClock, defaultRng)         // OK
 | `E0780` | `#[ambient]` 가 허용되지 않는 위치에 사용 |
 | `E0781` | `#[ambient]` 인자가 알려지지 않은 capability |
 | `E0782` | Capability 자동 forward 실패 (이름 일치 안 함) |
-| `E0783` | `#[reproducible_capability]` interface 에 비-reproducible 메서드 |
 | `E0784` | `#[reproducible]` 함수가 non-deterministic capability 수신 |
 | `E0785` | `#[pure]` 함수가 capability 수신 |
 | `E0789` | `#[ambient]` 로 사용자 정의 capability 를 바인딩하려 함 |

@@ -25,7 +25,7 @@ declaration grammar:
 
 | Category | Annotations | Purpose |
 |---|---|---|
-| **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
+| **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
 | **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
 | **Evolution** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]` | Promises about API surface stability, enforced by `osty publish`. |
 
@@ -822,9 +822,9 @@ pub interface Writer {
     fn flush(self) -> Result<(), Error>
 }
 
-// 사용자 정의 capability — `#[reproducible_capability]` 가 모든 메서드의
-// `#[reproducible]` 부착을 강제 (§20.5).
-#[reproducible_capability]
+// 사용자 정의 capability — 모든 method 가 `#[reproducible]` 또는 `#[pure]`
+// 이고 capability 자체가 deterministic 분류이면 컴파일러가 자동으로
+// "reproducible capability" 로 추론한다 (§20.5). 명시 어노테이션 불필요.
 pub interface Hash {
     #[reproducible(scope = "portable")]
     fn hash(self, data: Bytes) -> Bytes32
@@ -932,22 +932,30 @@ The mix is permitted on the same parameter list: a function may
 take a generic `T: Reader` and an interface-value `Writer` in the
 same signature.
 
-#### 3.6.4 `#[reproducible_capability]` — deterministic interface
+#### 3.6.4 Deterministic capability inference
 
-`#[reproducible_capability]` (§20.5) on an interface declaration
-asserts that *every* method on the interface is `#[reproducible]`
-at some scope. The compiler enforces this at the interface
-definition: a method body that omits `#[reproducible(...)]` is
-`E0783`.
+The compiler classifies an interface as a *deterministic
+(reproducible) capability* when **every** method on the interface
+carries `#[reproducible(scope = X)]` or `#[pure]` (with consistent
+scope across the surface). No author-facing annotation is required —
+the determinism property is computed from the existing
+per-method annotations.
 
 ```osty
-#[reproducible_capability]
+// Compiler infers `Hash` as a reproducible capability
+// because every method is `#[reproducible(scope = "portable")]`.
 pub interface Hash {
     #[reproducible(scope = "portable")]
     fn hash(self, data: Bytes) -> Bytes32
+}
 
-    // ❌ E0783 — interface annotated #[reproducible_capability]
-    //    but this method has no #[reproducible].
+// `Sloppy` is *not* a reproducible capability — `salt`
+// has no `#[reproducible]` annotation. Receiving `Sloppy`
+// inside `#[reproducible]` is `E0784`.
+pub interface Sloppy {
+    #[reproducible(scope = "portable")]
+    fn hash(self, data: Bytes) -> Bytes32
+
     fn salt(self) -> Bytes
 }
 ```
@@ -956,7 +964,13 @@ A `Hash` value can therefore be received inside a `#[reproducible]`
 function — the type checker knows every call goes to a deterministic
 method, so the function's reproducibility contract holds.
 
-Stdlib v0.6 baseline `#[reproducible_capability]` interfaces:
+The inference is *conservative*: any method without
+`#[reproducible]` / `#[pure]` (or carrying a weaker scope than the
+caller demands) disqualifies the entire interface for the requested
+scope. Authors who want to document the design intent should attach
+a `///` doc comment — the compiler does the determinism bookkeeping.
+
+Stdlib v0.6 baseline reproducible capability interfaces:
 
 | Interface | Methods | Scope |
 |---|---|---|
@@ -965,9 +979,10 @@ Stdlib v0.6 baseline `#[reproducible_capability]` interfaces:
 | `Decoder<T>` | `decode(self, bytes)` → `Result<T, Error>` | `portable` |
 
 Implementers must annotate every method with the same scope or
-stronger. A weaker-scope method on a `#[reproducible_capability]`
-interface is `E0783`; a method body that violates its declared
-reproducibility scope is checked by the ordinary reproducibility
+stronger. A weaker-scope method makes the interface non-reproducible
+at that stronger scope — receiving it inside a stronger
+`#[reproducible]` context surfaces as `E0784` at the call site.
+Method bodies are checked by the ordinary reproducibility
 diagnostics (`E0786`–`E0788`).
 
 #### 3.6.5 Interface 진화 rules
@@ -982,7 +997,7 @@ diagnostics (`E0786`–`E0788`).
 | Remove a method | major bump | minor bump |
 | Change a method signature | major bump | minor bump |
 | Change a default body | patch bump (semantic-only change) | patch bump |
-| Promote `#[reproducible_capability]` | major bump (existing impls may need new annotations) | minor bump |
+| Add `#[reproducible]` to a previously non-reproducible method | minor bump (additive — strengthens guarantees) | patch bump |
 
 The "add method *with* default body" rule is the canonical *minor
 bump* path for interface evolution — it lets stdlib add helper
@@ -1606,7 +1621,9 @@ sequence (top to bottom):
    `#[vectorize]`, `#[unroll]`, `#[no_vectorize]`
 8. **Compatibility** — `#[match_compat]`
 9. **Information flow** — `#[taint]` / `#[sanitizes]` / `#[trusted_declassify]` (function-level)
-10. **Capability marker** — `#[reproducible_capability]` (interfaces)
+
+Capability determinism is inferred from per-method annotations
+(§3.6.4) and therefore has no slot in the ordering convention.
 
 The formatter normalizes to this ordering on save. Authors who
 prefer a different sequence should set `formatter.annotation_order =
@@ -1683,7 +1700,7 @@ identity. These remain receivable inside `#[reproducible]`:
 
 | Capability | Deterministic? | Notes |
 |---|---|---|
-| `Hash` | Yes (when annotated `#[reproducible_capability]`) | Hashing is by definition deterministic |
+| `Hash` | Yes (compiler infers from per-method `#[reproducible]`) | Hashing is by definition deterministic |
 | `Clock` | No | `now()` depends on wall time |
 | `Rng` | No | Even seeded; the seed is process-local state |
 | `CryptoRng` | No | Pulls from OS entropy pool |
@@ -1695,8 +1712,9 @@ identity. These remain receivable inside `#[reproducible]`:
 
 Deterministic capabilities (e.g. a `Hash` interface where every
 method is annotated `#[reproducible(scope = "portable")]`) are
-receivable in `portable` functions provided the *interface itself*
-is annotated `#[reproducible_capability]` (§20.5).
+receivable in `portable` functions because the compiler infers the
+interface is reproducible from its per-method annotations (§20.5).
+No interface-level marker is required.
 
 #### 3.11.3 Reproducibility audit
 

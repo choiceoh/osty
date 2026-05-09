@@ -77,10 +77,12 @@ CapabilityAnnotation ::= '#[ambient' '(' AmbientArg (',' AmbientArg)* ')' ']'
 AmbientArg          ::= IDENT
                         (* IDENT 가 미리 정의된 capability name 중 하나여야 *)
                         (* 'clock', 'rng', 'env', 'fs', 'net', 'process', 'console' *)
-
-ReproducibleCapAnno ::= '#[reproducible_capability' ']'
-                        (* interface 선언에만 적용 *)
 ```
+
+> A user-defined interface is automatically classified as a
+> *reproducible capability* when every method on its surface carries
+> `#[reproducible(...)]` or `#[pure]`. There is no separate
+> interface-level marker — the property is inferred (§20.5).
 
 ### G37 — taint annotation
 

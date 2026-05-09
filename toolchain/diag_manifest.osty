@@ -153,7 +153,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0780" { return FamilyTypeChecking }
     if code == "E0781" { return FamilyTypeChecking }
     if code == "E0782" { return FamilyTypeChecking }
-    if code == "E0783" { return FamilyTypeChecking }
     if code == "E0784" { return FamilyTypeChecking }
     if code == "E0785" { return FamilyTypeChecking }
     if code == "E0786" { return FamilyTypeChecking }

@@ -244,10 +244,10 @@ var annotationRules = map[string]AnnotationTarget{
 	// `#[bench]` etc.). Library functions must receive capabilities
 	// as explicit parameters — `E0780` when applied elsewhere.
 	"ambient": TargetTopLevelDecl,
-	// `#[reproducible_capability]` marks an interface as carrying only
-	// `#[reproducible]` methods, so user-defined deterministic
-	// capabilities can pass `#[reproducible]` checks. v0.6 §20.5.
-	"reproducible_capability": TargetTopLevelDecl,
+	// Note: `#[reproducible_capability]` was removed in the cut-D
+	// pre-release amendment (G36). Interface deterministic
+	// classification is now inferred from per-method
+	// `#[reproducible]` / `#[pure]` annotations — see §20.5 / §3.6.4.
 
 	// v0.6 G37 — Information flow (LANG_SPEC_v0.6/21-information-flow.md).
 	// Source / sanitizer / sink annotations form a 1-bit + N-tag flow

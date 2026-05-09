@@ -1077,15 +1077,10 @@ const (
 	//      the names match.
 	CodeAmbientForwardFailed = "E0782"
 
-	// CodeReproducibleCapabilityNonRepro: an interface marked
-	// `#[reproducible_capability]` declares a method that is not itself
-	// `#[reproducible]`. The capability cannot be sealed if its surface
-	// allows non-deterministic operations.
-	//
-	// Spec: v0.6 §20.5
-	// Fix: add `#[reproducible(scope = "target")]` (or stronger) to
-	//      every method, or remove `#[reproducible_capability]`.
-	CodeReproducibleCapabilityNonRepro = "E0783"
+	// (E0783 removed in cut D pre-release amendment — capability
+	//  determinism is now inferred from per-method `#[reproducible]` /
+	//  `#[pure]` annotations on the interface surface (§3.6.4 / §20.5).
+	//  Surfacing happens at the call site through `E0784`.)
 
 	// CodeReproducibleViaCapability: a function carrying
 	// `#[reproducible]` receives a non-deterministic capability

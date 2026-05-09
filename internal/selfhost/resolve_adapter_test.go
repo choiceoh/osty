@@ -1015,7 +1015,10 @@ func TestV06SemanticAnnotationsRecognized(t *testing.T) {
 		src  string
 	}{
 		{"ambient", "#[ambient(clock)]\nfn main() {}\n"},
-		{"reproducible_capability", "#[reproducible_capability]\ninterface HashCap {\n    #[reproducible]\n    fn hash(self, value: String) -> String\n}\n"},
+		// (cut D pre-release amendment removed `reproducible_capability`
+		//  annotation — capability determinism is inferred from per-method
+		//  `#[reproducible]` / `#[pure]`. The bare interface below is the
+		//  baseline that the inference operates on.)
 		{"taint", "#[taint(\"user_input\")]\nfn source() -> String { \"\" }\n"},
 		{"taint_field", "pub struct Form {\n    #[taint_field(\"user_input\")]\n    pub name: String,\n}\n"},
 		{"sanitizes", "#[sanitizes(\"user_input\", into = \"trusted\")]\nfn clean(value: String) -> String { value }\n"},

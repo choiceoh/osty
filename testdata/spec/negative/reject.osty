@@ -328,7 +328,9 @@ fn main() {}
 // === END
 
 // === CASE: E0789 === user-defined capability cannot be ambient
-#[reproducible_capability]
+// (interface auto-classified as reproducible capability via inference —
+//  every method carries `#[reproducible]`. cut D pre-release amendment
+//  removed `#[reproducible_capability]` marker.)
 interface UserAmbientHash {
     #[reproducible]
     fn hash(self, value: String) -> String
@@ -337,12 +339,9 @@ interface UserAmbientHash {
 fn main() {}
 // === END
 
-// === CASE: E0783 === reproducible capability method missing reproducible annotation
-#[reproducible_capability]
-interface BadReproducibleCapability {
-    fn hash(self, value: String) -> String
-}
-// === END
+// (cut D pre-release amendment removed E0783 — capability determinism
+//  is inferred from per-method `#[reproducible]` / `#[pure]` annotations;
+//  the violation now surfaces at the call site through `E0784`.)
 
 // === CASE: E0784 === reproducible function receives non-deterministic capability
 #[reproducible]
@@ -352,7 +351,7 @@ fn badReproducibleClock(clock: Clock) -> Int {
 // === END
 
 // === CASE: E0785 === pure function receives a capability parameter
-#[reproducible_capability]
+// (interface auto-classified as reproducible capability via inference.)
 interface PureHashCap {
     #[reproducible]
     fn hash(self, value: String) -> String

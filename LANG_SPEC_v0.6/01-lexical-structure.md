@@ -534,13 +534,13 @@ v0.5 의 contextual identifier set (`self`, `Self`, `true`, `false`,
 
 #### 1.10.3 Annotation set 변경
 
-v0.5 의 11 fixed annotation 위에 v0.6 은 16 신규 annotation 추가.
+v0.5 의 11 fixed annotation 위에 v0.6 은 15 신규 annotation 추가.
 모든 v0.6 annotation 의 합법 위치 표는 `00-revision.md §7.6` 가
 권위.
 
 | 카테고리 | v0.6 신규 annotation |
 |---|---|
-| Capabilities (G36) | `#[ambient]`, `#[reproducible_capability]` |
+| Capabilities (G36) | `#[ambient]` |
 | Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
 | Reproducibility (G39) | `#[reproducible]` |
 | Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |

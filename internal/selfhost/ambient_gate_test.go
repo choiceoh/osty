@@ -76,8 +76,10 @@ fn main() {}
 }
 
 func TestAmbientGateRejectsUserDefinedCapability(t *testing.T) {
-	src := []byte(`#[reproducible_capability]
-interface LocalEntropy {
+	// (The interface qualifies as a reproducible capability via cut-D
+	//  inference because every method carries `#[reproducible]` —
+	//  no marker annotation needed.)
+	src := []byte(`interface LocalEntropy {
     #[reproducible]
     fn next(self) -> Int
 }

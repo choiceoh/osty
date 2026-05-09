@@ -28707,9 +28707,9 @@ func checkCodeAmbientUnknownCapability() string {
 	return "E0781"
 }
 
-func checkCodeReproducibleCapabilityNonRepro() string {
-	return "E0783"
-}
+// (cut D pre-release amendment removed `checkCodeReproducibleCapabilityNonRepro`
+//  / `E0783` — capability determinism is inferred from per-method
+//  `#[reproducible]` / `#[pure]` annotations.)
 
 func checkCodeReproducibleViaCapability() string {
 	return "E0784"
@@ -28762,18 +28762,9 @@ func diagAmbientUserCapability(name string, start int, end int) *CheckDiagnostic
 	)
 }
 
-func diagReproducibleCapabilityNonRepro(interfaceName string, methodName string, start int, end int) *CheckDiagnostic {
-	return checkDiagWithNotes(
-		checkCodeReproducibleCapabilityNonRepro(),
-		fmt.Sprintf("`#[reproducible_capability]` interface `%s` method `%s` must be `#[reproducible]`", ostyToString(interfaceName), ostyToString(methodName)),
-		start,
-		end,
-		[]string{
-			"LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
-			"hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
-		},
-	)
-}
+// (cut D pre-release amendment removed `diagReproducibleCapabilityNonRepro`
+//  — capability determinism is inferred from per-method annotations;
+//  surfacing happens at the call site through `diagReproducibleViaCapability`.)
 
 func diagReproducibleViaCapability(fnName string, paramName string, typeName string, capabilityName string, start int, end int) *CheckDiagnostic {
 	return checkDiagWithNotes(
@@ -49958,7 +49949,8 @@ func runCheckGates(cx *ElabCx) {
 	runNoAllocGate(cx)
 	runPureGate(cx)
 	runAmbientGate(cx)
-	runReproducibleCapabilityGate(cx)
+	// (cut D pre-release amendment removed runReproducibleCapabilityGate —
+	//  capability determinism inferred from per-method annotations.)
 	runCapabilitySignatureGate(cx)
 	runStructuredIntentGate(cx)
 }
@@ -55239,9 +55231,8 @@ func srAnnotAllowedTargets(name string) int {
 	if name == "ambient" {
 		return srAnnotTargetTopLevel()
 	}
-	if name == "reproducible_capability" {
-		return srAnnotTargetTopLevel()
-	}
+	// (cut D pre-release amendment removed `reproducible_capability` —
+	//  determinism inferred from per-method `#[reproducible]` / `#[pure]`.)
 	if name == "taint" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField()
 	}
@@ -56786,7 +56777,7 @@ func srCharToDigit(ch rune) int {
 
 // Osty: /tmp/selfhost_merged.osty:29239:1
 func srAnnotationNameList() []string {
-	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
+	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
 }
 
 // Osty: /tmp/selfhost_merged.osty:29269:1
@@ -70773,39 +70764,11 @@ func isUserAmbientCapabilityName(name string, userCapabilities []string) bool {
 	return false
 }
 
-func runReproducibleCapabilityGate(cx *ElabCx) {
-	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
-		return
-	}
-	arena := cx.ast.arena
-	for _, declIdx := range arena.decls {
-		node := astArenaNodeAt(arena, declIdx)
-		if node == nil {
-			continue
-		}
-		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok {
-			checkReproducibleCapabilityInterface(cx, arena, node)
-		}
-	}
-}
-
-func checkReproducibleCapabilityInterface(cx *ElabCx, arena *AstArena, iface *AstNode) {
-	if iface == nil || iface.extra < 0 {
-		return
-	}
-	if !checkGateAnnotationContains(arena, iface.extra, "reproducible_capability") {
-		return
-	}
-	for _, memberIdx := range iface.children {
-		member := astArenaNodeAt(arena, memberIdx)
-		if member == nil {
-			continue
-		}
-		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
-			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end))
-		}
-	}
-}
+// (cut D pre-release amendment removed `runReproducibleCapabilityGate`
+//  and `checkReproducibleCapabilityInterface` — capability determinism
+//  is now inferred from per-method `#[reproducible]` / `#[pure]`
+//  annotations on the interface surface; surfacing happens at the
+//  call site through `E0784`.)
 
 func runCapabilitySignatureGate(cx *ElabCx) {
 	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
@@ -70822,6 +70785,17 @@ func runCapabilitySignatureGate(cx *ElabCx) {
 	}
 }
 
+// collectReproducibleCapabilityNames infers a capability's deterministic
+// class from its interface surface (cut D pre-release amendment). An
+// interface is classified as a *reproducible capability* iff every `fn`
+// member carries `#[reproducible]` or `#[pure]`. Empty surfaces and
+// non-method members do not count against the classification, but any
+// single non-annotated method disqualifies the entire interface.
+//
+// The classification is conservative: any uncertainty (no methods,
+// missing annotations) returns "not reproducible" — call sites then
+// surface `E0784` if such an interface is received in a
+// `#[reproducible]` context.
 func collectReproducibleCapabilityNames(arena *AstArena) []string {
 	out := make([]string, 0, 1)
 	if arena == nil {
@@ -70832,11 +70806,37 @@ func collectReproducibleCapabilityNames(arena *AstArena) []string {
 		if node == nil {
 			continue
 		}
-		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok && interfaceIsReproducibleCapability(arena, node) {
 			out = append(out, node.text)
 		}
 	}
 	return out
+}
+
+func interfaceIsReproducibleCapability(arena *AstArena, iface *AstNode) bool {
+	if iface == nil {
+		return false
+	}
+	hasMethod := false
+	for _, memberIdx := range iface.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); !ok {
+			continue
+		}
+		hasMethod = true
+		if member.extra < 0 {
+			return false
+		}
+		isReproducible := checkGateAnnotationContains(arena, member.extra, "reproducible")
+		isPure := checkGateAnnotationContains(arena, member.extra, "pure")
+		if !isReproducible && !isPure {
+			return false
+		}
+	}
+	return hasMethod
 }
 
 func checkCapabilitySignatureDecl(cx *ElabCx, arena *AstArena, node *AstNode, reproducibleCapabilities []string) {

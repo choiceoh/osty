@@ -1181,16 +1181,6 @@ Spec: v0.6 §20.3.1
 
 **Fix**: pass the capability explicitly, or rename either side so
 
-### E0783 — `CodeReproducibleCapabilityNonRepro`
-
-CodeReproducibleCapabilityNonRepro: an interface marked `#[reproducible_capability]` declares a method that is not itself `#[reproducible]`. The capability cannot be sealed if its surface allows non-deterministic operations.
-
-every method, or remove `#[reproducible_capability]`.
-
-Spec: v0.6 §20.5
-
-**Fix**: add `#[reproducible(scope = "target")]` (or stronger) to
-
 ### E0784 — `CodeReproducibleViaCapability`
 
 CodeReproducibleViaCapability: a function carrying `#[reproducible]` receives a non-deterministic capability parameter (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`).
