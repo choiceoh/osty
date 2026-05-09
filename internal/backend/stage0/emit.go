@@ -4870,12 +4870,12 @@ func emitOrChainAggregate(out *strings.Builder, fn *mir.Function, pat orChainPat
 //   - every call arg resolves to a scalar operand
 
 type directAggregateCallPattern struct {
-	typeName   string
-	fieldTypes []scalarType
-	paramNames []string
-	paramTypes []scalarType
-	callSymbol string
-	callArgs   []callArg
+	typeName    string
+	fieldTypes  []scalarType
+	paramNames  []string
+	paramTypes  []scalarType
+	callSymbol  string
+	callArgs    []callArg
 	callPrelude string // multi-line LLVM prelude (e.g. field-read extracts)
 }
 
