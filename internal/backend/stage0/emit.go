@@ -7914,6 +7914,21 @@ func emitWhileValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 		}
 		declareRuntimePrototype(ctx.mctx, "llvm.expect.i1", scalarBool, []callArg{{ty: "i1"}, {ty: "i1"}})
 		return emitWhileCallResult(ctx, out, destID, scalarBool, "llvm.expect.i1", []callArg{args[0], {expr: expected, ty: "i1"}})
+	case mir.IntrinsicStringIndexOf, mir.IntrinsicStringLastIndexOf:
+		// Runtime returns i64 (-1 = not found), but MIR dest is Option<Int> (opaque ptr).
+		if destType != scalarOpaquePtr || len(ii.Args) != 2 {
+			return false
+		}
+		symbol := "osty_rt_strings_IndexOf"
+		if ii.Kind == mir.IntrinsicStringLastIndexOf {
+			symbol = "osty_rt_strings_LastIndexOf"
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarString, scalarString})
+		if !ok {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, symbol, scalarInt, []callArg{{ty: "ptr"}, {ty: "ptr"}})
+		return emitWhileOptionI64FromRuntime(ctx, out, destID, symbol, args)
 	}
 
 	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
@@ -8369,6 +8384,46 @@ func bindWhileResult(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.Loc
 	}
 	ctx.bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
 	return true
+}
+
+func emitWhileOptionI64FromRuntime(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.LocalID, symbol string, args []callArg) bool {
+	// Call the i64 runtime, then allocate an option box and store tag + value.
+	resultReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call i64 @%s(", resultReg, symbol)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+
+	// Emit option box type: { i64 tag, i64 value }
+	typeName, ok := ctx.mctx.emitOptionBoxDef(scalarInt)
+	if !ok {
+		return false
+	}
+
+	// Allocate box using same pattern as emitWhileMapGetIntrinsic
+	found := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = icmp ne i64 %s, -1\n", found, resultReg)
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	tag := freshReg(ctx)
+	tagSlot := ctx.mctx.freshTempName("indexOf.tag.slot")
+	payloadSlot := ctx.mctx.freshTempName("indexOf.payload.slot")
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	fmt.Fprintf(out, "  %s = select i1 %s, i64 0, i64 1\n", tag, found)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 %s, ptr %s\n", tag, tagSlot)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 %s, ptr %s\n", resultReg, payloadSlot)
+
+	return bindWhileResult(ctx, out, destID, scalarOpaquePtr, obj)
 }
 
 func emitWhileCallToPlace(ctx *whileLoopEmitCtx, out *strings.Builder, dest mir.Place, destType scalarType, symbol string, args []callArg) bool {
