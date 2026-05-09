@@ -489,6 +489,8 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn, mctx)
 	}
+	// Match attempts
+
 	if pat, ok := matchStructFieldRead(fn, mctx); ok {
 		return emitStructFieldRead(out, fn, pat)
 	}
@@ -1365,6 +1367,13 @@ type sequentialPattern struct {
 // stage0 cannot declare).
 func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern, bool) {
 	pat := sequentialPattern{}
+
+	// Reject aggregate return types — these belong to P21/matchDirectAggregateCall
+	// or the if-else aggregate matchers.
+	if _, _, ok := classifyAggregateReturnType(fn.ReturnType, mctx); ok {
+		return pat, false
+	}
+
 	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 	if pat.retType == scalarUnknown {
 		return pat, false
@@ -4410,6 +4419,12 @@ type scalarReturnArm struct {
 
 func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChainPattern, bool) {
 	pat := scalarReturnChainPattern{}
+
+	// Reject aggregate return types.
+	if _, _, ok := classifyAggregateReturnType(fn.ReturnType, mctx); ok {
+		return pat, false
+	}
+
 	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 	if pat.retType == scalarUnknown {
 		return pat, false
