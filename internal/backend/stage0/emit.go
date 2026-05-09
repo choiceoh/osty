@@ -12256,6 +12256,7 @@ type genericCFGPattern struct {
 	syntheticStringCoalesces  map[mir.BlockID]mir.LocalID
 	syntheticIntrinsicReturns map[mir.BlockID]*mir.IntrinsicInstr
 	syntheticCallReturns      map[mir.BlockID]*mir.CallInstr
+	syntheticXReturns        map[mir.BlockID]mir.LocalID
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
@@ -12348,6 +12349,8 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		} else if pat.retType == scalarBool {
 			if exitID, localID, ok := genericInferBoolSyntheticReturn(fn, mctx); ok {
 				pat.syntheticReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
+			} else if exitID, localID, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
+				pat.syntheticXReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
 			} else {
 				return pat, false
 			}
@@ -12372,12 +12375,18 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 					pat.syntheticStringJoins = map[mir.BlockID]*mir.IntrinsicInstr{exitID: join}
 				} else if exitID, optID, ok := genericInferStringOptionCoalesceSyntheticReturn(fn, mctx); ok {
 					pat.syntheticStringCoalesces = map[mir.BlockID]mir.LocalID{exitID: optID}
+				} else if exitID, localID, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
+					pat.syntheticXReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
 				} else {
 					return pat, false
 				}
 			}
 		} else {
-			return pat, false
+			if exitID, localID, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
+				pat.syntheticXReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
+			} else {
+				return pat, false
+			}
 		}
 	}
 	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
@@ -12733,6 +12742,69 @@ func genericInferBoolTerminalCondReturn(fn *mir.Function, mctx *moduleCtx, exitI
 		return cond.Place.Local, true
 	}
 	return 0, false
+}
+
+func genericInferXSyntheticReturn(fn *mir.Function, mctx *moduleCtx, retType scalarType) (mir.BlockID, mir.LocalID, bool) {
+	if fn == nil || mctx == nil || retType == scalarUnknown {
+		return 0, 0, false
+	}
+	exit, ok := genericStorageOnlyUnreachableExit(fn)
+	if !ok {
+		return 0, 0, false
+	}
+	candidates := map[mir.LocalID]bool{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() {
+				continue
+			}
+			loc := lookupLocal(fn, ai.Dest.Local)
+			if loc == nil || loc.IsParam || loc.ID == fn.ReturnLocal {
+				continue
+			}
+			if mctx.scalarFromType(loc.Type, true) != retType {
+				continue
+			}
+			candidates[ai.Dest.Local] = true
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, 0, false
+	}
+	updated := mir.LocalID(0)
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.CallInstr:
+				for candidate := range candidates {
+					if !callArgsMentionPlainLocal(step.Args, candidate) {
+						continue
+					}
+					if updated != 0 && updated != candidate {
+						return 0, 0, false
+					}
+					updated = candidate
+				}
+			}
+		}
+	}
+	if updated == 0 {
+		return 0, 0, false
+	}
+	return exit.ID, updated, true
 }
 
 func genericStorageOnlyGotoChainToExit(fn *mir.Function, start mir.BlockID, exitID mir.BlockID) bool {
