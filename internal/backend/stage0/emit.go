@@ -1827,6 +1827,7 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 			prelude:    resolved.prelude,
 			callSymbol: ref.Symbol,
 			callArgs:   resolved.args,
+			resultType: destType, // see #1587 / cluster 3 fix — emitPendingInstr needs this for the `<retType>` slot in `%reg = call <retType> @<sym>(…)`
 		}, destID, destType, true
 	}
 	if mctx.scalarFromType(fnTy.Return, allowOpaqueUserNamed) != destType {
@@ -1858,6 +1859,7 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 		prelude:    prelude.String(),
 		callSymbol: ref.Symbol,
 		callArgs:   args,
+		resultType: destType, // see #1587 / cluster 3 fix
 	}, destID, destType, true
 }
 
@@ -2844,6 +2846,15 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 				prelude:    leftPrelude + rightPrelude,
 				callSymbol: symbol,
 				callArgs:   []callArg{leftArg, rightArg},
+				// `resultType` populates `<resultType.llvm()>` in the
+				// emitted `%reg = call <type> @<sym>(...)` line; missing
+				// it produced `call  @osty_rt_strings_Concat(…)` (two
+				// spaces, no return type) — clang `error: expected
+				// type`. Same fix family as #1587 bug 2 in the
+				// intrinsic-spec fallback path. Here we know the call
+				// returns String (the binary `+` on String is the only
+				// reason this branch fires).
+				resultType: scalarString,
 			}, "", true
 		}
 		// P16 — Special-case String ==/!= String: lowers to a runtime
