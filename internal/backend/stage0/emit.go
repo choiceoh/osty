@@ -2034,7 +2034,18 @@ func isErrType(t mir.Type) bool {
 
 func formatFloatConst(v float64) string {
 	s := strconv.FormatFloat(v, 'e', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
+	// clang's IR parser requires a decimal point in float literals
+	// (`llvm-as` is laxer). `strconv.FormatFloat` with `'e'` may
+	// produce shapes like `0e+00`, `1e-09`, `5e+10` — exponent without
+	// a fraction. The previous guard checked `ContainsAny(s, ".eE")`
+	// and bailed because `e` matched, even though there was no `.`.
+	// Surfaced in the audit at `mirConstFloatDiv`'s `fcmp oeq double
+	// %right, 0e+00`. Insert `.0` immediately before the exponent
+	// marker so the value parses as `0.0e+00` / `1.0e-09` / etc.
+	if !strings.Contains(s, ".") {
+		if i := strings.IndexAny(s, "eE"); i >= 0 {
+			return s[:i] + ".0" + s[i:]
+		}
 		s += ".0"
 	}
 	return s
@@ -9843,7 +9854,12 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 		}
 		declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_string_char_at", scalarChar, []callArg{{ty: "ptr"}, {ty: "i64"}})
 		value := freshReg(ctx)
-		fmt.Fprintf(out, "  %s = call i64 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
+		// scalarChar lowers to i32 (matches the runtime stub in
+		// osty_runtime.c which returns int32_t). Cluster-5 fix #1624
+		// caught the same site in another path; this index-projection
+		// path was missed and still emitted `call i64`, which clang
+		// flagged as a type mismatch when the result fed an i32 store.
+		fmt.Fprintf(out, "  %s = call i32 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
 		return value, scalarChar, true
 	}
 	if listScalarTy != scalarOpaquePtr {
