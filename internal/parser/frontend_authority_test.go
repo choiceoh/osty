@@ -7,6 +7,8 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 )
 
+// --- Baseline authority tests ---
+
 func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *testing.T) {
 	src := []byte(`fn main() {
     let items = [1]
@@ -74,6 +76,12 @@ fn update(value: String?) {
 		t.Fatalf("assignment target = %#v, want .path field assignment", assign.Targets[0])
 	}
 }
+
+// --- Recovery matrix parity tests ---
+// Keep these tests in the same axis/ordinal order as the recovery
+// matrices in `testdata/spec/negative/reject.osty`.
+//
+// Axis A — branch / arm continuity.
 
 func TestParseRecoveryA1IfThenPreservesElseAndTrailingStmt(t *testing.T) {
 	src := []byte(`fn cond() -> Bool { false }
@@ -174,6 +182,8 @@ func TestParseRecoveryA2MatchArmPreservesNextArmAndTrailingStmt(t *testing.T) {
 		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", letStmt.Pattern)
 	}
 }
+
+// Axis B — required-rhs / next-statement boundary.
 
 func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
@@ -335,6 +345,8 @@ func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
+// Axis C — control-flow tail recovery.
+
 func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     for i in 0..10 {
@@ -443,6 +455,8 @@ func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *
 	}
 }
 
+// Axis D — scoped / nested body recovery.
+
 func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     defer {
@@ -484,6 +498,8 @@ func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing
 		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", second.Pattern)
 	}
 }
+
+// Axis E — conditional pattern recovery.
 
 func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
