@@ -310,6 +310,11 @@ fn ch() {
 }
 // === END
 
+// ---- recovery matrix (E0204) ----
+// These cases intentionally stress parser recovery boundaries while
+// keeping a simple trailing `let z = 2` sentinel so snapshots show
+// whether the following statement survives.
+
 // === CASE: E0204 === malformed then-branch expression recovers before `else`
 fn condRecover() -> Bool { false }
 fn recoverElseBranch() {
@@ -339,9 +344,30 @@ fn recoverLetRhs() {
 }
 // === END
 
+// === CASE: E0204 === malformed let initializer recovers to the next statement
+fn recoverLetRhsSameLine() {
+    let x = +
+    let z = 2
+}
+// === END
+
 // === CASE: E0204 === missing assignment rhs recovers to the next statement
 fn recoverAssignRhs() {
     x =
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === missing compound-assignment rhs recovers to the next statement
+fn recoverAssignCompoundRhs() {
+    x +=
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === malformed compound-assignment rhs recovers to the next statement
+fn recoverAssignCompoundRhsSameLine() {
+    x += +
     let z = 2
 }
 // === END
@@ -360,9 +386,23 @@ fn recoverChanSend() {
 }
 // === END
 
+// === CASE: E0204 === malformed channel-send rhs recovers to the next statement
+fn recoverChanSendSameLine() {
+    ch <- +
+    let z = 2
+}
+// === END
+
 // === CASE: E0204 === missing defer expression recovers to the next statement
 fn recoverDeferExpr() {
     defer
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === malformed defer expression recovers to the next statement
+fn recoverDeferExprSameLine() {
+    defer +
     let z = 2
 }
 // === END
@@ -371,6 +411,15 @@ fn recoverDeferExpr() {
 fn recoverBreakValue() {
     for i in 0..10 {
         break +
+        let z = 2
+    }
+}
+// === END
+
+// === CASE: E0204 === malformed labeled break value recovers to the next statement
+fn recoverLabeledBreakValue() {
+    'outer: for i in 0..10 {
+        break 'outer +
         let z = 2
     }
 }
