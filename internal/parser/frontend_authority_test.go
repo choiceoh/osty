@@ -239,7 +239,7 @@ func fixtureLabeledLoopFnWithTrailingLet(label string, body string) []byte {
 	return fixtureFn("    '" + label + ": for i in 0..10 {\n" + body + fixtureTrailingLet8 + "    }\n")
 }
 
-func fixtureFollowOnElseNewline(fnName string, condName string) []byte {
+func fixtureFollowOnAElseNewline(fnName string, condName string) []byte {
 	return []byte("fn " + fnName + "() -> Int {\n" +
 		"    if " + condName + "() {\n" +
 		"        1\n" +
@@ -251,14 +251,18 @@ func fixtureFollowOnElseNewline(fnName string, condName string) []byte {
 		"fn " + condName + "() -> Bool { false }\n")
 }
 
-func fixtureMatchAssignTopLevelDecl(fnName string) []byte {
-	return []byte("fn " + fnName + "(x: Int) {\n" +
-		"    match x {\n" +
-		"        0 -> out.path =\n" +
-		"        _ -> 1,\n" +
-		"    }\n" +
+func fixtureFollowOnBTopLevelDeclDrift(fnHead string, brokenBody string) []byte {
+	return []byte("fn " + fnHead + " {\n" +
+		brokenBody +
 		fixtureTrailingLet4 +
 		"}\n")
+}
+
+func fixtureFollowOnBMatchAssignTopLevelDecl(fnName string) []byte {
+	return fixtureFollowOnBTopLevelDeclDrift(fnName+"(x: Int)", "    match x {\n"+
+		"        0 -> out.path =\n"+
+		"        _ -> 1,\n"+
+		"    }\n")
 }
 
 func fixtureIfThenMissingRhs(condName string) []byte {
@@ -367,7 +371,7 @@ fn update(value: String?) {
 // Axis A — newline-else fallout.
 
 func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
-	src := fixtureFollowOnElseNewline("rfA1ElseNewlinePrimary", "rfA1Cond")
+	src := fixtureFollowOnAElseNewline("rfA1ElseNewlinePrimary", "rfA1Cond")
 
 	result := ParseDetailed(src)
 	fn, _ := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 1, "rfA1Cond", "E0105", "E0204", "E0100")
@@ -381,7 +385,7 @@ func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
 // Axis B — declaration-layer fallout after expression recovery.
 
 func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
-	src := fixtureMatchAssignTopLevelDecl("rfB1MatchAssignTopLevelDecl")
+	src := fixtureFollowOnBMatchAssignTopLevelDecl("rfB1MatchAssignTopLevelDecl")
 
 	result := ParseDetailed(src)
 	requireParseDiagnosticCodePresent(t, result, "E0100")
