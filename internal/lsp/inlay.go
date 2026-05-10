@@ -2,8 +2,8 @@ package lsp
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
-	"github.com/osty/osty/internal/types"
 )
 
 // handleInlayHint answers `textDocument/inlayHint`. We emit a type
@@ -49,13 +49,13 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 			if !ok {
 				return
 			}
-			t := lookupNodeType(doc.analysis, n, v.Value)
-			if t == nil || types.IsError(t) {
+			tr := lookupBindingType(doc.analysis, ip.PosV.Offset, ip.EndV.Offset)
+			if tr == nil || isErrorTypeRepr(tr) {
 				return
 			}
 			hints = append(hints, InlayHint{
 				Position:    doc.analysis.lines.ostyToLSP(ip.End()),
-				Label:       LSPInlayTypeLabel(inlayTypeString(t)),
+				Label:       LSPInlayTypeLabel(tr.String()),
 				Kind:        InlayHintKindType,
 				PaddingLeft: false,
 			})
@@ -63,8 +63,8 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 			if v.Type != nil || v.Name == "" {
 				return
 			}
-			t := lookupNodeType(doc.analysis, n, v.Value)
-			if t == nil || types.IsError(t) {
+			tr := lookupBindingType(doc.analysis, v.PosV.Offset, v.EndV.Offset)
+			if tr == nil || isErrorTypeRepr(tr) {
 				return
 			}
 			nameOff := findNameOffset(doc.src, v.PosV.Offset, v.EndV.Offset, v.Name)
@@ -73,7 +73,7 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 			}
 			hints = append(hints, InlayHint{
 				Position: doc.analysis.lines.offsetToLSP(nameOff + len(v.Name)),
-				Label:    LSPInlayTypeLabel(inlayTypeString(t)),
+				Label:    LSPInlayTypeLabel(tr.String()),
 				Kind:     InlayHintKindType,
 			})
 		}
@@ -82,27 +82,25 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 	replyJSON(s.conn, req.ID, hints)
 }
 
-// lookupNodeType returns the best-known type for a let binding.
-// Prefer LetTypes (tracked per declaration) and fall back to the
-// RHS expression's inferred type.
-func lookupNodeType(a *docAnalysis, decl ast.Node, rhs ast.Expr) types.Type {
-	if a.check == nil {
+// lookupBindingType returns the native check result type for a let binding
+// at the given offset range, using the semantic DB (stable offsets) instead
+// of pointer-keyed maps.
+func lookupBindingType(a *docAnalysis, start, end int) *api.TypeRepr {
+	if a.semantic == nil {
 		return nil
 	}
-	if t, ok := a.check.LetTypes[decl]; ok {
-		return t
+	if b := a.semantic.CheckedBindingAt(a.sourcePath, start); b != nil && b.Type != nil {
+		return b.Type
 	}
-	if rhs != nil {
-		return a.check.LookupType(rhs)
+	if n := a.semantic.CheckedNodeAt(a.sourcePath, end); n != nil && n.Type != nil {
+		return n.Type
 	}
 	return nil
 }
 
-func inlayTypeString(t types.Type) string {
-	if u, ok := t.(*types.Untyped); ok {
-		t = u.Default()
-	}
-	return t.String()
+// isErrorTypeRepr reports whether a TypeRepr represents an error/poison type.
+func isErrorTypeRepr(tr *api.TypeRepr) bool {
+	return tr != nil && (tr.Kind == "error" || tr.Kind == "poison")
 }
 
 // nodeInRange keeps the traversal bounded to the editor's viewport.

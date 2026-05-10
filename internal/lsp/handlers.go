@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/format"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -268,7 +268,7 @@ func (s *Server) handleHover(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, nil)
 		return
 	}
-	h := hoverForSymbol(sym, fallback, doc.analysis.check)
+	h := hoverForSymbol(sym, fallback, doc.analysis.semantic, doc.analysis.sourcePath)
 	h.Range = ptrRange(doc.analysis.lines.ostyRange(
 		diag.Span{Start: node.Pos(), End: node.End()}))
 	replyJSON(s.conn, req.ID, h)
@@ -319,9 +319,9 @@ func semanticHoverLegacyContext(a *docAnalysis, pos token.Pos) (docText string, 
 	if sym == nil {
 		return "", ""
 	}
-	if a.check != nil {
-		if t := a.check.LookupSymType(sym); t != nil {
-			typeText = t.String()
+	if a.semantic != nil {
+		if cs := a.semantic.CheckedSymbolAt(a.sourcePath, sym.Pos.Offset); cs != nil && cs.Type != nil {
+			typeText = cs.Type.String()
 		}
 	}
 	return symbolDoc(sym), typeText
@@ -335,8 +335,8 @@ func semanticHoverKind(kind string) string {
 // pointer-typed extraction is contained in hoverSymbolView; the
 // markdown rendering itself goes through the value-typed
 // selfhost.LSPHoverMarkdown so the policy stays portable.
-func hoverForSymbol(sym *resolve.Symbol, nameFallback string, r *check.Result) *Hover {
-	view := hoverSymbolView(sym, nameFallback, r)
+func hoverForSymbol(sym *resolve.Symbol, nameFallback string, sem *semanticdb.DB, sourcePath string) *Hover {
+	view := hoverSymbolView(sym, nameFallback, sem, sourcePath)
 	return &Hover{Contents: MarkupContent{
 		Kind:  MarkupKindMarkdown,
 		Value: selfhost.LSPHoverMarkdown(view),
@@ -373,14 +373,14 @@ func hoverForStructuredView(name, kind, typeText string, hasSym bool) *Hover {
 // checker result) into the value-typed view consumed by the markdown
 // formatter. nameFallback is shown when sym is nil so unresolved
 // references still get a minimal popup.
-func hoverSymbolView(sym *resolve.Symbol, nameFallback string, r *check.Result) selfhost.LSPSymbolView {
+func hoverSymbolView(sym *resolve.Symbol, nameFallback string, sem *semanticdb.DB, sourcePath string) selfhost.LSPSymbolView {
 	if sym == nil {
 		return selfhost.LSPSymbolView{Name: nameFallback}
 	}
 	typeText := ""
-	if r != nil {
-		if t := r.LookupSymType(sym); t != nil {
-			typeText = t.String()
+	if sem != nil {
+		if cs := sem.CheckedSymbolAt(sourcePath, sym.Pos.Offset); cs != nil && cs.Type != nil {
+			typeText = cs.Type.String()
 		}
 	}
 	return selfhost.LSPSymbolView{

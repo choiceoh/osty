@@ -2433,7 +2433,7 @@ fn opParseAnnotationArg(p: OstyParser) -> Int {
         let _ = opAdvance(p)
         let mut compChildren: List<Int> = []
         opSkipNewlines(p)
-        while !opAt(p, FrontRParen) && !opAt(p, FrontEOF) {
+        for !opAt(p, FrontRParen) && !opAt(p, FrontEOF) {
             compChildren.push(opParseAnnotationArg(p))
             opSkipNewlines(p)
             if !opEat(p, FrontComma) {
@@ -2445,7 +2445,7 @@ fn opParseAnnotationArg(p: OstyParser) -> Int {
         let mut calleeNode = emptyAstNode(AstNIdent)
         calleeNode.text = key
         calleeNode.start = start
-        calleeNode.end = start + key.length
+        calleeNode.end = start + key.len()
         let mut cn = emptyAstNode(AstNCall)
         cn.left = opAddNode(p, calleeNode)
         cn.children = compChildren

@@ -1,9 +1,9 @@
 package lsp
 
 import (
-	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/semanticdb"
 )
 
 // handleCompletion answers `textDocument/completion`. Behavior splits
@@ -89,7 +89,7 @@ func (s *Server) completionAfterDot(doc *document, recvName, prefix string) []Co
 	}
 	candidates := make([]LSPCompletionCandidateView, 0, len(pkg.PkgScope.Symbols()))
 	for name, member := range pkg.PkgScope.Symbols() {
-		view := completionSymbolView(name, member, a.check)
+		view := completionSymbolView(name, member, a.semantic, a.sourcePath)
 		candidates = append(candidates, LSPCompletionCandidateView{
 			Name:     view.Name,
 			Kind:     view.Kind,
@@ -142,7 +142,7 @@ func (s *Server) completionInScope(doc *document, prefix string) []CompletionIte
 	}
 	for sc := a.resolve.FileScope; sc != nil; sc = sc.Parent() {
 		for name, sym := range sc.Symbols() {
-			view := completionSymbolView(name, sym, a.check)
+			view := completionSymbolView(name, sym, a.semantic, a.sourcePath)
 			candidates = append(candidates, LSPCompletionCandidateView{
 				Name:     view.Name,
 				Kind:     view.Kind,
@@ -178,8 +178,8 @@ func sortCompletionItems(in []CompletionItem) []CompletionItem {
 // CompletionItem. The pointer-typed extraction lives in
 // completionSymbolView; the assembly itself runs off the value-typed
 // LSPSymbolView so the policy is portable.
-func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) CompletionItem {
-	return completionItemFromView(completionSymbolView(label, sym, r))
+func completionItemFromSym(label string, sym *resolve.Symbol, semantic *semanticdb.DB, sourcePath string) CompletionItem {
+	return completionItemFromView(completionSymbolView(label, sym, semantic, sourcePath))
 }
 
 func completionItemFromStructuredSymbol(sym structuredSymbol) CompletionItem {
@@ -202,11 +202,11 @@ func completionItemFromStructuredImportSymbol(sym structuredImportSymbol) Comple
 
 // completionSymbolView projects a resolver Symbol into the
 // value-typed view consumed by completionItemFromView.
-func completionSymbolView(label string, sym *resolve.Symbol, r *check.Result) selfhost.LSPSymbolView {
+func completionSymbolView(label string, sym *resolve.Symbol, semantic *semanticdb.DB, sourcePath string) selfhost.LSPSymbolView {
 	typeText := ""
-	if r != nil {
-		if t := r.LookupSymType(sym); t != nil {
-			typeText = t.String()
+	if semantic != nil {
+		if cs := semantic.CheckedSymbolAt(sourcePath, sym.Pos.Offset); cs != nil && cs.Type != nil {
+			typeText = cs.Type.String()
 		}
 	}
 	return selfhost.LSPSymbolView{
