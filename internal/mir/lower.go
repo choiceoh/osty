@@ -4214,23 +4214,21 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 		bs.popScope()
 		bs.popScope()
 		return
+	case *ir.LitPat:
+		bs.lowerIfLetLit(ife, dest, destT, scrutLocal, scrutT, p)
+		bs.popScope()
+		return
+	case *ir.RangePat:
+		bs.lowerIfLetRange(ife, dest, destT, scrutLocal, scrutT, p)
+		bs.popScope()
+		return
+	case *ir.OrPat:
+		bs.lowerIfLetOr(ife, dest, destT, scrutLocal, scrutT, p)
+		bs.popScope()
+		return
 	default:
-		// Refutable patterns (LitPat, RangePat, OrPat) not yet supported
-		// for if-let. Fall back to the else branch.
-		bs.l.noteIssue("if-let with non-variant pattern not lowered to MIR: %T", ife.Pattern)
-		if ife.Else != nil {
-			bs.pushScope()
-			bs.pushDeferScope()
-			for _, s := range ife.Else.Stmts {
-				bs.lowerStmt(s)
-			}
-			if ife.Else.Result != nil {
-				bs.lowerExprIntoPlace(ife.Else.Result, dest, destT)
-			}
-			bs.replayTopFrame(ife.Else.SpanV)
-			bs.popDeferScope()
-			bs.popScope()
-		}
+		bs.l.noteIssue("if-let with unsupported pattern not lowered to MIR: %T", ife.Pattern)
+		bs.lowerIfLetElse(ife, dest, destT)
 		bs.popScope()
 		return
 	}
@@ -4292,6 +4290,182 @@ func (bs *bodyState) lowerIfLetVariant(ife *ir.IfLetExpr, dest Place, destT Type
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
 	bs.cur = merge
+}
+
+// lowerIfLetElse emits the else branch of an if-let expression.
+func (bs *bodyState) lowerIfLetElse(ife *ir.IfLetExpr, dest Place, destT Type) {
+	if ife.Else != nil {
+		bs.pushScope()
+		bs.pushDeferScope()
+		for _, s := range ife.Else.Stmts {
+			bs.lowerStmt(s)
+		}
+		if ife.Else.Result != nil {
+			bs.lowerExprIntoPlace(ife.Else.Result, dest, destT)
+		}
+		bs.replayTopFrame(ife.Else.SpanV)
+		bs.popDeferScope()
+		bs.popScope()
+	}
+}
+
+// lowerIfLetThenAndElse emits the then block into thenBB, the else block
+// into elseBB, and sets cur to merge.
+func (bs *bodyState) lowerIfLetThenAndElse(ife *ir.IfLetExpr, dest Place, destT Type, thenBB, elseBB, merge BlockID, scrutLocal LocalID, scrutT Type) {
+	bs.cur = thenBB
+	bs.pushScope()
+	bs.pushDeferScope()
+	for _, s := range ife.Then.Stmts {
+		bs.lowerStmt(s)
+	}
+	if ife.Then.Result != nil {
+		bs.lowerExprIntoPlace(ife.Then.Result, dest, destT)
+	}
+	bs.replayTopFrame(ife.Then.SpanV)
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
+	bs.cur = elseBB
+	bs.lowerIfLetElse(ife, dest, destT)
+	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
+	bs.cur = merge
+}
+
+// lowerIfLetLit handles if-let with a LitPat: compare scrutinee against
+// the literal value and branch.
+func (bs *bodyState) lowerIfLetLit(ife *ir.IfLetExpr, dest Place, destT Type, scrutLocal LocalID, scrutT Type, lp *ir.LitPat) {
+	litOp := bs.lowerExprAsOperand(lp.Value)
+	cmp := bs.freshTemp(TBool, ife.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: cmp},
+		Src:   &BinaryRV{Op: BinEq, Left: &CopyOp{Place: Place{Local: scrutLocal}, T: scrutT}, Right: litOp, T: TBool},
+		SpanV: ife.SpanV,
+	})
+	thenBB := bs.newBlock(ife.SpanV)
+	elseBB := bs.newBlock(ife.SpanV)
+	merge := bs.newBlock(ife.SpanV)
+	bs.terminate(&BranchTerm{
+		Cond:  &CopyOp{Place: Place{Local: cmp}, T: TBool},
+		Then:  thenBB,
+		Else:  elseBB,
+		SpanV: ife.SpanV,
+	})
+	bs.lowerIfLetThenAndElse(ife, dest, destT, thenBB, elseBB, merge, scrutLocal, scrutT)
+}
+
+// lowerIfLetRange handles if-let with a RangePat: test whether the
+// scrutinee falls within the specified range.
+func (bs *bodyState) lowerIfLetRange(ife *ir.IfLetExpr, dest Place, destT Type, scrutLocal LocalID, scrutT Type, rp *ir.RangePat) {
+	var conds []LocalID
+	scrutOp := &CopyOp{Place: Place{Local: scrutLocal}, T: scrutT}
+	if rp.Low != nil {
+		lowOp := bs.lowerExprAsOperand(rp.Low)
+		c := bs.freshTemp(TBool, ife.SpanV)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: c},
+			Src:   &BinaryRV{Op: BinLeq, Left: lowOp, Right: scrutOp, T: TBool},
+			SpanV: ife.SpanV,
+		})
+		conds = append(conds, c)
+	}
+	if rp.High != nil {
+		highOp := bs.lowerExprAsOperand(rp.High)
+		op := BinLt
+		if rp.Inclusive {
+			op = BinLeq
+		}
+		c := bs.freshTemp(TBool, ife.SpanV)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: c},
+			Src:   &BinaryRV{Op: op, Left: scrutOp, Right: highOp, T: TBool},
+			SpanV: ife.SpanV,
+		})
+		conds = append(conds, c)
+	}
+	thenBB := bs.newBlock(ife.SpanV)
+	elseBB := bs.newBlock(ife.SpanV)
+	merge := bs.newBlock(ife.SpanV)
+	if len(conds) == 0 {
+		bs.terminate(&GotoTerm{Target: thenBB, SpanV: ife.SpanV})
+	} else if len(conds) == 1 {
+		bs.terminate(&BranchTerm{
+			Cond:  &CopyOp{Place: Place{Local: conds[0]}, T: TBool},
+			Then:  thenBB,
+			Else:  elseBB,
+			SpanV: ife.SpanV,
+		})
+	} else {
+		checkBB := bs.newBlock(ife.SpanV)
+		bs.terminate(&BranchTerm{
+			Cond:  &CopyOp{Place: Place{Local: conds[0]}, T: TBool},
+			Then:  checkBB,
+			Else:  elseBB,
+			SpanV: ife.SpanV,
+		})
+		bs.cur = checkBB
+		bs.terminate(&BranchTerm{
+			Cond:  &CopyOp{Place: Place{Local: conds[1]}, T: TBool},
+			Then:  thenBB,
+			Else:  elseBB,
+			SpanV: ife.SpanV,
+		})
+	}
+	bs.lowerIfLetThenAndElse(ife, dest, destT, thenBB, elseBB, merge, scrutLocal, scrutT)
+}
+
+// lowerIfLetOr handles if-let with an OrPat: test each alternative in
+// sequence. The first matching alternative triggers the then branch.
+func (bs *bodyState) lowerIfLetOr(ife *ir.IfLetExpr, dest Place, destT Type, scrutLocal LocalID, scrutT Type, op *ir.OrPat) {
+	thenBB := bs.newBlock(ife.SpanV)
+	elseBB := bs.newBlock(ife.SpanV)
+	merge := bs.newBlock(ife.SpanV)
+	for i, alt := range op.Alts {
+		switch a := alt.(type) {
+		case *ir.LitPat:
+			litOp := bs.lowerExprAsOperand(a.Value)
+			cmp := bs.freshTemp(TBool, ife.SpanV)
+			bs.emit(&AssignInstr{
+				Dest:  Place{Local: cmp},
+				Src:   &BinaryRV{Op: BinEq, Left: &CopyOp{Place: Place{Local: scrutLocal}, T: scrutT}, Right: litOp, T: TBool},
+				SpanV: ife.SpanV,
+			})
+			if i == len(op.Alts)-1 {
+				bs.terminate(&BranchTerm{Cond: &CopyOp{Place: Place{Local: cmp}, T: TBool}, Then: thenBB, Else: elseBB, SpanV: ife.SpanV})
+			} else {
+				next := bs.newBlock(ife.SpanV)
+				bs.terminate(&BranchTerm{Cond: &CopyOp{Place: Place{Local: cmp}, T: TBool}, Then: thenBB, Else: next, SpanV: ife.SpanV})
+				bs.cur = next
+			}
+		case *ir.VariantPat:
+			varIdx := bs.l.variantIndexByName(scrutT, a.Variant)
+			disc := bs.freshTemp(TInt, ife.SpanV)
+			bs.emit(&AssignInstr{
+				Dest:  Place{Local: disc},
+				Src:   &DiscriminantRV{Place: Place{Local: scrutLocal}, T: TInt},
+				SpanV: ife.SpanV,
+			})
+			defaultTarget := elseBB
+			if i < len(op.Alts)-1 {
+				defaultTarget = bs.newBlock(ife.SpanV)
+			}
+			bs.terminate(&SwitchIntTerm{
+				Scrutinee: &CopyOp{Place: Place{Local: disc}, T: TInt},
+				Cases:     []SwitchCase{{Value: int64(varIdx), Target: thenBB, Label: a.Variant}},
+				Default:   defaultTarget,
+				SpanV:     ife.SpanV,
+			})
+			bs.cur = defaultTarget
+		default:
+			if i == len(op.Alts)-1 {
+				bs.terminate(&GotoTerm{Target: elseBB, SpanV: ife.SpanV})
+			} else {
+				next := bs.newBlock(ife.SpanV)
+				bs.terminate(&GotoTerm{Target: next, SpanV: ife.SpanV})
+				bs.cur = next
+			}
+		}
+	}
+	bs.lowerIfLetThenAndElse(ife, dest, destT, thenBB, elseBB, merge, scrutLocal, scrutT)
 }
 
 // lowerMatchExprIntoPlace routes through the generic matcher.
