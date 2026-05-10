@@ -929,6 +929,21 @@ func iteratorElementType(t Type) Type {
 }
 
 
+// isCountableIteratorType reports whether an Iterator<T> is countable
+// (exposes len() and supports direct indexing). Array<T> and Slice<T>
+// qualify for index-driven lowering that the LLVM vectorizer can optimise.
+func isCountableIteratorType(t Type) bool {
+	nt, ok := t.(*ir.NamedType)
+	if !ok {
+		return false
+	}
+	switch nt.Name {
+	case "Array", "Slice":
+		return true
+	}
+	return false
+}
+
 func isPoisonType(t Type) bool {
 	if t == nil {
 		return true
@@ -1673,6 +1688,12 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		bs.lowerForInIterator(f, iterT)
 		return
 	}
+	// Countable iterators (Array<T>, Slice<T>) lower to index-driven
+	// counter loops that the LLVM vectorizer can optimise.
+	if isCountableIteratorType(iterT) {
+		bs.lowerForInCountableIterator(f, iterT)
+		return
+	}
 	if !bs.l.isListType(iterT) {
 		bs.l.noteIssue("for-in over unsupported iterable type not lowered to MIR: %s", typeString(iterT))
 		return
@@ -2178,6 +2199,83 @@ func (bs *bodyState) lowerForInIterator(f *ir.ForStmt, iterT Type) {
 	bs.cur = exit
 }
 
+
+// lowerForInCountableIterator lowers a for-in over a countable Iterator<T>
+// to an index-driven counter loop identical to the List for-in shape.
+// The LLVM vectorizer can compute trip counts from idx < len and
+// auto-vectorize the loop body.
+func (bs *bodyState) lowerForInCountableIterator(f *ir.ForStmt, iterT Type) {
+	elemT := iteratorElementType(iterT)
+	if elemT == nil || isPoisonType(elemT) {
+		bs.l.noteIssue("for-in over countable Iterator with unresolved element type not lowered to MIR: %s", typeString(iterT))
+		return
+	}
+	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
+	bs.lowerExprInto(f.Iter, iter, iterT)
+	lenLocal := bs.newLocal("_len", TInt, false, f.SpanV)
+	bs.emit(&CallInstr{
+		Dest:   &Place{Local: lenLocal},
+		Callee: &FnRef{Symbol: "Iterator__len", Type: TInt},
+		Args:   []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}},
+		SpanV:  f.SpanV,
+	})
+	idx := bs.newLocal("_idx", TInt, true, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: idx},
+		Src:   &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
+		SpanV: f.SpanV,
+	})
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = header
+	cmp := bs.freshTemp(TBool, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: cmp},
+		Src: &BinaryRV{Op: BinLt, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &CopyOp{Place: Place{Local: lenLocal}, T: TInt}, T: TBool},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&BranchTerm{
+		Cond: &CopyOp{Place: Place{Local: cmp}, T: TBool}, Then: body, Else: exit, SpanV: f.SpanV,
+	})
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label, breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
+	})
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
+	bs.emit(&CallInstr{
+		Dest:   &Place{Local: elemLocal},
+		Callee: &FnRef{Symbol: "Iterator__get", Type: elemT},
+		Args:   []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}, &CopyOp{Place: Place{Local: idx}, T: TInt}},
+		SpanV:  f.SpanV,
+	})
+	if f.Pattern != nil {
+		bs.bindPattern(f.Pattern, Place{Local: elemLocal}, elemT, f.SpanV)
+	} else if f.Var != "" {
+		bs.bind(f.Var, elemLocal)
+	}
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+	bs.cur = step
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: idx},
+		Src: &BinaryRV{Op: BinAdd, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt}, T: TInt},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = exit
+}
 
 // ==== match lowering ====
 
