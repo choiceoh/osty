@@ -22,11 +22,12 @@ func lowerSrc(t *testing.T, src string) *Module {
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
-		Stdlib:        reg,
-		Primitives:    reg.Primitives,
-		ResultMethods: reg.ResultMethods,
-		Source:        []byte(src),
-		Privileged:    true,
+		Stdlib:             reg,
+		Primitives:         reg.Primitives,
+		ResultMethods:      reg.ResultMethods,
+		Source:             []byte(src),
+		Privileged:         true,
+		PopulateLegacyMaps: true, // IR tests use pointer-keyed type maps
 	})
 	mod, _ := Lower("main", file, res, chk)
 	return mod

@@ -479,10 +479,11 @@ func checkOptsForSource(src []byte) check.Opts {
 	reg := stdlib.LoadCached()
 	return check.Opts{
 
-		Stdlib:        reg,
-		Primitives:    reg.Primitives,
-		ResultMethods: reg.ResultMethods,
-		Source:        src,
+		Stdlib:             reg,
+		Primitives:         reg.Primitives,
+		ResultMethods:      reg.ResultMethods,
+		Source:             src,
+		PopulateLegacyMaps: true, // airepair uses pointer-keyed maps for type lookup
 	}
 }
 
