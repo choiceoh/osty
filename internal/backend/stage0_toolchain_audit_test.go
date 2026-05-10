@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -920,7 +921,15 @@ func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string
 		return
 	}
 	binPath := filepath.Join(tmp, "audit-exec")
-	linkArgs := []string{"-O0", "-o", binPath, llPath, runtimeC}
+	// Link flags mirror the production `clangPlatformRuntimeLinkArgs`
+	// + `clangLinkLibraryArgs` (`internal/backend/llvm.go:425` and
+	// `internal/llvmabi/api.go:164`). Without these, the runtime
+	// fails to resolve macOS Keychain (`-framework Security
+	// CoreFoundation`), zlib (`-lz`), and libm (`-lm`) symbols at
+	// link time, swamping audit output with 70+ undefined-symbol
+	// errors that aren't actually stage0 emit bugs.
+	linkArgs := append([]string{"-O0", "-o", binPath, llPath, runtimeC},
+		stage0AuditPlatformLinkArgs()...)
 	cmd := exec.Command(clangPath, linkArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -934,7 +943,7 @@ func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string
 		var errLines []string
 		for _, line := range strings.Split(combined, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") {
+			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") || strings.Contains(line, "_osty_") || strings.Contains(line, "referenced from") || strings.HasPrefix(line, "\"_") {
 				errLines = append(errLines, line)
 			}
 		}
@@ -1074,7 +1083,8 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 		return
 	}
 	binPath := filepath.Join(tmp, "audit-fp-osty")
-	linkArgs := []string{"-O0", "-o", binPath, llPath, runtimeC}
+	linkArgs := append([]string{"-O0", "-o", binPath, llPath, runtimeC},
+		stage0AuditPlatformLinkArgs()...)
 	cmd := exec.Command(clangPath, linkArgs...)
 	out, linkErr := cmd.CombinedOutput()
 	if linkErr != nil {
@@ -1082,7 +1092,7 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 		var errLines []string
 		for _, line := range strings.Split(combined, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") {
+			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") || strings.Contains(line, "_osty_") || strings.Contains(line, "referenced from") || strings.HasPrefix(line, "\"_") {
 				errLines = append(errLines, line)
 			}
 		}
@@ -1165,4 +1175,23 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 		}
 		t.Logf("fp-verify (full): produced binary completed install-self ✓ (%d bytes output)", len(runOut))
 	}
+}
+
+// stage0AuditPlatformLinkArgs returns the platform-specific link
+// flags the audit harness needs when invoking clang to link a stage0
+// IR module + the runtime C source. Mirrors the production
+// `clangPlatformRuntimeLinkArgs` + `clangLinkLibraryArgs` chain so
+// the audit doesn't burn iterations on link errors that aren't
+// actually stage0 bugs (Keychain frameworks, zlib, libm).
+func stage0AuditPlatformLinkArgs() []string {
+	args := []string{"-pthread", "-lz"}
+	switch runtime.GOOS {
+	case "windows":
+		args = append(args, "-ladvapi32")
+	case "darwin":
+		args = append(args, "-lm", "-framework", "Security", "-framework", "CoreFoundation")
+	default:
+		args = append(args, "-lm")
+	}
+	return args
 }
