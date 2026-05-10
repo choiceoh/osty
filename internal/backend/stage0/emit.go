@@ -2218,6 +2218,15 @@ func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 		prelude:    prelude.String(),
 		callSymbol: spec.symbol,
 		callArgs:   args,
+		// `resultType` is required: emitPendingInstr renders the call as
+		// `%reg = call <resultType.llvm()> @<symbol>(...)`. Leaving it
+		// zero (`scalarUnknown`) emits `call  @symbol(…)` with two
+		// spaces and no return type, which clang rejects with
+		// `error: expected type`. The intrinsic-driven path here never
+		// set the field; the fallback through `intrinsicRuntimeCallSpec`
+		// already checked `spec.ret == destType`, so destType is
+		// authoritative.
+		resultType: destType,
 	}, destID, destType, true
 }
 
@@ -11225,6 +11234,7 @@ type forInListEarlyExitPattern struct {
 	falsePrepBody  string // optional work in false path
 	postBody       string
 	loopExitBody   string
+	earlyExitBody  string // body instrs preceding the early-exit ret (e.g. field reads, helper calls)
 	earlyRetExpr   string // what `ret retType` in the early-exit arm
 	loopRetExpr    string // what `ret retType` after the loop
 
@@ -11409,7 +11419,14 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 	pat.bodyBody = bodyBuf.String()
 	pat.innerCondExpr = innerExpr
 
-	// Render early-exit block.
+	// Render early-exit block. The body instructions (e.g. field reads,
+	// helper calls that compute the return value) MUST be preserved —
+	// they're the source of `earlyRetExpr`'s SSA value. Without
+	// `earlyExitBody`, the emit path used to drop these instructions and
+	// emit just `<label>: ret <type> <undef>`, leaving downstream LLVM
+	// IR with `use of undefined value` errors at clang. Save the
+	// rendered text to `pat.earlyExitBody` so emitForInListEarlyExit can
+	// write it between the label and the `ret`.
 	earlyCtxBindings := copyBindings(ctx.bindings)
 	earlyCtx := &whileLoopEmitCtx{fn: fn, bindings: earlyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
 	var earlyBuf strings.Builder
@@ -11423,6 +11440,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 		return pat, false
 	}
 	earlyRetExpr := earlyBinding.expr
+	pat.earlyExitBody = earlyBuf.String()
 	pat.earlyExitLabel = blockLabelName(earlyExit.ID, "early")
 
 	// Render false-prep block (connects body-false → post).
@@ -11491,6 +11509,7 @@ func emitForInListEarlyExit(out *strings.Builder, fn *mir.Function, pat forInLis
 
 	out.WriteString("\n")
 	fmt.Fprintf(out, "%s:\n", pat.earlyExitLabel)
+	out.WriteString(pat.earlyExitBody)
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.earlyRetExpr)
 
 	out.WriteString("\n")
