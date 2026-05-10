@@ -50,37 +50,38 @@ use a/b.c
 //   1. include one primary malformed construct that triggers recovery
 //   2. pin the *second-order* parser fallout we care about
 //   3. keep the tail minimal so declaration/script drift stays obvious
+//   4. name CASE hints `<Axis><Ordinal> ...` and helper fns `rf<Axis><Ordinal>...`
 //
 // Axis A — newline-else fallout.
 
-// === CASE: E0105 === `} else` across newline
-fn f() -> Int {
-    if cond() {
+// === CASE: E0105 === A1 `} else` across newline
+fn rfA1ElseNewlinePrimary() -> Int {
+    if rfA1Cond() {
         1
     }
     else {
         2
     }
 }
-fn cond() -> Bool { false }
+fn rfA1Cond() -> Bool { false }
 // === END
 
-// === CASE: E0100 === top-level `}` follow-on after `} else` newline recovery
-fn followOnDeclAfterElseNewline() -> Int {
-    if condFollowOn() {
+// === CASE: E0100 === A2 top-level `}` follow-on after `} else` newline recovery
+fn rfA2ElseNewlineTopLevelDecl() -> Int {
+    if rfA2Cond() {
         1
     }
     else {
         2
     }
 }
-fn condFollowOn() -> Bool { false }
+fn rfA2Cond() -> Bool { false }
 // === END
 
 // Axis B — declaration-layer fallout after expression recovery.
 
-// === CASE: E0100 === top-level `}` follow-on after broken match-arm assignment body
-fn followOnDeclAfterMatchAssign(x: Int) {
+// === CASE: E0100 === B1 top-level `}` follow-on after broken match-arm assignment body
+fn rfB1MatchAssignTopLevelDecl(x: Int) {
     match x {
         0 -> out.path =
         _ -> 1,
@@ -349,13 +350,14 @@ fn ch() {
 //      enclosing block, loop body, etc.)
 //   3. end with `let z = 2` when a tail sentinel makes recovery drift
 //      easy to spot in snapshots
+//   4. name CASE hints `<Axis><Ordinal> ...` and helper fns `rm<Axis><Ordinal>...`
 //
 // Axis A — branch / arm continuity.
 
-// === CASE: E0204 === malformed then-branch expression recovers before `else`
-fn condRecover() -> Bool { false }
-fn recoverElseBranch() {
-    if condRecover() {
+// === CASE: E0204 === A1 malformed then-branch expression recovers before `else`
+fn rmA1Cond() -> Bool { false }
+fn rmA1IfThenMissingRhs() {
+    if rmA1Cond() {
         let x =
     } else {
         let y = 1
@@ -364,8 +366,8 @@ fn recoverElseBranch() {
 }
 // === END
 
-// === CASE: E0204 === malformed match arm body recovers to the next arm
-fn recoverMatchArm(x: Int) {
+// === CASE: E0204 === A2 malformed match arm body recovers to the next arm
+fn rmA2MatchArmMissingBody(x: Int) {
     match x {
         0 ->
         _ -> 1,
@@ -376,71 +378,71 @@ fn recoverMatchArm(x: Int) {
 
 // Axis B — required-rhs / next-statement boundary.
 
-// === CASE: E0204 === missing let initializer recovers to the next statement
-fn recoverLetRhs() {
+// === CASE: E0204 === B1 missing let initializer recovers to the next statement
+fn rmB1LetMissingInit() {
     let x =
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === malformed let initializer recovers to the next statement
-fn recoverLetRhsSameLine() {
+// === CASE: E0204 === B2 malformed let initializer recovers to the next statement
+fn rmB2LetMalformedInit() {
     let x = +
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === missing assignment rhs recovers to the next statement
-fn recoverAssignRhs() {
+// === CASE: E0204 === B3 missing assignment rhs recovers to the next statement
+fn rmB3AssignMissingRhs() {
     x =
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === missing compound-assignment rhs recovers to the next statement
-fn recoverAssignCompoundRhs() {
+// === CASE: E0204 === B4 missing compound-assignment rhs recovers to the next statement
+fn rmB4CompoundAssignMissingRhs() {
     x +=
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === malformed compound-assignment rhs recovers to the next statement
-fn recoverAssignCompoundRhsSameLine() {
+// === CASE: E0204 === B5 malformed compound-assignment rhs recovers to the next statement
+fn rmB5CompoundAssignMalformedRhs() {
     x += +
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === malformed return expression recovers to the next statement
-fn recoverReturnExpr() {
+// === CASE: E0204 === B6 malformed return expression recovers to the next statement
+fn rmB6ReturnMalformedExpr() {
     return +
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === missing channel-send rhs recovers to the next statement
-fn recoverChanSend() {
+// === CASE: E0204 === B7 missing channel-send rhs recovers to the next statement
+fn rmB7ChanSendMissingRhs() {
     ch <-
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === malformed channel-send rhs recovers to the next statement
-fn recoverChanSendSameLine() {
+// === CASE: E0204 === B8 malformed channel-send rhs recovers to the next statement
+fn rmB8ChanSendMalformedRhs() {
     ch <- +
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === missing defer expression recovers to the next statement
-fn recoverDeferExpr() {
+// === CASE: E0204 === B9 missing defer expression recovers to the next statement
+fn rmB9DeferMissingExpr() {
     defer
     let z = 2
 }
 // === END
 
-// === CASE: E0204 === malformed defer expression recovers to the next statement
-fn recoverDeferExprSameLine() {
+// === CASE: E0204 === B10 malformed defer expression recovers to the next statement
+fn rmB10DeferMalformedExpr() {
     defer +
     let z = 2
 }
@@ -448,8 +450,8 @@ fn recoverDeferExprSameLine() {
 
 // Axis C — control-flow tail recovery.
 
-// === CASE: E0204 === malformed break value recovers to the next statement
-fn recoverBreakValue() {
+// === CASE: E0204 === C1 malformed break value recovers to the next statement
+fn rmC1BreakMalformedValue() {
     for i in 0..10 {
         break +
         let z = 2
@@ -457,8 +459,8 @@ fn recoverBreakValue() {
 }
 // === END
 
-// === CASE: E0204 === malformed labeled break value recovers to the next statement
-fn recoverLabeledBreakValue() {
+// === CASE: E0204 === C2 malformed labeled break value recovers to the next statement
+fn rmC2LabeledBreakMalformedValue() {
     'outer: for i in 0..10 {
         break 'outer +
         let z = 2
@@ -466,8 +468,8 @@ fn recoverLabeledBreakValue() {
 }
 // === END
 
-// === CASE: E0204 === malformed continue suffix recovers to the next statement
-fn recoverContinueSuffix() {
+// === CASE: E0204 === C3 malformed continue suffix recovers to the next statement
+fn rmC3ContinueMalformedSuffix() {
     for i in 0..10 {
         continue +
         let z = 2
@@ -475,8 +477,8 @@ fn recoverContinueSuffix() {
 }
 // === END
 
-// === CASE: E0204 === malformed labeled continue suffix recovers to the next statement
-fn recoverLabeledContinueSuffix() {
+// === CASE: E0204 === C4 malformed labeled continue suffix recovers to the next statement
+fn rmC4LabeledContinueMalformedSuffix() {
     'outer: for i in 0..10 {
         continue 'outer +
         let z = 2
@@ -486,8 +488,8 @@ fn recoverLabeledContinueSuffix() {
 
 // Axis D — scoped / nested body recovery.
 
-// === CASE: E0204 === malformed deferred block body recovers to the next statement
-fn recoverDeferBlock() {
+// === CASE: E0204 === D1 malformed deferred block body recovers to the next statement
+fn rmD1DeferBlockMalformedBody() {
     defer {
         let x =
     }
@@ -497,8 +499,8 @@ fn recoverDeferBlock() {
 
 // Axis E — conditional pattern recovery.
 
-// === CASE: E0204 === malformed if-let scrutinee recovers before `else`
-fn recoverIfLetElse() {
+// === CASE: E0204 === E1 malformed if-let scrutinee recovers before `else`
+fn rmE1IfLetMalformedScrutinee() {
     if let value = + {
         1
     } else {
