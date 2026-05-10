@@ -82,7 +82,9 @@ fn testCrossFileStructReturnedFromCrossFileFn() {
 		t.Fatalf("pkg.Files len = %d, want 2 (lib.osty + multi_file_test.osty)", got)
 	}
 
-	chk := check.Package(pkg, nil)
+	chk := check.Package(pkg, nil, check.Opts{
+		PopulateLegacyMaps: true, // multi-file E2E drives IR lowering
+	})
 	for _, d := range chk.Diags {
 		if d.Severity == diag.Error {
 			t.Fatalf("check produced error: %s", d.Message)
