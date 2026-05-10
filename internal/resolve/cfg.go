@@ -237,6 +237,7 @@ func evaluateCfgCompose(op string, children []*ast.AnnotationArg, pos token.Pos,
 				"unknown cfg composition `"+op+"`").
 				Code(diag.CodeAnnotationBadArg).
 				PrimaryPos(pos, "unknown cfg composition").
+				Hint(didYouMeanHintFromList(op, []string{"all", "any", "not"})).
 				Note("v0.5 §5 / G29: use `all`, `any`, or `not`").
 				Build(),
 		}
