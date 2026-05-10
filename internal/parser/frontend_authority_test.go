@@ -7,6 +7,72 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 )
 
+func requireNoParseDiagnostics(t *testing.T, result Result) {
+	t.Helper()
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want none", result.Diagnostics)
+	}
+}
+
+func requireSingleParseDiagnosticCode(t *testing.T, result Result, want string) {
+	t.Helper()
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != want {
+		t.Fatalf("first diagnostic code = %q, want %s", got, want)
+	}
+}
+
+func requireParseDiagnosticCount(t *testing.T, result Result, want int, context string) {
+	t.Helper()
+	if len(result.Diagnostics) != want {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want %d %s", result.Diagnostics, want, context)
+	}
+}
+
+func requireParseDiagnosticCodes(t *testing.T, result Result, want ...string) {
+	t.Helper()
+	if len(result.Diagnostics) != len(want) {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly %d diagnostics", result.Diagnostics, len(want))
+	}
+	seen := make(map[string]int, len(result.Diagnostics))
+	for _, d := range result.Diagnostics {
+		seen[d.Code]++
+	}
+	for _, code := range want {
+		if seen[code] == 0 {
+			t.Fatalf("diagnostics = %#v, want code %s", result.Diagnostics, code)
+		}
+		seen[code]--
+	}
+	for code, count := range seen {
+		if count != 0 {
+			t.Fatalf("diagnostics = %#v, got unexpected multiplicity for %s", result.Diagnostics, code)
+		}
+	}
+}
+
+func requireParseDiagnosticWithCodeAndMessage(t *testing.T, result Result, code string, message string) {
+	t.Helper()
+	for _, d := range result.Diagnostics {
+		if d.Code == code && d.Message == message {
+			return
+		}
+	}
+	t.Fatalf("diagnostics = %#v, want %s with message %q", result.Diagnostics, code, message)
+}
+
+func requireParseDiagnosticCodePresent(t *testing.T, result Result, code string) {
+	t.Helper()
+	for _, d := range result.Diagnostics {
+		if d.Code == code {
+			return
+		}
+	}
+	t.Fatalf("diagnostics = %#v, want code %s", result.Diagnostics, code)
+}
+
 // --- Baseline authority tests ---
 
 func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *testing.T) {
@@ -18,9 +84,7 @@ func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *test
 
 	selfhost.ResetAstbridgeLowerCount()
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) > 0 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want none", result.Diagnostics)
-	}
+	requireNoParseDiagnostics(t, result)
 	if result.Run == nil {
 		t.Fatal("ParseDetailed Run = nil, want retained frontend run")
 	}
@@ -45,9 +109,7 @@ fn update(value: String?) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) > 0 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want none", result.Diagnostics)
-	}
+	requireNoParseDiagnostics(t, result)
 	if result.File == nil || len(result.File.Decls) < 2 {
 		t.Fatalf("parsed file = %#v, want struct and function declarations", result.File)
 	}
@@ -96,20 +158,7 @@ fn rfA1Cond() -> Bool { false }
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 3 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want three follow-on diagnostics", result.Diagnostics)
-	}
-	want := map[string]bool{"E0105": false, "E0204": false, "E0100": false}
-	for _, d := range result.Diagnostics {
-		if _, ok := want[d.Code]; ok {
-			want[d.Code] = true
-		}
-	}
-	for code, seen := range want {
-		if !seen {
-			t.Fatalf("diagnostics = %#v, want code %s", result.Diagnostics, code)
-		}
-	}
+	requireParseDiagnosticCodes(t, result, "E0105", "E0204", "E0100")
 	if result.File == nil || len(result.File.Decls) != 2 {
 		t.Fatalf("parsed file = %#v, want primary fn plus preserved helper fn", result.File)
 	}
@@ -144,22 +193,9 @@ func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 5 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want five follow-on diagnostics", result.Diagnostics)
-	}
-	hasE0100 := false
-	hasArmRecovery := false
-	for _, d := range result.Diagnostics {
-		if d.Code == "E0100" {
-			hasE0100 = true
-		}
-		if d.Code == "E0204" && d.Message == "expected match arm body before `->`" {
-			hasArmRecovery = true
-		}
-	}
-	if !hasE0100 || !hasArmRecovery {
-		t.Fatalf("diagnostics = %#v, want E0100 plus match-arm follow-on recovery", result.Diagnostics)
-	}
+	requireParseDiagnosticCount(t, result, 5, "follow-on diagnostics")
+	requireParseDiagnosticCodePresent(t, result, "E0100")
+	requireParseDiagnosticWithCodeAndMessage(t, result, "E0204", "expected match arm body before `->`")
 	if result.File == nil || len(result.File.Decls) != 1 {
 		t.Fatalf("parsed file = %#v, want one damaged function decl", result.File)
 	}
@@ -218,12 +254,7 @@ fn f() {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	if result.File == nil || len(result.File.Decls) < 2 {
 		t.Fatalf("parsed file = %#v, want cond and f declarations", result.File)
 	}
@@ -267,12 +298,7 @@ func TestParseRecoveryA2MatchArmPreservesNextArmAndTrailingStmt(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	if result.File == nil || len(result.File.Decls) != 1 {
 		t.Fatalf("parsed file = %#v, want single function declaration", result.File)
 	}
@@ -314,12 +340,7 @@ func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want two let statements", result.File.Decls[0])
@@ -346,12 +367,7 @@ func TestParseRecoveryB3AssignMissingRhsPreservesFollowingStmt(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want assignment plus trailing let", result.File.Decls[0])
@@ -378,12 +394,7 @@ func TestParseRecoveryB6ReturnMalformedExprPreservesFollowingStmt(t *testing.T) 
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want return plus trailing let", result.File.Decls[0])
@@ -410,12 +421,7 @@ func TestParseRecoveryB7ChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want chan send plus trailing let", result.File.Decls[0])
@@ -442,12 +448,7 @@ func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want defer plus trailing let", result.File.Decls[0])
@@ -478,12 +479,7 @@ func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) 
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
 		t.Fatalf("decl[0] = %#v, want single for statement", result.File.Decls[0])
@@ -516,12 +512,7 @@ func TestParseRecoveryC3ContinueMalformedSuffixPreservesFollowingStmt(t *testing
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
 		t.Fatalf("decl[0] = %#v, want single for statement", result.File.Decls[0])
@@ -548,12 +539,7 @@ func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *
 	src := []byte("fn f() {\n    'outer: for i in 0..10 {\n        continue 'outer +\n        let z = 2\n    }\n}\n")
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
 		t.Fatalf("decl[0] = %#v, want single labeled for statement", result.File.Decls[0])
@@ -588,12 +574,7 @@ func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want defer plus trailing let", result.File.Decls[0])
@@ -634,12 +615,7 @@ func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *
 `)
 
 	result := ParseDetailed(src)
-	if len(result.Diagnostics) != 1 {
-		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
-	}
-	if got := result.Diagnostics[0].Code; got != "E0204" {
-		t.Fatalf("first diagnostic code = %q, want E0204", got)
-	}
+	requireSingleParseDiagnosticCode(t, result, "E0204")
 	fn, ok := result.File.Decls[0].(*ast.FnDecl)
 	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
 		t.Fatalf("decl[0] = %#v, want if-let plus trailing let", result.File.Decls[0])
