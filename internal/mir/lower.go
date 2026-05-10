@@ -370,6 +370,26 @@ func (l *lowerer) emitScript() {
 	if len(l.src.Script) == 0 {
 		return
 	}
+	// If the user already declared `fn main()` explicitly, don't
+	// synthesize a second one — duplicate-symbol breaks LLVM linking
+	// and the backend (`backend: MIR coverage incomplete: function
+	// "main": duplicate symbol`). The toolchain's own
+	// `toolchain/main.osty` declares a real `main` while several other
+	// files (e.g. `toolchain/ci.osty`, `toolchain/scaffold_policy.osty`)
+	// have top-level `let` constants that the parser routes into
+	// `file.Stmts` → `mod.Script`. Without this guard, both the user
+	// `main` and the auto-synthesised initialiser end up as `main`.
+	//
+	// Long-term fix: route module-level `let` constants into
+	// `mod.Decls` (as `Global`s) instead of `mod.Script`, OR wrap
+	// script statements in a `__init__`-named entry that the user
+	// `main` calls. For now the conservative fix is to skip the
+	// synthetic when the user's main is present.
+	for _, existing := range l.out.Functions {
+		if existing != nil && existing.Name == "main" {
+			return
+		}
+	}
 	// Treat script statements as the body of a synthetic main(). The
 	// backend conventionally does the same thing.
 	fn := l.newFunction("main", nil, TUnit, ir.Span{}, false)
