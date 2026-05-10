@@ -198,11 +198,30 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	// invocation, check exit code 0. Catches link-stage bugs missed
 	// by `-c` alone (undefined runtime symbols, calling-convention
 	// mismatches with the runtime ABI) plus immediate runtime
-	// crashes on the trivial entry path. Still does NOT exercise
-	// real compilation paths through the produced binary — that is
-	// the L4 fixed-point harness, deferred to a follow-up PR.
+	// crashes on the trivial entry path.
 	if stage0AuditExecVerifyEnabled() {
 		runStage0AuditExecVerify(t, entry.MIR, clangPath)
+	}
+
+	// L4 (fixed-point): the produced binary should be able to do the
+	// same job the source osty does. We don't run the full
+	// install-self cycle (would take ~15 min); instead we run
+	// progressively heavier subcommands against a tiny fixture file
+	// and verify exit 0 + non-empty output:
+	//
+	//   - `osty parse <fixture>`     — lexer + parser
+	//   - `osty check <fixture>`     — front-end type check
+	//   - `osty pipeline <fixture>`  — full front-end pipeline
+	//
+	// Each phase exposes the next stratum of semantic correctness
+	// the produced binary inherits (or doesn't) from stage0's lossy
+	// lowering. Stops at the first failing phase so the deepest
+	// working layer is reported. Full self-build (`osty build
+	// toolchain/`) is the heaviest fixed-point check and is left
+	// off this routine path — drive it manually with
+	// `OSTY_STAGE0_AUDIT_FP_FULL=1` when worthwhile.
+	if stage0AuditFixedPointVerifyEnabled() {
+		runStage0AuditFixedPointVerify(t, entry.MIR, clangPath)
 	}
 
 	buckets := make([]bucket, 0, len(tally))
@@ -948,5 +967,179 @@ func fileSize(path string) string {
 		return fmt.Sprintf("%.1fKB", float64(sz)/1024.0)
 	default:
 		return fmt.Sprintf("%.1fMB", float64(sz)/(1024.0*1024.0))
+	}
+}
+
+// stage0AuditFixedPointVerifyEnabled reports whether the audit
+// should run the produced binary against fixture Osty source files
+// to verify it semantically does the same job the source osty does.
+// Implies (re-runs internally) the L3 link step.
+//
+// Cost: link + 3 short subprocess invocations on tiny fixtures.
+// ~10s on top of L3.
+func stage0AuditFixedPointVerifyEnabled() bool {
+	switch strings.TrimSpace(os.Getenv("OSTY_STAGE0_AUDIT_FP_VERIFY")) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// stage0AuditFixedPointFullEnabled reports whether the audit should
+// additionally run the heaviest fixed-point check: the produced
+// binary builds the toolchain itself (a real install-self cycle).
+// Cost: ~15 min on top of FP_VERIFY. Off by default; only flip on
+// for end-to-end CI verification.
+func stage0AuditFixedPointFullEnabled() bool {
+	switch strings.TrimSpace(os.Getenv("OSTY_STAGE0_AUDIT_FP_FULL")) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// runStage0AuditFixedPointVerify links the stage0-produced IR with
+// the runtime, then exercises the resulting binary against tiny
+// fixture Osty programs. Each subcommand probes a deeper stratum
+// of the front-end (lexer → parser → type checker → full pipeline).
+// On the first failing phase we log the diagnostic and return,
+// since deeper phases would also fail.
+func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath string) {
+	t.Helper()
+	if module == nil {
+		t.Logf("fp-verify: skipped (nil MIR module)")
+		return
+	}
+	if clangPath == "" {
+		var err error
+		clangPath, err = exec.LookPath("clang")
+		if err != nil {
+			t.Logf("fp-verify: clang not found in PATH (%v); skipping", err)
+			return
+		}
+	}
+	prevListAll := os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES")
+	defer os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", prevListAll)
+	os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", "1")
+	irBytes, err := stage0.EmitMIR(module, llvmabi.Options{PackageName: "audit-fp"})
+	if err != nil {
+		short := strings.TrimSpace(err.Error())
+		if len(short) > 400 {
+			short = short[:400] + "…"
+		}
+		t.Logf("fp-verify: stage0 reports declines (partial IR continues): %s", short)
+		if len(irBytes) == 0 {
+			return
+		}
+	}
+	wd, _ := os.Getwd()
+	repoRoot := filepath.Dir(filepath.Dir(wd))
+	runtimeC := filepath.Join(repoRoot, "internal", "backend", "runtime", "osty_runtime.c")
+	if _, err := os.Stat(runtimeC); err != nil {
+		t.Logf("fp-verify: runtime C source missing at %s (%v); skipping", runtimeC, err)
+		return
+	}
+	tmp, err := os.MkdirTemp("", "stage0-audit-fp-*")
+	if err != nil {
+		t.Logf("fp-verify: TempDir failed: %v", err)
+		return
+	}
+	defer os.RemoveAll(tmp)
+	llPath := filepath.Join(tmp, "module.ll")
+	if err := os.WriteFile(llPath, irBytes, 0o600); err != nil {
+		t.Logf("fp-verify: write IR file: %v", err)
+		return
+	}
+	binPath := filepath.Join(tmp, "audit-fp-osty")
+	linkArgs := []string{"-O0", "-o", binPath, llPath, runtimeC}
+	cmd := exec.Command(clangPath, linkArgs...)
+	out, linkErr := cmd.CombinedOutput()
+	if linkErr != nil {
+		combined := strings.TrimSpace(string(out))
+		var errLines []string
+		for _, line := range strings.Split(combined, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") {
+				errLines = append(errLines, line)
+			}
+		}
+		if len(errLines) == 0 {
+			t.Logf("fp-verify: link failed (no parsable errors): %s", truncate(combined, 400))
+			return
+		}
+		t.Logf("fp-verify: link failed; %d error line(s):", len(errLines))
+		for i, line := range errLines {
+			if i >= 10 {
+				t.Logf("  …%d more", len(errLines)-10)
+				break
+			}
+			t.Logf("  %s", truncate(line, 300))
+		}
+		return
+	}
+
+	// Tiny fixture — `println` is the simplest entry that exercises
+	// stdlib bridging. The fixture is throwaway; we just need
+	// something the produced osty can chew on.
+	fixturePath := filepath.Join(tmp, "fp_fixture.osty")
+	fixtureSrc := `fn main() {
+    println("hello")
+}
+`
+	if err := os.WriteFile(fixturePath, []byte(fixtureSrc), 0o600); err != nil {
+		t.Logf("fp-verify: write fixture: %v", err)
+		return
+	}
+
+	type phase struct {
+		name       string
+		args       []string
+		requireOut bool
+	}
+	// Order matters — each phase implies the previous one worked
+	// inside the produced binary's source. Stop at first failure.
+	phases := []phase{
+		{name: "parse", args: []string{"parse", fixturePath}, requireOut: true},
+		{name: "check", args: []string{"check", fixturePath}, requireOut: false},
+		{name: "pipeline", args: []string{"pipeline", fixturePath}, requireOut: true},
+	}
+	deepest := ""
+	for _, p := range phases {
+		runCmd := exec.Command(binPath, p.args...)
+		runOut, runErr := runCmd.CombinedOutput()
+		if runErr != nil {
+			t.Logf("fp-verify: `osty %s` FAILED: %v", strings.Join(p.args, " "), runErr)
+			t.Logf("  output: %s", truncate(strings.TrimSpace(string(runOut)), 800))
+			break
+		}
+		if p.requireOut && len(strings.TrimSpace(string(runOut))) == 0 {
+			t.Logf("fp-verify: `osty %s` exit 0 but empty output (expected non-empty)", strings.Join(p.args, " "))
+			break
+		}
+		deepest = p.name
+		t.Logf("fp-verify: `osty %s` ✓ (%d bytes output)", strings.Join(p.args, " "), len(runOut))
+	}
+	if deepest == "" {
+		t.Logf("fp-verify: produced binary failed at the very first phase")
+	} else {
+		t.Logf("fp-verify: produced binary reached phase %q on the fixture", deepest)
+	}
+
+	// Optional: full install-self via the produced binary. Heavy
+	// (~15 min); intended for one-off CI verification. Off by
+	// default. The produced binary is dropped into a temp directory
+	// configured to look like a fresh-clone bootstrap so install-self
+	// uses stage0 fallback recursively.
+	if stage0AuditFixedPointFullEnabled() {
+		t.Logf("fp-verify (full): launching produced binary as `install-self` — this can take >10 min")
+		runCmd := exec.Command(binPath, "install-self")
+		runCmd.Env = append(os.Environ(), "OSTY_STAGE0_FALLBACK=1")
+		runOut, runErr := runCmd.CombinedOutput()
+		if runErr != nil {
+			t.Logf("fp-verify (full): produced binary install-self FAILED: %v", runErr)
+			t.Logf("  output: %s", truncate(strings.TrimSpace(string(runOut)), 1200))
+			return
+		}
+		t.Logf("fp-verify (full): produced binary completed install-self ✓ (%d bytes output)", len(runOut))
 	}
 }
