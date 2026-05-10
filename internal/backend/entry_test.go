@@ -1,18 +1,20 @@
 package backend
 
 import (
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/ir"
 )
 
-func TestLowerEntryMIRRejectsMIRLoweringIssues(t *testing.T) {
+func TestLowerEntryMIRAcceptsRangeLitValuePosition(t *testing.T) {
+	// RangeLit in value position (not directly in for-in) used to emit
+	// ErrMIRCoverageIncomplete. After the MIR lowering improvement, it
+	// should succeed and produce a valid MIR module.
 	rangeLit := &ir.RangeLit{
-		Start: &ir.IntLit{Text: "0", T: ir.TInt},
-		End:   &ir.IntLit{Text: "1", T: ir.TInt},
-		T:     ir.TUnit,
+		Start:     &ir.IntLit{Text: "0", T: ir.TInt},
+		End:       &ir.IntLit{Text: "10", T: ir.TInt},
+		T:         &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+		Inclusive: false,
 	}
 	mod := &ir.Module{
 		Package: "main",
@@ -21,7 +23,7 @@ func TestLowerEntryMIRRejectsMIRLoweringIssues(t *testing.T) {
 				Name:   "main",
 				Return: ir.TUnit,
 				Body: &ir.Block{Stmts: []ir.Stmt{
-					&ir.LetStmt{Name: "r", Type: ir.TUnit, Value: rangeLit},
+					&ir.LetStmt{Name: "r", Type: rangeLit.T, Value: rangeLit},
 				}},
 			},
 		},
@@ -32,16 +34,15 @@ func TestLowerEntryMIRRejectsMIRLoweringIssues(t *testing.T) {
 		t.Fatalf("finalizeEntryIR returned error before MIR lowering: %v", err)
 	}
 	entry, err = LowerEntryMIR(entry)
-	if err == nil {
-		t.Fatal("LowerEntryMIR returned nil error for MIR lowering issue")
+	if err != nil {
+		t.Fatalf("LowerEntryMIR returned error for RangeLit value position: %v", err)
 	}
-	if !errors.Is(err, ErrMIRCoverageIncomplete) {
-		t.Fatalf("error = %v, want ErrMIRCoverageIncomplete", err)
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
 	}
-	if len(entry.MIRIssues) == 0 {
-		t.Fatal("entry.MIRIssues empty, want recorded MIR coverage issue")
-	}
-	if got := entry.MIRIssues[0].Error(); !strings.Contains(got, "range literal in value position") {
-		t.Fatalf("first MIR issue = %q, want range literal coverage issue", got)
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil after lowering")
 	}
 }

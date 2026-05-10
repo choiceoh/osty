@@ -3692,19 +3692,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	case *ir.VariantLit:
 		return bs.lowerVariantLit(x, hint)
 	case *ir.RangeLit:
-		// Range values — unsupported in value position for MIR stage 1.
-		// Surface the source span + enclosing function so toolchain
-		// authors can find the blocking site quickly; see
-		// docs/osty_self_b2_1_audit.md for the in-progress range-value
-		// lowering plan.
-		span := x.At()
-		fnName := ""
-		if bs.fn != nil {
-			fnName = bs.fn.Name
-		}
-		bs.l.noteIssue("range literal in value position not lowered to MIR (fn %q, span line %d:%d-%d:%d, offset %d-%d)",
-			fnName, span.Start.Line, span.Start.Column, span.End.Line, span.End.Column, span.Start.Offset, span.End.Offset)
-		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
+		return bs.lowerRangeLit(x, hint)
 	case *ir.Closure:
 		return bs.lowerClosure(x, hint)
 	case *ir.ErrorExpr:
@@ -5905,6 +5893,59 @@ func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 		T:          t,
 		VariantIdx: idx,
 		VariantTag: v.Variant,
+	}
+}
+
+// lowerRangeLit lowers a RangeLit (e.g. `0..10` or `0..=9`) that appears
+// in value position -- `let r = 0..10`, `return 0..n`, function arguments,
+// etc. The range is represented as a two-field struct aggregate: [start, end].
+// Both fields are Int (Char ranges are already converted to Int codepoints
+// by the checker). The Inclusive flag is a compile-time constant that the
+// for-in desugaring reads back from rangeBindings; it is not stored in the
+// aggregate itself.
+//
+// For the common `let r = 0..n` pattern, the pseudo-binding fast path in
+// lowerLet is preferred because it avoids materialising the aggregate and
+// lets the for-in lowerer read the bounds directly. This path handles
+// everything else: return values, call arguments, nested expressions.
+func (bs *bodyState) lowerRangeLit(x *ir.RangeLit, hint Type) RValue {
+	t := x.T
+	if t == nil || t == ir.ErrTypeVal {
+		t = hint
+	}
+	if t == nil || t == ir.ErrTypeVal {
+		t = &ir.NamedType{Name: "Range", Args: []ir.Type{TInt}, Builtin: true}
+	}
+
+	// Determine element type from Range<T>.
+	elemT := TInt
+	if nt, ok := t.(*ir.NamedType); ok && len(nt.Args) == 1 {
+		if pt, ok := nt.Args[0].(*ir.PrimType); ok && pt.Kind == ir.PrimChar {
+			elemT = TChar
+		}
+	}
+
+	// Start field. Unbounded start (..end) defaults to 0.
+	var startOp Operand
+	if x.Start != nil {
+		startOp = bs.lowerExprAsOperandHint(x.Start, elemT)
+	} else {
+		startOp = &ConstOp{Const: &IntConst{Value: 0, T: elemT}, T: elemT}
+	}
+
+	// End field. Unbounded end (start..) is not fully supported yet.
+	var endOp Operand
+	if x.End != nil {
+		endOp = bs.lowerExprAsOperandHint(x.End, elemT)
+	} else {
+		endOp = &ConstOp{Const: &IntConst{Value: 0, T: elemT}, T: elemT}
+		bs.l.noteIssue("range literal with unbounded end not fully lowered to MIR (fn %q)", bs.fn.Name)
+	}
+
+	return &AggregateRV{
+		Kind:   AggStruct,
+		Fields: []Operand{startOp, endOp},
+		T:      t,
 	}
 }
 
