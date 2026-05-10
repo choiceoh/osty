@@ -164,12 +164,47 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		}
 	}
 
+	// Decline-stub eligibility: functions that decline trial-emit but
+	// whose signature converts cleanly will get a stub `define` from
+	// the post-pass below. They count as "defined" for declare-
+	// suppression — without this, a caller's `declareFunctionPrototype`
+	// emits a declare (with whatever return type the caller inferred,
+	// possibly wrong), and the post-pass's stub `define` collides →
+	// `error: invalid redefinition of function ...`.
+	//
+	// `definedFnSyms` for pass 2 = real successes ∪ stub-eligible.
+	// Stub bodies themselves are emitted by the post-pass below,
+	// keyed only on whether trial-emit failed AND the signature
+	// converts (computed independently there).
+	stubEligible := map[string]bool{}
+	for _, fn := range module.Functions {
+		if fn == nil || fn.IsExternal || fn.IsIntrinsic || fn.Name == "" {
+			continue
+		}
+		if successfulFns[fn.Name] {
+			continue
+		}
+		if fn.Name == "main" {
+			continue
+		}
+		if _, ok := emitDeclineStub(fn, mctx); ok {
+			stubEligible[fn.Name] = true
+		}
+	}
+	declareSuppressSet := map[string]bool{}
+	for k := range successfulFns {
+		declareSuppressSet[k] = true
+	}
+	for k := range stubEligible {
+		declareSuppressSet[k] = true
+	}
+
 	// Pass 2: reset module context so accumulated state from pass 1
 	// (string pool, struct decls, declare-emitted markers) doesn't
-	// leak between passes. Update definedFnSyms with the now-known
-	// successful set.
+	// leak between passes. Update definedFnSyms with the union of
+	// real-emit successes and stub-eligible declines.
 	mctx = newModuleCtx(module)
-	mctx.definedFnSyms = successfulFns
+	mctx.definedFnSyms = declareSuppressSet
 	// Re-do the print-needs prelude on the fresh context.
 	if needs.int {
 		mctx.extraDecls.WriteString("@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
@@ -210,6 +245,40 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 			emittedMain = true
 		}
 	}
+
+	// Decline-stub pass: for every function that declined trial-emit
+	// AND whose signature converts to LLVM cleanly, emit a minimal
+	// `define <ret> @<sym>(<params>) { entry: unreachable }` body.
+	// This satisfies the linker (callers' `call @<sym>(...)` references
+	// resolve to a real symbol) without claiming the body actually
+	// implements the function — if a stage0-built binary actually
+	// dispatches into a declined function, it traps via `unreachable`.
+	//
+	// Without this pass, every transitive caller of a declined helper
+	// fails the audit's link step. With it, the audit's --version
+	// smoke run can complete because it only exercises the small
+	// covered subset; the declined paths are dead code in that
+	// invocation.
+	if listAll {
+		for _, fn := range module.Functions {
+			if fn == nil || fn.IsExternal || fn.IsIntrinsic || fn.Name == "" {
+				continue
+			}
+			if successfulFns[fn.Name] {
+				continue
+			}
+			if fn.Name == "main" {
+				// Never stub main — emit_module above guards on
+				// emittedMain explicitly. If main declined, that's
+				// a real failure.
+				continue
+			}
+			if stub, ok := emitDeclineStub(fn, mctx); ok {
+				fnBodies.WriteString(stub)
+			}
+		}
+	}
+
 	// Aggregated-declines path is taken on `OSTY_STAGE0_LIST_ALL_DECLINES=1`
 	// when at least one function declined. We still build the (partial)
 	// IR and return it alongside the error so callers that want to
@@ -297,6 +366,72 @@ func newModuleCtx(module *mir.Module) *moduleCtx {
 		definedFnSyms:  defined,
 		tuplePool:      map[string]string{},
 	}
+}
+
+// emitDeclineStub renders a minimal `define <ret> @<name>(<params>)
+// { entry: unreachable }` body for a function that declined trial-
+// emit. The callers in successfully-emitted functions reference this
+// symbol via `call @<sym>(...)`; without a definition the linker
+// rejects the binary with `Undefined symbols for architecture …`.
+// `unreachable` as the only terminator is valid LLVM and asserts at
+// runtime — a stage0-built binary that hits this codepath traps
+// (which is correct: the production LIR-Proto path lowers the
+// function for real, stage0 just needs the smoke test to link).
+//
+// Returns false when any param or return type can't be classified —
+// such functions stay declined and accept the link gap. Aggregate
+// returns are handled via sret matching how `emitGenericScalarCFG`
+// renders the FIRST-pass aggregate path; tuple/struct/enum returns
+// that need a `%TypeName` reference need the type emitted into
+// `extraDecls` first via `mctx.emitStructDef`, which we skip here
+// (tracked separately for follow-up).
+func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
+	if fn == nil || mctx == nil || fn.Name == "" {
+		return "", false
+	}
+	// Convert param types. A scalarUnknown anywhere bails the stub.
+	// fn.Params is []LocalID; resolve each via fn.Local(id).
+	paramLLVM := make([]string, 0, len(fn.Params))
+	for _, pid := range fn.Params {
+		p := fn.Local(pid)
+		if p == nil {
+			return "", false
+		}
+		ty := mctx.scalarFromType(p.Type, true)
+		if ty == scalarUnknown {
+			return "", false
+		}
+		paramLLVM = append(paramLLVM, ty.llvm())
+	}
+	// Return type: void / scalar are easy. Aggregate returns require
+	// the named struct type — punt on those for now (they stay
+	// declined; their callers' `call %Type @sym(...)` keep failing
+	// link, but those are a small minority of the overall declined
+	// set).
+	retLLVM := "void"
+	if fn.ReturnType != nil && !isUnitType(fn.ReturnType) {
+		ty := mctx.scalarFromType(fn.ReturnType, true)
+		if ty == scalarUnknown {
+			// Aggregate / tuple / unsupported — bail.
+			return "", false
+		}
+		retLLVM = ty.llvm()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "define %s @%s(", retLLVM, fn.Name)
+	for i, p := range paramLLVM {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		// Use generated names %p0, %p1, … — the body never references
+		// them so any unique LLVM identifier works.
+		fmt.Fprintf(&b, "%s %%p%d", p, i)
+	}
+	b.WriteString(") {\n")
+	b.WriteString("entry:\n")
+	b.WriteString("  unreachable\n")
+	b.WriteString("}\n\n")
+	return b.String(), true
 }
 
 // internTupleType returns the synthetic LLVM type name (with leading
