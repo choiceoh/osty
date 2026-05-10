@@ -196,6 +196,28 @@ func requireRecoveryForStmtWithTrailingLet(t *testing.T, result Result, declIdx 
 	return forStmt, letStmt
 }
 
+func requireFollowOnFnWithHelper(t *testing.T, result Result, fnDeclIdx int, fnBodyStmts int, helperDeclIdx int, helperBodyStmts int, helperName string, wantCodes ...string) (*ast.FnDecl, *ast.FnDecl) {
+	t.Helper()
+	requireParseDiagnosticCodes(t, result, wantCodes...)
+	fn := requireFnDeclAt(t, result.File, fnDeclIdx, fnBodyStmts, "primary fn plus preserved helper fn")
+	helper := requireFnDeclAt(t, result.File, helperDeclIdx, helperBodyStmts, "preserved helper fn "+helperName)
+	if helper.Name != helperName {
+		t.Fatalf("decl[%d] = %#v, want preserved helper fn %s", helperDeclIdx, result.File.Decls[helperDeclIdx], helperName)
+	}
+	return fn, helper
+}
+
+func requireFollowOnFnWithTopLevelLetZ(t *testing.T, result Result, wantDiagCount int, declIdx int, wantBodyStmts int, context string) (*ast.FnDecl, *ast.LetStmt) {
+	t.Helper()
+	requireParseDiagnosticCount(t, result, wantDiagCount, "follow-on diagnostics")
+	fn := requireFnDeclAt(t, result.File, declIdx, wantBodyStmts, context)
+	if len(result.File.Stmts) != 1 {
+		t.Fatalf("top-level stmts = %#v, want trailing let to drift to file scope", result.File.Stmts)
+	}
+	topLet := requireTrailingLetZAt(t, result.File.Stmts, 0)
+	return fn, topLet
+}
+
 const (
 	fixtureTrailingLet4 = "    let z = 2\n"
 	fixtureTrailingLet8 = "        let z = 2\n"
@@ -348,16 +370,11 @@ func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
 	src := fixtureFollowOnElseNewline("rfA1ElseNewlinePrimary", "rfA1Cond")
 
 	result := ParseDetailed(src)
-	requireParseDiagnosticCodes(t, result, "E0105", "E0204", "E0100")
-	fn := requireFnDeclAt(t, result.File, 0, 1, "primary fn plus preserved helper fn")
+	fn, _ := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 1, "rfA1Cond", "E0105", "E0204", "E0100")
 	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
 	ifExpr, ok := stmt.X.(*ast.IfExpr)
 	if !ok || ifExpr.Else != nil {
 		t.Fatalf("stmt[0].X = %#v, want if expr with nil else after follow-on recovery", stmt.X)
-	}
-	helper := requireFnDeclAt(t, result.File, 1, 1, "preserved helper fn rfA1Cond")
-	if helper.Name != "rfA1Cond" {
-		t.Fatalf("decl[1] = %#v, want preserved helper fn rfA1Cond", result.File.Decls[1])
 	}
 }
 
@@ -367,10 +384,9 @@ func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
 	src := fixtureMatchAssignTopLevelDecl("rfB1MatchAssignTopLevelDecl")
 
 	result := ParseDetailed(src)
-	requireParseDiagnosticCount(t, result, 5, "follow-on diagnostics")
 	requireParseDiagnosticCodePresent(t, result, "E0100")
 	requireParseDiagnosticWithCodeAndMessage(t, result, "E0204", "expected match arm body before `->`")
-	fn := requireFnDeclAt(t, result.File, 0, 1, "one damaged function decl")
+	fn, _ := requireFollowOnFnWithTopLevelLetZ(t, result, 5, 0, 1, "one damaged function decl")
 	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
 	match, ok := stmt.X.(*ast.MatchExpr)
 	if !ok || len(match.Arms) != 2 {
@@ -379,11 +395,6 @@ func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
 	if match.Arms[0].Body != nil || match.Arms[1].Body != nil {
 		t.Fatalf("match arms = %#v, want both arm bodies nil after declaration-layer drift", match.Arms)
 	}
-	if len(result.File.Stmts) != 1 {
-		t.Fatalf("top-level stmts = %#v, want trailing let to drift to file scope", result.File.Stmts)
-	}
-	topLet := requireLetStmtAt(t, result.File.Stmts, 0, "top-level let z after fallout")
-	requireIdentPatName(t, topLet.Pattern, "z", "let z = 2")
 }
 
 // --- Recovery matrix parity tests ---
