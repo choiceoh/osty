@@ -227,3 +227,52 @@ func TestLowerEntryMIRAcceptsIfLetOrPat(t *testing.T) {
 		t.Fatal("entry.MIR is nil")
 	}
 }
+
+// TestLowerEntryMIRAcceptsForInIterator tests that for-in over an
+// Iterator<T> type lowers to a next()/Option<T> loop.
+func TestLowerEntryMIRAcceptsForInIterator(t *testing.T) {
+	iterT := &ir.NamedType{Name: "Iterator", Args: []ir.Type{ir.TInt}, Builtin: true}
+	body := &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt}},
+		},
+	}
+	forIn := &ir.ForStmt{
+		Kind:  ir.ForIn,
+		Iter:  &ir.Ident{Name: "it", Kind: ir.IdentLocal, T: iterT},
+		Var:   "x",
+		Body:  body,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{Name: "it", Type: iterT, Value: &ir.Ident{Name: "it", Kind: ir.IdentParam, T: iterT}},
+						forIn,
+					},
+				},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil")
+	}
+}
