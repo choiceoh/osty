@@ -22054,9 +22054,9 @@ func opParseStmt(p *OstyParser) int {
 		}()
 		_ = valueIdx
 		// Osty: /tmp/selfhost_merged.osty:8229:9
-		if astStartsExpr(opPeek(p).kind) && !ostyEqual(opPeek(p).kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
+		if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontNewline{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) {
 			// Osty: /tmp/selfhost_merged.osty:8230:13
-			valueIdx = opParseExpr(p)
+			valueIdx = opParseRequiredExpr(p)
 		}
 		// Osty: /tmp/selfhost_merged.osty:8232:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBreak{}))
@@ -22290,7 +22290,7 @@ func opParseDeferStmt(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8321:5
 	_ = opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:8322:5
-	expr := opParseExpr(p)
+	expr := opParseRequiredExpr(p)
 	_ = expr
 	// Osty: /tmp/selfhost_merged.osty:8323:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNDefer{}))
