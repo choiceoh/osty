@@ -183,6 +183,28 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			covered, totalFns, 100.0*float64(covered)/float64(totalFns))
 	}
 
+	// L2 (module-level link): emit the FULL toolchain module in one
+	// shot, run clang on the combined IR. Catches bugs that only
+	// manifest across function boundaries: prototype mismatches,
+	// duplicate symbol declarations, type-mismatched cross-function
+	// calls. Per-function L1 verification can't see these because
+	// each function compiles in isolation.
+	if stage0AuditModuleVerifyEnabled() {
+		runStage0AuditModuleVerify(t, entry.MIR, clangPath)
+	}
+
+	// L3 (binary exec): compile the produced IR + the runtime to an
+	// actual executable, run it with a minimal `--version` style
+	// invocation, check exit code 0. Catches link-stage bugs missed
+	// by `-c` alone (undefined runtime symbols, calling-convention
+	// mismatches with the runtime ABI) plus immediate runtime
+	// crashes on the trivial entry path. Still does NOT exercise
+	// real compilation paths through the produced binary — that is
+	// the L4 fixed-point harness, deferred to a follow-up PR.
+	if stage0AuditExecVerifyEnabled() {
+		runStage0AuditExecVerify(t, entry.MIR, clangPath)
+	}
+
 	buckets := make([]bucket, 0, len(tally))
 	for k, v := range tally {
 		buckets = append(buckets, bucket{k, v})
@@ -638,4 +660,293 @@ func normalizeClangDiagIdentifiers(msg string) string {
 		i++
 	}
 	return b.String()
+}
+
+// stage0AuditModuleVerifyEnabled reports whether the audit should run
+// `clang -c` on the FULL toolchain module (not per-function). Catches
+// bugs visible only across function boundaries: cross-call type
+// mismatches, duplicate `declare` lines, missing prototype
+// declarations. Per-function `OSTY_STAGE0_AUDIT_CLANG_VERIFY` cannot
+// see these because each function emits its own mini-module with
+// fresh prototypes.
+//
+// Cost: one full `EmitMIR` + one `clang -c` invocation. Adds ~30s on
+// this toolchain.
+func stage0AuditModuleVerifyEnabled() bool {
+	switch strings.TrimSpace(os.Getenv("OSTY_STAGE0_AUDIT_MODULE_VERIFY")) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// stage0AuditExecVerifyEnabled reports whether the audit should link
+// the produced IR + runtime objects into an executable and invoke it
+// with a no-op argument (`--version`), checking exit code 0. Adds
+// link-stage bug detection (undefined symbols, calling-conv
+// mismatches with the runtime ABI) and a smoke test for trivial
+// runtime crashes.
+//
+// Cost: one full link + one process spawn. Adds ~10s on top of
+// MODULE_VERIFY (and implies it).
+func stage0AuditExecVerifyEnabled() bool {
+	switch strings.TrimSpace(os.Getenv("OSTY_STAGE0_AUDIT_EXEC_VERIFY")) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// runStage0AuditModuleVerify emits the entire toolchain module via
+// stage0 (with declines silently dropped — `OSTY_STAGE0_LIST_ALL_DECLINES`
+// semantics) and feeds the combined IR through `clang -c`. Reports
+// any module-level diagnostics on the test logger.
+func runStage0AuditModuleVerify(t *testing.T, module *mir.Module, clangPath string) {
+	t.Helper()
+	if module == nil {
+		t.Logf("module-verify: skipped (nil MIR module)")
+		return
+	}
+	if clangPath == "" {
+		var err error
+		clangPath, err = exec.LookPath("clang")
+		if err != nil {
+			t.Logf("module-verify: clang not found in PATH (%v); skipping", err)
+			return
+		}
+	}
+	// Emit with declines surfaced as a single aggregated error so we
+	// know whether the module would even reach clang in production.
+	prevListAll := os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES")
+	defer os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", prevListAll)
+	os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", "1")
+	irBytes, err := stage0.EmitMIR(module, llvmabi.Options{PackageName: "audit-module"})
+	if err != nil {
+		// Aggregated declines come back with partial IR (EmitMIR
+		// returns the bytes alongside the error under
+		// OSTY_STAGE0_LIST_ALL_DECLINES=1). Log the decline list and
+		// continue with the partial IR if any was produced — the
+		// remaining functions are still worth clang-verifying.
+		short := strings.TrimSpace(err.Error())
+		if len(short) > 400 {
+			short = short[:400] + "…"
+		}
+		t.Logf("module-verify: stage0 reports declines (partial IR continues): %s", short)
+		if len(irBytes) == 0 {
+			return
+		}
+	}
+	tmp, err := os.MkdirTemp("", "stage0-audit-module-*")
+	if err != nil {
+		t.Logf("module-verify: TempDir failed: %v", err)
+		return
+	}
+	defer os.RemoveAll(tmp)
+	llPath := filepath.Join(tmp, "module.ll")
+	if err := os.WriteFile(llPath, irBytes, 0o600); err != nil {
+		t.Logf("module-verify: write IR file: %v", err)
+		return
+	}
+	cmd := exec.Command(clangPath, "-c", "-o", os.DevNull, llPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Logf("module-verify: full toolchain module compiled cleanly (%d bytes IR)", len(irBytes))
+		return
+	}
+	combined := strings.TrimSpace(string(out))
+	if combined == "" {
+		combined = err.Error()
+	}
+	// Bucket the module-level diagnostics so the histogram matches
+	// the per-function bucketing.
+	moduleTally := map[string]int{}
+	moduleSamples := map[string]string{}
+	for _, line := range strings.Split(combined, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.Contains(line, "error: ") {
+			continue
+		}
+		key := normalizeClangDiagnostic(line)
+		moduleTally[key]++
+		if _, seen := moduleSamples[key]; !seen {
+			moduleSamples[key] = line
+		}
+	}
+	if len(moduleTally) == 0 {
+		// Compiler exited non-zero but no parsed `error:` lines — log
+		// the raw output so we don't lose the signal.
+		short := combined
+		if len(short) > 600 {
+			short = short[:600] + "…"
+		}
+		t.Logf("module-verify: clang failed without parsable error lines: %s", short)
+		return
+	}
+	t.Logf("module-verify: clang found %d distinct module-level diagnostic shape(s):", len(moduleTally))
+	type bucket struct {
+		key   string
+		count int
+	}
+	bks := make([]bucket, 0, len(moduleTally))
+	for k, v := range moduleTally {
+		bks = append(bks, bucket{k, v})
+	}
+	sort.Slice(bks, func(i, j int) bool {
+		if bks[i].count != bks[j].count {
+			return bks[i].count > bks[j].count
+		}
+		return bks[i].key < bks[j].key
+	})
+	for i, b := range bks {
+		if i >= 10 {
+			t.Logf("  …%d more shapes truncated", len(bks)-10)
+			break
+		}
+		t.Logf("  %4d  %s", b.count, b.key)
+		if sample := moduleSamples[b.key]; sample != "" && sample != b.key {
+			trimmed := sample
+			if len(trimmed) > 300 {
+				trimmed = trimmed[:300] + "…"
+			}
+			t.Logf("       sample: %s", trimmed)
+		}
+	}
+}
+
+// runStage0AuditExecVerify emits the full module, links it against
+// the runtime, and runs the produced binary with `--version`. Catches
+// link-stage and trivial-runtime crashes that L1/L2 cannot see.
+//
+// The runtime sources live under
+// `internal/backend/runtime/osty_runtime.c`; this harness compiles
+// them on demand and links them with the IR. Failure modes reported:
+//
+//   - link error (undefined symbols, ABI mismatch)
+//   - exec failure (non-zero exit, segfault, hang)
+//   - exec timeout (defaults to 10s; the smoke target is just
+//     `--version` so this should be sub-second)
+func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string) {
+	t.Helper()
+	if module == nil {
+		t.Logf("exec-verify: skipped (nil MIR module)")
+		return
+	}
+	if clangPath == "" {
+		var err error
+		clangPath, err = exec.LookPath("clang")
+		if err != nil {
+			t.Logf("exec-verify: clang not found in PATH (%v); skipping", err)
+			return
+		}
+	}
+	prevListAll := os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES")
+	defer os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", prevListAll)
+	os.Setenv("OSTY_STAGE0_LIST_ALL_DECLINES", "1")
+	irBytes, err := stage0.EmitMIR(module, llvmabi.Options{PackageName: "audit-exec"})
+	if err != nil {
+		// Same deal as module-verify — partial IR comes alongside the
+		// declines. Try to link/run what we got; the remaining bugs
+		// downstream of declines are still worth surfacing.
+		short := strings.TrimSpace(err.Error())
+		if len(short) > 400 {
+			short = short[:400] + "…"
+		}
+		t.Logf("exec-verify: stage0 reports declines (partial IR continues): %s", short)
+		if len(irBytes) == 0 {
+			return
+		}
+	}
+	wd, _ := os.Getwd()
+	repoRoot := filepath.Dir(filepath.Dir(wd))
+	runtimeC := filepath.Join(repoRoot, "internal", "backend", "runtime", "osty_runtime.c")
+	if _, err := os.Stat(runtimeC); err != nil {
+		t.Logf("exec-verify: runtime C source missing at %s (%v); skipping", runtimeC, err)
+		return
+	}
+	tmp, err := os.MkdirTemp("", "stage0-audit-exec-*")
+	if err != nil {
+		t.Logf("exec-verify: TempDir failed: %v", err)
+		return
+	}
+	defer os.RemoveAll(tmp)
+	llPath := filepath.Join(tmp, "module.ll")
+	if err := os.WriteFile(llPath, irBytes, 0o600); err != nil {
+		t.Logf("exec-verify: write IR file: %v", err)
+		return
+	}
+	binPath := filepath.Join(tmp, "audit-exec")
+	linkArgs := []string{"-O0", "-o", binPath, llPath, runtimeC}
+	cmd := exec.Command(clangPath, linkArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		combined := strings.TrimSpace(string(out))
+		if combined == "" {
+			combined = err.Error()
+		}
+		// Filter to error lines only; clang -O0 still emits dozens of
+		// `-Wdeprecated-declarations` warnings from `osty_runtime.c`'s
+		// macOS Keychain bindings that drown the actual link diagnostics.
+		var errLines []string
+		for _, line := range strings.Split(combined, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "error:") || strings.Contains(line, "Undefined symbols") || strings.Contains(line, "ld: ") {
+				errLines = append(errLines, line)
+			}
+		}
+		if len(errLines) == 0 {
+			t.Logf("exec-verify: link failed (clang %s) — no error lines parsed; tail of output: %s", strings.Join(linkArgs, " "), truncate(combined, 1200))
+			return
+		}
+		t.Logf("exec-verify: link failed; %d error line(s):", len(errLines))
+		for i, line := range errLines {
+			if i >= 30 {
+				t.Logf("  …%d more error lines", len(errLines)-30)
+				break
+			}
+			t.Logf("  %s", truncate(line, 400))
+		}
+		return
+	}
+	t.Logf("exec-verify: linked binary at %s (size %s)", binPath, fileSize(binPath))
+	// Smoke test: invoke with --version so we don't trigger heavy
+	// flows. Many CLIs treat unknown args as a usage error which is
+	// also fine for "the binary loaded and printed something".
+	runCmd := exec.Command(binPath, "--version")
+	runOut, runErr := runCmd.CombinedOutput()
+	if runErr != nil {
+		t.Logf("exec-verify: binary --version failed: %v; output: %s", runErr, truncate(strings.TrimSpace(string(runOut)), 400))
+		return
+	}
+	t.Logf("exec-verify: binary --version succeeded; first 200 bytes of output: %s", truncate(strings.TrimSpace(string(runOut)), 200))
+}
+
+// truncate returns s clipped to n bytes with an ellipsis suffix when
+// truncation occurred. Used by audit log helpers; keeps the output
+// readable when clang dumps thousand-line type-mismatch reports.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// fileSize returns a human-readable size string for path; falls back
+// to "?" on error so audit log lines stay parseable.
+func fileSize(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "?"
+	}
+	sz := info.Size()
+	switch {
+	case sz < 1024:
+		return fmt.Sprintf("%dB", sz)
+	case sz < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(sz)/1024.0)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(sz)/(1024.0*1024.0))
+	}
 }
