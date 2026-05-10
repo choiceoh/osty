@@ -12,7 +12,10 @@ func TestRandomModuleDerivedHelpersAreBodied(t *testing.T) {
 		t.Fatal("stdlib random module missing")
 	}
 
-	for _, name := range []string{"next", "nextBytes", "choice", "shuffle"} {
+	// choice and shuffle are bodied derived helpers; the primitive
+	// methods (int, intInclusive, float, bool, bytes) are runtime-backed
+	// and carry no Osty body.
+	for _, name := range []string{"choice", "shuffle"} {
 		fn := reg.LookupMethodDecl("random", "Rng", name)
 		if fn == nil {
 			t.Fatalf("LookupMethodDecl(random, Rng, %s) = nil, want stdlib helper", name)
