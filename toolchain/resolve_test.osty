@@ -684,6 +684,22 @@ fn testSelfResolverCfgUnknownKeyEmitsE0405() {
     testing.assertEq(selfResolveCodeCount(result, "E0405"), 1)
     testing.assert(!selfResolveHasSymbol(result, "bad", "fn"))
 }
+fn testSelfResolverCfgUnknownKeySuggestsNearestSupportedKey() {
+    let source = r"""
+            #[cfg(taret = "linux")]
+            fn bad() -> Int { 1 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+    testing.assertEq(selfResolveCodeCount(result, "E0405"), 1)
+    let mut sawHint = false
+    for diag in result.diagnostics {
+        if diag.code == "E0405" && diag.hint == "did you mean `target`?" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
 // Unknown key evaluates to false — decl drops. Matches Go cfg.go.
 fn testSelfResolverCfgTargetMismatchDrops() {
     let source = r"""

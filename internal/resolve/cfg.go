@@ -190,6 +190,7 @@ func evaluateCfgArg(arg *ast.AnnotationArg, env *CfgEnv) (bool, []*diag.Diagnost
 				"unknown cfg key `"+arg.Key+"`").
 				Code(diag.CodeCfgUnknownKey).
 				PrimaryPos(arg.PosV, "unrecognised cfg key").
+				Hint(didYouMeanHintFromList(arg.Key, []string{"os", "target", "arch", "feature"})).
 				Note("v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`").
 				Build(),
 		}
