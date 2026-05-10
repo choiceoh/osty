@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	selfhostapi "github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -404,16 +404,31 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 		return nil
 	}
 	res := resolve.ResolveFileSourceDefault(src, file, stdlib.LoadCached())
-	chk := check.SelfhostFile(file, res, checkOptsForSource(canonical.Source(src, file)))
-	if chk == nil {
+	chk := check.SelfhostFile(file, res, checkOptsForSource(src))
+	if chk == nil || chk.NativeCheckResult == nil {
 		return nil
+	}
+	cr := chk.NativeCheckResult
+	cr.EnsureStableIDs()
+	cr.Index()
+	// Build a span-keyed lookup since TypedNodesByNodeKey uses stable
+	// hash-based node keys from the native checker, not "start:end" spans.
+	spanNodes := make(map[string]*selfhostapi.CheckedNode, len(cr.TypedNodes))
+	for i := range cr.TypedNodes {
+		rec := &cr.TypedNodes[i]
+		k := fmt.Sprintf("%d:%d", rec.Start, rec.End)
+		if _, dup := spanNodes[k]; !dup {
+			spanNodes[k] = rec
+		}
 	}
 	skip := make(map[int]bool)
 	walkFieldExprs(file, func(fe *ast.FieldExpr) {
 		if fe.Name != "length" {
 			return
 		}
-		t := semanticExprType(fe.X, res, chk)
+		start, end := fe.X.Pos().Offset, fe.X.End().Offset
+		key := fmt.Sprintf("%d:%d", start, end)
+		rec := spanNodes[key]
 		// Rewrite is only safe when the receiver is a known builtin
 		// container whose `.length` is genuine JS habit (String/Bytes/List/Map/Set).
 		// Unknown receiver types may resolve to a user struct in another
@@ -422,52 +437,25 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 		// rewriting those to `.len()` replaces a valid field read with a
 		// missing-method call. Be conservative: protect anything that is
 		// not a known builtin.
-		if !isRewritableLengthReceiver(t) {
+		if rec == nil || rec.Type == nil || !isRewritableLengthTypeRepr(rec.Type) {
 			skip[fe.EndV.Offset-len(fe.Name)] = true
 		}
 	})
 	return skip
 }
 
-func semanticExprType(e ast.Expr, res *resolve.Result, chk *check.Result) types.Type {
-	if e == nil || chk == nil {
-		return nil
+func isRewritableLengthTypeRepr(tr *selfhostapi.TypeRepr) bool {
+	if tr == nil {
+		return false
 	}
-	if t := chk.Types[e]; t != nil {
-		return t
-	}
-	id, ok := e.(*ast.Ident)
-	if !ok || res == nil {
-		return nil
-	}
-	sym := res.RefsByID[id.ID]
-	if sym == nil {
-		return nil
-	}
-	if t := chk.SymTypes[sym]; t != nil {
-		return t
-	}
-	for node, t := range chk.LetTypes {
-		switch n := node.(type) {
-		case *ast.LetDecl:
-			if sym.Decl == n {
-				return t
-			}
-		case *ast.LetStmt:
-			if semanticPatternBindsNode(n.Pattern, sym.Decl) {
-				return t
-			}
+	switch tr.Kind {
+	case "primitive":
+		return tr.Name == "String" || tr.Name == "Bytes"
+	case "named":
+		switch tr.Name {
+		case "List", "Map", "Set", "OrderedMap":
+			return true
 		}
-	}
-	return nil
-}
-
-func isRewritableLengthReceiver(t types.Type) bool {
-	switch v := t.(type) {
-	case *types.Primitive:
-		return v.Kind == types.PString || v.Kind == types.PBytes
-	case *types.Named:
-		return v != nil && v.IsBuiltinNamed()
 	}
 	return false
 }
