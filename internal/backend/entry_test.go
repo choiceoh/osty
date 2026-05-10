@@ -7,9 +7,6 @@ import (
 )
 
 func TestLowerEntryMIRAcceptsRangeLitValuePosition(t *testing.T) {
-	// RangeLit in value position (not directly in for-in) used to emit
-	// ErrMIRCoverageIncomplete. After the MIR lowering improvement, it
-	// should succeed and produce a valid MIR module.
 	rangeLit := &ir.RangeLit{
 		Start:     &ir.IntLit{Text: "0", T: ir.TInt},
 		End:       &ir.IntLit{Text: "10", T: ir.TInt},
@@ -28,7 +25,6 @@ func TestLowerEntryMIRAcceptsRangeLitValuePosition(t *testing.T) {
 			},
 		},
 	}
-
 	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
 	if err != nil {
 		t.Fatalf("finalizeEntryIR returned error before MIR lowering: %v", err)
@@ -47,11 +43,7 @@ func TestLowerEntryMIRAcceptsRangeLitValuePosition(t *testing.T) {
 	}
 }
 
-// TestLowerEntryMIRAcceptsIfLetIrrefutable tests that if-let with an
-// irrefutable pattern (IdentPat, TuplePat, StructPat) lowers without
-// emitting MIR coverage issues.
 func TestLowerEntryMIRAcceptsIfLetIrrefutable(t *testing.T) {
-	// if-let with an IdentPat: always matches.
 	ifLetIdent := &ir.IfLetExpr{
 		Pattern:   &ir.IdentPat{Name: "x"},
 		Scrutinee: &ir.IntLit{Text: "42", T: ir.TInt},
@@ -89,14 +81,12 @@ func TestLowerEntryMIRAcceptsIfLetIrrefutable(t *testing.T) {
 	}
 }
 
-// TestLowerEntryMIRAcceptsIfLetLitPat tests that if-let with a LitPat
-// lowers correctly: compare scrutinee == literal, then branch accordingly.
 func TestLowerEntryMIRAcceptsIfLetLitPat(t *testing.T) {
 	ifLet := &ir.IfLetExpr{
 		Pattern:   &ir.LitPat{Value: &ir.IntLit{Text: "42", T: ir.TInt}},
 		Scrutinee: &ir.IntLit{Text: "42", T: ir.TInt},
 		Then: &ir.Block{
-			Stmts: []ir.Stmt{},
+			Stmts:  []ir.Stmt{},
 			Result: &ir.IntLit{Text: "1", T: ir.TInt},
 		},
 		Else: &ir.Block{
@@ -133,8 +123,6 @@ func TestLowerEntryMIRAcceptsIfLetLitPat(t *testing.T) {
 	}
 }
 
-// TestLowerEntryMIRAcceptsIfLetRangePat tests that if-let with a RangePat
-// lowers correctly: emit range bound checks.
 func TestLowerEntryMIRAcceptsIfLetRangePat(t *testing.T) {
 	ifLet := &ir.IfLetExpr{
 		Pattern: &ir.RangePat{
@@ -180,8 +168,6 @@ func TestLowerEntryMIRAcceptsIfLetRangePat(t *testing.T) {
 	}
 }
 
-// TestLowerEntryMIRAcceptsIfLetOrPat tests that if-let with an OrPat
-// lowers correctly: test each literal alternative in sequence.
 func TestLowerEntryMIRAcceptsIfLetOrPat(t *testing.T) {
 	ifLet := &ir.IfLetExpr{
 		Pattern: &ir.OrPat{
@@ -228,8 +214,6 @@ func TestLowerEntryMIRAcceptsIfLetOrPat(t *testing.T) {
 	}
 }
 
-// TestLowerEntryMIRAcceptsForInIterator tests that for-in over an
-// Iterator<T> type lowers to a next()/Option<T> loop.
 func TestLowerEntryMIRAcceptsForInIterator(t *testing.T) {
 	iterT := &ir.NamedType{Name: "Iterator", Args: []ir.Type{ir.TInt}, Builtin: true}
 	body := &ir.Block{
@@ -253,6 +237,53 @@ func TestLowerEntryMIRAcceptsForInIterator(t *testing.T) {
 				Body: &ir.Block{
 					Stmts: []ir.Stmt{
 						&ir.LetStmt{Name: "it", Type: iterT, Value: &ir.Ident{Name: "it", Kind: ir.IdentParam, T: iterT}},
+						forIn,
+					},
+				},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil")
+	}
+}
+
+func TestLowerEntryMIRAcceptsForInCountableIterator(t *testing.T) {
+	arrayT := &ir.NamedType{Name: "Array", Args: []ir.Type{ir.TInt}, Builtin: true}
+	body := &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt}},
+		},
+	}
+	forIn := &ir.ForStmt{
+		Kind:  ir.ForIn,
+		Iter:  &ir.Ident{Name: "arr", Kind: ir.IdentLocal, T: arrayT},
+		Var:   "x",
+		Body:  body,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{Name: "arr", Type: arrayT, Value: &ir.Ident{Name: "arr", Kind: ir.IdentParam, T: arrayT}},
 						forIn,
 					},
 				},
