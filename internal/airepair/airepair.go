@@ -483,7 +483,7 @@ func checkOptsForSource(src []byte) check.Opts {
 		Primitives:         reg.Primitives,
 		ResultMethods:      reg.ResultMethods,
 		Source:             src,
-		PopulateLegacyMaps: true, // airepair uses pointer-keyed maps for type lookup
+		PopulateLegacyMaps: false, // airepair uses pointer-keyed maps for type lookup
 	}
 }
 
