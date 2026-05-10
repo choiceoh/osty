@@ -4394,6 +4394,17 @@ func paramFallbackName(i int) string {
 }
 
 func disambiguateParamNames(names []string) {
+	// LLVM IR puts parameter names and basic-block labels in the same
+	// per-function value namespace. Stage0 reserves a small set of bare
+	// block label names that can collide with user-source parameter
+	// names. Rename any parameter that hits a reserved label so the
+	// emitted IR doesn't produce e.g. `%entry` (parameter) and `entry:`
+	// (block label) in the same function.
+	for i := range names {
+		if isReservedStage0Label(names[i]) {
+			names[i] = fmt.Sprintf("%s.%d", names[i], i)
+		}
+	}
 	for i := 1; i < len(names); i++ {
 		for j := 0; j < i; j++ {
 			if names[i] == names[j] {
@@ -4402,6 +4413,20 @@ func disambiguateParamNames(names []string) {
 			}
 		}
 	}
+}
+
+// isReservedStage0Label reports whether `name` collides with a bare
+// (non-numbered) block label that stage0's emitter unconditionally
+// produces. All other stage0 labels go through blockLabelName, which
+// formats as "<prefix>.<id>" — those can't collide with valid Osty
+// identifier-style parameter names because Osty source identifiers
+// have no '.'.
+func isReservedStage0Label(name string) bool {
+	switch name {
+	case "entry":
+		return true
+	}
+	return false
 }
 
 // ---- P3c: if-else with phi-merged return ----

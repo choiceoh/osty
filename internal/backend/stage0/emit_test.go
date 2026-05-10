@@ -310,6 +310,33 @@ func TestStage0SanitizesEmptyParamName(t *testing.T) {
 	}
 }
 
+// TestStage0RenamesParamCollidingWithEntryLabel guards against a
+// regression where a user-source parameter named `entry` collides
+// with the LLVM `entry:` block label (LLVM puts param names and
+// block labels in the same per-function value namespace, so the
+// duplicate name produces "unable to create block named 'entry'").
+// The fix renames such a parameter via the disambiguation pass.
+func TestStage0RenamesParamCollidingWithEntryLabel(t *testing.T) {
+	t.Parallel()
+	got := emit(t, trivialMainFn(),
+		makeFn(fnSpec{
+			name:   "passthroughEntry",
+			retT:   ir.TInt,
+			params: []paramSpec{{name: "entry", ty: ir.TInt}},
+			src:    useRV(paramCopy(1, ir.TInt)),
+		}),
+	)
+	if strings.Contains(got, "(i64 %entry)") {
+		t.Fatalf("expected param `entry` to be renamed to avoid label collision:\n%s", got)
+	}
+	if !strings.Contains(got, "define i64 @passthroughEntry(i64 %entry.0)") {
+		t.Fatalf("expected param to be renamed to `%%entry.0`:\n%s", got)
+	}
+	if !strings.Contains(got, "ret i64 %entry.0") {
+		t.Fatalf("expected return to reference renamed param:\n%s", got)
+	}
+}
+
 // ---- single-instruction return: arithmetic ops ----
 
 func TestStage0EmitsIntArithOps(t *testing.T) {
