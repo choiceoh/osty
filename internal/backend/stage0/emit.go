@@ -142,6 +142,51 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 
 	listAll := listAllDeclinesEnabled()
 
+	// Two-pass emit so declare-suppression knows which functions
+	// actually emit a `define`. Pass 1 trial-emits with the optimistic
+	// pre-scan (every non-extern, non-intrinsic candidate is assumed
+	// to define). Pass 2 re-emits with `definedFnSyms` narrowed to
+	// only the symbols that successfully emitted in pass 1. Without
+	// this, a function that declines silently leaves its declare
+	// suppressed AND its define un-emitted — surfaces as
+	// `error: use of undefined value '@MirStringPool__isEmpty'` in
+	// the audit when a caller invokes a declined helper.
+	successfulFns := map[string]bool{}
+	for _, fn := range module.Functions {
+		if fn == nil {
+			continue
+		}
+		var probe strings.Builder
+		if err := emitFunction(&probe, fn, mctx); err == nil {
+			if fn.Name != "" {
+				successfulFns[fn.Name] = true
+			}
+		}
+	}
+
+	// Pass 2: reset module context so accumulated state from pass 1
+	// (string pool, struct decls, declare-emitted markers) doesn't
+	// leak between passes. Update definedFnSyms with the now-known
+	// successful set.
+	mctx = newModuleCtx(module)
+	mctx.definedFnSyms = successfulFns
+	// Re-do the print-needs prelude on the fresh context.
+	if needs.int {
+		mctx.extraDecls.WriteString("@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
+		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
+	}
+	if needs.str {
+		mctx.extraDecls.WriteString("@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n")
+		mctx.extraDecls.WriteString("@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n")
+	}
+	if needs.stdout {
+		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
+	}
+	if needs.stderr {
+		mctx.extraDecls.WriteString("@stderr = external global ptr\n")
+		mctx.extraDecls.WriteString("declare i32 @fprintf(ptr, ptr, ...)\n")
+	}
+
 	var fnBodies strings.Builder
 	emittedMain := false
 	var declines []string // function names that declined when listAll is on
