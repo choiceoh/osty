@@ -165,12 +165,14 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 			emittedMain = true
 		}
 	}
-	if listAll && len(declines) > 0 {
-		// Return a single aggregated error so the dispatcher's warning
-		// chain shows every blocking site in one build round-trip.
-		return nil, fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
-	}
-	if !emittedMain {
+	// Aggregated-declines path is taken on `OSTY_STAGE0_LIST_ALL_DECLINES=1`
+	// when at least one function declined. We still build the (partial)
+	// IR and return it alongside the error so callers that want to
+	// validate emit-correctness on the surviving functions (e.g. the
+	// audit harness's module-level clang verify) can do so. Pre-existing
+	// callers that ignore bytes on err == non-nil are unaffected.
+	aggregated := listAll && len(declines) > 0
+	if !aggregated && !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
 
@@ -182,6 +184,12 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		out.WriteString("\n")
 	}
 	out.WriteString(fnBodies.String())
+	if aggregated {
+		// Return partial IR + aggregated declines error so audit
+		// callers can clang-verify whatever did emit while still
+		// surfacing the full decline list.
+		return []byte(out.String()), fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
+	}
 	return []byte(out.String()), nil
 }
 
