@@ -11033,6 +11033,38 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		if !ok {
 			return false
 		}
+		// `instrCallChain` (e.g. 3-arg `IntrinsicStringConcat` for
+		// `"[" + x + "]"` interpolations) needs N-1 fresh registers,
+		// not 1. The reference plumbing in `matchSequentialReturn`
+		// (line ~1524) and `matchSequentialVoid` (line ~1679) does
+		// exactly this; the for-in-list value-returning path was
+		// left with the single-register `instrCall` shortcut, so
+		// `emitCallChain` silently returned (it checks
+		// `len(chainRegs) != len(callArgs)-1`) — leaving the call
+		// chain unemitted while the binding for the destination
+		// still pointed at a phantom SSA register the emitter
+		// never produced. Surfaced in `corePrintList` as
+		// `ret ptr %11` referencing an undefined `%11`.
+		if pending.kind == instrCallChain {
+			regs := make([]string, len(pending.callArgs)-1)
+			for i := range regs {
+				regs[i] = freshReg(ctx)
+			}
+			pending.chainRegs = regs
+			var buf strings.Builder
+			emitPendingInstr(&buf, pending)
+			out.WriteString(buf.String())
+			finalReg := regs[len(regs)-1]
+			if _, isStack := ctx.stack[destID]; isStack {
+				fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), finalReg, ctx.stack[destID].name)
+				return true
+			}
+			if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+				return false
+			}
+			ctx.bindings[destID] = localBinding{expr: finalReg, ty: destType, defined: true}
+			return true
+		}
 		reg := freshReg(ctx)
 		pending.binDestReg = reg
 		var buf strings.Builder
