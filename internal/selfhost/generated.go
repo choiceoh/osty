@@ -21008,7 +21008,7 @@ func opParseMatchExpr(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:7772:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))
 		// Osty: /tmp/selfhost_merged.osty:7773:9
-		body := opParseExpr(p)
+		body := opParseMatchArmBody(p)
 		_ = body
 		// Osty: /tmp/selfhost_merged.osty:7774:9
 		armNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMatchArm{}))
@@ -21049,6 +21049,42 @@ func opParseMatchExpr(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:7790:6
 	n.end = p.pos
 	return opAddNode(p, n)
+}
+
+// Backport of toolchain/parser.osty opParseMatchArmBody.
+// Handles assignment expressions as match arm bodies.
+func opParseMatchArmBody(p *OstyParser) int {
+	body := opParseExpr(p)
+	next := opPeek(p)
+	if !frontIsAssignOp(next.kind) {
+		return body
+	}
+	_ = opAdvance(p)
+	value := opParseExpr(p)
+	bodyNode := astArenaNodeAt(p.arena, body)
+	var stmtIdx int = -1
+	if _, ok := next.kind.(*FrontTokenKind_FrontAssign); ok {
+		lowered := opLowerAppendAssignmentStmt(p, body, value, bodyNode.start, p.pos)
+		if lowered >= 0 {
+			stmtIdx = lowered
+		}
+	}
+	if stmtIdx < 0 {
+		assign := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAssign{}))
+		assign.left = body
+		assign.right = value
+		assign.op = next.kind
+		assign.start = bodyNode.start
+		assign.end = p.pos
+		stmtIdx = opAddNode(p, assign)
+	}
+	var stmts []int = make([]int, 0, 1)
+	stmts = opAppendCanonicalStmt(p, stmts, stmtIdx)
+	block := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBlock{}))
+	block.children = stmts
+	block.start = bodyNode.start
+	block.end = p.pos
+	return opAddNode(p, block)
 }
 
 // Osty: /tmp/selfhost_merged.osty:7794:1
