@@ -60,6 +60,11 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		// MIR lowering may be partial — keep going if Entry.MIR is set.
 		t.Logf("prepare returned error (may be partial MIR): %v", err)
 	}
+	for _, issue := range entry.MIRIssues {
+		if strings.Contains(issue.Error(), "for-in over non-List") {
+			t.Logf("MIR for-in issue: %v", issue)
+		}
+	}
 	if entry.MIR == nil {
 		t.Fatal("nil MIR — front-end could not lower any function")
 	}
