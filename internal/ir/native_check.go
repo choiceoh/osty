@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -50,18 +51,30 @@ func nativeRecordNodeID(nodeID, legacyNode int) int {
 }
 
 func (l *lowerer) nativeCheckedType(e ast.Expr) Type {
-	id := astNodeID(e)
-	if id == 0 {
+	idx, ok := l.nativeIndex()
+	if !ok {
 		return nil
 	}
-	if _, ok := l.nativeIndex(); !ok {
+
+	// Fast path: NodeID lookup.
+	if id := int(astNodeID(e)); id != 0 {
+		if rec := selectNativeTypedNode(l.native.typedNodesByNodeID[id], e); rec != nil {
+			return l.fromNativeTypeRepr(rec.Type)
+		}
+	}
+
+	// Fallback: span-based lookup via NodeKey ("start:end").
+	// This covers cases where Go AST NodeIDs and native checker NodeIDs
+	// diverge (e.g., re-parsed source or different ID assignment order).
+	start, end, hasRange := astNodeByteRange(e)
+	if !hasRange {
 		return nil
 	}
-	rec := selectNativeTypedNode(l.native.typedNodesByNodeID[int(id)], e)
-	if rec == nil {
-		return nil
+	key := fmt.Sprintf("%d:%d", start, end)
+	if rec := idx.TypedNodesByNodeKey[key]; rec != nil && rec.Type != nil {
+		return l.fromNativeTypeRepr(rec.Type)
 	}
-	return l.fromNativeTypeRepr(rec.Type)
+	return nil
 }
 
 func selectNativeTypedNode(records []*api.CheckedNode, n ast.Node) *api.CheckedNode {
@@ -79,21 +92,36 @@ func selectNativeTypedNode(records []*api.CheckedNode, n ast.Node) *api.CheckedN
 }
 
 func (l *lowerer) nativeInstantiationArgs(e *ast.CallExpr) []Type {
-	id := astNodeID(e)
-	if id == 0 {
-		return nil
-	}
 	idx, ok := l.nativeIndex()
 	if !ok {
 		return nil
 	}
-	rec := selectNativeInstantiation(idx.InstantiationsByNodeID[int(id)], e)
-	if rec == nil || len(rec.TypeArgs) == 0 {
+
+	// Fast path: NodeID lookup.
+	if id := int(astNodeID(e)); id != 0 {
+		if rec := selectNativeInstantiation(idx.InstantiationsByNodeID[id], e); rec != nil && len(rec.TypeArgs) > 0 {
+			return l.nativeInstantiationTypes(rec.TypeArgs)
+		}
+	}
+
+	// Fallback: span-based lookup via NodeKey.
+	start, end, hasRange := astNodeByteRange(e)
+	if !hasRange {
 		return nil
 	}
-	out := make([]Type, 0, len(rec.TypeArgs))
-	for i := range rec.TypeArgs {
-		out = append(out, l.fromNativeTypeRepr(&rec.TypeArgs[i]))
+	key := fmt.Sprintf("%d:%d", start, end)
+	for _, rec := range idx.InstantiationsByNodeKey[key] {
+		if rec != nil && len(rec.TypeArgs) > 0 {
+			return l.nativeInstantiationTypes(rec.TypeArgs)
+		}
+	}
+	return nil
+}
+
+func (l *lowerer) nativeInstantiationTypes(args []api.TypeRepr) []Type {
+	out := make([]Type, 0, len(args))
+	for i := range args {
+		out = append(out, l.fromNativeTypeRepr(&args[i]))
 	}
 	return out
 }
@@ -120,19 +148,30 @@ func (l *lowerer) nativeBindingTypeForSymbol(sym *resolve.Symbol) Type {
 }
 
 func (l *lowerer) nativeBindingType(n ast.Node, name string) Type {
-	id := astNodeID(n)
-	if id == 0 {
-		return nil
-	}
 	idx, ok := l.nativeIndex()
 	if !ok {
 		return nil
 	}
-	rec := selectNativeBinding(idx.BindingsByNodeID[int(id)], n, name)
-	if rec == nil {
+
+	// Fast path: NodeID lookup.
+	if id := int(astNodeID(n)); id != 0 {
+		if rec := selectNativeBinding(idx.BindingsByNodeID[id], n, name); rec != nil {
+			return l.fromNativeTypeRepr(rec.Type)
+		}
+	}
+
+	// Fallback: span-based lookup via NodeKey.
+	start, end, hasRange := astNodeByteRange(n)
+	if !hasRange {
 		return nil
 	}
-	return l.fromNativeTypeRepr(rec.Type)
+	key := fmt.Sprintf("%d:%d", start, end)
+	for _, rec := range idx.BindingsByNodeKey[key] {
+		if rec != nil && rec.Type != nil && (name == "" || rec.Name == name) {
+			return l.fromNativeTypeRepr(rec.Type)
+		}
+	}
+	return nil
 }
 
 func selectNativeBinding(records []*api.CheckedBinding, n ast.Node, name string) *api.CheckedBinding {
@@ -157,19 +196,30 @@ func (l *lowerer) nativeSymbolType(sym *resolve.Symbol) Type {
 }
 
 func (l *lowerer) nativeSymbolTypeForNode(n ast.Node, name string) Type {
-	id := astNodeID(n)
-	if id == 0 {
-		return nil
-	}
 	idx, ok := l.nativeIndex()
 	if !ok {
 		return nil
 	}
-	rec := selectNativeSymbol(idx.SymbolsByNodeID[int(id)], n, name)
-	if rec == nil {
+
+	// Fast path: NodeID lookup.
+	if id := int(astNodeID(n)); id != 0 {
+		if rec := selectNativeSymbol(idx.SymbolsByNodeID[id], n, name); rec != nil {
+			return l.fromNativeTypeRepr(rec.Type)
+		}
+	}
+
+	// Fallback: span-based lookup via NodeKey.
+	start, end, hasRange := astNodeByteRange(n)
+	if !hasRange {
 		return nil
 	}
-	return l.fromNativeTypeRepr(rec.Type)
+	key := fmt.Sprintf("%d:%d", start, end)
+	for _, rec := range idx.SymbolsByNodeKey[key] {
+		if rec != nil && rec.Type != nil && (name == "" || rec.Name == name) {
+			return l.fromNativeTypeRepr(rec.Type)
+		}
+	}
+	return nil
 }
 
 func selectNativeSymbol(records []*api.CheckedSymbol, n ast.Node, name string) *api.CheckedSymbol {
