@@ -241,7 +241,7 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
-	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged, opt.PopulateLegacyMaps)
+	applySelfhostFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged, opt.PopulateLegacyMaps)
 	diag.StampFile(result.Diags, opt.Path)
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
@@ -258,11 +258,11 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		return result
 	}
 	privileged := isPrivilegedPackage(pkg)
-	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, privileged, opt.PopulateLegacyMaps)
+	applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, privileged, opt.PopulateLegacyMaps)
 	stampPackageDiags(result.Diags, pkg)
 	// §19 policy gates (privilege / POD / no_alloc / intrinsic body) are
 	// now sourced from the bootstrapped Osty checker
-	// (toolchain/check_gates.osty::runCheckGates), which `applyNativePackageResult`
+	// (toolchain/check_gates.osty::runCheckGates), which `applySelfhostPackageResult`
 	// just consumed. Cross-side parity is pinned by
 	// internal/check/gates_diff_test.go::TestGatesCrossSideParity, so the
 	// duplicate Go-side runs previously stitched in here were removed to
@@ -314,7 +314,7 @@ func Workspace(
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
 	}
-	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib, opt.PopulateLegacyMaps)
+	applySelfhostWorkspaceResults(ws, resolved, out, opt.Stdlib, opt.PopulateLegacyMaps)
 	// §19 policy gates are sourced from the Osty checker (see File()
 	// comment above). TestGatesCrossSideParity guards against drift.
 	for _, e := range walk {
@@ -360,7 +360,7 @@ func PackageGraph(
 		pr := resolved[path]
 		result := resultWithSharedMaps(shared)
 		out[path] = result
-		applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg), opt.PopulateLegacyMaps)
+		applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg), opt.PopulateLegacyMaps)
 		stampPackageDiags(result.Diags, pkg)
 		for _, pf := range pkg.Files {
 			if pf == nil {
