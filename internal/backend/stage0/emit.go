@@ -488,7 +488,18 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 		return fmt.Errorf("%w: external declaration %q", ErrUnsupported, fn.Name)
 	}
 	if fn.Name == "main" {
-		return emitTrivialMain(out, fn, mctx)
+		// Try trivial single-block main first; if it declines (e.g.
+		// multi-block main with calls), fall through to the general
+		// matchers below so matchGenericScalarCFG can handle it.
+		err := emitTrivialMain(out, fn, mctx)
+		if err == nil {
+			return nil
+		}
+		// Only fall through for multi-block decline; intrinsic/external
+		// errors are real.
+		if len(fn.Blocks) <= 1 {
+			return err
+		}
 	}
 	// Match attempts
 
@@ -1691,6 +1702,15 @@ func isUnitType(t mir.Type) bool {
 	return isPrimType(t, ir.PrimUnit)
 }
 
+// isEmptyTupleType reports whether t is an empty TupleType, which
+// represents the unit type () in MIR.
+func isEmptyTupleType(t mir.Type) bool {
+	if tt, ok := t.(*ir.TupleType); ok && tt != nil && len(tt.Elems) == 0 {
+		return true
+	}
+	return false
+}
+
 func isUnitOperand(op mir.Operand) bool {
 	if op == nil {
 		return false
@@ -2575,6 +2595,8 @@ func intrinsicRuntimeCallSpec(kind mir.IntrinsicKind) (intrinsicRuntimeSpec, boo
 		return intrinsicRuntimeSpec{"osty_rt_strings_ToUpper", scalarString, []scalarType{scalarString}}, true
 	case mir.IntrinsicStringToLower:
 		return intrinsicRuntimeSpec{"osty_rt_strings_ToLower", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringToInt:
+		return intrinsicRuntimeSpec{"osty_rt_strings_to_int", scalarOpaquePtr, []scalarType{scalarString}}, true
 	case mir.IntrinsicStringReplace:
 		return intrinsicRuntimeSpec{"osty_rt_strings_Replace", scalarString, []scalarType{scalarString, scalarString, scalarString}}, true
 	case mir.IntrinsicStringReplaceAll:
@@ -2595,6 +2617,8 @@ func intrinsicRuntimeCallSpec(kind mir.IntrinsicKind) (intrinsicRuntimeSpec, boo
 		return intrinsicRuntimeSpec{"osty_rt_strings_NthSegment", scalarString, []scalarType{scalarString, scalarString, scalarInt}}, true
 	case mir.IntrinsicListLen:
 		return intrinsicRuntimeSpec{"osty_rt_list_len", scalarInt, []scalarType{scalarOpaquePtr}}, true
+	case mir.IntrinsicListContains:
+		return intrinsicRuntimeSpec{"osty_rt_list_contains_str", scalarBool, []scalarType{scalarOpaquePtr, scalarString}}, true
 	case mir.IntrinsicListReversed:
 		return intrinsicRuntimeSpec{"osty_rt_list_reversed", scalarOpaquePtr, []scalarType{scalarOpaquePtr}}, true
 	case mir.IntrinsicListSlice:
@@ -6671,6 +6695,20 @@ func matchOrChainAggregate(fn *mir.Function, mctx *moduleCtx) (orChainPattern, b
 	if len(pat.arms) != len(pat.rungs)+1 {
 		return pat, false
 	}
+	// Reassign arm SSA ranges so they come after all rung cond emits.
+	// The original classification assigns arm0 before rung1, which
+	// gives arm0 lower SSA numbers than rung blocks — but LLVM
+	// requires SSA definitions to be in textual order. Reassign from
+	// the current nextSSA value (past all rung instructions).
+	for i := range pat.arms {
+		nFields := len(pat.arms[i].fieldExprs)
+		if nFields == 0 {
+			continue
+		}
+		pat.arms[i].startSSA = nextSSA
+		pat.arms[i].resultExpr = fmt.Sprintf("%%%d", nextSSA+nFields-1)
+		nextSSA += nFields
+	}
 	pat.mergeLabel = blockLabelName(returnBlock.ID, "merge")
 	return pat, true
 }
@@ -7453,6 +7491,31 @@ func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr)
 		return emitWhileIntrinsic(ctx, out, step)
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 		return true
+	}
+	return false
+}
+
+// emitWhileStepInUnreachable is like emitWhileStep but for blocks
+// terminated by UnreachableTerm. It emits calls and intrinsics
+// (which may have side effects like os.exit or process.abort) but
+// skips pure assignments that only bind ErrType/unit values.
+func emitWhileStepInUnreachable(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr) bool {
+	switch step := instr.(type) {
+	case *mir.CallInstr:
+		return emitWhileCall(ctx, out, step)
+	case *mir.IntrinsicInstr:
+		return emitWhileIntrinsic(ctx, out, step)
+	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+		return true
+	case *mir.AssignInstr:
+		// Skip assignments to ErrType or unit locals in unreachable
+		// blocks — they have no side effects and their locals may
+		// not have valid stack allocations.
+		destLocal := lookupLocal(ctx.fn, step.Dest.Local)
+		if destLocal != nil && (isErrType(destLocal.Type) || isUnitType(destLocal.Type)) {
+			return true
+		}
+		return emitWhileAssign(ctx, out, step)
 	}
 	return false
 }
@@ -8542,6 +8605,13 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		if !ok {
 			return false
 		}
+		// For tuple aggregates the value is built inline (not
+		// heap-allocated), so emitWhileAggregateRValue stores it
+		// directly to the sret slot internally.
+		if agg.Kind == mir.AggTuple {
+			_, _, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
+			return ok
+		}
 		expr, ty, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
 		if !ok || ty != scalarOpaquePtr {
 			return false
@@ -9051,6 +9121,52 @@ func emitWhileAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *
 	if agg != nil && agg.Kind == mir.AggStruct && destType == scalarOpaquePtr {
 		return emitWhileStructAggregateRValue(ctx, out, agg)
 	}
+	// Tuple construction: emit insertvalue chain when the dest is an
+	// sret aggregate-return slot, or build an SSA value for
+	// intermediate tuple locals.
+	if agg != nil && agg.Kind == mir.AggTuple {
+		tupleTy, ok := agg.T.(*ir.TupleType)
+		if !ok || tupleTy == nil {
+			return "", scalarUnknown, false
+		}
+		fields := make([]scalarType, len(tupleTy.Elems))
+		for i, e := range tupleTy.Elems {
+			st := ctx.mctx.scalarFromType(e, true)
+			if st == scalarUnknown {
+				return "", scalarUnknown, false
+			}
+			fields[i] = st
+		}
+		typeN := ctx.mctx.internTupleType(fields)
+		if len(agg.Fields) != len(fields) {
+			return "", scalarUnknown, false
+		}
+		fieldExprs := make([]string, len(agg.Fields))
+		for i, f := range agg.Fields {
+			expr, ty, ok := resolveOperandWithLoad(ctx, out, f)
+			if !ok || ty != fields[i] {
+				return "", scalarUnknown, false
+			}
+			fieldExprs[i] = expr
+		}
+		// Build the tuple via insertvalue chain.
+		result := "undef"
+		for i, fe := range fieldExprs {
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = insertvalue %%%s %s, %s %s, %d\n", reg, typeN, result, fields[i].llvm(), fe, i)
+			result = reg
+		}
+		// Store the built tuple value directly to the sret slot.
+		if ctx.aggRetSRet {
+			for _, sd := range ctx.stack {
+				if sd.id == ctx.fn.ReturnLocal && sd.ty == scalarOpaquePtr {
+					fmt.Fprintf(out, "  store %%%s %s, ptr %%%s\n", typeN, result, sd.name)
+					break
+				}
+			}
+		}
+		return result, scalarOpaquePtr, true
+	}
 	if agg == nil || agg.Kind != mir.AggList || destType != scalarOpaquePtr {
 		return "", scalarUnknown, false
 	}
@@ -9162,10 +9278,10 @@ func resultPayloadScalars(t mir.Type, mctx *moduleCtx) (scalarType, scalarType, 
 	}
 	okTy := mctx.scalarFromType(named.Args[0], true)
 	errTy := mctx.scalarFromType(named.Args[1], true)
-	if okTy == scalarUnknown && isUnitType(named.Args[0]) {
+	if okTy == scalarUnknown && (isUnitType(named.Args[0]) || isEmptyTupleType(named.Args[0])) {
 		okTy = scalarInt
 	}
-	if errTy == scalarUnknown && isUnitType(named.Args[1]) {
+	if errTy == scalarUnknown && (isUnitType(named.Args[1]) || isEmptyTupleType(named.Args[1])) {
 		errTy = scalarInt
 	}
 	if okTy == scalarUnknown || errTy == scalarUnknown {
@@ -11912,7 +12028,15 @@ func declareListRuntime(mctx *moduleCtx) {
 	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_i1(ptr, i1)\n")
 	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_string(ptr, ptr)\n")
 	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_ptr(ptr, ptr)\n")
-	mctx.extraDecls.WriteString("declare i64 @osty_rt_list_len(ptr)\n")
+	// Use declareRuntimePrototype for list_len so its per-symbol
+	// dedup key is set and other callers don't emit duplicates.
+	declareRuntimePrototype(mctx, "osty_rt_list_len", scalarInt, []callArg{{ty: "ptr"}})
+	// Set per-symbol dedup keys for push functions so
+	// declareListPushRuntimeFor doesn't emit duplicates.
+	mctx.emittedStructs["__stage0.fn_decl.osty_rt_list_push_i64"] = true
+	mctx.emittedStructs["__stage0.fn_decl.osty_rt_list_push_i1"] = true
+	mctx.emittedStructs["__stage0.fn_decl.osty_rt_list_push_string"] = true
+	mctx.emittedStructs["__stage0.fn_decl.osty_rt_list_push_ptr"] = true
 }
 
 func emitListLiteralLen(out *strings.Builder, fn *mir.Function, pat listLiteralLenPattern) error {
@@ -12230,6 +12354,15 @@ func classifyBuiltinEnumReturnTypeFromNamed(t *ir.NamedType, mctx *moduleCtx) (s
 		}
 		okST := mctx.scalarFromType(t.Args[0], true)
 		errST := mctx.scalarFromType(t.Args[1], true)
+		// Unit-typed Ok payload: represent as i64 zero marker.
+		// Check both PrimUnit and empty TupleType (both represent () in MIR).
+		if okST == scalarUnknown && (isUnitType(t.Args[0]) || isEmptyTupleType(t.Args[0])) {
+			okST = scalarInt
+		}
+		// Unit-typed Err payload: represent as i64 zero marker.
+		if errST == scalarUnknown && (isUnitType(t.Args[1]) || isEmptyTupleType(t.Args[1])) {
+			errST = scalarInt
+		}
 		if okST == scalarUnknown || errST == scalarUnknown {
 			return "", nil, false
 		}
@@ -12786,6 +12919,19 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		stack[l.ID] = decl
 		pat.stackDecls = append(pat.stackDecls, decl)
 	}
+	// Deduplicate stack decl names — multiple locals can share the
+	// same source name (e.g. _iter in different scopes), which would
+	// produce duplicate LLVM alloca names.
+	seen := map[string]bool{}
+	for i, sd := range pat.stackDecls {
+		base := sd.name
+		for seen[sd.name] {
+			sd.name = base + fmt.Sprintf(".%d", sd.id)
+		}
+		seen[sd.name] = true
+		pat.stackDecls[i] = sd
+		stack[sd.id] = sd
+	}
 	if !pat.returnsVoid {
 		if _, ok := stack[fn.ReturnLocal]; !ok {
 			return pat, false
@@ -12882,7 +13028,17 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if !emitSyntheticDiscardedCallReturn(ctx, &body, bb, call, pat.retType) {
 				return pat, false
 			}
-		} else if _, unreachable := bb.Term.(*mir.UnreachableTerm); !unreachable {
+		} else if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			// Emit instructions in unreachable blocks only when they
+			// contain non-trivial calls (e.g. os.exit, process.abort)
+			// that must still be lowered. Pure ErrType/const assignments
+			// in unreachable sinks are skipped.
+			for _, instr := range bb.Instrs {
+				if !emitWhileStepInUnreachable(ctx, &body, instr) {
+					return pat, false
+				}
+			}
+		} else {
 			for _, instr := range bb.Instrs {
 				if !emitWhileStep(ctx, &body, instr) {
 					return pat, false
