@@ -165,6 +165,37 @@ func requireIdentPatName(t *testing.T, pat ast.Pattern, want string, context str
 	}
 }
 
+func requireTrailingLetZAt(t *testing.T, stmts []ast.Stmt, idx int) *ast.LetStmt {
+	t.Helper()
+	stmt := requireLetStmtAt(t, stmts, idx, "trailing let statement")
+	requireIdentPatName(t, stmt.Pattern, "z", "let z = 2")
+	return stmt
+}
+
+func requireRecoveryFnDecl(t *testing.T, result Result, declIdx int, wantBodyStmts int, context string) *ast.FnDecl {
+	t.Helper()
+	requireSingleParseDiagnosticCode(t, result, "E0204")
+	return requireFnDeclAt(t, result.File, declIdx, wantBodyStmts, context)
+}
+
+func requireRecoveryFnWithTrailingLet(t *testing.T, result Result, declIdx int, wantBodyStmts int, letIdx int, context string) (*ast.FnDecl, *ast.LetStmt) {
+	t.Helper()
+	fn := requireRecoveryFnDecl(t, result, declIdx, wantBodyStmts, context)
+	letStmt := requireTrailingLetZAt(t, fn.Body.Stmts, letIdx)
+	return fn, letStmt
+}
+
+func requireRecoveryForStmtWithTrailingLet(t *testing.T, result Result, declIdx int, context string) (*ast.ForStmt, *ast.LetStmt) {
+	t.Helper()
+	fn := requireRecoveryFnDecl(t, result, declIdx, 1, context)
+	forStmt := requireForStmtAt(t, fn.Body.Stmts, 0, context)
+	if len(forStmt.Body.Stmts) != 2 {
+		t.Fatalf("stmt[0] = %#v, want %s", fn.Body.Stmts[0], context)
+	}
+	letStmt := requireTrailingLetZAt(t, forStmt.Body.Stmts, 1)
+	return forStmt, letStmt
+}
+
 const (
 	fixtureTrailingLet4 = "    let z = 2\n"
 	fixtureTrailingLet8 = "        let z = 2\n"
@@ -417,70 +448,55 @@ func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
 	src := fixtureFnWithTrailingLet("    let x =\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "two let statements")
-	first := requireLetStmtAt(t, fn.Body.Stmts, 0, "let with nil value placeholder")
-	if first.Value != nil {
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "two let statements")
+	first, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok || first.Value != nil {
 		t.Fatalf("stmt[0] = %#v, want let with nil value placeholder", fn.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryB3AssignMissingRhsPreservesFollowingStmt(t *testing.T) {
 	src := fixtureFnWithTrailingLet("    x =\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "assignment plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "assignment plus trailing let")
 	assign, ok := fn.Body.Stmts[0].(*ast.AssignStmt)
 	if !ok || assign.Value != nil {
 		t.Fatalf("stmt[0] = %#v, want assignment with nil rhs placeholder", fn.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryB6ReturnMalformedExprPreservesFollowingStmt(t *testing.T) {
 	src := fixtureFnWithTrailingLet("    return +\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "return plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "return plus trailing let")
 	ret, ok := fn.Body.Stmts[0].(*ast.ReturnStmt)
 	if !ok || ret.Value != nil {
 		t.Fatalf("stmt[0] = %#v, want return with nil value after recovery", fn.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryB7ChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
 	src := fixtureFnWithTrailingLet("    ch <-\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "chan send plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "chan send plus trailing let")
 	send, ok := fn.Body.Stmts[0].(*ast.ChanSendStmt)
 	if !ok || send.Value != nil {
 		t.Fatalf("stmt[0] = %#v, want chan send with nil rhs placeholder", fn.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
 	src := fixtureFnWithTrailingLet("    defer\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "defer plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "defer plus trailing let")
 	deferStmt := requireDeferStmtAt(t, fn.Body.Stmts, 0, "defer with nil expr after recovery")
 	if deferStmt.X != nil {
 		t.Fatalf("stmt[0] = %#v, want defer with nil expr after recovery", fn.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 // Axis C — control-flow tail recovery.
@@ -489,54 +505,33 @@ func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) 
 	src := fixtureLoopFnWithTrailingLet("        break +\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 1, "single for statement")
-	forStmt := requireForStmtAt(t, fn.Body.Stmts, 0, "for body with break plus trailing let")
-	if len(forStmt.Body.Stmts) != 2 {
-		t.Fatalf("stmt[0] = %#v, want for body with break plus trailing let", fn.Body.Stmts[0])
-	}
+	forStmt, _ := requireRecoveryForStmtWithTrailingLet(t, result, 0, "single for statement")
 	brk := requireBreakStmtAt(t, forStmt.Body.Stmts, 0, "break with nil value after recovery")
 	if brk.Value != nil {
 		t.Fatalf("for body stmt[0] = %#v, want break with nil value after recovery", forStmt.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, forStmt.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryC3ContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
 	src := fixtureLoopFnWithTrailingLet("        continue +\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 1, "single for statement")
-	forStmt := requireForStmtAt(t, fn.Body.Stmts, 0, "for body with continue plus trailing let")
-	if len(forStmt.Body.Stmts) != 2 {
-		t.Fatalf("stmt[0] = %#v, want for body with continue plus trailing let", fn.Body.Stmts[0])
-	}
+	forStmt, _ := requireRecoveryForStmtWithTrailingLet(t, result, 0, "single for statement")
 	cont := requireContinueStmtAt(t, forStmt.Body.Stmts, 0, "unlabeled continue")
 	if cont.Label != "" {
 		t.Fatalf("for body stmt[0] = %#v, want unlabeled continue", forStmt.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, forStmt.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
 	src := fixtureLabeledLoopFnWithTrailingLet("outer", "        continue 'outer +\n")
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 1, "single labeled for statement")
-	forStmt := requireForStmtAt(t, fn.Body.Stmts, 0, "for body with continue plus trailing let")
-	if len(forStmt.Body.Stmts) != 2 {
-		t.Fatalf("stmt[0] = %#v, want for body with continue plus trailing let", fn.Body.Stmts[0])
-	}
+	forStmt, _ := requireRecoveryForStmtWithTrailingLet(t, result, 0, "single labeled for statement")
 	cont := requireContinueStmtAt(t, forStmt.Body.Stmts, 0, "labeled continue 'outer")
 	if cont.Label != "outer" {
 		t.Fatalf("for body stmt[0] = %#v, want labeled continue 'outer", forStmt.Body.Stmts[0])
 	}
-	second := requireLetStmtAt(t, forStmt.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 // Axis D — scoped / nested body recovery.
@@ -545,8 +540,7 @@ func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing
 	src := fixtureDeferBlockMalformedBody()
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "defer plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "defer plus trailing let")
 	deferStmt := requireDeferStmtAt(t, fn.Body.Stmts, 0, "defer statement")
 	block, ok := deferStmt.X.(*ast.Block)
 	if !ok || len(block.Stmts) != 1 {
@@ -556,8 +550,6 @@ func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing
 	if inner.Value != nil {
 		t.Fatalf("defer block stmt[0] = %#v, want let with nil initializer", block.Stmts[0])
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
 
 // Axis E — conditional pattern recovery.
@@ -566,8 +558,7 @@ func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *
 	src := fixtureIfLetMalformedScrutinee()
 
 	result := ParseDetailed(src)
-	requireSingleParseDiagnosticCode(t, result, "E0204")
-	fn := requireFnDeclAt(t, result.File, 0, 2, "if-let plus trailing let")
+	fn, _ := requireRecoveryFnWithTrailingLet(t, result, 0, 2, 1, "if-let plus trailing let")
 	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
 	ifExpr, ok := stmt.X.(*ast.IfExpr)
 	if !ok || !ifExpr.IsIfLet || ifExpr.Cond != nil {
@@ -577,6 +568,4 @@ func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *
 	if !ok || len(elseBlock.Stmts) != 1 {
 		t.Fatalf("ifExpr.Else = %#v, want preserved else block", ifExpr.Else)
 	}
-	second := requireLetStmtAt(t, fn.Body.Stmts, 1, "trailing let statement")
-	requireIdentPatName(t, second.Pattern, "z", "let z = 2")
 }
