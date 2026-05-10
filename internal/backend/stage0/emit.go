@@ -1314,7 +1314,7 @@ func classifyDiscardedValueIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInst
 		return "", false
 	}
 	declareRuntimePrototype(mctx, spec.symbol, spec.ret, args)
-	return prelude + renderDiscardValueCallLine(spec.symbol, spec.ret, args), true
+	return prelude + renderDiscardValueCallLine(mctx, spec.symbol, spec.ret, args), true
 }
 
 func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
@@ -2004,7 +2004,7 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 			if !mctx.knownSymbols[ref.Symbol] {
 				declareFunctionPrototype(mctx, ref.Symbol, retType, args)
 			}
-			return resolved.prelude + renderDiscardValueCallLine(ref.Symbol, retType, args), true
+			return resolved.prelude + renderDiscardValueCallLine(mctx, ref.Symbol, retType, args), true
 		}
 		if !mctx.knownSymbols[ref.Symbol] {
 			declareVoidFunctionPrototype(mctx, ref.Symbol, args)
@@ -2119,9 +2119,23 @@ func renderVoidCallLine(symbol string, args []callArg) string {
 	return b.String()
 }
 
-func renderDiscardValueCallLine(symbol string, retType scalarType, args []callArg) string {
+func renderDiscardValueCallLine(mctx *moduleCtx, symbol string, retType scalarType, args []callArg) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "  call %s @%s(", retType.llvm(), symbol)
+	// Capture the result into a uniquely-named SSA register even though
+	// the caller will not consume it. LLVM auto-allocates an anonymous
+	// number for any value-producing instruction that lacks a `%X = `
+	// prefix; without an explicit (named) capture, the next anonymous
+	// `%N = ...` instruction in the same basic block collides with the
+	// reserved slot, e.g.:
+	//
+	//   call i1 @checkIsAssignableDepth(...)   ; LLVM auto-allocates %308
+	//   %308 = load ptr, ptr %sa.slot           ; collides → "expected '%309'"
+	//
+	// Naming the capture (via `mctx.freshDiscardName`) keeps it out of
+	// the anonymous numbering pool so subsequent positional `%N`
+	// instructions stay in sequence. The named register is otherwise
+	// inert — no later instruction references it.
+	fmt.Fprintf(&b, "  %s = call %s @%s(", mctx.freshDiscardName(symbol), retType.llvm(), symbol)
 	for i, a := range args {
 		if i > 0 {
 			b.WriteString(", ")
@@ -2130,6 +2144,19 @@ func renderDiscardValueCallLine(symbol string, retType scalarType, args []callAr
 	}
 	b.WriteString(")\n")
 	return b.String()
+}
+
+// freshDiscardName allocates a uniquely-named SSA register for a
+// value-returning call whose result is discarded by the source.
+// `symbol` is the called function's LLVM symbol — it is sanitized into
+// the register name so the generated IR is self-explanatory in dumps.
+func (m *moduleCtx) freshDiscardName(symbol string) string {
+	if m == nil {
+		return "%stage0.discard"
+	}
+	name := fmt.Sprintf("%%stage0.discard.%s.%d", sanitizeLLVMName(symbol, "fn"), m.nextTempID)
+	m.nextTempID++
+	return name
 }
 
 type intrinsicRuntimeSpec struct {
@@ -7833,7 +7860,7 @@ func emitWhileDiscardedValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builde
 		return false
 	}
 	declareRuntimePrototype(ctx.mctx, spec.symbol, spec.ret, args)
-	out.WriteString(renderDiscardValueCallLine(spec.symbol, spec.ret, args))
+	out.WriteString(renderDiscardValueCallLine(ctx.mctx, spec.symbol, spec.ret, args))
 	return true
 }
 
@@ -9655,7 +9682,7 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 			if !ctx.mctx.knownSymbols[ref.Symbol] {
 				declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
 			}
-			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
+			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
 			return true
 		}
 	} else {
@@ -9674,7 +9701,7 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 			if !ctx.mctx.knownSymbols[ref.Symbol] {
 				declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
 			}
-			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
+			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
 			return true
 		}
 	}
