@@ -889,6 +889,25 @@ func isRangeIntOrCharType(t Type) bool {
 	}
 	return pt.Kind == ir.PrimInt || pt.Kind == ir.PrimChar
 }
+// isIteratorType reports whether t is a NamedType with Name "Iterator"
+// and exactly one type argument (the element type).
+func isIteratorType(t Type) bool {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name != "Iterator" || len(nt.Args) != 1 {
+		return false
+	}
+	return true
+}
+
+// iteratorElementType extracts the T from Iterator<T>.
+func iteratorElementType(t Type) Type {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || len(nt.Args) < 1 {
+		return nil
+	}
+	return nt.Args[0]
+}
+
 
 func isPoisonType(t Type) bool {
 	if t == nil {
@@ -1629,8 +1648,13 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 			}
 		}
 	}
+	// Iterator<T> protocol: call next() repeatedly, check Option<T>.
+	if isIteratorType(iterT) {
+		bs.lowerForInIterator(f, iterT)
+		return
+	}
 	if !bs.l.isListType(iterT) {
-		bs.l.noteIssue("for-in over non-List/Map/Channel iterable is not lowered to MIR yet: %s", typeString(iterT))
+		bs.l.noteIssue("for-in over unsupported iterable type not lowered to MIR: %s", typeString(iterT))
 		return
 	}
 	elemT := bs.l.listElementType(iterT)
@@ -2047,6 +2071,93 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
 	bs.cur = exit
 }
+// lowerForInIterator lowers `for x in iter { ... }` where iter implements
+// the Iterator<T> protocol. Each loop iteration calls iter.next() which
+// returns Option<T>. Some(val) continues the loop; None terminates it.
+// The shape mirrors lowerForInChannel but uses a method call instead of
+// an intrinsic.
+func (bs *bodyState) lowerForInIterator(f *ir.ForStmt, iterT Type) {
+	elemT := iteratorElementType(iterT)
+	if elemT == nil || isPoisonType(elemT) {
+		bs.l.noteIssue("for-in over Iterator with unresolved element type not lowered to MIR: %s", typeString(iterT))
+		return
+	}
+	optT := &ir.OptionalType{Inner: elemT}
+
+	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
+	bs.lowerExprInto(f.Iter, iter, iterT)
+
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+
+	// header: opt = iter.next(); switch opt { Some => body, None => exit }
+	bs.cur = header
+	opt := bs.newLocal("_next", optT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: opt, SpanV: f.SpanV})
+	// Call Iterator__next(iter) — the method takes self and returns T.
+	bs.emit(&CallInstr{
+		Dest:   &Place{Local: opt},
+		Callee: &FnRef{Symbol: "Iterator__next", Type: optT},
+		Args:   []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}},
+		SpanV:  f.SpanV,
+	})
+
+	disc := bs.freshTemp(TInt, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: disc},
+		Src:   &DiscriminantRV{Place: Place{Local: opt}, T: TInt},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&SwitchIntTerm{
+		Scrutinee: &CopyOp{Place: Place{Local: disc}, T: TInt},
+		Cases:     []SwitchCase{{Value: someTagOf(optT), Target: body, Label: "Some"}},
+		Default:   exit,
+		SpanV:     f.SpanV,
+	})
+
+	// body: unwrap Some payload, bind, execute loop body
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label:      f.Label,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
+	})
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
+	payloadProj := &VariantProj{
+		Variant:  int(someTagOf(optT)),
+		Name:     "Some",
+		FieldIdx: 0,
+		Type:     elemT,
+	}
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: elemLocal},
+		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: opt}.Project(payloadProj), T: elemT}},
+		SpanV: f.SpanV,
+	})
+	if f.Pattern != nil {
+		bs.bindPattern(f.Pattern, Place{Local: elemLocal}, elemT, f.SpanV)
+	} else if f.Var != "" {
+		bs.bind(f.Var, elemLocal)
+	}
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+
+	bs.cur = step
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = exit
+}
+
 
 // ==== match lowering ====
 
