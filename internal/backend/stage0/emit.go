@@ -9911,9 +9911,17 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 		if !ok || indexTy != scalarInt {
 			return "", scalarUnknown, false
 		}
+		// Char element (i32) — match the runtime prototype's return
+		// type. The previous `call i64` form left `%value` as i64
+		// while every consumer (`store i32 %value, ptr %char.slot`,
+		// `icmp eq i32 %value, …`) treated it as i32, producing
+		// clang `'<id>' defined with type 'i64' but expected 'i32'`.
+		// Other byte-/codepoint-returning runtime helpers in this
+		// file (e.g. `osty_rt_bytes_get` → i8 at line ~9929) follow
+		// the same scalar-matches-prototype convention.
 		declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_string_char_at", scalarChar, []callArg{{ty: "ptr"}, {ty: "i64"}})
 		value := freshReg(ctx)
-		fmt.Fprintf(out, "  %s = call i64 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
+		fmt.Fprintf(out, "  %s = call i32 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
 		return value, scalarChar, true
 	}
 	if listScalarTy != scalarOpaquePtr {
