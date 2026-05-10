@@ -88,7 +88,6 @@ func parseBackendFile(t *testing.T, src string) (*ast.File, *resolve.Result, *ch
 		Primitives:         reg.Primitives,
 		ResultMethods:      reg.ResultMethods,
 		Source:             []byte(src),
-		PopulateLegacyMaps: true, // LLVM backend lowerer uses pointer-keyed maps
 	})
 	return file, res, chk
 }

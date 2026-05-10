@@ -175,14 +175,6 @@ type Opts struct {
 	// correct for ordinary user code.
 	Privileged bool
 
-	// PopulateLegacyMaps controls whether the checker populates the
-	// pointer-keyed maps in Result (Types, LetTypes, SymTypes,
-	// InstantiationsByID) via overlaySelfhostResult. These maps are
-	// needed by legacy consumers that have not yet migrated to
-	// NativeCheckResult / SemanticDB. When false (the default), the
-	// overlay is skipped and only NativeCheckResult / SemanticDB are
-	// populated, which is sufficient for most downstream tools.
-	PopulateLegacyMaps bool
 }
 
 // firstOpt returns the first Opts in the slice, or a zero value when
@@ -241,7 +233,7 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
-	applySelfhostFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged, opt.PopulateLegacyMaps)
+	applySelfhostFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
 	diag.StampFile(result.Diags, opt.Path)
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
@@ -258,7 +250,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		return result
 	}
 	privileged := isPrivilegedPackage(pkg)
-	applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, privileged, opt.PopulateLegacyMaps)
+	applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, privileged)
 	stampPackageDiags(result.Diags, pkg)
 	// §19 policy gates (privilege / POD / no_alloc / intrinsic body) are
 	// now sourced from the bootstrapped Osty checker
@@ -314,7 +306,7 @@ func Workspace(
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
 	}
-	applySelfhostWorkspaceResults(ws, resolved, out, opt.Stdlib, opt.PopulateLegacyMaps)
+	applySelfhostWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	// §19 policy gates are sourced from the Osty checker (see File()
 	// comment above). TestGatesCrossSideParity guards against drift.
 	for _, e := range walk {
@@ -360,7 +352,7 @@ func PackageGraph(
 		pr := resolved[path]
 		result := resultWithSharedMaps(shared)
 		out[path] = result
-		applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg), opt.PopulateLegacyMaps)
+		applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg))
 		stampPackageDiags(result.Diags, pkg)
 		for _, pf := range pkg.Files {
 			if pf == nil {
