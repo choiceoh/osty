@@ -6711,7 +6711,6 @@ func TestStage0ListAllDeclinesSkipsAggregationOnCleanModule(t *testing.T) {
 	}
 }
 
-
 func TestStage0GenericCFGResultEnumReturn(t *testing.T) {
 	t.Parallel()
 	resultIntString := &ir.NamedType{Name: "Result", Builtin: true, Args: []ir.Type{ir.TInt, ir.TString}}
@@ -6751,7 +6750,7 @@ func TestStage0GenericCFGResultEnumReturn(t *testing.T) {
 				Term: &mir.GotoTerm{Target: 3},
 			},
 			{
-				ID: 3,
+				ID:   3,
 				Term: &mir.BranchTerm{Then: 4, Else: 5, Cond: localCopy(2, ir.TBool)},
 			},
 			{

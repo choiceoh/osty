@@ -2543,6 +2543,16 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
     if callee.name == "" {
+        // Interface method-call indirect dispatch (E4).
+        // When the callee symbol matches `<iface>__<method>` and the
+        // first argument's type is that interface, emit extractvalue /
+        // GEP / load / indirect-call instead of a cross-module direct
+        // call. This lets the Go MIR lowerer (which emits the same
+        // CallInstr for both concrete and interface receivers) avoid
+        // adding a new MIR callee kind.
+        if lirTryLowerMirInterfaceCall(l, instr) {
+            return
+        }
         lirLowerMirCrossModuleCall(l, instr)
         return
     }
@@ -2619,6 +2629,111 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         let loc = mirFunctionLocal(l.fn_, instr.dest.local)
         lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "cross-module call result")
     }
+}
+/// `lirTryLowerMirInterfaceCall` detects a CallInstr whose callee
+/// symbol has shape `<iface>__<method>` and whose first argument is
+/// the interface type, then emits the canonical vtable indirect-
+/// dispatch sequence:
+///
+///   %vt   = extractvalue %osty.iface %recv, 1
+///   %slot = getelementptr inbounds ptr, ptr %vt, i64 <methodSlot>
+///   %fn   = load ptr, ptr %slot
+///   %data = extractvalue %osty.iface %recv, 0
+///   %res  = call <ret> %fn(ptr %data, ...)
+///
+/// Returns true when the call was recognised and lowered.
+fn lirTryLowerMirInterfaceCall(l: LirMirFunctionLowerer, instr: MirInstr) -> Bool {
+    if instr.args.len() == 0 {
+        return false
+    }
+    let recvType = instr.args[0].typ
+    for layout in l.mirModule.layouts.interfaces {
+        let prefix = layout.name + "__"
+        if !(strings.hasPrefix(instr.calleeSymbol, prefix)) {
+            continue
+        }
+        let methodName = strings.slice(instr.calleeSymbol, prefix.len(), instr.calleeSymbol.len())
+        let slot = lirFindInterfaceMethodSlot(layout, methodName)
+        if slot < 0 {
+            continue
+        }
+        // Verify receiver type matches interface (allow bare name or %prefixed).
+        if recvType != layout.name && recvType != ("%" + layout.name) {
+            continue
+        }
+        // Lower the interface fat-pointer operand.
+        let ifaceType = lirAggregateType(lirIfaceTypeName())
+        let recvValue = lirLowerMirOperand(l, instr.args[0], recvType, ifaceType)
+        if recvValue.value == "" {
+            return true
+        }
+        // Extract vtable (index 1) and method slot.
+        let vtReg = lirFresh(l)
+        l.instrs.push(lirExtractValue(vtReg, ifaceType, recvValue.value, [1]))
+        let slotReg = lirFresh(l)
+        l.instrs.push(lirGep(slotReg, lirPtrType(), vtReg, [lirOperand(lirIntType(64), lirIntToString(slot))], true))
+        let fnReg = lirFresh(l)
+        l.instrs.push(lirLoad(fnReg, lirPtrType(), slotReg, 0))
+        // Extract data pointer (index 0) — becomes the shim's self arg.
+        let dataReg = lirFresh(l)
+        l.instrs.push(lirExtractValue(dataReg, ifaceType, recvValue.value, [0]))
+        // Build argument list: data ptr + remaining args.
+        let mut args: List<LirOperand> = []
+        args.push(lirOperand(lirPtrType(), dataReg))
+        let mut i = 1
+        for i < instr.args.len() {
+            let arg = instr.args[i]
+            let argType = lirLowerMirType(l, arg.typ)
+            if lirTypeIsZero(argType) {
+                lirLowerError(l, LirDiagUnsupported, "interface call arg type `" + arg.typ + "` is not implemented", "call.interface")
+                return true
+            }
+            let value = lirLowerMirOperand(l, arg, arg.typ, argType)
+            if value.value == "" {
+                return true
+            }
+            args.push(lirOperand(argType, value.value))
+            i = i + 1
+        }
+        // Return type from destination local, same as cross-module call.
+        let retType = if instr.hasDest {
+            let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+            if loc.id < 0 {
+                lirLowerError(l, LirDiagInvalidInput, "interface call destination local out of range", "call.interface")
+                return true
+            }
+            lirLowerMirType(l, loc.typ)
+        } else {
+            lirVoidType()
+        }
+        if lirTypeIsVoid(retType) {
+            l.instrs.push(lirCall("", retType, fnReg, args))
+            lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "void interface call `" + instr.calleeSymbol + "`")
+            return true
+        }
+        let destName = if instr.hasDest {
+            lirFresh(l)
+        } else {
+            ""
+        }
+        l.instrs.push(lirCall(destName, retType, fnReg, args))
+        if instr.hasDest {
+            let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+            lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "interface call result")
+        }
+        return true
+    }
+    false
+}
+/// `lirFindInterfaceMethodSlot` returns the vtable slot index for
+/// `methodName` inside `layout`, or -1 when not found.
+fn lirFindInterfaceMethodSlot(layout: MirInterfaceLayout, methodName: String) -> Int {
+    for method in layout.methods {
+        if method.name == methodName {
+            return method.slot
+        }
+    }
+    -1
 }
 // `lirLowerMirIndirectCall` handles a call through a function-value
 // operand. The MIR shape: `instr.calleeOperand` evaluates to a

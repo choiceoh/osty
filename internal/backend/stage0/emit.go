@@ -3,7 +3,6 @@ package stage0
 import (
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -166,14 +165,12 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 			emittedMain = true
 		}
 	}
-	// Aggregated-declines path is taken on `OSTY_STAGE0_LIST_ALL_DECLINES=1`
-	// when at least one function declined. We still build the (partial)
-	// IR and return it alongside the error so callers that want to
-	// validate emit-correctness on the surviving functions (e.g. the
-	// audit harness's module-level clang verify) can do so. Pre-existing
-	// callers that ignore bytes on err == non-nil are unaffected.
-	aggregated := listAll && len(declines) > 0
-	if !aggregated && !emittedMain {
+	if listAll && len(declines) > 0 {
+		// Return a single aggregated error so the dispatcher's warning
+		// chain shows every blocking site in one build round-trip.
+		return nil, fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
+	}
+	if !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
 
@@ -185,23 +182,15 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		out.WriteString("\n")
 	}
 	out.WriteString(fnBodies.String())
-	if aggregated {
-		// Return partial IR + aggregated declines error so audit
-		// callers can clang-verify whatever did emit while still
-		// surfacing the full decline list.
-		return []byte(out.String()), fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
-	}
 	return []byte(out.String()), nil
 }
 
 // moduleCtx threads per-EmitMIR module-level state through every
-// matcher and emit helper. It replaces the bare `knownSymbols` map
-// the older signatures used so future stage0 features (string pool,
+// matcher and emit helper so future stage0 features (string pool,
 // struct layouts, runtime declarations …) can attach without forcing
 // another sweep through all matcher signatures.
 type moduleCtx struct {
-	module       *mir.Module
-	knownSymbols map[string]bool
+	module *mir.Module
 	// extraDecls collects module-level lines (declares + globals +
 	// struct type defs) the matchers emit on demand. Concatenated
 	// into the final output before function bodies.
@@ -225,16 +214,8 @@ type moduleCtx struct {
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
-	syms := map[string]bool{}
-	for _, fn := range module.Functions {
-		if fn == nil || fn.Name == "" {
-			continue
-		}
-		syms[fn.Name] = true
-	}
 	return &moduleCtx{
 		module:         module,
-		knownSymbols:   syms,
 		extraDecls:     &strings.Builder{},
 		stringPool:     map[string]string{},
 		emittedStructs: map[string]bool{},
@@ -1105,14 +1086,7 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		// `osty_rt_set_*` returns `i1` (whether the element was
-		// added/removed). The MIR call discards the result, but
-		// emitting `call i1 @sym(...)` without an explicit capture
-		// would let LLVM auto-allocate the next anonymous %N for it
-		// and collide with subsequent positional `%N = ...`. Same
-		// fix family as #1588's `renderDiscardValueCallLine`: name
-		// the result so the anonymous numbering pool is unaffected.
-		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, mctx.freshDiscardName(symbol), symbol, setExpr, elemTy.llvm(), elemExpr), true
+		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, symbol, setExpr, elemTy.llvm(), elemExpr), true
 	case mir.IntrinsicMapRemove:
 		if len(ii.Args) != 2 {
 			return "", false
@@ -1131,8 +1105,7 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		// Same SSA-collision fix as the SetAdd/SetRemove branch above.
-		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, mctx.freshDiscardName(symbol), symbol, mapExpr, keyTy.llvm(), keyExpr), true
+		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, symbol, mapExpr, keyTy.llvm(), keyExpr), true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
 			return "", false
@@ -1331,7 +1304,7 @@ func classifyDiscardedValueIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInst
 		return "", false
 	}
 	declareRuntimePrototype(mctx, spec.symbol, spec.ret, args)
-	return prelude + renderDiscardValueCallLine(mctx, spec.symbol, spec.ret, args), true
+	return prelude + renderDiscardValueCallLine(spec.symbol, spec.ret, args), true
 }
 
 func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
@@ -1346,19 +1319,13 @@ func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 	if !ok {
 		return "", false
 	}
-	// printf / fprintf return `i32` (bytes written). The caller never
-	// captures it, but emitting `call i32 ...` without an explicit
-	// SSA prefix lets LLVM auto-allocate the next anonymous %N for
-	// the discarded result and collide with the next positional
-	// `%N = ...`. Capture into a named discard register — same fix
-	// family as #1588.
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := mctx.freshTempName("stderr")
 		return prelude +
 			fmt.Sprintf("  %s = load ptr, ptr @stderr\n", stderrReg) +
-			fmt.Sprintf("  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", mctx.freshDiscardName("fprintf"), stderrReg, fmtGlobal, argTy, expr), true
+			fmt.Sprintf("  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr), true
 	}
-	return prelude + fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", mctx.freshDiscardName("printf"), fmtGlobal, argTy, expr), true
+	return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr), true
 }
 
 func printFormatFor(kind mir.IntrinsicKind, ty scalarType) (string, string, bool) {
@@ -1403,10 +1370,7 @@ type sequentialPattern struct {
 }
 
 // matchSequentialReturn classifies `fn` against the multi-instruction
-// stage0 subset described in the package docstring. `knownSymbols`
-// names every function defined in the same MIR module so direct call
-// classifiers can decline references to external symbols (which
-// stage0 cannot declare).
+// stage0 subset described in the package docstring.
 func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern, bool) {
 	pat := sequentialPattern{}
 
@@ -1820,15 +1784,12 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 		if !ok {
 			return pendingInstr{}, 0, scalarUnknown, false
 		}
-		if !mctx.knownSymbols[ref.Symbol] {
-			declareFunctionPrototype(mctx, ref.Symbol, destType, resolved.args)
-		}
+		declareFunctionPrototype(mctx, ref.Symbol, destType, resolved.args)
 		return pendingInstr{
 			kind:       instrCall,
 			prelude:    resolved.prelude,
 			callSymbol: ref.Symbol,
 			callArgs:   resolved.args,
-			resultType: destType, // see #1587 / cluster 3 fix — emitPendingInstr needs this for the `<retType>` slot in `%reg = call <retType> @<sym>(…)`
 		}, destID, destType, true
 	}
 	if mctx.scalarFromType(fnTy.Return, allowOpaqueUserNamed) != destType {
@@ -1852,15 +1813,12 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 		prelude.WriteString(argPrelude)
 		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
 	}
-	if !mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(mctx, ref.Symbol, destType, args)
-	}
+	declareFunctionPrototype(mctx, ref.Symbol, destType, args)
 	return pendingInstr{
 		kind:       instrCall,
 		prelude:    prelude.String(),
 		callSymbol: ref.Symbol,
 		callArgs:   args,
-		resultType: destType, // see #1587 / cluster 3 fix
 	}, destID, destType, true
 }
 
@@ -1917,9 +1875,7 @@ func classifyProjectedCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map
 	if !ok || fieldTy != destType {
 		return "", false
 	}
-	if !mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(mctx, ref.Symbol, destType, resolved.args)
-	}
+	declareFunctionPrototype(mctx, ref.Symbol, destType, resolved.args)
 	reg := mctx.freshTempName("call.field")
 	var line strings.Builder
 	line.WriteString(slotPrelude)
@@ -2005,9 +1961,7 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 			prelude.WriteString(argPrelude)
 			args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
 		}
-		if !mctx.knownSymbols[ref.Symbol] {
-			declareVoidFunctionPrototype(mctx, ref.Symbol, args)
-		}
+		declareVoidFunctionPrototype(mctx, ref.Symbol, args)
 		return prelude.String() + renderVoidCallLine(ref.Symbol, args), true
 	} else {
 		resolved, okArgs := resolveCallArgsWithoutFnType(fn, ci.Args, bindings, mctx)
@@ -2017,23 +1971,17 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 		args = resolved.args
 		if !isErrType(ref.Type) {
 			if isUnitType(ref.Type) {
-				if !mctx.knownSymbols[ref.Symbol] {
-					declareVoidFunctionPrototype(mctx, ref.Symbol, args)
-				}
+				declareVoidFunctionPrototype(mctx, ref.Symbol, args)
 				return resolved.prelude + renderVoidCallLine(ref.Symbol, args), true
 			}
 			retType := mctx.scalarFromType(ref.Type, allowOpaqueUserNamed)
 			if retType == scalarUnknown {
 				return "", false
 			}
-			if !mctx.knownSymbols[ref.Symbol] {
-				declareFunctionPrototype(mctx, ref.Symbol, retType, args)
-			}
-			return resolved.prelude + renderDiscardValueCallLine(mctx, ref.Symbol, retType, args), true
+			declareFunctionPrototype(mctx, ref.Symbol, retType, args)
+			return resolved.prelude + renderDiscardValueCallLine(ref.Symbol, retType, args), true
 		}
-		if !mctx.knownSymbols[ref.Symbol] {
-			declareVoidFunctionPrototype(mctx, ref.Symbol, args)
-		}
+		declareVoidFunctionPrototype(mctx, ref.Symbol, args)
 		return resolved.prelude + renderVoidCallLine(ref.Symbol, args), true
 	}
 }
@@ -2043,29 +1991,9 @@ func isErrType(t mir.Type) bool {
 	return ok
 }
 
-// formatFloatConst renders a Go float64 as an LLVM IR floating-point
-// constant for the `double` type. LLVM's IR parser requires a decimal
-// point in textual fp constants — e.g. `0e+00`, `1e+02`, and `5e-01`
-// are all rejected as `integer constant must have integer type` even
-// when the surrounding context is `fcmp oeq double …`. To stay
-// human-readable while remaining LLVM-valid, we use the canonical hex
-// form (0x + 16 hex digits) for non-finite values and force a decimal
-// point ahead of the exponent for finite ones.
 func formatFloatConst(v float64) string {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Sprintf("0x%016X", math.Float64bits(v))
-	}
 	s := strconv.FormatFloat(v, 'e', -1, 64)
-	// FormatFloat with precision -1 uses the shortest round-trip form;
-	// for whole-number mantissas it produces output without `.` such as
-	// `0e+00` or `1e-10`. LLVM requires a `.` to disambiguate float vs
-	// integer literals, so insert `.0` immediately before the exponent
-	// when the mantissa lacks a fractional part.
-	if i := strings.IndexAny(s, "eE"); i >= 0 {
-		if !strings.ContainsRune(s[:i], '.') {
-			s = s[:i] + ".0" + s[i:]
-		}
-	} else if !strings.ContainsRune(s, '.') {
+	if !strings.ContainsAny(s, ".eE") {
 		s += ".0"
 	}
 	return s
@@ -2164,23 +2092,9 @@ func renderVoidCallLine(symbol string, args []callArg) string {
 	return b.String()
 }
 
-func renderDiscardValueCallLine(mctx *moduleCtx, symbol string, retType scalarType, args []callArg) string {
+func renderDiscardValueCallLine(symbol string, retType scalarType, args []callArg) string {
 	var b strings.Builder
-	// Capture the result into a uniquely-named SSA register even though
-	// the caller will not consume it. LLVM auto-allocates an anonymous
-	// number for any value-producing instruction that lacks a `%X = `
-	// prefix; without an explicit (named) capture, the next anonymous
-	// `%N = ...` instruction in the same basic block collides with the
-	// reserved slot, e.g.:
-	//
-	//   call i1 @checkIsAssignableDepth(...)   ; LLVM auto-allocates %308
-	//   %308 = load ptr, ptr %sa.slot           ; collides → "expected '%309'"
-	//
-	// Naming the capture (via `mctx.freshDiscardName`) keeps it out of
-	// the anonymous numbering pool so subsequent positional `%N`
-	// instructions stay in sequence. The named register is otherwise
-	// inert — no later instruction references it.
-	fmt.Fprintf(&b, "  %s = call %s @%s(", mctx.freshDiscardName(symbol), retType.llvm(), symbol)
+	fmt.Fprintf(&b, "  call %s @%s(", retType.llvm(), symbol)
 	for i, a := range args {
 		if i > 0 {
 			b.WriteString(", ")
@@ -2189,19 +2103,6 @@ func renderDiscardValueCallLine(mctx *moduleCtx, symbol string, retType scalarTy
 	}
 	b.WriteString(")\n")
 	return b.String()
-}
-
-// freshDiscardName allocates a uniquely-named SSA register for a
-// value-returning call whose result is discarded by the source.
-// `symbol` is the called function's LLVM symbol — it is sanitized into
-// the register name so the generated IR is self-explanatory in dumps.
-func (m *moduleCtx) freshDiscardName(symbol string) string {
-	if m == nil {
-		return "%stage0.discard"
-	}
-	name := fmt.Sprintf("%%stage0.discard.%s.%d", sanitizeLLVMName(symbol, "fn"), m.nextTempID)
-	m.nextTempID++
-	return name
 }
 
 type intrinsicRuntimeSpec struct {
@@ -2290,15 +2191,6 @@ func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 		prelude:    prelude.String(),
 		callSymbol: spec.symbol,
 		callArgs:   args,
-		// `resultType` is required: emitPendingInstr renders the call as
-		// `%reg = call <resultType.llvm()> @<symbol>(...)`. Leaving it
-		// zero (`scalarUnknown`) emits `call  @symbol(…)` with two
-		// spaces and no return type, which clang rejects with
-		// `error: expected type`. The intrinsic-driven path here never
-		// set the field; the fallback through `intrinsicRuntimeCallSpec`
-		// already checked `spec.ret == destType`, so destType is
-		// authoritative.
-		resultType: destType,
 	}, destID, destType, true
 }
 
@@ -2867,15 +2759,6 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 				prelude:    leftPrelude + rightPrelude,
 				callSymbol: symbol,
 				callArgs:   []callArg{leftArg, rightArg},
-				// `resultType` populates `<resultType.llvm()>` in the
-				// emitted `%reg = call <type> @<sym>(...)` line; missing
-				// it produced `call  @osty_rt_strings_Concat(…)` (two
-				// spaces, no return type) — clang `error: expected
-				// type`. Same fix family as #1587 bug 2 in the
-				// intrinsic-spec fallback path. Here we know the call
-				// returns String (the binary `+` on String is the only
-				// reason this branch fires).
-				resultType: scalarString,
 			}, "", true
 		}
 		// P16 — Special-case String ==/!= String: lowers to a runtime
@@ -3676,9 +3559,7 @@ func stringFnConstCallSymbol(op mir.Operand, mctx *moduleCtx) (string, bool) {
 	}
 	if fnTy, ok := fc.Type().(*ir.FnType); ok && fnTy != nil {
 		if len(fnTy.Params) == 0 && mctx.scalarFromType(fnTy.Return, true) == scalarString {
-			if !mctx.knownSymbols[fc.Symbol] {
-				declareFunctionPrototype(mctx, fc.Symbol, scalarString, nil)
-			}
+			declareFunctionPrototype(mctx, fc.Symbol, scalarString, nil)
 			return fc.Symbol, true
 		}
 	}
@@ -3693,9 +3574,7 @@ func stringFnConstCallSymbol(op mir.Operand, mctx *moduleCtx) (string, bool) {
 		}
 	}
 	if isErrType(fc.Type()) {
-		if !mctx.knownSymbols[fc.Symbol] {
-			declareFunctionPrototype(mctx, fc.Symbol, scalarString, nil)
-		}
+		declareFunctionPrototype(mctx, fc.Symbol, scalarString, nil)
 		return fc.Symbol, true
 	}
 	return "", false
@@ -4406,7 +4285,8 @@ func classifyBinaryForType(op mir.BinaryOp, hint scalarType) (string, scalarType
 }
 
 // disambiguateParamNames mutates `names` in place so that no two
-// entries are identical, by suffixing collisions with `.<index>`.
+// entries are identical and none collide with stage0-reserved block
+// labels such as `entry:`.
 func paramFallbackName(i int) string {
 	if i < 26 {
 		return string(rune('a' + i))
@@ -4415,12 +4295,6 @@ func paramFallbackName(i int) string {
 }
 
 func disambiguateParamNames(names []string) {
-	// LLVM IR puts parameter names and basic-block labels in the same
-	// per-function value namespace. Stage0 reserves a small set of bare
-	// block label names that can collide with user-source parameter
-	// names. Rename any parameter that hits a reserved label so the
-	// emitted IR doesn't produce e.g. `%entry` (parameter) and `entry:`
-	// (block label) in the same function.
 	for i := range names {
 		if isReservedStage0Label(names[i]) {
 			names[i] = fmt.Sprintf("%s.%d", names[i], i)
@@ -4437,11 +4311,9 @@ func disambiguateParamNames(names []string) {
 }
 
 // isReservedStage0Label reports whether `name` collides with a bare
-// (non-numbered) block label that stage0's emitter unconditionally
-// produces. All other stage0 labels go through blockLabelName, which
-// formats as "<prefix>.<id>" — those can't collide with valid Osty
-// identifier-style parameter names because Osty source identifiers
-// have no '.'.
+// block label that stage0 emits directly. Numbered labels such as
+// `then.1` or `bb.4` are not valid Osty source identifiers, so the
+// unnumbered `entry:` label is the only collision class we need here.
 func isReservedStage0Label(name string) bool {
 	switch name {
 	case "entry":
@@ -5501,9 +5373,7 @@ func classifyDiscardedBoolCallLine(fn *mir.Function, ci *mir.CallInstr, bindings
 			return "", false
 		}
 	}
-	if !mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(mctx, ref.Symbol, scalarBool, resolved.args)
-	}
+	declareFunctionPrototype(mctx, ref.Symbol, scalarBool, resolved.args)
 	var line strings.Builder
 	line.WriteString(resolved.prelude)
 	fmt.Fprintf(&line, "  %s = call i1 @%s(", resultReg, ref.Symbol)
@@ -7024,10 +6894,10 @@ func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregat
 		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
 	}
 
-	// Declare the callee prototype if it is not a symbol defined in this module.
-	if !mctx.knownSymbols[ref.Symbol] {
-		declareAggregateFunctionPrototype(mctx, ref.Symbol, typeName, args)
-	}
+	// Always declare the callee prototype before the call site. This keeps
+	// partial/list-all-declines modules parseable even when the referenced
+	// helper function declined and therefore has no local `define` body.
+	declareAggregateFunctionPrototype(mctx, ref.Symbol, typeName, args)
 
 	pat.callSymbol = ref.Symbol
 	pat.callArgs = args
@@ -7767,12 +7637,7 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}})
-		// `osty_rt_set_*` returns `i1` (whether the element was
-		// added/removed). Capture into a named SSA register so
-		// LLVM doesn't auto-allocate the next anonymous %N for the
-		// discarded result and collide with subsequent positional
-		// instructions. Same fix family as #1588.
-		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName(symbol), symbol, setExpr, elemTy.llvm(), elemExpr)
+		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, setExpr, elemTy.llvm(), elemExpr)
 		return true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
@@ -7817,9 +7682,7 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}})
-		// Same SSA-collision fix as the SetInsert/SetRemove branch
-		// above; capture the discarded `i1` into a named register.
-		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName(symbol), symbol, mapExpr, keyTy.llvm(), keyExpr)
+		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr)
 		return true
 	case mir.IntrinsicMapClear:
 		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_map_clear")
@@ -7946,7 +7809,7 @@ func emitWhileDiscardedValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builde
 		return false
 	}
 	declareRuntimePrototype(ctx.mctx, spec.symbol, spec.ret, args)
-	out.WriteString(renderDiscardValueCallLine(ctx.mctx, spec.symbol, spec.ret, args))
+	out.WriteString(renderDiscardValueCallLine(spec.symbol, spec.ret, args))
 	return true
 }
 
@@ -7962,17 +7825,13 @@ func emitWhilePrintIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 	if !ok {
 		return false
 	}
-	// Same SSA-collision fix as classifyPrintIntrinsicLine —
-	// printf/fprintf return `i32` and the discard form must be
-	// captured into a named SSA register so LLVM doesn't auto-
-	// allocate an anonymous slot.
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := ctx.mctx.freshTempName("stderr")
 		fmt.Fprintf(out, "  %s = load ptr, ptr @stderr\n", stderrReg)
-		fmt.Fprintf(out, "  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", ctx.mctx.freshDiscardName("fprintf"), stderrReg, fmtGlobal, argTy, expr)
+		fmt.Fprintf(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr)
 		return true
 	}
-	fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName("printf"), fmtGlobal, argTy, expr)
+	fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr)
 	return true
 }
 
@@ -9673,13 +9532,7 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 			}
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
 		}
-		if ctx.mctx.knownSymbols == nil {
-			ctx.mctx.knownSymbols = map[string]bool{}
-		}
-		if !ctx.mctx.knownSymbols[ref.Symbol] {
-			declareFunctionPrototypeLLVM(ctx.mctx, ref.Symbol, "%"+typeName, args)
-			ctx.mctx.knownSymbols[ref.Symbol] = true
-		}
+		declareFunctionPrototypeLLVM(ctx.mctx, ref.Symbol, "%"+typeName, args)
 		reg := freshReg(ctx)
 		fmt.Fprintf(out, "  %s = call %%%s @%s(", reg, typeName, ref.Symbol)
 		for i, a := range args {
@@ -9714,9 +9567,7 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 			}
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
 		}
-		if !ctx.mctx.knownSymbols[ref.Symbol] {
-			declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
-		}
+		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 		return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
 	}
 	if ctx.mctx.scalarFromType(fnTy.Return, allowOpaqueUserNamed) != destType {
@@ -9737,9 +9588,7 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		}
 		args = append(args, callArg{expr: expr, ty: ty.llvm()})
 	}
-	if !ctx.mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
-	}
+	declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 	return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
 }
 
@@ -9769,10 +9618,8 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 			if retType == scalarUnknown {
 				return false
 			}
-			if !ctx.mctx.knownSymbols[ref.Symbol] {
-				declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
-			}
-			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
+			declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
+			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
 			return true
 		}
 	} else {
@@ -9788,16 +9635,12 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 			if retType == scalarUnknown {
 				return false
 			}
-			if !ctx.mctx.knownSymbols[ref.Symbol] {
-				declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
-			}
-			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
+			declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
+			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
 			return true
 		}
 	}
-	if !ctx.mctx.knownSymbols[ref.Symbol] {
-		declareVoidFunctionPrototype(ctx.mctx, ref.Symbol, args)
-	}
+	declareVoidFunctionPrototype(ctx.mctx, ref.Symbol, args)
 	out.WriteString(renderVoidCallLine(ref.Symbol, args))
 	return true
 }
@@ -9911,17 +9754,9 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 		if !ok || indexTy != scalarInt {
 			return "", scalarUnknown, false
 		}
-		// Char element (i32) — match the runtime prototype's return
-		// type. The previous `call i64` form left `%value` as i64
-		// while every consumer (`store i32 %value, ptr %char.slot`,
-		// `icmp eq i32 %value, …`) treated it as i32, producing
-		// clang `'<id>' defined with type 'i64' but expected 'i32'`.
-		// Other byte-/codepoint-returning runtime helpers in this
-		// file (e.g. `osty_rt_bytes_get` → i8 at line ~9929) follow
-		// the same scalar-matches-prototype convention.
 		declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_string_char_at", scalarChar, []callArg{{ty: "ptr"}, {ty: "i64"}})
 		value := freshReg(ctx)
-		fmt.Fprintf(out, "  %s = call i32 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
 		return value, scalarChar, true
 	}
 	if listScalarTy != scalarOpaquePtr {
@@ -11081,10 +10916,7 @@ func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 			}
 			argExprs = append(argExprs, callArg{expr: expr, ty: ty.llvm()})
 		}
-		// Declare prototype for unknown symbols.
-		if !ctx.mctx.knownSymbols[ref.Symbol] {
-			declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
-		}
+		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
 	} else {
 		// No FnType (e.g. ErrType callee) — attempt arg resolution.
 		argExprs = make([]callArg, 0, len(ci.Args))
@@ -11095,9 +10927,7 @@ func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 			}
 			argExprs = append(argExprs, callArg{expr: expr, ty: ty.llvm()})
 		}
-		if !ctx.mctx.knownSymbols[ref.Symbol] {
-			declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
-		}
+		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
 	}
 	reg := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), ref.Symbol)
@@ -11124,68 +10954,12 @@ func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 // intrinsics (string_byte_len, list_len, etc.) by delegating to
 // classifyIntrinsicValueStep for the latter.
 func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
-	// IntrinsicStringConcat: delegate to the while-loop emitter so
-	// stack-backed string accumulators (e.g. `let mut out = ""; for ...
-	// { out = "{out}{f(x)}" }`) get a `load` for `out` rather than
-	// having the `osty_rt_strings_Concat` runtime call see the slot
-	// pointer raw. The shared sequential classifier
-	// (`classifyStringConcatIntrinsic`) routes through
-	// `resolveOperandWithPrelude` → `resolveOperand`, which does not
-	// load from `isStack` bindings, so it would emit
-	// `call  @osty_rt_strings_Concat(ptr %out.slot, ptr %lower)` —
-	// missing return type AND passing the slot pointer. The
-	// while-loop variant (`emitWhileStringConcatIntrinsic`) uses
-	// `stringConcatWhileArg` → `resolveOperandWithLoad` and emits
-	// the call line directly with a literal `ptr` return type.
-	if ii.Dest != nil && !ii.Dest.HasProjections() && ii.Kind == mir.IntrinsicStringConcat {
-		destLocal := lookupLocal(ctx.fn, ii.Dest.Local)
-		if destLocal == nil {
-			return false
-		}
-		destType := ctx.mctx.scalarFromType(destLocal.Type, true)
-		if destType == scalarUnknown {
-			return false
-		}
-		return emitWhileStringConcatIntrinsic(ctx, out, ii, ii.Dest.Local, destType)
-	}
 	// Value-returning intrinsic: delegate to the shared sequential classifier,
 	// then bind the result in the while-loop context.
 	if ii.Dest != nil {
 		pending, destID, destType, ok := classifyIntrinsicValueStep(ctx.fn, ii, ctx.bindings, ctx.mctx)
 		if !ok {
 			return false
-		}
-		// `instrCallChain` (e.g. 3-arg `IntrinsicStringConcat` for
-		// `"[" + x + "]"` interpolations) needs N-1 fresh registers,
-		// not 1. The reference plumbing in `matchSequentialReturn`
-		// (line ~1524) and `matchSequentialVoid` (line ~1679) does
-		// exactly this; the for-in-list value-returning path was
-		// left with the single-register `instrCall` shortcut, so
-		// `emitCallChain` silently returned (it checks
-		// `len(chainRegs) != len(callArgs)-1`) — leaving the call
-		// chain unemitted while the binding for the destination
-		// still pointed at a phantom SSA register the emitter
-		// never produced. Surfaced in `corePrintList` as
-		// `ret ptr %11` referencing an undefined `%11`.
-		if pending.kind == instrCallChain {
-			regs := make([]string, len(pending.callArgs)-1)
-			for i := range regs {
-				regs[i] = freshReg(ctx)
-			}
-			pending.chainRegs = regs
-			var buf strings.Builder
-			emitPendingInstr(&buf, pending)
-			out.WriteString(buf.String())
-			finalReg := regs[len(regs)-1]
-			if _, isStack := ctx.stack[destID]; isStack {
-				fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), finalReg, ctx.stack[destID].name)
-				return true
-			}
-			if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
-				return false
-			}
-			ctx.bindings[destID] = localBinding{expr: finalReg, ty: destType, defined: true}
-			return true
 		}
 		reg := freshReg(ctx)
 		pending.binDestReg = reg
@@ -11213,15 +10987,12 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		if !ok {
 			return false
 		}
-		// Same SSA-collision fix as the other printf/fprintf paths
-		// — capture the discarded `i32` byte-count into a named
-		// register so the anonymous numbering pool stays in step.
 		switch ty {
 		case scalarInt:
-			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", ctx.mctx.freshDiscardName("printf"), expr)
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
 			return true
 		case scalarString:
-			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", ctx.mctx.freshDiscardName("printf"), expr)
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
 			return true
 		}
 		return false
@@ -11418,7 +11189,6 @@ type forInListEarlyExitPattern struct {
 	falsePrepBody  string // optional work in false path
 	postBody       string
 	loopExitBody   string
-	earlyExitBody  string // body instrs preceding the early-exit ret (e.g. field reads, helper calls)
 	earlyRetExpr   string // what `ret retType` in the early-exit arm
 	loopRetExpr    string // what `ret retType` after the loop
 
@@ -11603,14 +11373,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 	pat.bodyBody = bodyBuf.String()
 	pat.innerCondExpr = innerExpr
 
-	// Render early-exit block. The body instructions (e.g. field reads,
-	// helper calls that compute the return value) MUST be preserved —
-	// they're the source of `earlyRetExpr`'s SSA value. Without
-	// `earlyExitBody`, the emit path used to drop these instructions and
-	// emit just `<label>: ret <type> <undef>`, leaving downstream LLVM
-	// IR with `use of undefined value` errors at clang. Save the
-	// rendered text to `pat.earlyExitBody` so emitForInListEarlyExit can
-	// write it between the label and the `ret`.
+	// Render early-exit block.
 	earlyCtxBindings := copyBindings(ctx.bindings)
 	earlyCtx := &whileLoopEmitCtx{fn: fn, bindings: earlyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
 	var earlyBuf strings.Builder
@@ -11624,7 +11387,6 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 		return pat, false
 	}
 	earlyRetExpr := earlyBinding.expr
-	pat.earlyExitBody = earlyBuf.String()
 	pat.earlyExitLabel = blockLabelName(earlyExit.ID, "early")
 
 	// Render false-prep block (connects body-false → post).
@@ -11693,7 +11455,6 @@ func emitForInListEarlyExit(out *strings.Builder, fn *mir.Function, pat forInLis
 
 	out.WriteString("\n")
 	fmt.Fprintf(out, "%s:\n", pat.earlyExitLabel)
-	out.WriteString(pat.earlyExitBody)
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.earlyRetExpr)
 
 	out.WriteString("\n")
@@ -12457,9 +12218,7 @@ func classifyErrTypedEnumPayloadCall(fn *mir.Function, ci *mir.CallInstr, bindin
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
 	args := []callArg{{expr: expr, ty: ty.llvm()}}
-	if !mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(mctx, ref.Symbol, scalarOpaquePtr, args)
-	}
+	declareFunctionPrototype(mctx, ref.Symbol, scalarOpaquePtr, args)
 	return pendingInstr{
 		kind:       instrCall,
 		prelude:    prelude,
@@ -13977,9 +13736,7 @@ func emitDiscardedCallAsReturn(ctx *whileLoopEmitCtx, out *strings.Builder, ci *
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
 		}
 	}
-	if !ctx.mctx.knownSymbols[ref.Symbol] {
-		declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
-	}
+	declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
 	reg := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = call %s @%s(", reg, retType.llvm(), ref.Symbol)
 	for i, arg := range args {
@@ -15036,36 +14793,12 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 		}
 		out.WriteString(") {\n")
 	}
-	// LLVM rule: the FIRST basic block in a function may not have
-	// predecessors. When the source MIR's entry block is the target
-	// of a backedge (loop continue, while-style structure), emitting
-	// it as the LLVM `entry:` block violates the rule.
-	//
-	// Fix: emit a synthetic prelude block (`stage0.prelude:`) FIRST.
-	// It holds the allocas and unconditionally branches to the
-	// original entry. The block named `entry` is no longer the
-	// function's first block — LLVM treats whatever appears first
-	// as the entry, so `stage0.prelude` becomes the actual entry
-	// and the user's `entry` block becomes a regular block that's
-	// allowed to have predecessors.
-	//
-	// Pre-rendered `pat.blockBodies` strings reference `%entry` for
-	// branches to the user's first block; we keep those intact by
-	// not renaming it.
-	splitEntry := genericEntryHasPredecessors(fn)
-	if splitEntry {
-		out.WriteString("stage0.prelude:\n")
-		for _, sd := range pat.stackDecls {
-			fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
-		}
-		fmt.Fprintf(out, "  br label %%%s\n\n", genericBlockLabel(fn, fn.Entry))
-	}
 	for i, id := range pat.blockOrder {
 		if i > 0 {
 			out.WriteString("\n")
 		}
 		fmt.Fprintf(out, "%s:\n", genericBlockLabel(fn, id))
-		if id == fn.Entry && !splitEntry {
+		if id == fn.Entry {
 			for _, sd := range pat.stackDecls {
 				fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
 			}
@@ -15074,33 +14807,6 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 	}
 	out.WriteString("}\n\n")
 	return nil
-}
-
-// genericEntryHasPredecessors reports whether any block in fn
-// branches (Goto, Branch then/else) to the function's entry block.
-// LLVM's IR validator rejects functions whose first basic block has
-// predecessors; emitGenericScalarCFG inserts a synthetic prelude
-// block before the entry when this returns true.
-func genericEntryHasPredecessors(fn *mir.Function) bool {
-	if fn == nil {
-		return false
-	}
-	for _, bb := range fn.Blocks {
-		if bb == nil {
-			continue
-		}
-		switch term := bb.Term.(type) {
-		case *mir.GotoTerm:
-			if term.Target == fn.Entry {
-				return true
-			}
-		case *mir.BranchTerm:
-			if term.Then == fn.Entry || term.Else == fn.Entry {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func genericBlockLabel(fn *mir.Function, id mir.BlockID) string {
