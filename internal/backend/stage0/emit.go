@@ -1104,7 +1104,14 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, symbol, setExpr, elemTy.llvm(), elemExpr), true
+		// `osty_rt_set_*` returns `i1` (whether the element was
+		// added/removed). The MIR call discards the result, but
+		// emitting `call i1 @sym(...)` without an explicit capture
+		// would let LLVM auto-allocate the next anonymous %N for it
+		// and collide with subsequent positional `%N = ...`. Same
+		// fix family as #1588's `renderDiscardValueCallLine`: name
+		// the result so the anonymous numbering pool is unaffected.
+		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, mctx.freshDiscardName(symbol), symbol, setExpr, elemTy.llvm(), elemExpr), true
 	case mir.IntrinsicMapRemove:
 		if len(ii.Args) != 2 {
 			return "", false
@@ -1123,7 +1130,8 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, symbol, mapExpr, keyTy.llvm(), keyExpr), true
+		// Same SSA-collision fix as the SetAdd/SetRemove branch above.
+		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, mctx.freshDiscardName(symbol), symbol, mapExpr, keyTy.llvm(), keyExpr), true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
 			return "", false
@@ -1337,13 +1345,19 @@ func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 	if !ok {
 		return "", false
 	}
+	// printf / fprintf return `i32` (bytes written). The caller never
+	// captures it, but emitting `call i32 ...` without an explicit
+	// SSA prefix lets LLVM auto-allocate the next anonymous %N for
+	// the discarded result and collide with the next positional
+	// `%N = ...`. Capture into a named discard register — same fix
+	// family as #1588.
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := mctx.freshTempName("stderr")
 		return prelude +
 			fmt.Sprintf("  %s = load ptr, ptr @stderr\n", stderrReg) +
-			fmt.Sprintf("  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr), true
+			fmt.Sprintf("  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", mctx.freshDiscardName("fprintf"), stderrReg, fmtGlobal, argTy, expr), true
 	}
-	return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr), true
+	return prelude + fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", mctx.freshDiscardName("printf"), fmtGlobal, argTy, expr), true
 }
 
 func printFormatFor(kind mir.IntrinsicKind, ty scalarType) (string, string, bool) {
@@ -7696,7 +7710,12 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}})
-		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, setExpr, elemTy.llvm(), elemExpr)
+		// `osty_rt_set_*` returns `i1` (whether the element was
+		// added/removed). Capture into a named SSA register so
+		// LLVM doesn't auto-allocate the next anonymous %N for the
+		// discarded result and collide with subsequent positional
+		// instructions. Same fix family as #1588.
+		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName(symbol), symbol, setExpr, elemTy.llvm(), elemExpr)
 		return true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
@@ -7741,7 +7760,9 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}})
-		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr)
+		// Same SSA-collision fix as the SetInsert/SetRemove branch
+		// above; capture the discarded `i1` into a named register.
+		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName(symbol), symbol, mapExpr, keyTy.llvm(), keyExpr)
 		return true
 	case mir.IntrinsicMapClear:
 		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_map_clear")
@@ -7884,13 +7905,17 @@ func emitWhilePrintIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 	if !ok {
 		return false
 	}
+	// Same SSA-collision fix as classifyPrintIntrinsicLine —
+	// printf/fprintf return `i32` and the discard form must be
+	// captured into a named SSA register so LLVM doesn't auto-
+	// allocate an anonymous slot.
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := ctx.mctx.freshTempName("stderr")
 		fmt.Fprintf(out, "  %s = load ptr, ptr @stderr\n", stderrReg)
-		fmt.Fprintf(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr)
+		fmt.Fprintf(out, "  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", ctx.mctx.freshDiscardName("fprintf"), stderrReg, fmtGlobal, argTy, expr)
 		return true
 	}
-	fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr)
+	fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", ctx.mctx.freshDiscardName("printf"), fmtGlobal, argTy, expr)
 	return true
 }
 
@@ -11099,12 +11124,15 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		if !ok {
 			return false
 		}
+		// Same SSA-collision fix as the other printf/fprintf paths
+		// — capture the discarded `i32` byte-count into a named
+		// register so the anonymous numbering pool stays in step.
 		switch ty {
 		case scalarInt:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
+			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", ctx.mctx.freshDiscardName("printf"), expr)
 			return true
 		case scalarString:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
+			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", ctx.mctx.freshDiscardName("printf"), expr)
 			return true
 		}
 		return false
