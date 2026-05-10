@@ -98,6 +98,16 @@ fn rfB1MatchAssignTopLevelDecl(x: Int) {
 }
 // === END
 
+// === CASE: E0100 === B2 preserved helper decl after broken match-arm assignment body
+fn rfB2MatchAssignHelperTail(x: Int) {
+    match x {
+        0 -> out.path =
+        _ -> 1,
+    }
+}
+fn rfB2Tail() {}
+// === END
+
 // === CASE: E0106 === non-literal default value
 fn connect(t: Int = compute()) {}
 fn compute() -> Int { 0 }
@@ -161,12 +171,23 @@ fn dup() {}
 fn dup() {}
 // === END
 
-// === CASE: E0503 === `self` outside a method
-fn f() { let x = self }
+// === CASE: E0502 === duplicate local binding
+fn f() {
+    let x = 1
+    let x = 2
+}
 // === END
 
-// === CASE: E0504 === `Self` outside a type body
-fn f() -> Self { 0 }
+// === CASE: E0503 === import name conflicts with local
+use std.fs as fs
+fn f() {
+    let fs = 1
+}
+// === END
+
+// === CASE: E0504 === import name conflicts with top-level decl
+use std.fs as fs
+fn fs() {}
 // === END
 
 // === CASE: E0600 === `break` outside a loop
@@ -177,30 +198,24 @@ fn f() { break }
 fn f() { continue }
 // === END
 
-// === CASE: E0604 === `_` in expression position
+// === CASE: E0602 === `return` outside a function script body
+return 1
+// === END
+
+// === CASE: E0603 === `self` outside a method receiver context
+fn f() { let x = self }
+// === END
+
+// === CASE: E0604 === wildcard `_` used as an expression
 fn f() { let x = _ }
 // === END
 
-// === CASE: E0605 === or-pattern with inconsistent bindings
-pub enum E { A(Int), B(Int, Int) }
-fn f(e: E) -> Int {
-    match e { A(x) | B(x, y) -> x }
-}
+// === CASE: E0605 === `Self` outside a nominal impl-like context
+fn f() -> Self { 0 }
 // === END
 
-// === CASE: E0606 === interface default body reading a field on self
-pub interface Greeter {
-    fn greet(self) -> String { self.name }
-}
-// === END
-
-// === CASE: E0607 === annotation on the wrong target
+// === CASE: E0607 === annotation on the wrong target kind
 #[json]
-pub fn wrongTarget() {}
-// === END
-
-// === CASE: E0607 === annotation on a `use` statement
-#[deprecated]
 use std.fs
 // === END
 
@@ -209,96 +224,107 @@ let x = 1
 defer println("{x}")
 // === END
 
-// === CASE: E0609 === duplicate annotation name
+// === CASE: E0609 === duplicate annotation on same declaration
 #[deprecated]
 #[deprecated]
 pub fn f() {}
 // === END
 
-// === CASE: E0607 === #[vectorize] on a struct field (wrong target)
+// === CASE: E0700 === interface body references `self` field
+pub interface Greeter {
+    fn greet(self) -> String { self.name }
+}
+// === END
+
+// === CASE: E0702 === `#[json]` on unsupported declaration kind
+#[json]
+pub fn wrongTarget() {}
+// === END
+
+// === CASE: E0745 === `#[vectorize]` on struct field
 pub struct Bad {
     #[vectorize]
     pub count: Int,
 }
 // === END
 
-// === CASE: E0739 === #[vectorize] rejects unknown argument keys
+// === CASE: E0739 === `#[vectorize]` rejects unknown argument keys
 #[vectorize(foo = 4)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[vectorize] rejects width out of range
+// === CASE: E0739 === `#[vectorize]` rejects width out of range
 #[vectorize(width = 99999)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[unroll] rejects unknown argument keys
+// === CASE: E0739 === `#[unroll]` rejects unknown argument keys
 #[unroll(factor = 4)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[parallel] takes no arguments
+// === CASE: E0739 === `#[parallel]` takes no arguments
 #[parallel(level = 2)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[inline(...)] rejects unknown flag
+// === CASE: E0739 === `#[inline(...)]` rejects unknown flag
 #[inline(sometimes)]
 pub fn mid(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[hot] takes no arguments
+// === CASE: E0739 === `#[hot]` takes no arguments
 #[hot(priority = 1)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[target_feature(...)] requires at least one feature
-#[target_feature()]
+// === CASE: E0739 === `#[target_feature(...)]` requires at least one feature
+#[target_feature]
 pub fn wide(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[target_feature(...)] rejects duplicate features
+// === CASE: E0739 === `#[target_feature(...)]` rejects duplicate features
 #[target_feature(avx512f, avx512f)]
 pub fn wide(n: Int) -> Int { n }
 // === END
 
-// === CASE: E0739 === #[noalias(...)] rejects key=value form
+// === CASE: E0739 === `#[noalias(...)]` rejects key=value form
 #[noalias(xs = 1)]
 pub fn hot(xs: List<Int>) -> Int { 0 }
 // === END
 
-// === CASE: E0739 === #[noalias(...)] rejects duplicate param names
+// === CASE: E0739 === `#[noalias(...)]` rejects duplicate param names
 #[noalias(xs, xs)]
 pub fn hot(xs: List<Int>) -> Int { 0 }
 // === END
 
-// === CASE: E0739 === #[pure] takes no arguments
+// === CASE: E0739 === `#[pure]` takes no arguments
 #[pure(strict)]
 pub fn hash(a: Int, b: Int) -> Int { a + b }
 // === END
 
-// === CASE: E0757 === `as?` on non-Error operand
+// === CASE: E0757 === `as?` sugar requires Error bound on operand and target
 fn f(n: Int) -> Int? {
     n as? Int
 }
 // === END
 
-// === CASE: E0757 === `as?` target type must implement Error
+// === CASE: E0757 === `as?` target must implement Error too
 fn g(err: Error) -> Int? {
     err as? Int
 }
 // === END
 
-// === CASE: E0757 === `as?` target struct without `message()` must not satisfy Error
+// === CASE: E0757 === `as?` with non-Error target struct
 pub struct PlainNoMessage { pub x: Int }
 fn gp(err: Error) -> PlainNoMessage? {
     err as? PlainNoMessage
 }
 // === END
 
-// === CASE: E0202 === `as?` requires no whitespace between `as` and `?`
+// === CASE: E0758 === `as?` target same as operand type is pointless
 fn h(err: Error) -> Error? {
-    err as ? Error
+    err as? Error
 }
 // === END
 
@@ -310,7 +336,7 @@ fn no_such_label() {
 }
 // === END
 
-// === CASE: E0764 === inner label shadows an outer label of the same name
+// === CASE: E0764 === duplicate loop labels in the same visible chain
 fn label_shadow() {
     'tag: for i in 0..10 {
         'tag: for j in 0..10 {
