@@ -403,29 +403,49 @@ func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
 		}
 		paramLLVM = append(paramLLVM, ty.llvm())
 	}
-	// Return type: void / scalar are easy. Aggregate returns require
-	// the named struct type — punt on those for now (they stay
-	// declined; their callers' `call %Type @sym(...)` keep failing
-	// link, but those are a small minority of the overall declined
-	// set).
+	// Return type: void / scalar / aggregate. The aggregate case uses
+	// LLVM's sret calling convention — `define void @sym(ptr sret(%T)
+	// %sret.result, ...)` — matching how `emitDirectAggregateCall`
+	// and friends emit real aggregate returns. The named type
+	// `%T` is registered in `extraDecls` via `classifyAggregateReturnType`'s
+	// `mctx.emitStructDef` call.
 	retLLVM := "void"
+	useSret := false
+	sretTypeName := ""
 	if fn.ReturnType != nil && !isUnitType(fn.ReturnType) {
 		ty := mctx.scalarFromType(fn.ReturnType, true)
 		if ty == scalarUnknown {
-			// Aggregate / tuple / unsupported — bail.
-			return "", false
+			// Try aggregate / tuple. classifyAggregateReturnType also
+			// emits the struct type def into extraDecls when needed.
+			if name, _, ok := classifyAggregateReturnType(fn.ReturnType, mctx); ok {
+				useSret = true
+				sretTypeName = name
+			} else {
+				// Truly unsupported — bail.
+				return "", false
+			}
+		} else {
+			retLLVM = ty.llvm()
 		}
-		retLLVM = ty.llvm()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "define %s @%s(", retLLVM, fn.Name)
-	for i, p := range paramLLVM {
-		if i > 0 {
-			b.WriteString(", ")
+	if useSret {
+		// sret: hidden first parameter is `ptr sret(%T) %sret.result`,
+		// real params follow. Function returns void.
+		fmt.Fprintf(&b, "define void @%s(ptr sret(%%%s) %%sret.result", fn.Name, sretTypeName)
+		for i, p := range paramLLVM {
+			fmt.Fprintf(&b, ", %s %%p%d", p, i)
 		}
-		// Use generated names %p0, %p1, … — the body never references
-		// them so any unique LLVM identifier works.
-		fmt.Fprintf(&b, "%s %%p%d", p, i)
+	} else {
+		fmt.Fprintf(&b, "define %s @%s(", retLLVM, fn.Name)
+		for i, p := range paramLLVM {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			// Use generated names %p0, %p1, … — the body never references
+			// them so any unique LLVM identifier works.
+			fmt.Fprintf(&b, "%s %%p%d", p, i)
+		}
 	}
 	b.WriteString(") {\n")
 	b.WriteString("entry:\n")
