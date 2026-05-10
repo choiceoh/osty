@@ -52,6 +52,14 @@ use a/b.c
 //   3. keep the tail minimal so declaration/script drift stays obvious
 //   4. name CASE hints `<Axis><Ordinal> ...` and helper fns `rf<Axis><Ordinal>...`
 //
+// Axis parity rule with `internal/parser/frontend_authority_test.go`:
+//   - axis letters and their order must match between the corpus and
+//     the focused parser regression tests
+//   - when a follow-on case gets a dedicated parser regression, reuse
+//     the same `<Axis><Ordinal>` label in the test name
+//   - the corpus may be denser than the parser tests, but never invent
+//     a parser-test axis that does not exist here
+//
 // Axis A — newline-else fallout.
 
 // === CASE: E0105 === A1 `} else` across newline
@@ -351,6 +359,15 @@ fn ch() {
 //   3. end with `let z = 2` when a tail sentinel makes recovery drift
 //      easy to spot in snapshots
 //   4. name CASE hints `<Axis><Ordinal> ...` and helper fns `rm<Axis><Ordinal>...`
+//
+// Axis parity rule with `internal/parser/frontend_authority_test.go`:
+//   - axis letters and their order must match between the corpus and
+//     the focused parser regression tests
+//   - parser regressions are a representative subset, not a promise of
+//     1:1 case coverage, but any mirrored case should keep the same
+//     `<Axis><Ordinal>` identity across both files
+//   - add new axes here first, then mirror the section header order in
+//     the parser regression file
 //
 // Axis A — branch / arm continuity.
 

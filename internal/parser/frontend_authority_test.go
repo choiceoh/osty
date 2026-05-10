@@ -78,8 +78,15 @@ fn update(value: String?) {
 }
 
 // --- Recovery matrix parity tests ---
-// Keep these tests in the same axis/ordinal order as the recovery
-// matrices in `testdata/spec/negative/reject.osty`.
+// Axis parity rule with `testdata/spec/negative/reject.osty`:
+//   - axis letters and their order must match the corpus sections
+//   - these tests are a focused subset of the denser corpus matrix, so
+//     missing ordinals here are allowed when the corpus already covers
+//     the shape well enough
+//   - when a test does mirror a corpus case, keep the same
+//     `<Axis><Ordinal>` label in the test name
+//   - add new axes to `reject.osty` first, then mirror the section
+//     header order here
 //
 // Axis A — branch / arm continuity.
 
