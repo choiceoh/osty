@@ -53,7 +53,6 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		Stdlib:             reg,
 		Primitives:         reg.Primitives,
 		ResultMethods:      reg.ResultMethods,
-		PopulateLegacyMaps: true, // stage0 audit uses IR lowerer
 	})
 
 	entry, err := PreparePackage("toolchain", filepath.Join(pkgDir, "main.osty"), pkg, nil, chk)

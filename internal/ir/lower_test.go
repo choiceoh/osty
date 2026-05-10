@@ -631,11 +631,10 @@ fn probe(p: Printable) -> Note? {
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
-		Stdlib:             reg,
-		Primitives:         reg.Primitives,
-		ResultMethods:      reg.ResultMethods,
-		Source:             []byte(src),
-		PopulateLegacyMaps: true, // IR lowerer falls back to pointer-keyed maps
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
 	})
 
 	probe, ok := file.Decls[len(file.Decls)-1].(*ast.FnDecl)
@@ -707,11 +706,10 @@ func TestLowerUseDeclRecoversBuiltinGenericTypesWithoutResolverTypeRefs(t *testi
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
-		Stdlib:             reg,
-		Primitives:         reg.Primitives,
-		ResultMethods:      reg.ResultMethods,
-		Source:             []byte(src),
-		PopulateLegacyMaps: true, // IR lowerer falls back to pointer-keyed maps
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
 	})
 
 	mod, issues := Lower("main", file, res, chk)

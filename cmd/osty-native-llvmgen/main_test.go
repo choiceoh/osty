@@ -155,11 +155,10 @@ func prepareMIRPayloadEntry(t *testing.T, src string) backend.Entry {
 	reg := stdlib.LoadCached()
 	res := resolve.ResolveFileSourceDefault([]byte(src), file, reg)
 	chk := check.SelfhostFile(file, res, check.Opts{
-		Stdlib:             reg,
-		Primitives:         reg.Primitives,
-		ResultMethods:      reg.ResultMethods,
-		Source:             []byte(src),
-		PopulateLegacyMaps: true, // LLVM backend lowerer uses pointer-keyed maps
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
 	})
 	entry, err := backend.PrepareEntry("main", "/tmp/mir_payload.osty", file, res, chk)
 	if err != nil {

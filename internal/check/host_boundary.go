@@ -103,7 +103,7 @@ type selfhostFileSegment struct {
 	nativeNodeIDBase int
 }
 
-func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider, privileged bool, populateLegacy bool) {
+func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider, privileged bool) {
 	if result == nil {
 		return
 	}
@@ -160,12 +160,10 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	result.SemanticDB = semanticdb.FromCheck(checked)
-	if populateLegacy {
-		overlaySelfhostResult(result, checkedSrc, checked)
-	}
+
 }
 
-func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, populateLegacy bool) {
+func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
 	if result == nil || pkg == nil {
 		return
 	}
@@ -213,12 +211,10 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolv
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	attachSemanticDB(result, pr, checked)
-	if populateLegacy {
-		overlaySelfhostResult(result, src, checked)
-	}
+
 }
 
-func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*resolve.PackageResult, results map[string]*Result, stdlib resolve.StdlibProvider, populateLegacy bool) {
+func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*resolve.PackageResult, results map[string]*Result, stdlib resolve.StdlibProvider) {
 	if ws == nil {
 		return
 	}
@@ -258,7 +254,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 	}
 	if len(jobs) == 1 || os.Getenv("OSTY_CHECK_PARALLEL") == "0" {
 		for _, j := range jobs {
-			applySelfhostPackageResult(j.result, j.pkg, j.pr, ws, stdlib, j.privileged, populateLegacy)
+			applySelfhostPackageResult(j.result, j.pkg, j.pr, ws, stdlib, j.privileged)
 		}
 		return
 	}
@@ -277,7 +273,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 		go func() {
 			defer wg.Done()
 			for j := range ch {
-				runSelfhostPackageResultLocked(j.result, j.pkg, j.pr, ws, stdlib, j.privileged, populateLegacy, &mu)
+				runSelfhostPackageResultLocked(j.result, j.pkg, j.pr, ws, stdlib, j.privileged, &mu)
 			}
 		}()
 	}
@@ -295,7 +291,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 // the shared type maps under `mu`. This is the parallel variant of
 // applySelfhostPackageResult; the single-threaded fast path in
 // applySelfhostWorkspaceResults still calls the non-locked version.
-func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, populateLegacy bool, mu *sync.Mutex) {
+func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, mu *sync.Mutex) {
 	if result == nil || pkg == nil {
 		return
 	}
@@ -354,9 +350,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *re
 	result.NativeCheckerTelemetry = telemetry
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	attachSemanticDB(result, pr, checked)
-	if populateLegacy {
-		overlaySelfhostResult(result, src, checked)
-	}
+
 }
 
 func attachSemanticDB(result *Result, pr *resolve.PackageResult, checked api.CheckResult) {

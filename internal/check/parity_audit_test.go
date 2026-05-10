@@ -45,7 +45,6 @@ func TestCheckPackageParityAudit(t *testing.T) {
 		Stdlib:             reg,
 		Primitives:         reg.Primitives,
 		ResultMethods:      reg.ResultMethods,
-		PopulateLegacyMaps: true, // parity audit drives IR lowering
 	})
 
 	type diagRow struct {
