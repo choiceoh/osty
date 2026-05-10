@@ -14,49 +14,44 @@
 // canonical Osty parser shape ahead of when LLVM self-host LLVMgen
 // catches up. They type-check today, and the behaviour they assert
 // already lives in the `toolchain/parser.osty` source.
-
 use std.testing
-
 fn findFirstStringLit(file: AstFile) -> AstNode {
     for n in file.arena.nodes {
-        if n.kind == AstNStringLit { return n }
+        if n.kind == AstNStringLit {
+            return n
+        }
     }
     emptyAstNode(AstNError)
 }
-
 fn testParserAttachesIdentChildToStringInterp() {
-    let file = astParse("fn main() { let x = 1; let s = \"{x}\" }")
+    let file = astParse("fn main() \{ let x = 1; let s = \"\{x\}\" \}")
     let lit = findFirstStringLit(file)
     testing.assert(lit.kind == AstNStringLit)
-    // Exactly one interpolation part → one child.
     testing.assertEq(lit.children.len(), 1)
     let child = file.arena.nodes[lit.children[0]]
     testing.assert(child.kind == AstNIdent)
     testing.assertEq(child.text, "x")
 }
-
+// Exactly one interpolation part → one child.
 fn testParserAttachesMultiInterpChildren() {
-    // `"{a}-{b}"` → two interp parts, two children, in source order.
-    let file = astParse("fn main() { let a = 1; let b = 2; let s = \"{a}-{b}\" }")
+    let file = astParse("fn main() \{ let a = 1; let b = 2; let s = \"\{a\}-\{b\}\" \}")
     let lit = findFirstStringLit(file)
     testing.assertEq(lit.children.len(), 2)
     testing.assertEq(file.arena.nodes[lit.children[0]].text, "a")
     testing.assertEq(file.arena.nodes[lit.children[1]].text, "b")
 }
-
+// `"\{a\}-\{b\}"` → two interp parts, two children, in source order.
 fn testParserAttachesCallExprInsideInterp() {
-    // `"{f(x)}"` — the interp expression is a CallExpr. Verifies the
-    // sub-parser doesn't stop at the bare ident: it descends through
-    // the full expression grammar.
-    let file = astParse("fn main() { let s = \"{f(1)}\" }")
+    let file = astParse("fn main() \{ let s = \"\{f(1)\}\" \}")
     let lit = findFirstStringLit(file)
     testing.assertEq(lit.children.len(), 1)
     testing.assertEq(file.arena.nodes[lit.children[0]].kind, AstNCall)
 }
-
+// `"{f(x)}"` — the interp expression is a CallExpr. Verifies the
+// sub-parser doesn't stop at the bare ident: it descends through
+// the full expression grammar.
 fn testParserNoChildrenForLiteralOnlyString() {
-    // No interpolation → no children.
-    let file = astParse("fn main() { let s = \"hello\" }")
+    let file = astParse("fn main() \{ let s = \"hello\" \}")
     let lit = findFirstStringLit(file)
     testing.assertEq(lit.children.len(), 0)
 }
