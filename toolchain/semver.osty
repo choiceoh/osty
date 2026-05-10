@@ -1,12 +1,10 @@
 use std.strings as strings
-
 /// SemPreIdent is one dot-separated pre-release identifier.
 pub enum SemPreIdent {
     PreNone,
     PreNumber(Int),
     PreText(String),
 }
-
 /// SemVersion is the package-manager version shape used by the toolchain port.
 ///
 /// The Go implementation stores an arbitrary pre-release slice. This Osty
@@ -22,35 +20,22 @@ pub struct SemVersion {
     pub pre3: SemPreIdent,
     pub build: String,
 }
-
 /// preNone returns the sentinel empty pre-release slot.
 pub fn preNone() -> SemPreIdent {
     PreNone
 }
-
 /// preNumber constructs a numeric pre-release identifier.
 pub fn preNumber(n: Int) -> SemPreIdent {
     PreNumber(n)
 }
-
 /// preText constructs an alphanumeric pre-release identifier.
 pub fn preText(s: String) -> SemPreIdent {
     PreText(s)
 }
-
 /// semVersion constructs a version with explicit pre-release slots.
-pub fn semVersion(
-    major: Int,
-    minor: Int,
-    patch: Int,
-    pre1: SemPreIdent,
-    pre2: SemPreIdent,
-    pre3: SemPreIdent,
-    build: String,
-) -> SemVersion {
-    SemVersion { major, minor, patch, pre1, pre2, pre3, build }
+pub fn semVersion(major: Int, minor: Int, patch: Int, pre1: SemPreIdent, pre2: SemPreIdent, pre3: SemPreIdent, build: String) -> SemVersion {
+    SemVersion {major, minor, patch, pre1, pre2, pre3, build}
 }
-
 /// stableVersion constructs a release with no pre-release identifiers.
 ///
 /// ```osty
@@ -63,28 +48,18 @@ pub fn semVersion(
 pub fn stableVersion(major: Int, minor: Int, patch: Int) -> SemVersion {
     semVersion(major, minor, patch, preNone(), preNone(), preNone(), "")
 }
-
 /// prerelease1 constructs a release with one pre-release identifier.
 pub fn prerelease1(major: Int, minor: Int, patch: Int, pre1: SemPreIdent) -> SemVersion {
     semVersion(major, minor, patch, pre1, preNone(), preNone(), "")
 }
-
 /// prerelease2 constructs a release with two pre-release identifiers.
-pub fn prerelease2(
-    major: Int,
-    minor: Int,
-    patch: Int,
-    pre1: SemPreIdent,
-    pre2: SemPreIdent,
-) -> SemVersion {
+pub fn prerelease2(major: Int, minor: Int, patch: Int, pre1: SemPreIdent, pre2: SemPreIdent) -> SemVersion {
     semVersion(major, minor, patch, pre1, pre2, preNone(), "")
 }
-
 /// versionWithBuild records build metadata, which does not affect ordering.
 pub fn versionWithBuild(major: Int, minor: Int, patch: Int, build: String) -> SemVersion {
     semVersion(major, minor, patch, preNone(), preNone(), preNone(), build)
 }
-
 /// isSemPrerelease reports whether a version has any pre-release identifier.
 ///
 /// ```osty
@@ -98,7 +73,6 @@ pub fn isSemPrerelease(v: SemVersion) -> Bool {
         _ -> true,
     }
 }
-
 /// compareSemVersion returns -1, 0, or 1 using SemVer precedence rules.
 ///
 /// Core numbers dominate pre-release identifiers, which in turn dominate
@@ -118,17 +92,14 @@ pub fn compareSemVersion(a: SemVersion, b: SemVersion) -> Int {
     if major != 0 {
         return major
     }
-
     let minor = signInt(a.minor, b.minor)
     if minor != 0 {
         return minor
     }
-
     let patch = signInt(a.patch, b.patch)
     if patch != 0 {
         return patch
     }
-
     let aPre = isSemPrerelease(a)
     let bPre = isSemPrerelease(b)
     if !(aPre) && !(bPre) {
@@ -140,7 +111,6 @@ pub fn compareSemVersion(a: SemVersion, b: SemVersion) -> Int {
     if !(bPre) {
         return -1
     }
-
     let p1 = comparePreIdent(a.pre1, b.pre1)
     if p1 != 0 {
         return p1
@@ -151,7 +121,6 @@ pub fn compareSemVersion(a: SemVersion, b: SemVersion) -> Int {
     }
     comparePreIdent(a.pre3, b.pre3)
 }
-
 /// comparePreIdent implements SemVer §11.4 pre-release identifier ordering.
 pub fn comparePreIdent(a: SemPreIdent, b: SemPreIdent) -> Int {
     match a {
@@ -171,7 +140,6 @@ pub fn comparePreIdent(a: SemPreIdent, b: SemPreIdent) -> Int {
         },
     }
 }
-
 /// signInt returns the three-way comparison used by the Go semver package.
 pub fn signInt(a: Int, b: Int) -> Int {
     if a < b {
@@ -182,12 +150,10 @@ pub fn signInt(a: Int, b: Int) -> Int {
         0
     }
 }
-
 /// signString returns lexical string order for alpha pre-release identifiers.
 pub fn signString(a: String, b: String) -> Int {
     strings.compare(a, b)
 }
-
 /// semPreIdentIsNone reports whether a pre-release slot is empty.
 pub fn semPreIdentIsNone(ident: SemPreIdent) -> Bool {
     match ident {
@@ -195,7 +161,6 @@ pub fn semPreIdentIsNone(ident: SemPreIdent) -> Bool {
         _ -> false,
     }
 }
-
 /// semPreIdentText renders one pre-release identifier.
 pub fn semPreIdentText(ident: SemPreIdent) -> String {
     match ident {
@@ -204,7 +169,6 @@ pub fn semPreIdentText(ident: SemPreIdent) -> String {
         PreText(text) -> text,
     }
 }
-
 /// semVersionText renders the package-manager SemVer form used in locks.
 ///
 /// ```osty

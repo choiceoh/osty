@@ -21,11 +21,9 @@
 // share a single TyArena — types are interned and comparing by index
 // equality is load-bearing. A separate pass (D2) will rewrite Ty
 // indices through a substitution map once monomorphization needs it.
-
 // ====================================================================
 // Per-kind slot descriptor
 // ====================================================================
-
 /// CoreRefSlots describes which of a CoreNode's index slots carry
 /// CoreArena references (so the cloner remaps them) vs everything else
 /// (copied verbatim).
@@ -51,97 +49,160 @@ pub struct CoreRefSlots {
     pub typeArgsIsCore: Bool,
     pub known: Bool,
 }
-
 fn coreSlotsNone() -> CoreRefSlots {
-    CoreRefSlots {
-        leftIsCore: false,
-        rightIsCore: false,
-        extraIsCore: false,
-        childrenIsCore: false,
-        children2IsCore: false,
-        typeArgsIsCore: false,
-        known: true,
-    }
+    CoreRefSlots {leftIsCore: false, rightIsCore: false, extraIsCore: false, childrenIsCore: false, children2IsCore: false, typeArgsIsCore: false, known: true}
 }
-
 fn coreSlotsUnknown() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.known = false
     s
 }
-
 /// coreKindSlots is the authoritative per-CoreKind descriptor. If a
 /// new kind is added to `core.osty` it MUST be registered here — the
 /// cloner refuses to copy a node whose `known` flag is false and
 /// reports an error back to the caller via the returned mapping.
 pub fn coreKindSlots(kind: CoreKind) -> CoreRefSlots {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    // ---- Literals (no children) ----
-    if kind == CkErr { return coreSlotsNone() }
-    if kind == CkIntLit { return coreSlotsNone() }
-    if kind == CkFloatLit { return coreSlotsNone() }
-    if kind == CkBoolLit { return coreSlotsNone() }
-    if kind == CkCharLit { return coreSlotsNone() }
-    if kind == CkByteLit { return coreSlotsNone() }
-    if kind == CkBytesLit { return coreSlotsNone() }
-    if kind == CkStringLit { return coreSlotsNone() }
-    if kind == CkUnitLit { return coreSlotsNone() }
-
-    // ---- Atoms & operators ----
-    if kind == CkIdent { return coreSlotsNone() }
-    if kind == CkUnary { return coreSlotsLeft() }
-    if kind == CkBinary { return coreSlotsLeftRight() }
-    if kind == CkCoalesce { return coreSlotsLeftRight() }
-    if kind == CkQuestion { return coreSlotsLeft() }
-
-    // ---- Callables (typeArgs is TyArena-indexed for these) ----
-    if kind == CkCall { return coreSlotsLeftChildren() }
-    if kind == CkMethodCall { return coreSlotsLeftChildren() }
-    if kind == CkIntrinsic { return coreSlotsChildren() }
-    if kind == CkVariantLit { return coreSlotsChildren() }
-
-    // ---- Access ----
-    if kind == CkField { return coreSlotsLeft() }
-    if kind == CkTupleAccess { return coreSlotsLeft() }
-    if kind == CkIndex { return coreSlotsLeftRight() }
-
-    // ---- Aggregates ----
-    if kind == CkList { return coreSlotsChildren() }
-    if kind == CkMap { return coreSlotsChildren() }
-    if kind == CkMapEntry { return coreSlotsLeftRight() }
-    if kind == CkTuple { return coreSlotsChildren() }
-    if kind == CkStruct { return coreSlotsChildren() }
-    if kind == CkStructField { return coreSlotsLeft() }
-    if kind == CkRange { return coreSlotsLeftRight() }
-
-    // ---- Control ----
-    if kind == CkClosure { return coreSlotsChildrenLeft() }
-    if kind == CkBlock { return coreSlotsChildren() }
-    if kind == CkIf { return coreSlotsLeftRightExtra() }
-    if kind == CkIfLet { return coreSlotsChildrenLeft() }
-    if kind == CkMatch { return coreSlotsLeftChildren() }
-    if kind == CkMatchArm { return coreSlotsLeftRightExtra() }
-
-    // ---- Statements ----
-    if kind == CsBlock { return coreSlotsChildren() }
-    if kind == CsLet { return coreSlotsLeftRight() }
-    if kind == CsAssign { return coreSlotsLeftRight() }
-    if kind == CsReturn { return coreSlotsLeft() }
-    if kind == CsBreak { return coreSlotsNone() }
-    if kind == CsContinue { return coreSlotsNone() }
-    if kind == CsIf { return coreSlotsLeftRightExtra() }
-    if kind == CsFor { return coreSlotsLeftRightExtra() }
-    if kind == CsMatch { return coreSlotsLeftChildren() }
-    if kind == CsExprStmt { return coreSlotsLeft() }
-    if kind == CsDefer { return coreSlotsLeft() }
-    if kind == CsChanSend { return coreSlotsLeftRight() }
-    if kind == CsErr { return coreSlotsNone() }
-
-    // ---- Decls ----
-    //
-    // CdFn: children=params (Core), children2=generics (Core),
-    //       left=body (Core), right=retTy (Ty — not a Core ref),
-    //       typeArgs currently unused (stays false).
+    if kind == CkErr {
+        return coreSlotsNone()
+    }
+    if kind == CkIntLit {
+        return coreSlotsNone()
+    }
+    if kind == CkFloatLit {
+        return coreSlotsNone()
+    }
+    if kind == CkBoolLit {
+        return coreSlotsNone()
+    }
+    if kind == CkCharLit {
+        return coreSlotsNone()
+    }
+    if kind == CkByteLit {
+        return coreSlotsNone()
+    }
+    if kind == CkBytesLit {
+        return coreSlotsNone()
+    }
+    if kind == CkStringLit {
+        return coreSlotsNone()
+    }
+    if kind == CkUnitLit {
+        return coreSlotsNone()
+    }
+    if kind == CkIdent {
+        return coreSlotsNone()
+    }
+    if kind == CkUnary {
+        return coreSlotsLeft()
+    }
+    if kind == CkBinary {
+        return coreSlotsLeftRight()
+    }
+    if kind == CkCoalesce {
+        return coreSlotsLeftRight()
+    }
+    if kind == CkQuestion {
+        return coreSlotsLeft()
+    }
+    if kind == CkCall {
+        return coreSlotsLeftChildren()
+    }
+    if kind == CkMethodCall {
+        return coreSlotsLeftChildren()
+    }
+    if kind == CkIntrinsic {
+        return coreSlotsChildren()
+    }
+    if kind == CkVariantLit {
+        return coreSlotsChildren()
+    }
+    if kind == CkField {
+        return coreSlotsLeft()
+    }
+    if kind == CkTupleAccess {
+        return coreSlotsLeft()
+    }
+    if kind == CkIndex {
+        return coreSlotsLeftRight()
+    }
+    if kind == CkList {
+        return coreSlotsChildren()
+    }
+    if kind == CkMap {
+        return coreSlotsChildren()
+    }
+    if kind == CkMapEntry {
+        return coreSlotsLeftRight()
+    }
+    if kind == CkTuple {
+        return coreSlotsChildren()
+    }
+    if kind == CkStruct {
+        return coreSlotsChildren()
+    }
+    if kind == CkStructField {
+        return coreSlotsLeft()
+    }
+    if kind == CkRange {
+        return coreSlotsLeftRight()
+    }
+    if kind == CkClosure {
+        return coreSlotsChildrenLeft()
+    }
+    if kind == CkBlock {
+        return coreSlotsChildren()
+    }
+    if kind == CkIf {
+        return coreSlotsLeftRightExtra()
+    }
+    if kind == CkIfLet {
+        return coreSlotsChildrenLeft()
+    }
+    if kind == CkMatch {
+        return coreSlotsLeftChildren()
+    }
+    if kind == CkMatchArm {
+        return coreSlotsLeftRightExtra()
+    }
+    if kind == CsBlock {
+        return coreSlotsChildren()
+    }
+    if kind == CsLet {
+        return coreSlotsLeftRight()
+    }
+    if kind == CsAssign {
+        return coreSlotsLeftRight()
+    }
+    if kind == CsReturn {
+        return coreSlotsLeft()
+    }
+    if kind == CsBreak {
+        return coreSlotsNone()
+    }
+    if kind == CsContinue {
+        return coreSlotsNone()
+    }
+    if kind == CsIf {
+        return coreSlotsLeftRightExtra()
+    }
+    if kind == CsFor {
+        return coreSlotsLeftRightExtra()
+    }
+    if kind == CsMatch {
+        return coreSlotsLeftChildren()
+    }
+    if kind == CsExprStmt {
+        return coreSlotsLeft()
+    }
+    if kind == CsDefer {
+        return coreSlotsLeft()
+    }
+    if kind == CsChanSend {
+        return coreSlotsLeftRight()
+    }
+    if kind == CsErr {
+        return coreSlotsNone()
+    }
     if kind == CdFn {
         let mut s = coreSlotsNone()
         s.leftIsCore = true
@@ -149,55 +210,104 @@ pub fn coreKindSlots(kind: CoreKind) -> CoreRefSlots {
         s.children2IsCore = true
         return s
     }
-    // CdStruct: children=fields (Core), children2=generics (Core),
-    //           typeArgs=methods (Core).
-    if kind == CdStruct { return coreSlotsChildrenChildren2Type() }
-    // CdEnum: children=variants, children2=generics, typeArgs=methods.
-    if kind == CdEnum { return coreSlotsChildrenChildren2Type() }
-    if kind == CdEnumVariant { return coreSlotsChildren() }
-    if kind == CdInterface { return coreSlotsChildrenChildren2Type() }
-    // CdTypeAlias: children2=generics (Core), ty carries target —
-    // target is TyArena, not Core; no Core refs in slots.
+    if kind == CdStruct {
+        return coreSlotsChildrenChildren2Type()
+    }
+    if kind == CdEnum {
+        return coreSlotsChildrenChildren2Type()
+    }
+    if kind == CdEnumVariant {
+        return coreSlotsChildren()
+    }
+    if kind == CdInterface {
+        return coreSlotsChildrenChildren2Type()
+    }
     if kind == CdTypeAlias {
         let mut s = coreSlotsNone()
         s.children2IsCore = true
         return s
     }
-    // CdLet: left=init (Core), right unused (Ty), ty=declared type.
-    if kind == CdLet { return coreSlotsLeft() }
-    if kind == CdUse { return coreSlotsNone() }
-    if kind == CdField { return coreSlotsLeft() }
-    if kind == CdParam { return coreSlotsLeft() }
-    if kind == CdGenericParam { return coreSlotsChildren() }
-
-    // ---- Patterns ----
-    if kind == CpWild { return coreSlotsNone() }
-    if kind == CpIdent { return coreSlotsNone() }
-    if kind == CpLit { return coreSlotsNone() }
-    if kind == CpTuple { return coreSlotsChildren() }
-    if kind == CpStruct { return coreSlotsChildren() }
-    if kind == CpStructField { return coreSlotsLeft() }
-    if kind == CpVariant { return coreSlotsChildren() }
-    if kind == CpRange { return coreSlotsLeftRight() }
-    if kind == CpOr { return coreSlotsChildren() }
-    if kind == CpBinding { return coreSlotsLeft() }
-    if kind == CpErr { return coreSlotsNone() }
+    if kind == CdLet {
+        return coreSlotsLeft()
+    }
+    if kind == CdUse {
+        return coreSlotsNone()
+    }
+    if kind == CdField {
+        return coreSlotsLeft()
+    }
+    if kind == CdParam {
+        return coreSlotsLeft()
+    }
+    if kind == CdGenericParam {
+        return coreSlotsChildren()
+    }
+    if kind == CpWild {
+        return coreSlotsNone()
+    }
+    if kind == CpIdent {
+        return coreSlotsNone()
+    }
+    if kind == CpLit {
+        return coreSlotsNone()
+    }
+    if kind == CpTuple {
+        return coreSlotsChildren()
+    }
+    if kind == CpStruct {
+        return coreSlotsChildren()
+    }
+    if kind == CpStructField {
+        return coreSlotsLeft()
+    }
+    if kind == CpVariant {
+        return coreSlotsChildren()
+    }
+    if kind == CpRange {
+        return coreSlotsLeftRight()
+    }
+    if kind == CpOr {
+        return coreSlotsChildren()
+    }
+    if kind == CpBinding {
+        return coreSlotsLeft()
+    }
+    if kind == CpErr {
+        return coreSlotsNone()
+    }
     coreSlotsNone()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+// ---- Literals (no children) ----
+// ---- Atoms & operators ----
+// ---- Callables (typeArgs is TyArena-indexed for these) ----
+// ---- Access ----
+// ---- Aggregates ----
+// ---- Control ----
+// ---- Statements ----
+// ---- Decls ----
+//
+// CdFn: children=params (Core), children2=generics (Core),
+//       left=body (Core), right=retTy (Ty — not a Core ref),
+//       typeArgs currently unused (stays false).
+// CdStruct: children=fields (Core), children2=generics (Core),
+//           typeArgs=methods (Core).
+// CdEnum: children=variants, children2=generics, typeArgs=methods.
+// CdTypeAlias: children2=generics (Core), ty carries target —
+// target is TyArena, not Core; no Core refs in slots.
+// CdLet: left=init (Core), right unused (Ty), ty=declared type.
+// ---- Patterns ----
 fn coreSlotsLeft() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.leftIsCore = true
     s
 }
-
 fn coreSlotsLeftRight() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.leftIsCore = true
     s.rightIsCore = true
     s
 }
-
 fn coreSlotsLeftRightExtra() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.leftIsCore = true
@@ -205,27 +315,23 @@ fn coreSlotsLeftRightExtra() -> CoreRefSlots {
     s.extraIsCore = true
     s
 }
-
 fn coreSlotsChildren() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.childrenIsCore = true
     s
 }
-
 fn coreSlotsChildrenLeft() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.leftIsCore = true
     s.childrenIsCore = true
     s
 }
-
 fn coreSlotsLeftChildren() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.leftIsCore = true
     s.childrenIsCore = true
     s
 }
-
 fn coreSlotsChildrenChildren2Type() -> CoreRefSlots {
     let mut s = coreSlotsNone()
     s.childrenIsCore = true
@@ -233,11 +339,9 @@ fn coreSlotsChildrenChildren2Type() -> CoreRefSlots {
     s.typeArgsIsCore = true
     s
 }
-
 // ====================================================================
 // Clone mapping
 // ====================================================================
-
 /// CoreCloneResult carries a successful clone's new root index and an
 /// optional error string. On success `err` is empty and `newRoot` is
 /// the destination arena index of the cloned root. On failure `err`
@@ -247,15 +351,12 @@ pub struct CoreCloneResult {
     pub newRoot: Int,
     pub err: String,
 }
-
 fn coreCloneOk(newRoot: Int) -> CoreCloneResult {
-    CoreCloneResult { newRoot, err: "" }
+    CoreCloneResult {newRoot, err: ""}
 }
-
 fn coreCloneErr(err: String) -> CoreCloneResult {
-    CoreCloneResult { newRoot: -1, err }
+    CoreCloneResult {newRoot: -1, err}
 }
-
 /// CoreCloneMap tracks old-arena → new-arena index remapping so shared
 /// subgraphs (e.g. a generic param decl referenced by several callers
 /// within the same fn body) stay shared in the destination arena.
@@ -268,11 +369,9 @@ pub struct CoreCloneMap {
     pub oldIdx: List<Int>,
     pub newIdx: List<Int>,
 }
-
 pub fn emptyCoreCloneMap() -> CoreCloneMap {
-    CoreCloneMap { oldIdx: [], newIdx: [] }
+    CoreCloneMap {oldIdx: [], newIdx: []}
 }
-
 fn coreCloneMapLookup(map: CoreCloneMap, oldI: Int) -> Int {
     let mut i = 0
     for old in map.oldIdx {
@@ -283,16 +382,13 @@ fn coreCloneMapLookup(map: CoreCloneMap, oldI: Int) -> Int {
     }
     -1
 }
-
 fn coreCloneMapInsert(map: CoreCloneMap, oldI: Int, newI: Int) {
     map.oldIdx.push(oldI)
     map.newIdx.push(newI)
 }
-
 // ====================================================================
 // Public API
 // ====================================================================
-
 /// coreCloneArena returns a full copy of `src`: every node is copied
 /// element-for-element, and since each CoreNode already stores indices
 /// into the source arena, the copy retains internal consistency (new
@@ -304,7 +400,6 @@ pub fn coreCloneArena(src: CoreArena) -> CoreArena {
     }
     dst
 }
-
 /// coreCloneSubtree deep-copies the subtree rooted at `srcRoot` in
 /// `src` into `dst`, returning the destination root index (or an
 /// error on an unknown kind / out-of-range index). The `map` argument
@@ -326,12 +421,7 @@ pub fn coreCloneArena(src: CoreArena) -> CoreArena {
 /// indices during construction, and there is no back-edge after
 /// elaboration). A bounded recursion depth is enforced implicitly by
 /// the CoreArena's acyclic shape.
-pub fn coreCloneSubtree(
-    src: CoreArena,
-    srcRoot: Int,
-    dst: CoreArena,
-    map: CoreCloneMap,
-) -> CoreCloneResult {
+pub fn coreCloneSubtree(src: CoreArena, srcRoot: Int, dst: CoreArena, map: CoreCloneMap) -> CoreCloneResult {
     if srcRoot < 0 {
         return coreCloneOk(-1)
     }
@@ -347,26 +437,21 @@ pub fn coreCloneSubtree(
     if !(slots.known) {
         return coreCloneErr("coreCloneSubtree: unknown core kind")
     }
-
-    // Reserve the destination slot up-front. The placeholder will be
-    // overwritten with the final payload once its children are cloned.
-    // This makes the map entry visible to any sibling that references
-    // the same node before the clone of that node finishes — even
-    // though CoreArenas are acyclic today, reserving up-front keeps
-    // the contract sound if one day we grow a back-edge.
     let dstIdx = dst.nodes.len()
     dst.nodes.push(coreCloneNodeShallow(node))
     coreCloneMapInsert(map, srcRoot, dstIdx)
-
-    // Clone CoreArena-ref children. Every recursion either succeeds
-    // and returns a remapped index or fails with a propagated error.
     let leftRes = coreCloneChildIfCore(src, dst, node.left, slots.leftIsCore, map)
-    if leftRes.err != "" { return leftRes }
+    if leftRes.err != "" {
+        return leftRes
+    }
     let rightRes = coreCloneChildIfCore(src, dst, node.right, slots.rightIsCore, map)
-    if rightRes.err != "" { return rightRes }
+    if rightRes.err != "" {
+        return rightRes
+    }
     let extraRes = coreCloneChildIfCore(src, dst, node.extra, slots.extraIsCore, map)
-    if extraRes.err != "" { return extraRes }
-
+    if extraRes.err != "" {
+        return extraRes
+    }
     let childrenRes = coreCloneIndexList(src, dst, node.children, slots.childrenIsCore, map)
     if childrenRes.err != "" {
         return coreCloneErr(childrenRes.err)
@@ -379,8 +464,6 @@ pub fn coreCloneSubtree(
     if typeArgsRes.err != "" {
         return coreCloneErr(typeArgsRes.err)
     }
-
-    // Patch the reserved node with the remapped payload.
     let mut out = coreCloneNodeShallow(node)
     out.left = leftRes.newRoot
     out.right = rightRes.newRoot
@@ -389,58 +472,46 @@ pub fn coreCloneSubtree(
     out.children2 = children2Res.values
     out.typeArgs = typeArgsRes.values
     dst.nodes[dstIdx] = out
-
     coreCloneOk(dstIdx)
 }
-
+// Reserve the destination slot up-front. The placeholder will be
+// overwritten with the final payload once its children are cloned.
+// This makes the map entry visible to any sibling that references
+// the same node before the clone of that node finishes — even
+// though CoreArenas are acyclic today, reserving up-front keeps
+// the contract sound if one day we grow a back-edge.
+// Clone CoreArena-ref children. Every recursion either succeeds
+// and returns a remapped index or fails with a propagated error.
+// Patch the reserved node with the remapped payload.
 /// coreCloneSubtreeFresh is a convenience wrapper for callers that do
 /// not need to share a clone map across multiple roots.
 pub fn coreCloneSubtreeFresh(src: CoreArena, srcRoot: Int, dst: CoreArena) -> CoreCloneResult {
     let map = emptyCoreCloneMap()
     coreCloneSubtree(src, srcRoot, dst, map)
 }
-
 // ====================================================================
 // Internal helpers
 // ====================================================================
-
 /// CoreCloneListResult carries either a remapped index list or an
 /// error string. Parallel to CoreCloneResult but over lists.
 pub struct CoreCloneListResult {
     pub values: List<Int>,
     pub err: String,
 }
-
 fn coreCloneListErr(err: String) -> CoreCloneListResult {
-    CoreCloneListResult { values: [], err }
+    CoreCloneListResult {values: [], err}
 }
-
 fn coreCloneListOk(values: List<Int>) -> CoreCloneListResult {
-    CoreCloneListResult { values, err: "" }
+    CoreCloneListResult {values, err: ""}
 }
-
-fn coreCloneChildIfCore(
-    src: CoreArena,
-    dst: CoreArena,
-    oldIdx: Int,
-    isCore: Bool,
-    map: CoreCloneMap,
-) -> CoreCloneResult {
+fn coreCloneChildIfCore(src: CoreArena, dst: CoreArena, oldIdx: Int, isCore: Bool, map: CoreCloneMap) -> CoreCloneResult {
     if !(isCore) {
         return coreCloneOk(oldIdx)
     }
     coreCloneSubtree(src, oldIdx, dst, map)
 }
-
-fn coreCloneIndexList(
-    src: CoreArena,
-    dst: CoreArena,
-    xs: List<Int>,
-    isCore: Bool,
-    map: CoreCloneMap,
-) -> CoreCloneListResult {
+fn coreCloneIndexList(src: CoreArena, dst: CoreArena, xs: List<Int>, isCore: Bool, map: CoreCloneMap) -> CoreCloneListResult {
     if !(isCore) {
-        // Non-Core lists (TyArena indices, etc.) are copied verbatim.
         let mut passthrough: List<Int> = []
         for v in xs {
             passthrough.push(v)
@@ -461,7 +532,7 @@ fn coreCloneIndexList(
     }
     coreCloneListOk(out)
 }
-
+// Non-Core lists (TyArena indices, etc.) are copied verbatim.
 /// coreCloneNodeShallow returns a copy of `n` with its List fields
 /// freshly allocated (so mutating the clone's lists does not touch the
 /// source). Child indices are copied verbatim — the caller is
@@ -491,11 +562,9 @@ fn coreCloneNodeShallow(n: CoreNode) -> CoreNode {
     }
     out
 }
-
 // ====================================================================
 // Walk + collect helpers
 // ====================================================================
-
 /// coreCollectReachable returns the set of CoreArena indices reachable
 /// from `root` via the per-kind Core-ref slots. Useful for
 /// monomorphization size estimates and for asserting that a cloned
@@ -506,12 +575,11 @@ pub struct CoreReachResult {
     pub indices: List<Int>,
     pub err: String,
 }
-
 pub fn coreCollectReachable(src: CoreArena, root: Int) -> CoreReachResult {
     let mut seen: List<Int> = []
     let mut stack: List<Int> = []
     if root < 0 || root >= src.nodes.len() {
-        return CoreReachResult { indices: seen, err: "" }
+        return CoreReachResult {indices: seen, err: ""}
     }
     stack.push(root)
     for _step in 0..1000000 {
@@ -527,11 +595,10 @@ pub fn coreCollectReachable(src: CoreArena, root: Int) -> CoreReachResult {
             continue
         }
         seen.push(top)
-
         let node = src.nodes[top]
         let slots = coreKindSlots(node.kind)
         if !(slots.known) {
-            return CoreReachResult { indices: seen, err: "coreCollectReachable: unknown core kind" }
+            return CoreReachResult {indices: seen, err: "coreCollectReachable: unknown core kind"}
         }
         if slots.leftIsCore && node.left >= 0 {
             stack.push(node.left)
@@ -564,6 +631,5 @@ pub fn coreCollectReachable(src: CoreArena, root: Int) -> CoreReachResult {
             }
         }
     }
-    CoreReachResult { indices: seen, err: "" }
+    CoreReachResult {indices: seen, err: ""}
 }
-

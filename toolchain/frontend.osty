@@ -1,5 +1,4 @@
 use std.strings as strings
-
 /// FrontTokenKind mirrors the compiler token categories needed by the
 /// self-hosting front end.
 pub enum FrontTokenKind {
@@ -86,7 +85,6 @@ pub enum FrontTokenKind {
     FrontAt,
     FrontHash,
 }
-
 /// FrontToken is the compact token shape used by the Osty parser core.
 ///
 /// startOffset / endOffset are source byte offsets matching the rich
@@ -100,13 +98,11 @@ pub struct FrontToken {
     pub startOffset: Int,
     pub endOffset: Int,
 }
-
 pub enum FrontCommentKind {
     FrontCommentLine,
     FrontCommentBlock,
     FrontCommentDoc,
 }
-
 pub enum FrontLexDiagnosticCode {
     FrontDiagIllegalCharacter,
     FrontDiagUnterminatedBlockComment,
@@ -122,18 +118,15 @@ pub enum FrontLexDiagnosticCode {
     FrontDiagBadNumericSeparator,
     FrontDiagFatArrowRemoved,
 }
-
 pub enum FrontStringPartKind {
     FrontStringText,
     FrontStringInterpolation,
 }
-
 pub struct FrontPos {
     pub offset: Int,
     pub line: Int,
     pub column: Int,
 }
-
 /// FrontLexToken is the self-hosting token shape. It stores normalized
 /// source positions and literal metadata without copying lexeme text.
 pub struct FrontLexToken {
@@ -147,20 +140,17 @@ pub struct FrontLexToken {
     pub interpolations: Int,
     pub baseLiteral: Bool,
 }
-
 pub struct FrontLexDiagnostic {
     pub code: FrontLexDiagnosticCode,
     pub start: FrontPos,
     pub end: FrontPos,
 }
-
 pub struct FrontComment {
     pub kind: FrontCommentKind,
     pub start: FrontPos,
     pub end: FrontPos,
     pub lines: Int,
 }
-
 pub struct FrontStringPart {
     pub ownerToken: Int,
     pub kind: FrontStringPartKind,
@@ -171,12 +161,10 @@ pub struct FrontStringPart {
     pub exprTokenStart: Int,
     pub exprTokenCount: Int,
 }
-
 pub struct FrontInterpolationToken {
     pub ownerPart: Int,
     pub token: FrontLexToken,
 }
-
 pub struct FrontLexStream {
     pub tokens: List<FrontLexToken>,
     pub diagnostics: List<FrontLexDiagnostic>,
@@ -190,7 +178,6 @@ pub struct FrontLexStream {
     pub tripleIndentErrors: Int,
     pub escapeErrors: Int,
 }
-
 /// FrontLexSummary keeps the self-hosted lexer executable without depending on
 /// dynamic token-buffer generation yet.
 pub struct FrontLexSummary {
@@ -212,7 +199,6 @@ pub struct FrontLexSummary {
     pub second: String,
     pub third: String,
 }
-
 /// FrontParseSummary is the compatibility metrics surface emitted by the
 /// self-hosting parser core.
 pub struct FrontParseSummary {
@@ -284,7 +270,6 @@ pub struct FrontParseSummary {
     pub rangePatterns: Int,
     pub wildcardPatterns: Int,
 }
-
 pub enum FrontTypeKind {
     FrontTypeInvalid,
     FrontTypeInt,
@@ -298,18 +283,15 @@ pub enum FrontTypeKind {
     FrontTypeUntypedInt,
     FrontTypeUntypedFloat,
 }
-
 pub struct FrontAssignment {
     pub dst: String,
     pub src: String,
 }
-
 pub struct FrontCheckSummary {
     pub assignments: Int,
     pub accepted: Int,
     pub errors: Int,
 }
-
 pub struct FrontScanResult {
     pub kind: FrontTokenKind,
     pub consumed: Int,
@@ -320,12 +302,10 @@ pub struct FrontScanResult {
     pub baseLiteral: Bool,
     pub uppercaseBasePrefix: Bool,
 }
-
 pub struct FrontBlockCommentScan {
     pub consumed: Int,
     pub ok: Bool,
 }
-
 pub struct FrontStringStructureScan {
     pub parts: List<FrontStringPart>,
     pub interpolationTokens: List<FrontInterpolationToken>,
@@ -336,7 +316,6 @@ pub struct FrontStringStructureScan {
     pub tripleIndentErrors: Int,
     pub escapeErrors: Int,
 }
-
 pub struct FrontInterpolationScan {
     pub consumed: Int,
     pub ok: Bool,
@@ -344,28 +323,23 @@ pub struct FrontInterpolationScan {
     pub diagnostics: List<FrontLexDiagnostic>,
     pub tokenCount: Int,
 }
-
 pub struct FrontEscapeScan {
     pub consumed: Int,
     pub ok: Bool,
 }
-
 pub struct FrontTripleNormalization {
     pub normalizedUnits: Int,
     pub badIndentLines: Int,
     pub indentUnits: Int,
 }
-
 pub struct FrontTripleLineStats {
     pub normalizedUnits: Int,
     pub badIndent: Bool,
 }
-
 pub struct FrontParseResult {
     pub summary: FrontParseSummary,
     pub consumed: Int,
 }
-
 pub enum FrontNodeKind {
     FrontNodeFile,
     FrontNodeAnnotation,
@@ -411,7 +385,6 @@ pub enum FrontNodeKind {
     FrontNodeVariant,
     FrontNodeRecovery,
 }
-
 pub enum FrontParseDiagnosticKind {
     FrontParseDiagUnexpectedToken,
     FrontParseDiagMissingName,
@@ -421,7 +394,6 @@ pub enum FrontParseDiagnosticKind {
     FrontParseDiagTrailingSelector,
     FrontParseDiagLexerError,
 }
-
 pub struct FrontParseNode {
     pub kind: FrontNodeKind,
     pub start: Int,
@@ -429,7 +401,6 @@ pub struct FrontParseNode {
     pub depth: Int,
     pub flags: Int,
 }
-
 pub struct FrontParseDiagnostic {
     pub kind: FrontParseDiagnosticKind,
     pub start: Int,
@@ -437,7 +408,6 @@ pub struct FrontParseDiagnostic {
     pub expected: FrontTokenKind,
     pub found: FrontTokenKind,
 }
-
 pub struct FrontParseTree {
     pub nodes: List<FrontParseNode>,
     pub diagnostics: List<FrontParseDiagnostic>,
@@ -448,237 +418,313 @@ pub struct FrontParseTree {
     pub recovered: Int,
     pub precedenceDiagnostics: Int,
 }
-
 pub fn frontToken(kindName: String, text: String) -> FrontToken {
-    FrontToken { kind: frontTokenKindByName(kindName), text, startOffset: 0, endOffset: 0 }
+    FrontToken {kind: frontTokenKindByName(kindName), text, startOffset: 0, endOffset: 0}
 }
-
 pub fn frontEOF() -> FrontToken {
-    FrontToken { kind: FrontEOF, text: "", startOffset: 0, endOffset: 0 }
+    FrontToken {kind: FrontEOF, text: "", startOffset: 0, endOffset: 0}
 }
-
 pub fn frontPos(offset: Int, line: Int, column: Int) -> FrontPos {
-    FrontPos { offset, line, column }
+    FrontPos {offset, line, column}
 }
-
 pub fn emptyFrontPos() -> FrontPos {
     frontPos(0, 1, 1)
 }
-
-pub fn frontLexToken(
-    kind: FrontTokenKind,
-    start: FrontPos,
-    end: FrontPos,
-    length: Int,
-    leadingDocLines: Int,
-    triple: Bool,
-    interpolations: Int,
-    baseLiteral: Bool,
-) -> FrontLexToken {
-    FrontLexToken {
-        id: frontStableTokenID(kind, start, end, length),
-        kind,
-        start,
-        end,
-        length,
-        leadingDocLines,
-        triple,
-        interpolations,
-        baseLiteral,
-    }
+pub fn frontLexToken(kind: FrontTokenKind, start: FrontPos, end: FrontPos, length: Int, leadingDocLines: Int, triple: Bool, interpolations: Int, baseLiteral: Bool) -> FrontLexToken {
+    FrontLexToken {id: frontStableTokenID(kind, start, end, length), kind, start, end, length, leadingDocLines, triple, interpolations, baseLiteral}
 }
-
 pub fn emptyFrontLexToken() -> FrontLexToken {
     frontLexToken(FrontEOF, emptyFrontPos(), emptyFrontPos(), 0, 0, false, 0, false)
 }
-
 /// frontStableTokenID is a deterministic identity for a lexed token in a
 /// normalized source buffer. It deliberately avoids slice indexes so side
 /// tables can keep referring to the same token even if callers filter or copy
 /// the token list at legacy boundaries.
-pub fn frontStableTokenID(
-    kind: FrontTokenKind,
-    start: FrontPos,
-    end: FrontPos,
-    length: Int,
-) -> Int {
+pub fn frontStableTokenID(kind: FrontTokenKind, start: FrontPos, end: FrontPos, length: Int) -> Int {
     let _ = end
     let _ = length
     (start.offset + 1) * 257 + frontTokenKindStableCode(kind)
 }
-
 pub fn frontTokenKindStableCode(kind: FrontTokenKind) -> Int {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontEOF { return 0 }
-    if kind == FrontIllegal { return 1 }
-    if kind == FrontNewline { return 2 }
-    if kind == FrontIdent { return 3 }
-    if kind == FrontLabel { return 4 }
-    if kind == FrontInt { return 5 }
-    if kind == FrontFloat { return 6 }
-    if kind == FrontChar { return 7 }
-    if kind == FrontByte { return 8 }
-    if kind == FrontByteString { return 81 }
-    if kind == FrontString { return 9 }
-    if kind == FrontRawString { return 10 }
-    if kind == FrontFn { return 11 }
-    if kind == FrontStruct { return 12 }
-    if kind == FrontEnum { return 13 }
-    if kind == FrontInterface { return 14 }
-    if kind == FrontType { return 15 }
-    if kind == FrontLet { return 16 }
-    if kind == FrontMut { return 17 }
-    if kind == FrontPub { return 18 }
-    if kind == FrontUse { return 19 }
-    if kind == FrontIf { return 20 }
-    if kind == FrontElse { return 21 }
-    if kind == FrontMatch { return 22 }
-    if kind == FrontFor { return 23 }
-    if kind == FrontReturn { return 24 }
-    if kind == FrontBreak { return 25 }
-    if kind == FrontContinue { return 26 }
-    if kind == FrontDefer { return 27 }
-    if kind == FrontLParen { return 28 }
-    if kind == FrontRParen { return 29 }
-    if kind == FrontLBrace { return 30 }
-    if kind == FrontRBrace { return 31 }
-    if kind == FrontLBracket { return 32 }
-    if kind == FrontRBracket { return 33 }
-    if kind == FrontComma { return 34 }
-    if kind == FrontColon { return 35 }
-    if kind == FrontSemicolon { return 36 }
-    if kind == FrontDot { return 37 }
-    if kind == FrontPlus { return 38 }
-    if kind == FrontMinus { return 39 }
-    if kind == FrontStar { return 40 }
-    if kind == FrontSlash { return 41 }
-    if kind == FrontPercent { return 42 }
-    if kind == FrontEq { return 43 }
-    if kind == FrontNeq { return 44 }
-    if kind == FrontLt { return 45 }
-    if kind == FrontGt { return 46 }
-    if kind == FrontLeq { return 47 }
-    if kind == FrontGeq { return 48 }
-    if kind == FrontAnd { return 49 }
-    if kind == FrontOr { return 50 }
-    if kind == FrontNot { return 51 }
-    if kind == FrontBitAnd { return 52 }
-    if kind == FrontBitOr { return 53 }
-    if kind == FrontBitXor { return 54 }
-    if kind == FrontBitNot { return 55 }
-    if kind == FrontShl { return 56 }
-    if kind == FrontShr { return 57 }
-    if kind == FrontAssign { return 58 }
-    if kind == FrontPlusEq { return 59 }
-    if kind == FrontMinusEq { return 60 }
-    if kind == FrontStarEq { return 61 }
-    if kind == FrontSlashEq { return 62 }
-    if kind == FrontPercentEq { return 63 }
-    if kind == FrontBitAndEq { return 64 }
-    if kind == FrontBitOrEq { return 65 }
-    if kind == FrontBitXorEq { return 66 }
-    if kind == FrontShlEq { return 67 }
-    if kind == FrontShrEq { return 68 }
-    if kind == FrontArrow { return 69 }
-    if kind == FrontChanArrow { return 70 }
-    if kind == FrontQuestion { return 71 }
-    if kind == FrontAsQuestion { return 72 }
-    if kind == FrontQDot { return 73 }
-    if kind == FrontQQ { return 74 }
-    if kind == FrontDotDot { return 75 }
-    if kind == FrontDotDotEq { return 76 }
-    if kind == FrontColonColon { return 77 }
-    if kind == FrontUnderscore { return 78 }
-    if kind == FrontAt { return 79 }
-    if kind == FrontHash { return 80 }
+    if kind == FrontEOF {
+        return 0
+    }
+    if kind == FrontIllegal {
+        return 1
+    }
+    if kind == FrontNewline {
+        return 2
+    }
+    if kind == FrontIdent {
+        return 3
+    }
+    if kind == FrontLabel {
+        return 4
+    }
+    if kind == FrontInt {
+        return 5
+    }
+    if kind == FrontFloat {
+        return 6
+    }
+    if kind == FrontChar {
+        return 7
+    }
+    if kind == FrontByte {
+        return 8
+    }
+    if kind == FrontByteString {
+        return 81
+    }
+    if kind == FrontString {
+        return 9
+    }
+    if kind == FrontRawString {
+        return 10
+    }
+    if kind == FrontFn {
+        return 11
+    }
+    if kind == FrontStruct {
+        return 12
+    }
+    if kind == FrontEnum {
+        return 13
+    }
+    if kind == FrontInterface {
+        return 14
+    }
+    if kind == FrontType {
+        return 15
+    }
+    if kind == FrontLet {
+        return 16
+    }
+    if kind == FrontMut {
+        return 17
+    }
+    if kind == FrontPub {
+        return 18
+    }
+    if kind == FrontUse {
+        return 19
+    }
+    if kind == FrontIf {
+        return 20
+    }
+    if kind == FrontElse {
+        return 21
+    }
+    if kind == FrontMatch {
+        return 22
+    }
+    if kind == FrontFor {
+        return 23
+    }
+    if kind == FrontReturn {
+        return 24
+    }
+    if kind == FrontBreak {
+        return 25
+    }
+    if kind == FrontContinue {
+        return 26
+    }
+    if kind == FrontDefer {
+        return 27
+    }
+    if kind == FrontLParen {
+        return 28
+    }
+    if kind == FrontRParen {
+        return 29
+    }
+    if kind == FrontLBrace {
+        return 30
+    }
+    if kind == FrontRBrace {
+        return 31
+    }
+    if kind == FrontLBracket {
+        return 32
+    }
+    if kind == FrontRBracket {
+        return 33
+    }
+    if kind == FrontComma {
+        return 34
+    }
+    if kind == FrontColon {
+        return 35
+    }
+    if kind == FrontSemicolon {
+        return 36
+    }
+    if kind == FrontDot {
+        return 37
+    }
+    if kind == FrontPlus {
+        return 38
+    }
+    if kind == FrontMinus {
+        return 39
+    }
+    if kind == FrontStar {
+        return 40
+    }
+    if kind == FrontSlash {
+        return 41
+    }
+    if kind == FrontPercent {
+        return 42
+    }
+    if kind == FrontEq {
+        return 43
+    }
+    if kind == FrontNeq {
+        return 44
+    }
+    if kind == FrontLt {
+        return 45
+    }
+    if kind == FrontGt {
+        return 46
+    }
+    if kind == FrontLeq {
+        return 47
+    }
+    if kind == FrontGeq {
+        return 48
+    }
+    if kind == FrontAnd {
+        return 49
+    }
+    if kind == FrontOr {
+        return 50
+    }
+    if kind == FrontNot {
+        return 51
+    }
+    if kind == FrontBitAnd {
+        return 52
+    }
+    if kind == FrontBitOr {
+        return 53
+    }
+    if kind == FrontBitXor {
+        return 54
+    }
+    if kind == FrontBitNot {
+        return 55
+    }
+    if kind == FrontShl {
+        return 56
+    }
+    if kind == FrontShr {
+        return 57
+    }
+    if kind == FrontAssign {
+        return 58
+    }
+    if kind == FrontPlusEq {
+        return 59
+    }
+    if kind == FrontMinusEq {
+        return 60
+    }
+    if kind == FrontStarEq {
+        return 61
+    }
+    if kind == FrontSlashEq {
+        return 62
+    }
+    if kind == FrontPercentEq {
+        return 63
+    }
+    if kind == FrontBitAndEq {
+        return 64
+    }
+    if kind == FrontBitOrEq {
+        return 65
+    }
+    if kind == FrontBitXorEq {
+        return 66
+    }
+    if kind == FrontShlEq {
+        return 67
+    }
+    if kind == FrontShrEq {
+        return 68
+    }
+    if kind == FrontArrow {
+        return 69
+    }
+    if kind == FrontChanArrow {
+        return 70
+    }
+    if kind == FrontQuestion {
+        return 71
+    }
+    if kind == FrontAsQuestion {
+        return 72
+    }
+    if kind == FrontQDot {
+        return 73
+    }
+    if kind == FrontQQ {
+        return 74
+    }
+    if kind == FrontDotDot {
+        return 75
+    }
+    if kind == FrontDotDotEq {
+        return 76
+    }
+    if kind == FrontColonColon {
+        return 77
+    }
+    if kind == FrontUnderscore {
+        return 78
+    }
+    if kind == FrontAt {
+        return 79
+    }
+    if kind == FrontHash {
+        return 80
+    }
     unreachable()
 }
-
-pub fn frontLexDiagnostic(
-    code: FrontLexDiagnosticCode,
-    start: FrontPos,
-    end: FrontPos,
-) -> FrontLexDiagnostic {
-    FrontLexDiagnostic { code, start, end }
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+pub fn frontLexDiagnostic(code: FrontLexDiagnosticCode, start: FrontPos, end: FrontPos) -> FrontLexDiagnostic {
+    FrontLexDiagnostic {code, start, end}
 }
-
 pub fn emptyFrontLexDiagnostic() -> FrontLexDiagnostic {
     frontLexDiagnostic(FrontDiagIllegalCharacter, emptyFrontPos(), emptyFrontPos())
 }
-
-pub fn frontComment(
-    kind: FrontCommentKind,
-    start: FrontPos,
-    end: FrontPos,
-    lines: Int,
-) -> FrontComment {
-    FrontComment { kind, start, end, lines }
+pub fn frontComment(kind: FrontCommentKind, start: FrontPos, end: FrontPos, lines: Int) -> FrontComment {
+    FrontComment {kind, start, end, lines}
 }
-
 pub fn emptyFrontComment() -> FrontComment {
     frontComment(FrontCommentLine, emptyFrontPos(), emptyFrontPos(), 0)
 }
-
-pub fn frontStringPart(
-    ownerToken: Int,
-    kind: FrontStringPartKind,
-    start: FrontPos,
-    end: FrontPos,
-    length: Int,
-    normalizedLength: Int,
-    exprTokenStart: Int,
-    exprTokenCount: Int,
-) -> FrontStringPart {
-    FrontStringPart {
-        ownerToken,
-        kind,
-        start,
-        end,
-        length,
-        normalizedLength,
-        exprTokenStart,
-        exprTokenCount,
-    }
+pub fn frontStringPart(ownerToken: Int, kind: FrontStringPartKind, start: FrontPos, end: FrontPos, length: Int, normalizedLength: Int, exprTokenStart: Int, exprTokenCount: Int) -> FrontStringPart {
+    FrontStringPart {ownerToken, kind, start, end, length, normalizedLength, exprTokenStart, exprTokenCount}
 }
-
 pub fn emptyFrontStringPart() -> FrontStringPart {
     frontStringPart(0, FrontStringText, emptyFrontPos(), emptyFrontPos(), 0, 0, 0, 0)
 }
-
 pub fn frontInterpolationToken(ownerPart: Int, token: FrontLexToken) -> FrontInterpolationToken {
-    FrontInterpolationToken { ownerPart, token }
+    FrontInterpolationToken {ownerPart, token}
 }
-
 pub fn emptyFrontInterpolationToken() -> FrontInterpolationToken {
     frontInterpolationToken(0, emptyFrontLexToken())
 }
-
 pub fn frontAssignment(dst: String, src: String) -> FrontAssignment {
-    FrontAssignment { dst, src }
+    FrontAssignment {dst, src}
 }
-
 pub fn emptyFrontLexSummary() -> FrontLexSummary {
-    FrontLexSummary {
-        tokens: 0,
-        keywords: 0,
-        identifiers: 0,
-        literals: 0,
-        punctuation: 0,
-        docs: 0,
-        newlines: 0,
-        errors: 0,
-        shebangs: 0,
-        bomStripped: 0,
-        tripleStrings: 0,
-        interpolations: 0,
-        baseLiterals: 0,
-        uppercaseBasePrefixes: 0,
-        first: "",
-        second: "",
-        third: "",
-    }
+    FrontLexSummary {tokens: 0, keywords: 0, identifiers: 0, literals: 0, punctuation: 0, docs: 0, newlines: 0, errors: 0, shebangs: 0, bomStripped: 0, tripleStrings: 0, interpolations: 0, baseLiterals: 0, uppercaseBasePrefixes: 0, first: "", second: "", third: ""}
 }
-
 /// frontendLexStream emits a real token stream with source positions,
 /// diagnostics, and comment side tables. It is intentionally richer than the
 /// Go lexer's compact Token surface: token text can be recovered from
@@ -705,7 +751,6 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
     let mut normalizedTripleUnits = 0
     let mut tripleIndentErrors = 0
     let mut escapeErrors = 0
-
     for idx in 0..unitCount {
         if skip > 0 {
             skip = skip - 1
@@ -726,23 +771,8 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
             } else if frontIsNewlineUnit(unit) {
                 let consumed = frontNewlineConsumed(unit, next)
                 atFileStart = false
-                if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(
-                    units,
-                    idx + consumed,
-                    unitCount,
-                )) {
-                    tokens.push(
-                        frontLexTokenFromScan(
-                            units,
-                            idx,
-                            consumed,
-                            FrontNewline,
-                            0,
-                            false,
-                            0,
-                            false,
-                        ),
-                    )
+                if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(units, idx + consumed, unitCount)) {
+                    tokens.push(frontLexTokenFromScan(units, idx, consumed, FrontNewline, 0, false, 0, false))
                     tokenIndex = tokenIndex + 1
                     insertTerm = false
                 }
@@ -764,56 +794,19 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let block = frontBlockCommentSkip(units, idx, unitCount)
                 let end = frontPositionAt(units, idx + block.consumed)
                 atFileStart = false
-                comments.push(
-                    frontComment(
-                        FrontCommentBlock,
-                        start,
-                        end,
-                        frontCommentLineCount(start, end),
-                    ),
-                )
+                comments.push(frontComment(FrontCommentBlock, start, end, frontCommentLineCount(start, end)))
                 if !(block.ok) {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagUnterminatedBlockComment,
-                            start,
-                            end,
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedBlockComment, start, end))
                 }
                 skip = block.consumed - 1
             } else if unit == "r" && next == "\"" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontRawString)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(
-                    units,
-                    idx,
-                    unitCount,
-                    scan.kind,
-                    ownerToken,
-                    stringPartIndex,
-                    interpolationTokenIndex,
-                    scan,
-                )
+                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -829,50 +822,24 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, FrontRawString, scan),
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontRawString, scan), start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if unit == "b" && (next == "'" || next == "\"") {
-                let byteScanKind = if next == "'" { FrontByte } else { FrontByteString }
+                let byteScanKind = if next == "'" {
+                    FrontByte
+                } else {
+                    FrontByteString
+                }
                 let scan = frontStringLikeScan(units, idx, unitCount, byteScanKind)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(
-                    units,
-                    idx,
-                    unitCount,
-                    scan.kind,
-                    ownerToken,
-                    stringPartIndex,
-                    interpolationTokenIndex,
-                    scan,
-                )
+                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -888,49 +855,19 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan),
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan), start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if unit == "b" && next == "\"" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontByte)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(
-                    units,
-                    idx,
-                    unitCount,
-                    scan.kind,
-                    ownerToken,
-                    stringPartIndex,
-                    interpolationTokenIndex,
-                    scan,
-                )
+                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -946,49 +883,19 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan),
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan), start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if unit == "\"" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontString)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(
-                    units,
-                    idx,
-                    unitCount,
-                    scan.kind,
-                    ownerToken,
-                    stringPartIndex,
-                    interpolationTokenIndex,
-                    scan,
-                )
+                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -1004,73 +911,28 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, FrontString, scan),
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontString, scan), start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if unit == "'" && frontCanStartLabel(units, idx, unitCount) {
                 let scan = frontLabelScan(units, idx, unitCount)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        false,
-                        0,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                 tokenIndex = tokenIndex + 1
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if unit == "'" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontChar)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(
-                    units,
-                    idx,
-                    unitCount,
-                    scan.kind,
-                    ownerToken,
-                    stringPartIndex,
-                    interpolationTokenIndex,
-                    scan,
-                )
+                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -1086,104 +948,41 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, FrontChar, scan),
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontChar, scan), start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if digitStringValue(unit) >= 0 {
                 let scan = frontNumberScan(units, idx, unitCount)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        scan.triple,
-                        scan.interpolations,
-                        scan.baseLiteral,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, scan.baseLiteral))
                 tokenIndex = tokenIndex + 1
                 if scan.uppercaseBasePrefix {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagUppercaseBasePrefix,
-                            start,
-                            frontPositionAt(units, idx + 2),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, start, frontPositionAt(units, idx + 2)))
                 }
                 if frontNumberHasBadSeparator(units, idx, scan.consumed) {
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagBadNumericSeparator,
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, start, frontPositionAt(units, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else if isFrontIdentStart(unit) {
                 let scan = frontIdentScan(units, idx, unitCount)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(
-                    frontLexTokenFromScan(
-                        units,
-                        idx,
-                        scan.consumed,
-                        scan.kind,
-                        leadingDocLines,
-                        false,
-                        0,
-                        false,
-                    ),
-                )
+                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                 tokenIndex = tokenIndex + 1
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
             } else {
                 let scan = frontPunctuationScan(units, idx, unitCount)
-                let leadingDocLines = frontAttachedDocLines(
-                    pendingDocLines,
-                    docLastLine,
-                    start.line,
-                )
+                let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 if scan.ok {
-                    tokens.push(
-                        frontLexTokenFromScan(
-                            units,
-                            idx,
-                            scan.consumed,
-                            scan.kind,
-                            leadingDocLines,
-                            false,
-                            0,
-                            false,
-                        ),
-                    )
+                    tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                     tokenIndex = tokenIndex + 1
                     if scan.kind == FrontLParen || scan.kind == FrontLBracket {
                         parenDepth = parenDepth + 1
@@ -1195,26 +994,9 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                     insertTerm = frontKindInsertsTerm(scan.kind)
                 } else {
                     let diagCode = frontIllegalDiagnosticCode(units, idx, scan)
-                    tokens.push(
-                        frontLexTokenFromScan(
-                            units,
-                            idx,
-                            scan.consumed,
-                            FrontIllegal,
-                            leadingDocLines,
-                            false,
-                            0,
-                            false,
-                        ),
-                    )
+                    tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, FrontIllegal, leadingDocLines, false, 0, false))
                     tokenIndex = tokenIndex + 1
-                    diagnostics.push(
-                        frontLexDiagnostic(
-                            diagCode,
-                            start,
-                            frontPositionAt(units, idx + scan.consumed),
-                        ),
-                    )
+                    diagnostics.push(frontLexDiagnostic(diagCode, start, frontPositionAt(units, idx + scan.consumed)))
                     insertTerm = false
                 }
                 pendingDocLines = 0
@@ -1222,7 +1004,6 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
             }
         }
     }
-
     let eofPos = frontPositionAt(units, unitCount)
     if insertTerm {
         tokens.push(frontLexToken(FrontNewline, eofPos, eofPos, 0, 0, false, 0, false))
@@ -1230,43 +1011,11 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
     }
     tokens.push(frontLexToken(FrontEOF, eofPos, eofPos, 0, 0, false, 0, false))
     tokenIndex = tokenIndex + 1
-    FrontLexStream {
-        tokens,
-        diagnostics,
-        comments,
-        stringParts,
-        interpolationTokens,
-        shebangs,
-        bomStripped,
-        sourceUnits: unitCount,
-        normalizedTripleUnits,
-        tripleIndentErrors,
-        escapeErrors,
-    }
+    FrontLexStream {tokens, diagnostics, comments, stringParts, interpolationTokens, shebangs, bomStripped, sourceUnits: unitCount, normalizedTripleUnits, tripleIndentErrors, escapeErrors}
 }
-
-pub fn frontLexTokenFromScan(
-    units: List<String>,
-    start: Int,
-    consumed: Int,
-    kind: FrontTokenKind,
-    leadingDocLines: Int,
-    triple: Bool,
-    interpolations: Int,
-    baseLiteral: Bool,
-) -> FrontLexToken {
-    frontLexToken(
-        kind,
-        frontPositionAt(units, start),
-        frontPositionAt(units, start + consumed),
-        consumed,
-        leadingDocLines,
-        triple,
-        interpolations,
-        baseLiteral,
-    )
+pub fn frontLexTokenFromScan(units: List<String>, start: Int, consumed: Int, kind: FrontTokenKind, leadingDocLines: Int, triple: Bool, interpolations: Int, baseLiteral: Bool) -> FrontLexToken {
+    frontLexToken(kind, frontPositionAt(units, start), frontPositionAt(units, start + consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
 }
-
 pub fn frontPositionAt(units: List<String>, target: Int) -> FrontPos {
     let mut offset = 0
     let mut line = 1
@@ -1296,7 +1045,6 @@ pub fn frontPositionAt(units: List<String>, target: Int) -> FrontPos {
     }
     frontPos(offset, line, column)
 }
-
 pub fn frontNewlineConsumed(unit: String, next: String) -> Int {
     if unit == "\r" && next == "\n" {
         2
@@ -1304,7 +1052,6 @@ pub fn frontNewlineConsumed(unit: String, next: String) -> Int {
         1
     }
 }
-
 pub fn frontAttachedDocLines(pendingDocLines: Int, docLastLine: Int, tokenLine: Int) -> Int {
     if pendingDocLines > 0 && tokenLine == docLastLine + 1 {
         pendingDocLines
@@ -1312,7 +1059,6 @@ pub fn frontAttachedDocLines(pendingDocLines: Int, docLastLine: Int, tokenLine: 
         0
     }
 }
-
 pub fn frontCommentLineCount(start: FrontPos, end: FrontPos) -> Int {
     let lines = end.line - start.line + 1
     if lines < 1 {
@@ -1321,14 +1067,7 @@ pub fn frontCommentLineCount(start: FrontPos, end: FrontPos) -> Int {
         lines
     }
 }
-
-pub fn frontStringDiagnosticCode(
-    units: List<String>,
-    start: Int,
-    unitCount: Int,
-    kind: FrontTokenKind,
-    scan: FrontScanResult,
-) -> FrontLexDiagnosticCode {
+pub fn frontStringDiagnosticCode(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind, scan: FrontScanResult) -> FrontLexDiagnosticCode {
     if scan.triple && frontStringMissingTripleLeadingNewline(units, start, kind) {
         return FrontDiagTripleMissingLeadingNewline
     }
@@ -1337,31 +1076,20 @@ pub fn frontStringDiagnosticCode(
     }
     FrontDiagUnterminatedString
 }
-
-pub fn frontStringMissingTripleLeadingNewline(
-    units: List<String>,
-    start: Int,
-    kind: FrontTokenKind,
-) -> Bool {
+pub fn frontStringMissingTripleLeadingNewline(units: List<String>, start: Int, kind: FrontTokenKind) -> Bool {
     let mut contentStart = start + 3
     if kind == FrontRawString {
         contentStart = start + 4
     }
     let first = frontUnitAt(units, contentStart)
-    // Accept any of the canonical line terminators: LF (Unix), CR (Mac
-    // classic), or CRLF (Windows). A Windows-checked-out source file
-    // carries `\r\n` between the opening `"""` / `r"""` and the first
-    // content line; the older `!= "\n"` check flagged every such file as
-    // E0006 (see toolchain/docgen.osty:1641).
     first != "\n" && first != "\r"
 }
-
-pub fn frontStringScanHitNewline(
-    units: List<String>,
-    start: Int,
-    unitCount: Int,
-    kind: FrontTokenKind,
-) -> Bool {
+// Accept any of the canonical line terminators: LF (Unix), CR (Mac
+// classic), or CRLF (Windows). A Windows-checked-out source file
+// carries `\r\n` between the opening `"""` / `r"""` and the first
+// content line; the older `!= "\n"` check flagged every such file as
+// E0006 (see toolchain/docgen.osty:1641).
+pub fn frontStringScanHitNewline(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind) -> Bool {
     let mut contentStart = start + 1
     let mut close = "\""
     if kind == FrontRawString || kind == FrontByte || kind == FrontByteString {
@@ -1381,30 +1109,10 @@ pub fn frontStringScanHitNewline(
     }
     false
 }
-
 pub fn emptyFrontStringStructureScan() -> FrontStringStructureScan {
-    FrontStringStructureScan {
-        parts: [],
-        interpolationTokens: [],
-        diagnostics: [],
-        partCount: 0,
-        interpolationTokenCount: 0,
-        normalizedTripleUnits: 0,
-        tripleIndentErrors: 0,
-        escapeErrors: 0,
-    }
+    FrontStringStructureScan {parts: [], interpolationTokens: [], diagnostics: [], partCount: 0, interpolationTokenCount: 0, normalizedTripleUnits: 0, tripleIndentErrors: 0, escapeErrors: 0}
 }
-
-pub fn frontStringStructureScan(
-    units: List<String>,
-    start: Int,
-    unitCount: Int,
-    kind: FrontTokenKind,
-    ownerToken: Int,
-    firstPartIndex: Int,
-    firstInterpolationTokenIndex: Int,
-    scan: FrontScanResult,
-) -> FrontStringStructureScan {
+pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind, ownerToken: Int, firstPartIndex: Int, firstInterpolationTokenIndex: Int, scan: FrontScanResult) -> FrontStringStructureScan {
     let mut out = emptyFrontStringStructureScan()
     let mut partIndex = firstPartIndex
     let mut interpolationTokenIndex = firstInterpolationTokenIndex
@@ -1414,33 +1122,14 @@ pub fn frontStringStructureScan(
     out.normalizedTripleUnits = normalized.normalizedUnits
     out.tripleIndentErrors = normalized.badIndentLines
     if normalized.badIndentLines > 0 {
-        out.diagnostics.push(
-            frontLexDiagnostic(
-                FrontDiagBadTripleIndent,
-                frontPositionAt(units, start),
-                frontPositionAt(units, start + scan.consumed),
-            ),
-        )
+        out.diagnostics.push(frontLexDiagnostic(FrontDiagBadTripleIndent, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
     }
-
     if kind == FrontChar || kind == FrontByte {
         if contentEnd <= contentStart {
             if kind == FrontChar {
-                out.diagnostics.push(
-                    frontLexDiagnostic(
-                        FrontDiagEmptyChar,
-                        frontPositionAt(units, start),
-                        frontPositionAt(units, start + scan.consumed),
-                    ),
-                )
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyChar, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
             } else {
-                out.diagnostics.push(
-                    frontLexDiagnostic(
-                        FrontDiagEmptyByte,
-                        frontPositionAt(units, start),
-                        frontPositionAt(units, start + scan.consumed),
-                    ),
-                )
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyByte, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
             }
         }
         let escapes = frontEscapeDiagnostics(units, contentStart, contentEnd)
@@ -1450,27 +1139,14 @@ pub fn frontStringStructureScan(
         out.escapeErrors = out.escapeErrors + escapes.escapeErrors
         return out
     }
-
     if kind == FrontRawString {
         let length = contentEnd - contentStart
         if length > 0 || scan.triple {
-            out.parts.push(
-                frontStringPart(
-                    ownerToken,
-                    FrontStringText,
-                    frontPositionAt(units, contentStart),
-                    frontPositionAt(units, contentEnd),
-                    length,
-                    frontStringNormalizedLength(length, scan.triple, normalized.normalizedUnits),
-                    0,
-                    0,
-                ),
-            )
+            out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, contentStart), frontPositionAt(units, contentEnd), length, frontStringNormalizedLength(length, scan.triple, normalized.normalizedUnits), 0, 0))
             out.partCount = out.partCount + 1
         }
         return out
     }
-
     let mut segmentStart = contentStart
     let mut skip = 0
     for idx in contentStart..contentEnd {
@@ -1481,47 +1157,19 @@ pub fn frontStringStructureScan(
             if unit == "\\" {
                 let escape = frontEscapeScan(units, idx + 1, contentEnd)
                 if !(escape.ok) {
-                    out.diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagUnknownEscape,
-                            frontPositionAt(units, idx),
-                            frontPositionAt(units, idx + 1 + escape.consumed),
-                        ),
-                    )
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionAt(units, idx), frontPositionAt(units, idx + 1 + escape.consumed)))
                     out.escapeErrors = out.escapeErrors + 1
                 }
                 skip = escape.consumed
             } else if unit == r"{" {
                 if idx > segmentStart {
-                    out.parts.push(
-                        frontStringPart(
-                            ownerToken,
-                            FrontStringText,
-                            frontPositionAt(units, segmentStart),
-                            frontPositionAt(units, idx),
-                            idx - segmentStart,
-                            idx - segmentStart,
-                            0,
-                            0,
-                        ),
-                    )
+                    out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, segmentStart), frontPositionAt(units, idx), idx - segmentStart, idx - segmentStart, 0, 0))
                     out.partCount = out.partCount + 1
                     partIndex = partIndex + 1
                 }
                 let interpPartIndex = partIndex
                 let interp = frontInterpolationScan(units, idx, contentEnd, interpPartIndex)
-                out.parts.push(
-                    frontStringPart(
-                        ownerToken,
-                        FrontStringInterpolation,
-                        frontPositionAt(units, idx),
-                        frontPositionAt(units, idx + interp.consumed),
-                        interp.consumed,
-                        0,
-                        interpolationTokenIndex,
-                        interp.tokenCount,
-                    ),
-                )
+                out.parts.push(frontStringPart(ownerToken, FrontStringInterpolation, frontPositionAt(units, idx), frontPositionAt(units, idx + interp.consumed), interp.consumed, 0, interpolationTokenIndex, interp.tokenCount))
                 out.partCount = out.partCount + 1
                 partIndex = partIndex + 1
                 for token in interp.tokens {
@@ -1538,33 +1186,12 @@ pub fn frontStringStructureScan(
         }
     }
     if contentEnd > segmentStart {
-        out.parts.push(
-            frontStringPart(
-                ownerToken,
-                FrontStringText,
-                frontPositionAt(units, segmentStart),
-                frontPositionAt(units, contentEnd),
-                contentEnd - segmentStart,
-                frontStringNormalizedLength(
-                    contentEnd - segmentStart,
-                    scan.triple,
-                    normalized.normalizedUnits,
-                ),
-                0,
-                0,
-            ),
-        )
+        out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, segmentStart), frontPositionAt(units, contentEnd), contentEnd - segmentStart, frontStringNormalizedLength(contentEnd - segmentStart, scan.triple, normalized.normalizedUnits), 0, 0))
         out.partCount = out.partCount + 1
     }
     out
 }
-
-pub fn frontStringContentStart(
-    units: List<String>,
-    start: Int,
-    kind: FrontTokenKind,
-    triple: Bool,
-) -> Int {
+pub fn frontStringContentStart(units: List<String>, start: Int, kind: FrontTokenKind, triple: Bool) -> Int {
     let _ = units
     if kind == FrontRawString {
         if triple {
@@ -1580,30 +1207,16 @@ pub fn frontStringContentStart(
         start + 1
     }
 }
-
-pub fn frontStringContentEnd(
-    units: List<String>,
-    start: Int,
-    unitCount: Int,
-    kind: FrontTokenKind,
-    scan: FrontScanResult,
-) -> Int {
+pub fn frontStringContentEnd(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind, scan: FrontScanResult) -> Int {
     let _ = unitCount
-    if scan.triple && scan.consumed >= 3 && frontUnitsMatchAt(
-        units,
-        start + scan.consumed - 3,
-        "\"\"\"",
-    ) {
+    if scan.triple && scan.consumed >= 3 && frontUnitsMatchAt(units, start + scan.consumed - 3, "\"\"\"") {
         start + scan.consumed - 3
-    } else if scan.consumed >= 1 && frontUnitAt(units, start + scan.consumed - 1) == frontStringClose(
-        kind,
-    ) {
+    } else if scan.consumed >= 1 && frontUnitAt(units, start + scan.consumed - 1) == frontStringClose(kind) {
         start + scan.consumed - 1
     } else {
         start + scan.consumed
     }
 }
-
 pub fn frontStringClose(kind: FrontTokenKind) -> String {
     if kind == FrontChar || kind == FrontByte {
         "'"
@@ -1611,7 +1224,6 @@ pub fn frontStringClose(kind: FrontTokenKind) -> String {
         "\""
     }
 }
-
 pub fn frontStringNormalizedLength(length: Int, triple: Bool, normalizedTripleUnits: Int) -> Int {
     if triple {
         normalizedTripleUnits
@@ -1619,7 +1231,6 @@ pub fn frontStringNormalizedLength(length: Int, triple: Bool, normalizedTripleUn
         length
     }
 }
-
 pub fn frontUnitsMatchAt(units: List<String>, start: Int, text: String) -> Bool {
     let mut offset = 0
     for unit in strings.split(text, "") {
@@ -1630,12 +1241,7 @@ pub fn frontUnitsMatchAt(units: List<String>, start: Int, text: String) -> Bool 
     }
     true
 }
-
-pub fn frontEscapeDiagnostics(
-    units: List<String>,
-    start: Int,
-    end: Int,
-) -> FrontStringStructureScan {
+pub fn frontEscapeDiagnostics(units: List<String>, start: Int, end: Int) -> FrontStringStructureScan {
     let mut out = emptyFrontStringStructureScan()
     let mut skip = 0
     for idx in start..end {
@@ -1644,13 +1250,7 @@ pub fn frontEscapeDiagnostics(
         } else if frontUnitAt(units, idx) == "\\" {
             let escape = frontEscapeScan(units, idx + 1, end)
             if !(escape.ok) {
-                out.diagnostics.push(
-                    frontLexDiagnostic(
-                        FrontDiagUnknownEscape,
-                        frontPositionAt(units, idx),
-                        frontPositionAt(units, idx + 1 + escape.consumed),
-                    ),
-                )
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionAt(units, idx), frontPositionAt(units, idx + 1 + escape.consumed)))
                 out.escapeErrors = out.escapeErrors + 1
             }
             skip = escape.consumed
@@ -1658,26 +1258,25 @@ pub fn frontEscapeDiagnostics(
     }
     out
 }
-
 pub fn frontEscapeScan(units: List<String>, start: Int, limit: Int) -> FrontEscapeScan {
     if start >= limit {
-        return FrontEscapeScan { consumed: 0, ok: false }
+        return FrontEscapeScan {consumed: 0, ok: false}
     }
     let unit = frontUnitAt(units, start)
     if unit == "n" || unit == "t" || unit == "r" || unit == "0" || unit == "\\" || unit == "'" || unit == "\"" || unit == r"{" || unit == r"}" {
-        return FrontEscapeScan { consumed: 1, ok: true }
+        return FrontEscapeScan {consumed: 1, ok: true}
     }
     if unit == "x" {
         if start + 2 >= limit {
-            return FrontEscapeScan { consumed: limit - start, ok: false }
+            return FrontEscapeScan {consumed: limit - start, ok: false}
         }
         let hi = frontHexValue(frontUnitAt(units, start + 1))
         let lo = frontHexValue(frontUnitAt(units, start + 2))
-        return FrontEscapeScan { consumed: 3, ok: hi >= 0 && lo >= 0 }
+        return FrontEscapeScan {consumed: 3, ok: hi >= 0 && lo >= 0}
     }
     if unit == "u" {
         if frontUnitAt(units, start + 1) != r"{" {
-            return FrontEscapeScan { consumed: 1, ok: false }
+            return FrontEscapeScan {consumed: 1, ok: false}
         }
         let mut consumed = 2
         let mut digits = 0
@@ -1685,24 +1284,20 @@ pub fn frontEscapeScan(units: List<String>, start: Int, limit: Int) -> FrontEsca
         for idx in start + 2..limit {
             let at = frontUnitAt(units, idx)
             if at == r"}" {
-                return FrontEscapeScan {
-                    consumed: consumed + 1,
-                    ok: digits > 0 && !(value >= 55296 && value <= 57343) && value <= 1114111,
-                }
+                return FrontEscapeScan {consumed: consumed + 1, ok: digits > 0 && !(value >= 55296 && value <= 57343) && value <= 1114111}
             }
             let hex = frontHexValue(at)
             if hex < 0 {
-                return FrontEscapeScan { consumed, ok: false }
+                return FrontEscapeScan {consumed, ok: false}
             }
             value = value * 16 + hex
             digits = digits + 1
             consumed = consumed + 1
         }
-        return FrontEscapeScan { consumed, ok: false }
+        return FrontEscapeScan {consumed, ok: false}
     }
-    FrontEscapeScan { consumed: 1, ok: false }
+    FrontEscapeScan {consumed: 1, ok: false}
 }
-
 pub fn frontHexValue(unit: String) -> Int {
     let digit = digitStringValue(unit)
     if digit >= 0 {
@@ -1724,23 +1319,10 @@ pub fn frontHexValue(unit: String) -> Int {
         -1
     }
 }
-
 pub fn emptyFrontInterpolationScan() -> FrontInterpolationScan {
-    FrontInterpolationScan {
-        consumed: 0,
-        ok: true,
-        tokens: [],
-        diagnostics: [],
-        tokenCount: 0,
-    }
+    FrontInterpolationScan {consumed: 0, ok: true, tokens: [], diagnostics: [], tokenCount: 0}
 }
-
-pub fn frontInterpolationScan(
-    units: List<String>,
-    start: Int,
-    limit: Int,
-    ownerPart: Int,
-) -> FrontInterpolationScan {
+pub fn frontInterpolationScan(units: List<String>, start: Int, limit: Int, ownerPart: Int) -> FrontInterpolationScan {
     let mut out = emptyFrontInterpolationScan()
     let mut depth = 1
     let mut skip = 0
@@ -1760,13 +1342,7 @@ pub fn frontInterpolationScan(
                 let block = frontBlockCommentSkip(units, idx, limit)
                 out.consumed = idx - start + block.consumed
                 if !(block.ok) {
-                    out.diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagUnterminatedBlockComment,
-                            frontPositionAt(units, idx),
-                            frontPositionAt(units, idx + block.consumed),
-                        ),
-                    )
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedBlockComment, frontPositionAt(units, idx), frontPositionAt(units, idx + block.consumed)))
                 }
                 skip = block.consumed - 1
             } else if unit == r"}" {
@@ -1775,72 +1351,30 @@ pub fn frontInterpolationScan(
                     out.consumed = idx - start + 1
                     return out
                 }
-                out.tokens.push(
-                    frontInterpolationToken(
-                        ownerPart,
-                        frontLexTokenFromScan(units, idx, 1, FrontRBrace, 0, false, 0, false),
-                    ),
-                )
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontRBrace, 0, false, 0, false)))
                 out.tokenCount = out.tokenCount + 1
                 out.consumed = idx - start + 1
             } else if unit == r"{" {
                 depth = depth + 1
-                out.tokens.push(
-                    frontInterpolationToken(
-                        ownerPart,
-                        frontLexTokenFromScan(units, idx, 1, FrontLBrace, 0, false, 0, false),
-                    ),
-                )
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontLBrace, 0, false, 0, false)))
                 out.tokenCount = out.tokenCount + 1
                 out.consumed = idx - start + 1
             } else {
                 let tokenScan = frontInterpolationTokenScan(units, idx, limit)
-                out.tokens.push(
-                    frontInterpolationToken(
-                        ownerPart,
-                        frontLexTokenFromScan(
-                            units,
-                            idx,
-                            tokenScan.consumed,
-                            tokenScan.kind,
-                            0,
-                            tokenScan.triple,
-                            tokenScan.interpolations,
-                            tokenScan.baseLiteral,
-                        ),
-                    ),
-                )
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, tokenScan.consumed, tokenScan.kind, 0, tokenScan.triple, tokenScan.interpolations, tokenScan.baseLiteral)))
                 out.tokenCount = out.tokenCount + 1
                 let nestedString = frontInterpolationStringDiagnostics(units, idx, limit, tokenScan)
                 for diag in nestedString.diagnostics {
                     out.diagnostics.push(diag)
                 }
                 if tokenScan.uppercaseBasePrefix {
-                    out.diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagUppercaseBasePrefix,
-                            frontPositionAt(units, idx),
-                            frontPositionAt(units, idx + 2),
-                        ),
-                    )
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, frontPositionAt(units, idx), frontPositionAt(units, idx + 2)))
                 }
                 if frontScanIsNumber(tokenScan) && frontNumberHasBadSeparator(units, idx, tokenScan.consumed) {
-                    out.diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagBadNumericSeparator,
-                            frontPositionAt(units, idx),
-                            frontPositionAt(units, idx + tokenScan.consumed),
-                        ),
-                    )
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, frontPositionAt(units, idx), frontPositionAt(units, idx + tokenScan.consumed)))
                 }
                 if frontScanIsFatArrow(units, idx, tokenScan) {
-                    out.diagnostics.push(
-                        frontLexDiagnostic(
-                            FrontDiagFatArrowRemoved,
-                            frontPositionAt(units, idx),
-                            frontPositionAt(units, idx + tokenScan.consumed),
-                        ),
-                    )
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagFatArrowRemoved, frontPositionAt(units, idx), frontPositionAt(units, idx + tokenScan.consumed)))
                 }
                 out.consumed = idx - start + tokenScan.consumed
                 skip = tokenScan.consumed - 1
@@ -1849,22 +1383,10 @@ pub fn frontInterpolationScan(
     }
     out.ok = false
     out.consumed = limit - start
-    out.diagnostics.push(
-        frontLexDiagnostic(
-            FrontDiagUnterminatedInterpolation,
-            frontPositionAt(units, start),
-            frontPositionAt(units, limit),
-        ),
-    )
+    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedInterpolation, frontPositionAt(units, start), frontPositionAt(units, limit)))
     out
 }
-
-pub fn frontInterpolationStringDiagnostics(
-    units: List<String>,
-    start: Int,
-    limit: Int,
-    tokenScan: FrontScanResult,
-) -> FrontStringStructureScan {
+pub fn frontInterpolationStringDiagnostics(units: List<String>, start: Int, limit: Int, tokenScan: FrontScanResult) -> FrontStringStructureScan {
     if tokenScan.kind != FrontString && tokenScan.kind != FrontRawString && tokenScan.kind != FrontChar && tokenScan.kind != FrontByte && tokenScan.kind != FrontByteString {
         return emptyFrontStringStructureScan()
     }
@@ -1874,17 +1396,10 @@ pub fn frontInterpolationStringDiagnostics(
         out.diagnostics.push(diag)
     }
     if tokenScan.errors > 0 {
-        out.diagnostics.push(
-            frontLexDiagnostic(
-                frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan),
-                frontPositionAt(units, start),
-                frontPositionAt(units, start + tokenScan.consumed),
-            ),
-        )
+        out.diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan), frontPositionAt(units, start), frontPositionAt(units, start + tokenScan.consumed)))
     }
     out
 }
-
 pub fn frontInterpolationTokenScan(units: List<String>, start: Int, limit: Int) -> FrontScanResult {
     let unit = frontUnitAt(units, start)
     let next = frontUnitAt(units, start + 1)
@@ -1906,21 +1421,12 @@ pub fn frontInterpolationTokenScan(units: List<String>, start: Int, limit: Int) 
         frontPunctuationScan(units, start, limit)
     }
 }
-
-pub fn frontTripleNormalization(
-    units: List<String>,
-    start: Int,
-    scan: FrontScanResult,
-    kind: FrontTokenKind,
-) -> FrontTripleNormalization {
+pub fn frontTripleNormalization(units: List<String>, start: Int, scan: FrontScanResult, kind: FrontTokenKind) -> FrontTripleNormalization {
     if !(scan.triple) {
-        return FrontTripleNormalization { normalizedUnits: 0, badIndentLines: 0, indentUnits: 0 }
+        return FrontTripleNormalization {normalizedUnits: 0, badIndentLines: 0, indentUnits: 0}
     }
     let contentStartRaw = frontStringContentStart(units, start, kind, true)
     let mut contentStart = contentStartRaw
-    // Skip the leading newline after the opening `"""` / `r"""`. Treat
-    // LF, CR, and CRLF uniformly so that the per-line indent probe
-    // starts at actual content on Windows (CRLF) checkouts.
     if frontUnitAt(units, contentStart) == "\r" {
         contentStart = contentStart + 1
     }
@@ -1949,13 +1455,11 @@ pub fn frontTripleNormalization(
             lineStart = idx + 1
         }
     }
-    FrontTripleNormalization {
-        normalizedUnits,
-        badIndentLines,
-        indentUnits: indent,
-    }
+    FrontTripleNormalization {normalizedUnits, badIndentLines, indentUnits: indent}
 }
-
+// Skip the leading newline after the opening `"""` / `r"""`. Treat
+// LF, CR, and CRLF uniformly so that the per-line indent probe
+// starts at actual content on Windows (CRLF) checkouts.
 pub fn frontLineStartBefore(units: List<String>, target: Int) -> Int {
     let mut lineStart = 0
     for idx in 0..target {
@@ -1965,7 +1469,6 @@ pub fn frontLineStartBefore(units: List<String>, target: Int) -> Int {
     }
     lineStart
 }
-
 pub fn frontTripleClosingIndent(units: List<String>, closeStart: Int) -> Int {
     let mut lineStart = 0
     for idx in 0..closeStart {
@@ -1984,24 +1487,17 @@ pub fn frontTripleClosingIndent(units: List<String>, closeStart: Int) -> Int {
     }
     indent
 }
-
-pub fn frontTripleLineStats(
-    units: List<String>,
-    start: Int,
-    end: Int,
-    indent: Int,
-) -> FrontTripleLineStats {
+pub fn frontTripleLineStats(units: List<String>, start: Int, end: Int, indent: Int) -> FrontTripleLineStats {
     let length = end - start
     if length <= 0 || frontLineBlank(units, start, end) {
-        return FrontTripleLineStats { normalizedUnits: 0, badIndent: false }
+        return FrontTripleLineStats {normalizedUnits: 0, badIndent: false}
     }
     if frontLineHasIndent(units, start, end, indent) {
-        FrontTripleLineStats { normalizedUnits: length - indent, badIndent: false }
+        FrontTripleLineStats {normalizedUnits: length - indent, badIndent: false}
     } else {
-        FrontTripleLineStats { normalizedUnits: length, badIndent: true }
+        FrontTripleLineStats {normalizedUnits: length, badIndent: true}
     }
 }
-
 pub fn frontLineBlank(units: List<String>, start: Int, end: Int) -> Bool {
     for idx in start..end {
         let unit = frontUnitAt(units, idx)
@@ -2011,7 +1507,6 @@ pub fn frontLineBlank(units: List<String>, start: Int, end: Int) -> Bool {
     }
     true
 }
-
 pub fn frontLineHasIndent(units: List<String>, start: Int, end: Int, indent: Int) -> Bool {
     if end - start < indent {
         return false
@@ -2025,88 +1520,76 @@ pub fn frontLineHasIndent(units: List<String>, start: Int, end: Int, indent: Int
     }
     true
 }
-
 pub fn frontLexTokenCount(stream: FrontLexStream) -> Int {
     stream.tokens.len()
 }
-
 pub fn frontLexDiagnosticCount(stream: FrontLexStream) -> Int {
     stream.diagnostics.len()
 }
-
 pub fn frontCommentCount(stream: FrontLexStream) -> Int {
     stream.comments.len()
 }
-
 pub fn frontStringPartCount(stream: FrontLexStream) -> Int {
     stream.stringParts.len()
 }
-
 pub fn frontInterpolationTokenCount(stream: FrontLexStream) -> Int {
     stream.interpolationTokens.len()
 }
-
 pub fn frontLexTokenAt(stream: FrontLexStream, target: Int) -> FrontLexToken {
-    if target < 0 || target >= stream.tokens.len() { return emptyFrontLexToken() }
+    if target < 0 || target >= stream.tokens.len() {
+        return emptyFrontLexToken()
+    }
     stream.tokens[target]
 }
-
 pub fn frontLexDiagnosticAt(stream: FrontLexStream, target: Int) -> FrontLexDiagnostic {
-    if target < 0 || target >= stream.diagnostics.len() { return emptyFrontLexDiagnostic() }
+    if target < 0 || target >= stream.diagnostics.len() {
+        return emptyFrontLexDiagnostic()
+    }
     stream.diagnostics[target]
 }
-
 pub fn frontCommentAt(stream: FrontLexStream, target: Int) -> FrontComment {
-    if target < 0 || target >= stream.comments.len() { return emptyFrontComment() }
+    if target < 0 || target >= stream.comments.len() {
+        return emptyFrontComment()
+    }
     stream.comments[target]
 }
-
 pub fn frontStringPartAt(stream: FrontLexStream, target: Int) -> FrontStringPart {
-    if target < 0 || target >= stream.stringParts.len() { return emptyFrontStringPart() }
+    if target < 0 || target >= stream.stringParts.len() {
+        return emptyFrontStringPart()
+    }
     stream.stringParts[target]
 }
-
 pub fn frontInterpolationTokenAt(stream: FrontLexStream, target: Int) -> FrontInterpolationToken {
-    if target < 0 || target >= stream.interpolationTokens.len() { return emptyFrontInterpolationToken() }
+    if target < 0 || target >= stream.interpolationTokens.len() {
+        return emptyFrontInterpolationToken()
+    }
     stream.interpolationTokens[target]
 }
-
 pub fn frontendParseLexedSummary(source: String) -> FrontParseSummary {
     let stream = frontendLexStream(source)
     frontendParseSummary(frontTokensFromStream(stream))
 }
-
 pub fn frontTokensFromStream(stream: FrontLexStream) -> List<FrontToken> {
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
-        parseTokens.push(FrontToken {
-            kind: tok.kind,
-            text: frontTokenKindName(tok.kind),
-            startOffset: tok.start.offset,
-            endOffset: tok.end.offset,
-        })
+        parseTokens.push(FrontToken {kind: tok.kind, text: frontTokenKindName(tok.kind), startOffset: tok.start.offset, endOffset: tok.end.offset})
     }
     parseTokens
 }
-
 pub fn frontTokensFromSource(source: String, stream: FrontLexStream) -> List<FrontToken> {
     let units = strings.split(source, "")
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
         let raw = frontLexemeFromUnits(units, tok.start.offset, tok.length)
-        let text = if tok.kind == FrontLabel { frontLabelName(raw) } else { raw }
-        parseTokens.push(
-            FrontToken {
-                kind: tok.kind,
-                text,
-                startOffset: tok.start.offset,
-                endOffset: tok.end.offset,
-            },
-        )
+        let text = if tok.kind == FrontLabel {
+            frontLabelName(raw)
+        } else {
+            raw
+        }
+        parseTokens.push(FrontToken {kind: tok.kind, text, startOffset: tok.start.offset, endOffset: tok.end.offset})
     }
     parseTokens
 }
-
 pub fn frontLexemeFromUnits(units: List<String>, start: Int, length: Int) -> String {
     let mut parts: List<String> = []
     let end = start + length
@@ -2115,7 +1598,6 @@ pub fn frontLexemeFromUnits(units: List<String>, start: Int, length: Int) -> Str
     }
     strings.join(parts, "")
 }
-
 /// frontendLexSummary scans Osty source at character granularity. It mirrors
 /// the Go lexer surface needed by self-hosting: identifiers/keywords,
 /// literals, comments, implicit newlines, and multi-character punctuation.
@@ -2127,7 +1609,6 @@ pub fn frontendLexSummary(source: String) -> FrontLexSummary {
     let mut parenDepth = 0
     let mut skip = 0
     let mut atFileStart = true
-
     for idx in 0..unitCount {
         if skip > 0 {
             skip = skip - 1
@@ -2145,11 +1626,7 @@ pub fn frontendLexSummary(source: String) -> FrontLexSummary {
                 atFileStart = false
             } else if frontIsNewlineUnit(unit) {
                 atFileStart = false
-                if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(
-                    units,
-                    idx + 1,
-                    unitCount,
-                )) {
+                if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(units, idx + 1, unitCount)) {
                     summary = frontRecordLexeme(FrontNewline, summary)
                     insertTerm = false
                 }
@@ -2264,7 +1741,6 @@ pub fn frontendLexSummary(source: String) -> FrontLexSummary {
     summary = frontRecordLexeme(FrontEOF, summary)
     summary
 }
-
 pub fn frontRecordLexeme(kind: FrontTokenKind, summary: FrontLexSummary) -> FrontLexSummary {
     let mut out = summary
     let name = frontTokenKindName(kind)
@@ -2275,7 +1751,6 @@ pub fn frontRecordLexeme(kind: FrontTokenKind, summary: FrontLexSummary) -> Fron
     } else if out.tokens == 2 {
         out.third = name
     }
-
     if isFrontKeywordKind(kind) {
         out.keywords = out.keywords + 1
     } else if kind == FrontIdent {
@@ -2292,42 +1767,12 @@ pub fn frontRecordLexeme(kind: FrontTokenKind, summary: FrontLexSummary) -> Fron
     out.tokens = out.tokens + 1
     out
 }
-
 pub fn frontScanResult(kind: FrontTokenKind, consumed: Int, ok: Bool) -> FrontScanResult {
-    FrontScanResult {
-        kind,
-        consumed,
-        ok,
-        errors: 0,
-        triple: false,
-        interpolations: 0,
-        baseLiteral: false,
-        uppercaseBasePrefix: false,
-    }
+    FrontScanResult {kind, consumed, ok, errors: 0, triple: false, interpolations: 0, baseLiteral: false, uppercaseBasePrefix: false}
 }
-
-pub fn frontDetailedScanResult(
-    kind: FrontTokenKind,
-    consumed: Int,
-    ok: Bool,
-    errors: Int,
-    triple: Bool,
-    interpolations: Int,
-    baseLiteral: Bool,
-    uppercaseBasePrefix: Bool,
-) -> FrontScanResult {
-    FrontScanResult {
-        kind,
-        consumed,
-        ok,
-        errors,
-        triple,
-        interpolations,
-        baseLiteral,
-        uppercaseBasePrefix,
-    }
+pub fn frontDetailedScanResult(kind: FrontTokenKind, consumed: Int, ok: Bool, errors: Int, triple: Bool, interpolations: Int, baseLiteral: Bool, uppercaseBasePrefix: Bool) -> FrontScanResult {
+    FrontScanResult {kind, consumed, ok, errors, triple, interpolations, baseLiteral, uppercaseBasePrefix}
 }
-
 pub fn frontRecordScan(scan: FrontScanResult, summary: FrontLexSummary) -> FrontLexSummary {
     let mut out = frontRecordLexeme(scan.kind, summary)
     out.errors = out.errors + scan.errors
@@ -2343,11 +1788,9 @@ pub fn frontRecordScan(scan: FrontScanResult, summary: FrontLexSummary) -> Front
     }
     out
 }
-
 pub fn frontBlockCommentScan(consumed: Int, ok: Bool) -> FrontBlockCommentScan {
-    FrontBlockCommentScan { consumed, ok }
+    FrontBlockCommentScan {consumed, ok}
 }
-
 pub fn frontUnitAt(units: List<String>, target: Int) -> String {
     let mut idx = 0
     for unit in units {
@@ -2358,15 +1801,12 @@ pub fn frontUnitAt(units: List<String>, target: Int) -> String {
     }
     ""
 }
-
 pub fn frontIsSpaceNoNewline(unit: String) -> Bool {
     unit == " " || unit == "\t"
 }
-
 pub fn frontIsNewlineUnit(unit: String) -> Bool {
     unit == "\n" || unit == "\r"
 }
-
 pub fn frontLineCommentSkip(units: List<String>, bodyStart: Int, unitCount: Int) -> Int {
     let mut skipped = 1
     for idx in bodyStart..unitCount {
@@ -2377,7 +1817,6 @@ pub fn frontLineCommentSkip(units: List<String>, bodyStart: Int, unitCount: Int)
     }
     skipped
 }
-
 pub fn frontBlockCommentSkip(units: List<String>, start: Int, unitCount: Int) -> FrontBlockCommentScan {
     let mut consumed = 2
     let mut previous = ""
@@ -2391,13 +1830,7 @@ pub fn frontBlockCommentSkip(units: List<String>, start: Int, unitCount: Int) ->
     }
     frontBlockCommentScan(unitCount - start, false)
 }
-
-pub fn frontStringLikeScan(
-    units: List<String>,
-    start: Int,
-    unitCount: Int,
-    kind: FrontTokenKind,
-) -> FrontScanResult {
+pub fn frontStringLikeScan(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind) -> FrontScanResult {
     let mut consumed = 1
     let mut escaped = false
     let mut errors = 0
@@ -2415,9 +1848,6 @@ pub fn frontStringLikeScan(
             consumed = 4
             contentStart = start + 4
             let first = frontUnitAt(units, contentStart)
-            // Accept LF, CR, or CRLF as the mandatory leading newline
-            // after `r"""`. See toolchain/frontend.osty's comment on
-            // frontStringMissingTripleLeadingNewline.
             if first != "\n" && first != "\r" {
                 errors = errors + 1
             }
@@ -2447,16 +1877,7 @@ pub fn frontStringLikeScan(
         let third = frontUnitAt(units, idx + 2)
         if !(triple) && frontIsNewlineUnit(unit) {
             errors = errors + 1
-            return frontDetailedScanResult(
-                kind,
-                consumed,
-                true,
-                errors,
-                triple,
-                interpolations,
-                false,
-                false,
-            )
+            return frontDetailedScanResult(kind, consumed, true, errors, triple, interpolations, false, false)
         }
         consumed = consumed + 1
         if skip > 0 {
@@ -2493,32 +1914,16 @@ pub fn frontStringLikeScan(
             interpolations = interpolations + 1
             braceDepth = 1
         } else if triple && unit == close && next == close && third == close {
-            return frontDetailedScanResult(
-                kind,
-                consumed + 2,
-                true,
-                errors,
-                triple,
-                interpolations,
-                false,
-                false,
-            )
+            return frontDetailedScanResult(kind, consumed + 2, true, errors, triple, interpolations, false, false)
         } else if !(triple) && unit == close {
-            return frontDetailedScanResult(
-                kind,
-                consumed,
-                true,
-                errors,
-                triple,
-                interpolations,
-                false,
-                false,
-            )
+            return frontDetailedScanResult(kind, consumed, true, errors, triple, interpolations, false, false)
         }
     }
     frontDetailedScanResult(kind, consumed, true, errors + 1, triple, interpolations, false, false)
 }
-
+// Accept LF, CR, or CRLF as the mandatory leading newline
+// after `r"""`. See toolchain/frontend.osty's comment on
+// frontStringMissingTripleLeadingNewline.
 pub fn frontIdentScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
     let mut consumed = 0
     for idx in start..unitCount {
@@ -2541,7 +1946,6 @@ pub fn frontIdentScan(units: List<String>, start: Int, unitCount: Int) -> FrontS
     }
     frontScanResult(FrontIdent, consumed, true)
 }
-
 pub fn frontCanStartLabel(units: List<String>, start: Int, unitCount: Int) -> Bool {
     if frontUnitAt(units, start) != "'" {
         return false
@@ -2556,7 +1960,6 @@ pub fn frontCanStartLabel(units: List<String>, start: Int, unitCount: Int) -> Bo
     }
     frontUnitAt(units, start + scan.consumed) != "'"
 }
-
 pub fn frontLabelScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
     if frontUnitAt(units, start) != "'" {
         return frontScanResult(FrontIllegal, 1, false)
@@ -2576,7 +1979,6 @@ pub fn frontLabelScan(units: List<String>, start: Int, unitCount: Int) -> FrontS
     }
     frontScanResult(FrontLabel, consumed, true)
 }
-
 pub fn frontKeywordKindAt(units: List<String>, start: Int, consumed: Int) -> FrontTokenKind {
     if frontUnitsMatch(units, start, consumed, "fn") {
         FrontFn
@@ -2616,7 +2018,6 @@ pub fn frontKeywordKindAt(units: List<String>, start: Int, consumed: Int) -> Fro
         FrontIdent
     }
 }
-
 pub fn frontUnitsMatch(units: List<String>, start: Int, consumed: Int, text: String) -> Bool {
     if consumed != stringUnitCount(text) {
         return false
@@ -2630,7 +2031,6 @@ pub fn frontUnitsMatch(units: List<String>, start: Int, consumed: Int, text: Str
     }
     true
 }
-
 pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
     let first = frontUnitAt(units, start)
     let prefix = frontUnitAt(units, start + 1)
@@ -2645,16 +2045,7 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
             }
         }
         let badSeparators = frontNumberBadSeparatorErrors(units, start, consumed)
-        return frontDetailedScanResult(
-            FrontInt,
-            consumed,
-            true,
-            frontUppercaseBaseError(prefix) + badSeparators,
-            false,
-            0,
-            true,
-            prefix == "X",
-        )
+        return frontDetailedScanResult(FrontInt, consumed, true, frontUppercaseBaseError(prefix) + badSeparators, false, 0, true, prefix == "X")
     }
     if first == "0" && (prefix == "b" || prefix == "B") {
         let mut consumed = 2
@@ -2667,16 +2058,7 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
             }
         }
         let badSeparators = frontNumberBadSeparatorErrors(units, start, consumed)
-        return frontDetailedScanResult(
-            FrontInt,
-            consumed,
-            true,
-            frontUppercaseBaseError(prefix) + badSeparators,
-            false,
-            0,
-            true,
-            prefix == "B",
-        )
+        return frontDetailedScanResult(FrontInt, consumed, true, frontUppercaseBaseError(prefix) + badSeparators, false, 0, true, prefix == "B")
     }
     if first == "0" && (prefix == "o" || prefix == "O") {
         let mut consumed = 2
@@ -2689,18 +2071,8 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
             }
         }
         let badSeparators = frontNumberBadSeparatorErrors(units, start, consumed)
-        return frontDetailedScanResult(
-            FrontInt,
-            consumed,
-            true,
-            frontUppercaseBaseError(prefix) + badSeparators,
-            false,
-            0,
-            true,
-            prefix == "O",
-        )
+        return frontDetailedScanResult(FrontInt, consumed, true, frontUppercaseBaseError(prefix) + badSeparators, false, 0, true, prefix == "O")
     }
-
     let mut consumed = 0
     let mut kind = FrontInt
     let mut seenDot = false
@@ -2728,18 +2100,8 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
             break
         }
     }
-    frontDetailedScanResult(
-        kind,
-        consumed,
-        true,
-        frontNumberBadSeparatorErrors(units, start, consumed),
-        false,
-        0,
-        false,
-        false,
-    )
+    frontDetailedScanResult(kind, consumed, true, frontNumberBadSeparatorErrors(units, start, consumed), false, 0, false, false)
 }
-
 pub fn frontUppercaseBaseError(prefix: String) -> Int {
     if prefix == "X" || prefix == "B" || prefix == "O" {
         1
@@ -2747,11 +2109,9 @@ pub fn frontUppercaseBaseError(prefix: String) -> Int {
         0
     }
 }
-
 pub fn frontIsHexDigit(unit: String) -> Bool {
     digitStringValue(unit) >= 0 || (unit >= "a" && unit <= "f") || (unit >= "A" && unit <= "F")
 }
-
 pub fn frontNumberBadSeparatorErrors(units: List<String>, start: Int, consumed: Int) -> Int {
     if frontNumberHasBadSeparator(units, start, consumed) {
         1
@@ -2759,11 +2119,9 @@ pub fn frontNumberBadSeparatorErrors(units: List<String>, start: Int, consumed: 
         0
     }
 }
-
 pub fn frontScanIsNumber(scan: FrontScanResult) -> Bool {
     scan.kind == FrontInt || scan.kind == FrontFloat
 }
-
 pub fn frontNumberHasBadSeparator(units: List<String>, start: Int, consumed: Int) -> Bool {
     let base = frontNumberBase(units, start)
     let mut bodyStart = start
@@ -2781,7 +2139,6 @@ pub fn frontNumberHasBadSeparator(units: List<String>, start: Int, consumed: Int
     }
     false
 }
-
 pub fn frontNumberBase(units: List<String>, start: Int) -> Int {
     if frontUnitAt(units, start) == "0" {
         let prefix = frontUnitAt(units, start + 1)
@@ -2797,7 +2154,6 @@ pub fn frontNumberBase(units: List<String>, start: Int) -> Int {
     }
     10
 }
-
 pub fn frontIsBaseDigit(unit: String, base: Int) -> Bool {
     if base == 2 {
         unit == "0" || unit == "1"
@@ -2809,7 +2165,6 @@ pub fn frontIsBaseDigit(unit: String, base: Int) -> Bool {
         digitStringValue(unit) >= 0
     }
 }
-
 pub fn frontPunctuationScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
     let one = frontUnitAt(units, start)
     let two = frontUnitAt(units, start + 1)
@@ -2836,23 +2191,16 @@ pub fn frontPunctuationScan(units: List<String>, start: Int, unitCount: Int) -> 
     }
     frontScanResult(FrontIllegal, 1, false)
 }
-
-pub fn frontIllegalDiagnosticCode(
-    units: List<String>,
-    start: Int,
-    scan: FrontScanResult,
-) -> FrontLexDiagnosticCode {
+pub fn frontIllegalDiagnosticCode(units: List<String>, start: Int, scan: FrontScanResult) -> FrontLexDiagnosticCode {
     if frontScanIsFatArrow(units, start, scan) {
         FrontDiagFatArrowRemoved
     } else {
         FrontDiagIllegalCharacter
     }
 }
-
 pub fn frontScanIsFatArrow(units: List<String>, start: Int, scan: FrontScanResult) -> Bool {
     !(scan.ok) && scan.consumed == 2 && frontUnitAt(units, start) == "=" && frontUnitAt(units, start + 1) == ">"
 }
-
 pub fn frontPunctuationPairKind(one: String, two: String) -> FrontTokenKind {
     if one == "=" && two == "=" {
         FrontEq
@@ -2902,7 +2250,6 @@ pub fn frontPunctuationPairKind(one: String, two: String) -> FrontTokenKind {
         FrontIllegal
     }
 }
-
 pub fn frontNextSuppressesTerm(units: List<String>, start: Int, unitCount: Int) -> Bool {
     let mut skip = 0
     for idx in start..unitCount {
@@ -2911,7 +2258,8 @@ pub fn frontNextSuppressesTerm(units: List<String>, start: Int, unitCount: Int) 
         } else {
             let unit = frontUnitAt(units, idx)
             let next = frontUnitAt(units, idx + 1)
-            if frontIsSpaceNoNewline(unit) || frontIsNewlineUnit(unit) {} else if unit == "/" && next == "/" {
+            if frontIsSpaceNoNewline(unit) || frontIsNewlineUnit(unit) {
+            } else if unit == "/" && next == "/" {
                 skip = frontLineCommentSkip(units, idx + 2, unitCount)
             } else if unit == "/" && next == "*" {
                 let block = frontBlockCommentSkip(units, idx, unitCount)
@@ -2923,34 +2271,67 @@ pub fn frontNextSuppressesTerm(units: List<String>, start: Int, unitCount: Int) 
     }
     false
 }
-
 pub fn frontSuppressingStart(unit: String, next: String) -> Bool {
     unit == "." || unit == "," || unit == ")" || unit == "]" || unit == r"}" || unit == "+" || unit == "-" || unit == "*" || unit == "/" || unit == "%" || unit == "=" || unit == "!" || unit == "<" || unit == ">" || unit == "&" || unit == "|" || unit == "^" || (unit == "?" && next == ".") || (unit == "?" && next == "?")
 }
-
 pub fn frontKindInsertsTerm(kind: FrontTokenKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontIdent { return true }
-    if kind == FrontInt { return true }
-    if kind == FrontFloat { return true }
-    if kind == FrontChar { return true }
-    if kind == FrontByte { return true }
-    if kind == FrontByteString { return true }
-    if kind == FrontString { return true }
-    if kind == FrontRawString { return true }
-    if kind == FrontRParen { return true }
-    if kind == FrontRBracket { return true }
-    if kind == FrontRBrace { return true }
-    if kind == FrontBreak { return true }
-    if kind == FrontContinue { return true }
-    if kind == FrontReturn { return true }
-    if kind == FrontUnderscore { return true }
-    if kind == FrontQuestion { return true }
-    if kind == FrontDot { return true }
-    if kind == FrontQDot { return true }
+    if kind == FrontIdent {
+        return true
+    }
+    if kind == FrontInt {
+        return true
+    }
+    if kind == FrontFloat {
+        return true
+    }
+    if kind == FrontChar {
+        return true
+    }
+    if kind == FrontByte {
+        return true
+    }
+    if kind == FrontByteString {
+        return true
+    }
+    if kind == FrontString {
+        return true
+    }
+    if kind == FrontRawString {
+        return true
+    }
+    if kind == FrontRParen {
+        return true
+    }
+    if kind == FrontRBracket {
+        return true
+    }
+    if kind == FrontRBrace {
+        return true
+    }
+    if kind == FrontBreak {
+        return true
+    }
+    if kind == FrontContinue {
+        return true
+    }
+    if kind == FrontReturn {
+        return true
+    }
+    if kind == FrontUnderscore {
+        return true
+    }
+    if kind == FrontQuestion {
+        return true
+    }
+    if kind == FrontDot {
+        return true
+    }
+    if kind == FrontQDot {
+        return true
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
     if text == "" {
         return FrontIllegal
@@ -2995,7 +2376,6 @@ pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
     }
     FrontIllegal
 }
-
 pub fn isFrontFloatLexeme(text: String) -> Bool {
     if strings.count(text, ".") != 1 {
         return false
@@ -3006,7 +2386,6 @@ pub fn isFrontFloatLexeme(text: String) -> Bool {
     let parts = splitSummary(strings.splitN(text, ".", 2))
     parts.count == 2 && allAsciiDigits(parts.first) && allAsciiDigits(parts.second)
 }
-
 pub fn isFrontIdentText(text: String) -> Bool {
     let mut count = 0
     for unit in strings.split(text, "") {
@@ -3021,7 +2400,6 @@ pub fn isFrontIdentText(text: String) -> Bool {
     }
     count > 0
 }
-
 pub fn isFrontLabelLexeme(text: String) -> Bool {
     if !(strings.hasPrefix(text, "'")) {
         return false
@@ -3029,7 +2407,6 @@ pub fn isFrontLabelLexeme(text: String) -> Bool {
     let name = frontLabelName(text)
     name != "" && isFrontIdentText(name)
 }
-
 pub fn frontLabelName(text: String) -> String {
     let mut parts: List<String> = []
     let mut idx = 0
@@ -3041,15 +2418,12 @@ pub fn frontLabelName(text: String) -> String {
     }
     strings.join(parts, "")
 }
-
 pub fn isFrontIdentStart(unit: String) -> Bool {
     (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z") || unit == "_"
 }
-
 pub fn isFrontIdentContinue(unit: String) -> Bool {
     isFrontIdentStart(unit) || (unit >= "0" && unit <= "9")
 }
-
 pub fn frontKeywordKind(text: String) -> FrontTokenKind {
     if text == "fn" {
         FrontFn
@@ -3089,7 +2463,6 @@ pub fn frontKeywordKind(text: String) -> FrontTokenKind {
         FrontIdent
     }
 }
-
 pub fn frontPunctuationKind(text: String) -> FrontTokenKind {
     if text == "(" {
         FrontLParen
@@ -3201,99 +2574,249 @@ pub fn frontPunctuationKind(text: String) -> FrontTokenKind {
         FrontIllegal
     }
 }
-
 pub fn isFrontKeywordKind(kind: FrontTokenKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontFn { return true }
-    if kind == FrontStruct { return true }
-    if kind == FrontEnum { return true }
-    if kind == FrontInterface { return true }
-    if kind == FrontType { return true }
-    if kind == FrontLet { return true }
-    if kind == FrontMut { return true }
-    if kind == FrontPub { return true }
-    if kind == FrontUse { return true }
-    if kind == FrontIf { return true }
-    if kind == FrontElse { return true }
-    if kind == FrontMatch { return true }
-    if kind == FrontFor { return true }
-    if kind == FrontReturn { return true }
-    if kind == FrontBreak { return true }
-    if kind == FrontContinue { return true }
-    if kind == FrontDefer { return true }
+    if kind == FrontFn {
+        return true
+    }
+    if kind == FrontStruct {
+        return true
+    }
+    if kind == FrontEnum {
+        return true
+    }
+    if kind == FrontInterface {
+        return true
+    }
+    if kind == FrontType {
+        return true
+    }
+    if kind == FrontLet {
+        return true
+    }
+    if kind == FrontMut {
+        return true
+    }
+    if kind == FrontPub {
+        return true
+    }
+    if kind == FrontUse {
+        return true
+    }
+    if kind == FrontIf {
+        return true
+    }
+    if kind == FrontElse {
+        return true
+    }
+    if kind == FrontMatch {
+        return true
+    }
+    if kind == FrontFor {
+        return true
+    }
+    if kind == FrontReturn {
+        return true
+    }
+    if kind == FrontBreak {
+        return true
+    }
+    if kind == FrontContinue {
+        return true
+    }
+    if kind == FrontDefer {
+        return true
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn isFrontLiteralKind(kind: FrontTokenKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontInt { return true }
-    if kind == FrontFloat { return true }
-    if kind == FrontChar { return true }
-    if kind == FrontByte { return true }
-    if kind == FrontByteString { return true }
-    if kind == FrontString { return true }
-    if kind == FrontRawString { return true }
+    if kind == FrontInt {
+        return true
+    }
+    if kind == FrontFloat {
+        return true
+    }
+    if kind == FrontChar {
+        return true
+    }
+    if kind == FrontByte {
+        return true
+    }
+    if kind == FrontByteString {
+        return true
+    }
+    if kind == FrontString {
+        return true
+    }
+    if kind == FrontRawString {
+        return true
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn isFrontPunctuationKind(kind: FrontTokenKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontLParen { return true }
-    if kind == FrontRParen { return true }
-    if kind == FrontLBrace { return true }
-    if kind == FrontRBrace { return true }
-    if kind == FrontLBracket { return true }
-    if kind == FrontRBracket { return true }
-    if kind == FrontComma { return true }
-    if kind == FrontColon { return true }
-    if kind == FrontSemicolon { return true }
-    if kind == FrontDot { return true }
-    if kind == FrontPlus { return true }
-    if kind == FrontMinus { return true }
-    if kind == FrontStar { return true }
-    if kind == FrontSlash { return true }
-    if kind == FrontPercent { return true }
-    if kind == FrontEq { return true }
-    if kind == FrontNeq { return true }
-    if kind == FrontLt { return true }
-    if kind == FrontGt { return true }
-    if kind == FrontLeq { return true }
-    if kind == FrontGeq { return true }
-    if kind == FrontAnd { return true }
-    if kind == FrontOr { return true }
-    if kind == FrontNot { return true }
-    if kind == FrontBitAnd { return true }
-    if kind == FrontBitOr { return true }
-    if kind == FrontBitXor { return true }
-    if kind == FrontBitNot { return true }
-    if kind == FrontShl { return true }
-    if kind == FrontShr { return true }
-    if kind == FrontAssign { return true }
-    if kind == FrontPlusEq { return true }
-    if kind == FrontMinusEq { return true }
-    if kind == FrontStarEq { return true }
-    if kind == FrontSlashEq { return true }
-    if kind == FrontPercentEq { return true }
-    if kind == FrontBitAndEq { return true }
-    if kind == FrontBitOrEq { return true }
-    if kind == FrontBitXorEq { return true }
-    if kind == FrontShlEq { return true }
-    if kind == FrontShrEq { return true }
-    if kind == FrontArrow { return true }
-    if kind == FrontChanArrow { return true }
-    if kind == FrontQuestion { return true }
-    if kind == FrontAsQuestion { return true }
-    if kind == FrontQDot { return true }
-    if kind == FrontQQ { return true }
-    if kind == FrontDotDot { return true }
-    if kind == FrontDotDotEq { return true }
-    if kind == FrontColonColon { return true }
-    if kind == FrontUnderscore { return true }
-    if kind == FrontAt { return true }
-    if kind == FrontHash { return true }
+    if kind == FrontLParen {
+        return true
+    }
+    if kind == FrontRParen {
+        return true
+    }
+    if kind == FrontLBrace {
+        return true
+    }
+    if kind == FrontRBrace {
+        return true
+    }
+    if kind == FrontLBracket {
+        return true
+    }
+    if kind == FrontRBracket {
+        return true
+    }
+    if kind == FrontComma {
+        return true
+    }
+    if kind == FrontColon {
+        return true
+    }
+    if kind == FrontSemicolon {
+        return true
+    }
+    if kind == FrontDot {
+        return true
+    }
+    if kind == FrontPlus {
+        return true
+    }
+    if kind == FrontMinus {
+        return true
+    }
+    if kind == FrontStar {
+        return true
+    }
+    if kind == FrontSlash {
+        return true
+    }
+    if kind == FrontPercent {
+        return true
+    }
+    if kind == FrontEq {
+        return true
+    }
+    if kind == FrontNeq {
+        return true
+    }
+    if kind == FrontLt {
+        return true
+    }
+    if kind == FrontGt {
+        return true
+    }
+    if kind == FrontLeq {
+        return true
+    }
+    if kind == FrontGeq {
+        return true
+    }
+    if kind == FrontAnd {
+        return true
+    }
+    if kind == FrontOr {
+        return true
+    }
+    if kind == FrontNot {
+        return true
+    }
+    if kind == FrontBitAnd {
+        return true
+    }
+    if kind == FrontBitOr {
+        return true
+    }
+    if kind == FrontBitXor {
+        return true
+    }
+    if kind == FrontBitNot {
+        return true
+    }
+    if kind == FrontShl {
+        return true
+    }
+    if kind == FrontShr {
+        return true
+    }
+    if kind == FrontAssign {
+        return true
+    }
+    if kind == FrontPlusEq {
+        return true
+    }
+    if kind == FrontMinusEq {
+        return true
+    }
+    if kind == FrontStarEq {
+        return true
+    }
+    if kind == FrontSlashEq {
+        return true
+    }
+    if kind == FrontPercentEq {
+        return true
+    }
+    if kind == FrontBitAndEq {
+        return true
+    }
+    if kind == FrontBitOrEq {
+        return true
+    }
+    if kind == FrontBitXorEq {
+        return true
+    }
+    if kind == FrontShlEq {
+        return true
+    }
+    if kind == FrontShrEq {
+        return true
+    }
+    if kind == FrontArrow {
+        return true
+    }
+    if kind == FrontChanArrow {
+        return true
+    }
+    if kind == FrontQuestion {
+        return true
+    }
+    if kind == FrontAsQuestion {
+        return true
+    }
+    if kind == FrontQDot {
+        return true
+    }
+    if kind == FrontQQ {
+        return true
+    }
+    if kind == FrontDotDot {
+        return true
+    }
+    if kind == FrontDotDotEq {
+        return true
+    }
+    if kind == FrontColonColon {
+        return true
+    }
+    if kind == FrontUnderscore {
+        return true
+    }
+    if kind == FrontAt {
+        return true
+    }
+    if kind == FrontHash {
+        return true
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
     if name == "EOF" {
         FrontEOF
@@ -3325,230 +2848,337 @@ pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
         frontPunctuationKind(name)
     }
 }
-
 pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontEOF { return "EOF" }
-    if kind == FrontIllegal { return "ILLEGAL" }
-    if kind == FrontNewline { return "NEWLINE" }
-    if kind == FrontIdent { return "IDENT" }
-    if kind == FrontLabel { return "LABEL" }
-    if kind == FrontInt { return "INT" }
-    if kind == FrontFloat { return "FLOAT" }
-    if kind == FrontChar { return "CHAR" }
-    if kind == FrontByte { return "BYTE" }
-    if kind == FrontByteString { return "BYTESTRING" }
-    if kind == FrontString { return "STRING" }
-    if kind == FrontRawString { return "RAWSTRING" }
-    if kind == FrontFn { return "fn" }
-    if kind == FrontStruct { return "struct" }
-    if kind == FrontEnum { return "enum" }
-    if kind == FrontInterface { return "interface" }
-    if kind == FrontType { return "type" }
-    if kind == FrontLet { return "let" }
-    if kind == FrontMut { return "mut" }
-    if kind == FrontPub { return "pub" }
-    if kind == FrontUse { return "use" }
-    if kind == FrontIf { return "if" }
-    if kind == FrontElse { return "else" }
-    if kind == FrontMatch { return "match" }
-    if kind == FrontFor { return "for" }
-    if kind == FrontReturn { return "return" }
-    if kind == FrontBreak { return "break" }
-    if kind == FrontContinue { return "continue" }
-    if kind == FrontDefer { return "defer" }
-    if kind == FrontLParen { return "(" }
-    if kind == FrontRParen { return ")" }
-    if kind == FrontLBrace { return r"{" }
-    if kind == FrontRBrace { return r"}" }
-    if kind == FrontLBracket { return "[" }
-    if kind == FrontRBracket { return "]" }
-    if kind == FrontComma { return "," }
-    if kind == FrontColon { return ":" }
-    if kind == FrontSemicolon { return ";" }
-    if kind == FrontDot { return "." }
-    if kind == FrontPlus { return "+" }
-    if kind == FrontMinus { return "-" }
-    if kind == FrontStar { return "*" }
-    if kind == FrontSlash { return "/" }
-    if kind == FrontPercent { return "%" }
-    if kind == FrontEq { return "==" }
-    if kind == FrontNeq { return "!=" }
-    if kind == FrontLt { return "<" }
-    if kind == FrontGt { return ">" }
-    if kind == FrontLeq { return "<=" }
-    if kind == FrontGeq { return ">=" }
-    if kind == FrontAnd { return "&&" }
-    if kind == FrontOr { return "||" }
-    if kind == FrontNot { return "!" }
-    if kind == FrontBitAnd { return "&" }
-    if kind == FrontBitOr { return "|" }
-    if kind == FrontBitXor { return "^" }
-    if kind == FrontBitNot { return "~" }
-    if kind == FrontShl { return "<<" }
-    if kind == FrontShr { return ">>" }
-    if kind == FrontAssign { return "=" }
-    if kind == FrontPlusEq { return "+=" }
-    if kind == FrontMinusEq { return "-=" }
-    if kind == FrontStarEq { return "*=" }
-    if kind == FrontSlashEq { return "/=" }
-    if kind == FrontPercentEq { return "%=" }
-    if kind == FrontBitAndEq { return "&=" }
-    if kind == FrontBitOrEq { return "|=" }
-    if kind == FrontBitXorEq { return "^=" }
-    if kind == FrontShlEq { return "<<=" }
-    if kind == FrontShrEq { return ">>=" }
-    if kind == FrontArrow { return "->" }
-    if kind == FrontChanArrow { return "<-" }
-    if kind == FrontQuestion { return "?" }
-    if kind == FrontAsQuestion { return "as?" }
-    if kind == FrontQDot { return "?." }
-    if kind == FrontQQ { return "??" }
-    if kind == FrontDotDot { return ".." }
-    if kind == FrontDotDotEq { return "..=" }
-    if kind == FrontColonColon { return "::" }
-    if kind == FrontUnderscore { return "_" }
-    if kind == FrontAt { return "@" }
-    if kind == FrontHash { return "#" }
+    if kind == FrontEOF {
+        return "EOF"
+    }
+    if kind == FrontIllegal {
+        return "ILLEGAL"
+    }
+    if kind == FrontNewline {
+        return "NEWLINE"
+    }
+    if kind == FrontIdent {
+        return "IDENT"
+    }
+    if kind == FrontLabel {
+        return "LABEL"
+    }
+    if kind == FrontInt {
+        return "INT"
+    }
+    if kind == FrontFloat {
+        return "FLOAT"
+    }
+    if kind == FrontChar {
+        return "CHAR"
+    }
+    if kind == FrontByte {
+        return "BYTE"
+    }
+    if kind == FrontByteString {
+        return "BYTESTRING"
+    }
+    if kind == FrontString {
+        return "STRING"
+    }
+    if kind == FrontRawString {
+        return "RAWSTRING"
+    }
+    if kind == FrontFn {
+        return "fn"
+    }
+    if kind == FrontStruct {
+        return "struct"
+    }
+    if kind == FrontEnum {
+        return "enum"
+    }
+    if kind == FrontInterface {
+        return "interface"
+    }
+    if kind == FrontType {
+        return "type"
+    }
+    if kind == FrontLet {
+        return "let"
+    }
+    if kind == FrontMut {
+        return "mut"
+    }
+    if kind == FrontPub {
+        return "pub"
+    }
+    if kind == FrontUse {
+        return "use"
+    }
+    if kind == FrontIf {
+        return "if"
+    }
+    if kind == FrontElse {
+        return "else"
+    }
+    if kind == FrontMatch {
+        return "match"
+    }
+    if kind == FrontFor {
+        return "for"
+    }
+    if kind == FrontReturn {
+        return "return"
+    }
+    if kind == FrontBreak {
+        return "break"
+    }
+    if kind == FrontContinue {
+        return "continue"
+    }
+    if kind == FrontDefer {
+        return "defer"
+    }
+    if kind == FrontLParen {
+        return "("
+    }
+    if kind == FrontRParen {
+        return ")"
+    }
+    if kind == FrontLBrace {
+        return r"{"
+    }
+    if kind == FrontRBrace {
+        return r"}"
+    }
+    if kind == FrontLBracket {
+        return "["
+    }
+    if kind == FrontRBracket {
+        return "]"
+    }
+    if kind == FrontComma {
+        return ","
+    }
+    if kind == FrontColon {
+        return ":"
+    }
+    if kind == FrontSemicolon {
+        return ";"
+    }
+    if kind == FrontDot {
+        return "."
+    }
+    if kind == FrontPlus {
+        return "+"
+    }
+    if kind == FrontMinus {
+        return "-"
+    }
+    if kind == FrontStar {
+        return "*"
+    }
+    if kind == FrontSlash {
+        return "/"
+    }
+    if kind == FrontPercent {
+        return "%"
+    }
+    if kind == FrontEq {
+        return "=="
+    }
+    if kind == FrontNeq {
+        return "!="
+    }
+    if kind == FrontLt {
+        return "<"
+    }
+    if kind == FrontGt {
+        return ">"
+    }
+    if kind == FrontLeq {
+        return "<="
+    }
+    if kind == FrontGeq {
+        return ">="
+    }
+    if kind == FrontAnd {
+        return "&&"
+    }
+    if kind == FrontOr {
+        return "||"
+    }
+    if kind == FrontNot {
+        return "!"
+    }
+    if kind == FrontBitAnd {
+        return "&"
+    }
+    if kind == FrontBitOr {
+        return "|"
+    }
+    if kind == FrontBitXor {
+        return "^"
+    }
+    if kind == FrontBitNot {
+        return "~"
+    }
+    if kind == FrontShl {
+        return "<<"
+    }
+    if kind == FrontShr {
+        return ">>"
+    }
+    if kind == FrontAssign {
+        return "="
+    }
+    if kind == FrontPlusEq {
+        return "+="
+    }
+    if kind == FrontMinusEq {
+        return "-="
+    }
+    if kind == FrontStarEq {
+        return "*="
+    }
+    if kind == FrontSlashEq {
+        return "/="
+    }
+    if kind == FrontPercentEq {
+        return "%="
+    }
+    if kind == FrontBitAndEq {
+        return "&="
+    }
+    if kind == FrontBitOrEq {
+        return "|="
+    }
+    if kind == FrontBitXorEq {
+        return "^="
+    }
+    if kind == FrontShlEq {
+        return "<<="
+    }
+    if kind == FrontShrEq {
+        return ">>="
+    }
+    if kind == FrontArrow {
+        return "->"
+    }
+    if kind == FrontChanArrow {
+        return "<-"
+    }
+    if kind == FrontQuestion {
+        return "?"
+    }
+    if kind == FrontAsQuestion {
+        return "as?"
+    }
+    if kind == FrontQDot {
+        return "?."
+    }
+    if kind == FrontQQ {
+        return "??"
+    }
+    if kind == FrontDotDot {
+        return ".."
+    }
+    if kind == FrontDotDotEq {
+        return "..="
+    }
+    if kind == FrontColonColon {
+        return "::"
+    }
+    if kind == FrontUnderscore {
+        return "_"
+    }
+    if kind == FrontAt {
+        return "@"
+    }
+    if kind == FrontHash {
+        return "#"
+    }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn frontLexDiagnosticCodeName(code: FrontLexDiagnosticCode) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if code == FrontDiagIllegalCharacter { return "E_LEX_ILLEGAL_CHARACTER" }
-    if code == FrontDiagUnterminatedBlockComment { return "E_LEX_UNTERMINATED_BLOCK_COMMENT" }
-    if code == FrontDiagUnterminatedString { return "E_LEX_UNTERMINATED_STRING" }
-    if code == FrontDiagUnterminatedInterpolation { return "E_LEX_UNTERMINATED_INTERPOLATION" }
-    if code == FrontDiagNewlineInString { return "E_LEX_NEWLINE_IN_STRING" }
-    if code == FrontDiagTripleMissingLeadingNewline { return "E_LEX_TRIPLE_MISSING_LEADING_NEWLINE" }
-    if code == FrontDiagBadTripleIndent { return "E_LEX_BAD_TRIPLE_INDENT" }
-    if code == FrontDiagUppercaseBasePrefix { return "E_LEX_UPPERCASE_BASE_PREFIX" }
-    if code == FrontDiagUnknownEscape { return "E_LEX_UNKNOWN_ESCAPE" }
-    if code == FrontDiagEmptyChar { return "E_LEX_EMPTY_CHAR" }
-    if code == FrontDiagEmptyByte { return "E_LEX_EMPTY_BYTE" }
-    if code == FrontDiagBadNumericSeparator { return "E_LEX_BAD_NUMERIC_SEPARATOR" }
-    if code == FrontDiagFatArrowRemoved { return "E_LEX_FAT_ARROW_REMOVED" }
+    if code == FrontDiagIllegalCharacter {
+        return "E_LEX_ILLEGAL_CHARACTER"
+    }
+    if code == FrontDiagUnterminatedBlockComment {
+        return "E_LEX_UNTERMINATED_BLOCK_COMMENT"
+    }
+    if code == FrontDiagUnterminatedString {
+        return "E_LEX_UNTERMINATED_STRING"
+    }
+    if code == FrontDiagUnterminatedInterpolation {
+        return "E_LEX_UNTERMINATED_INTERPOLATION"
+    }
+    if code == FrontDiagNewlineInString {
+        return "E_LEX_NEWLINE_IN_STRING"
+    }
+    if code == FrontDiagTripleMissingLeadingNewline {
+        return "E_LEX_TRIPLE_MISSING_LEADING_NEWLINE"
+    }
+    if code == FrontDiagBadTripleIndent {
+        return "E_LEX_BAD_TRIPLE_INDENT"
+    }
+    if code == FrontDiagUppercaseBasePrefix {
+        return "E_LEX_UPPERCASE_BASE_PREFIX"
+    }
+    if code == FrontDiagUnknownEscape {
+        return "E_LEX_UNKNOWN_ESCAPE"
+    }
+    if code == FrontDiagEmptyChar {
+        return "E_LEX_EMPTY_CHAR"
+    }
+    if code == FrontDiagEmptyByte {
+        return "E_LEX_EMPTY_BYTE"
+    }
+    if code == FrontDiagBadNumericSeparator {
+        return "E_LEX_BAD_NUMERIC_SEPARATOR"
+    }
+    if code == FrontDiagFatArrowRemoved {
+        return "E_LEX_FAT_ARROW_REMOVED"
+    }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn frontCommentKindName(kind: FrontCommentKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontCommentLine { return "line" }
-    if kind == FrontCommentBlock { return "block" }
-    if kind == FrontCommentDoc { return "doc" }
+    if kind == FrontCommentLine {
+        return "line"
+    }
+    if kind == FrontCommentBlock {
+        return "block"
+    }
+    if kind == FrontCommentDoc {
+        return "doc"
+    }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn frontStringPartKindName(kind: FrontStringPartKind) -> String {
-    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
-    if kind == FrontStringText { return "text" }
-    if kind == FrontStringInterpolation { return "interpolation" }
+    if kind == FrontStringText {
+        return "text"
+    }
+    if kind == FrontStringInterpolation {
+        return "interpolation"
+    }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else (stage0 P0–P15).
 pub fn emptyFrontParseSummary() -> FrontParseSummary {
-    FrontParseSummary {
-        decls: 0,
-        funcs: 0,
-        structs: 0,
-        enums: 0,
-        interfaces: 0,
-        aliases: 0,
-        uses: 0,
-        publicDecls: 0,
-        maxBlockDepth: 0,
-        errors: 0,
-        genericParams: 0,
-        params: 0,
-        fields: 0,
-        methods: 0,
-        variants: 0,
-        variantFields: 0,
-        typeRefs: 0,
-        blocks: 0,
-        statements: 0,
-        lets: 0,
-        returns: 0,
-        breaks: 0,
-        continues: 0,
-        fors: 0,
-        defers: 0,
-        ifs: 0,
-        matches: 0,
-        calls: 0,
-        indexes: 0,
-        selectors: 0,
-        literals: 0,
-        binaryOps: 0,
-        unaryOps: 0,
-        assignments: 0,
-        annotations: 0,
-        docComments: 0,
-        goUses: 0,
-        useAliases: 0,
-        useGoItems: 0,
-        mutableBindings: 0,
-        defaultValues: 0,
-        ifLets: 0,
-        elseBranches: 0,
-        matchArms: 0,
-        matchGuards: 0,
-        closures: 0,
-        closureParams: 0,
-        keywordArgs: 0,
-        turbofish: 0,
-        listLits: 0,
-        mapLits: 0,
-        tupleLits: 0,
-        structLits: 0,
-        structLitFields: 0,
-        spreads: 0,
-        ranges: 0,
-        channelSends: 0,
-        questionOps: 0,
-        optionalTypes: 0,
-        fnTypes: 0,
-        tupleTypes: 0,
-        tuplePatterns: 0,
-        structPatterns: 0,
-        variantPatterns: 0,
-        orPatterns: 0,
-        rangePatterns: 0,
-        wildcardPatterns: 0,
-    }
+    FrontParseSummary {decls: 0, funcs: 0, structs: 0, enums: 0, interfaces: 0, aliases: 0, uses: 0, publicDecls: 0, maxBlockDepth: 0, errors: 0, genericParams: 0, params: 0, fields: 0, methods: 0, variants: 0, variantFields: 0, typeRefs: 0, blocks: 0, statements: 0, lets: 0, returns: 0, breaks: 0, continues: 0, fors: 0, defers: 0, ifs: 0, matches: 0, calls: 0, indexes: 0, selectors: 0, literals: 0, binaryOps: 0, unaryOps: 0, assignments: 0, annotations: 0, docComments: 0, goUses: 0, useAliases: 0, useGoItems: 0, mutableBindings: 0, defaultValues: 0, ifLets: 0, elseBranches: 0, matchArms: 0, matchGuards: 0, closures: 0, closureParams: 0, keywordArgs: 0, turbofish: 0, listLits: 0, mapLits: 0, tupleLits: 0, structLits: 0, structLitFields: 0, spreads: 0, ranges: 0, channelSends: 0, questionOps: 0, optionalTypes: 0, fnTypes: 0, tupleTypes: 0, tuplePatterns: 0, structPatterns: 0, variantPatterns: 0, orPatterns: 0, rangePatterns: 0, wildcardPatterns: 0}
 }
-
 pub fn frontParseResult(summary: FrontParseSummary, consumed: Int) -> FrontParseResult {
-    FrontParseResult { summary, consumed }
+    FrontParseResult {summary, consumed}
 }
-
 pub fn frontParseNode(kind: FrontNodeKind, start: Int, end: Int, depth: Int, flags: Int) -> FrontParseNode {
-    FrontParseNode { kind, start, end, depth, flags }
+    FrontParseNode {kind, start, end, depth, flags}
 }
-
-pub fn frontParseDiagnostic(
-    kind: FrontParseDiagnosticKind,
-    start: Int,
-    end: Int,
-    expected: FrontTokenKind,
-    found: FrontTokenKind,
-) -> FrontParseDiagnostic {
-    FrontParseDiagnostic { kind, start, end, expected, found }
+pub fn frontParseDiagnostic(kind: FrontParseDiagnosticKind, start: Int, end: Int, expected: FrontTokenKind, found: FrontTokenKind) -> FrontParseDiagnostic {
+    FrontParseDiagnostic {kind, start, end, expected, found}
 }
-
 pub fn emptyFrontParseTree(summary: FrontParseSummary, tokens: Int) -> FrontParseTree {
-    FrontParseTree {
-        nodes: [],
-        diagnostics: [],
-        summary,
-        tokens,
-        coveredTokens: 0,
-        maxDepth: 0,
-        recovered: 0,
-        precedenceDiagnostics: 0,
-    }
+    FrontParseTree {nodes: [], diagnostics: [], summary, tokens, coveredTokens: 0, maxDepth: 0, recovered: 0, precedenceDiagnostics: 0}
 }
-
 pub fn frontTreePushNode(tree: FrontParseTree, node: FrontParseNode) -> FrontParseTree {
     let mut out = tree
     out.nodes.push(node)
@@ -3557,11 +3187,7 @@ pub fn frontTreePushNode(tree: FrontParseTree, node: FrontParseNode) -> FrontPar
     }
     out
 }
-
-pub fn frontTreePushDiagnostic(
-    tree: FrontParseTree,
-    diag: FrontParseDiagnostic,
-) -> FrontParseTree {
+pub fn frontTreePushDiagnostic(tree: FrontParseTree, diag: FrontParseDiagnostic) -> FrontParseTree {
     let mut out = tree
     out.diagnostics.push(diag)
     out.recovered = out.recovered + 1
@@ -3570,7 +3196,6 @@ pub fn frontTreePushDiagnostic(
     }
     out
 }
-
 pub fn frontendParseTree(source: String) -> FrontParseTree {
     let stream = frontendLexStream(source)
     let tokens = frontTokensFromSource(source, stream)
@@ -3579,20 +3204,10 @@ pub fn frontendParseTree(source: String) -> FrontParseTree {
     let mut tree = frontBuildParseTree(tokens, count, summary)
     let lexErrors = frontLexDiagnosticCount(stream)
     for idx in 0..lexErrors {
-        tree = frontTreePushDiagnostic(
-            tree,
-            frontParseDiagnostic(
-                FrontParseDiagLexerError,
-                idx,
-                idx + 1,
-                FrontEOF,
-                FrontIllegal,
-            ),
-        )
+        tree = frontTreePushDiagnostic(tree, frontParseDiagnostic(FrontParseDiagLexerError, idx, idx + 1, FrontEOF, FrontIllegal))
     }
     tree
 }
-
 /// frontendParseRichSummary keeps the legacy summary API on top of the
 /// self-hosting parser core. New callers should prefer frontendParseTree when
 /// they need lossless spans, node events, and recovery diagnostics.
@@ -3605,7 +3220,6 @@ pub fn frontendParseRichSummary(source: String) -> FrontParseSummary {
     summary.docComments = frontLeadingDocAttachmentCount(stream)
     let mut skip = 0
     let mut pendingPub = false
-
     for idx in 0..count {
         if skip > 0 {
             skip = skip - 1
@@ -3691,22 +3305,20 @@ pub fn frontendParseRichSummary(source: String) -> FrontParseSummary {
             }
         }
     }
-
     summary.maxBlockDepth = frontMaxBraceDepth(tokens)
     summary.errors = summary.errors + frontBraceBalanceErrors(tokens)
     summary = frontScanProgramExtras(tokens, count, summary)
     summary
 }
-
 pub fn frontTokenListCount(tokens: List<FrontToken>) -> Int {
     tokens.len()
 }
-
 pub fn frontTokenAtList(tokens: List<FrontToken>, target: Int) -> FrontToken {
-    if target < 0 || target >= tokens.len() { return frontEOF() }
+    if target < 0 || target >= tokens.len() {
+        return frontEOF()
+    }
     tokens[target]
 }
-
 pub fn frontLeadingDocAttachmentCount(stream: FrontLexStream) -> Int {
     let mut count = 0
     for tok in stream.tokens {
@@ -3716,16 +3328,10 @@ pub fn frontLeadingDocAttachmentCount(stream: FrontLexStream) -> Int {
     }
     count
 }
-
 pub fn frontTokenTextAt(tokens: List<FrontToken>, target: Int) -> String {
     frontTokenAtList(tokens, target).text
 }
-
-pub fn frontBuildParseTree(
-    tokens: List<FrontToken>,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseTree {
+pub fn frontBuildParseTree(tokens: List<FrontToken>, count: Int, summary: FrontParseSummary) -> FrontParseTree {
     let mut tree = emptyFrontParseTree(summary, count)
     tree = frontTreePushNode(tree, frontParseNode(FrontNodeFile, 0, count, 0, 0))
     tree.coveredTokens = count
@@ -3739,24 +3345,15 @@ pub fn frontBuildParseTree(
                 let _ = kind
             } else if kind == FrontHash && frontTokenAtList(tokens, idx + 1).kind == FrontLBracket {
                 let close = frontFindMatching(tokens, idx + 1, count, FrontLBracket, FrontRBracket)
-                tree = frontTreePushNode(
-                    tree,
-                    frontParseNode(FrontNodeAnnotation, idx, close + 1, 1, 0),
-                )
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeAnnotation, idx, close + 1, 1, 0))
                 skip = close - idx
             } else if kind == FrontUse {
                 let consumed = frontParseUseConsumed(tokens, idx, count)
                 let end = idx + consumed
                 if frontUseIsGo(tokens, idx, end) {
-                    tree = frontTreePushNode(
-                        tree,
-                        frontParseNode(FrontNodeGoUseDecl, idx, end, 1, 0),
-                    )
+                    tree = frontTreePushNode(tree, frontParseNode(FrontNodeGoUseDecl, idx, end, 1, 0))
                 } else {
-                    tree = frontTreePushNode(
-                        tree,
-                        frontParseNode(FrontNodeUseDecl, idx, end, 1, 0),
-                    )
+                    tree = frontTreePushNode(tree, frontParseNode(FrontNodeUseDecl, idx, end, 1, 0))
                 }
                 tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
                 skip = consumed - 1
@@ -3767,10 +3364,7 @@ pub fn frontBuildParseTree(
                 skip = end - idx - 1
             } else if kind == FrontStruct {
                 let end = frontDeclEnd(tokens, idx, count)
-                tree = frontTreePushNode(
-                    tree,
-                    frontParseNode(FrontNodeStructDecl, idx, end, 1, 0),
-                )
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeStructDecl, idx, end, 1, 0))
                 tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
                 skip = end - idx - 1
             } else if kind == FrontEnum {
@@ -3780,18 +3374,12 @@ pub fn frontBuildParseTree(
                 skip = end - idx - 1
             } else if kind == FrontInterface {
                 let end = frontDeclEnd(tokens, idx, count)
-                tree = frontTreePushNode(
-                    tree,
-                    frontParseNode(FrontNodeInterfaceDecl, idx, end, 1, 0),
-                )
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeInterfaceDecl, idx, end, 1, 0))
                 tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
                 skip = end - idx - 1
             } else if kind == FrontType {
                 let end = frontDeclEnd(tokens, idx, count)
-                tree = frontTreePushNode(
-                    tree,
-                    frontParseNode(FrontNodeTypeAliasDecl, idx, end, 1, 0),
-                )
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeTypeAliasDecl, idx, end, 1, 0))
                 tree = frontCollectTypeTree(tokens, idx, end, 2, tree)
                 skip = end - idx - 1
             } else if kind == FrontLet {
@@ -3802,27 +3390,14 @@ pub fn frontBuildParseTree(
             } else if kind == FrontPub || kind == FrontNewline || kind == FrontSemicolon {
                 let _ = kind
             } else {
-                tree = frontTreePushNode(
-                    tree,
-                    frontParseNode(FrontNodeRecovery, idx, idx + 1, 1, 0),
-                )
-                tree = frontTreePushDiagnostic(
-                    tree,
-                    frontParseDiagnostic(
-                        FrontParseDiagUnexpectedToken,
-                        idx,
-                        idx + 1,
-                        FrontEOF,
-                        kind,
-                    ),
-                )
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeRecovery, idx, idx + 1, 1, 0))
+                tree = frontTreePushDiagnostic(tree, frontParseDiagnostic(FrontParseDiagUnexpectedToken, idx, idx + 1, FrontEOF, kind))
             }
         }
     }
     tree = frontAddDelimiterDiagnostics(tokens, count, tree)
     tree
 }
-
 pub fn frontDeclEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     let kind = frontTokenAtList(tokens, start).kind
     if kind == FrontFn {
@@ -3841,7 +3416,6 @@ pub fn frontDeclEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
         frontFindStatementEnd(tokens, start, count)
     }
 }
-
 pub fn frontUseIsGo(tokens: List<FrontToken>, start: Int, end: Int) -> Bool {
     for idx in start + 1..end {
         let tok = frontTokenAtList(tokens, idx)
@@ -3851,30 +3425,17 @@ pub fn frontUseIsGo(tokens: List<FrontToken>, start: Int, end: Int) -> Bool {
     }
     false
 }
-
-pub fn frontCollectFnTree(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectFnTree(tokens: List<FrontToken>, start: Int, end: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     for idx in start..end {
         let kind = frontTokenAtList(tokens, idx).kind
         if kind == FrontLt {
             let close = frontFindMatching(tokens, idx, end, FrontLt, FrontGt)
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodeGenericParams, idx, close + 1, depth, 0),
-            )
+            out = frontTreePushNode(out, frontParseNode(FrontNodeGenericParams, idx, close + 1, depth, 0))
             out = frontCollectTypeTree(tokens, idx + 1, close, depth + 1, out)
         } else if kind == FrontLParen {
             let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodeParamList, idx, close + 1, depth, 0),
-            )
+            out = frontTreePushNode(out, frontParseNode(FrontNodeParamList, idx, close + 1, depth, 0))
             out = frontCollectParamNodes(tokens, idx, close, depth + 1, out)
         } else if kind == FrontArrow {
             let typeEnd = frontFindTypeEnd(tokens, idx + 1, end)
@@ -3887,23 +3448,13 @@ pub fn frontCollectFnTree(
     }
     out
 }
-
-pub fn frontCollectAggregateTree(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectAggregateTree(tokens: List<FrontToken>, start: Int, end: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     for idx in start..end {
         let kind = frontTokenAtList(tokens, idx).kind
         if kind == FrontHash && frontTokenAtList(tokens, idx + 1).kind == FrontLBracket {
             let close = frontFindMatching(tokens, idx + 1, end, FrontLBracket, FrontRBracket)
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodeAnnotation, idx, close + 1, depth, 0),
-            )
+            out = frontTreePushNode(out, frontParseNode(FrontNodeAnnotation, idx, close + 1, depth, 0))
         } else if kind == FrontLBrace {
             let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
             out = frontTreePushNode(out, frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0))
@@ -3917,31 +3468,18 @@ pub fn frontCollectAggregateTree(
             out = frontCollectTypeTree(tokens, idx, fieldEnd, depth + 1, out)
         } else if kind == FrontIdent && frontTokenAtList(tokens, idx + 1).kind != FrontColon {
             let variantEnd = frontVariantConsumed(tokens, idx, end)
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodeVariant, idx, idx + variantEnd, depth, 0),
-            )
+            out = frontTreePushNode(out, frontParseNode(FrontNodeVariant, idx, idx + variantEnd, depth, 0))
         }
     }
     out
 }
-
-pub fn frontCollectParamNodes(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectParamNodes(tokens: List<FrontToken>, open: Int, close: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     let mut skip = 0
     for idx in open + 1..close {
         if skip > 0 {
             skip = skip - 1
-        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(
-            tokens,
-            idx + 1,
-        ).kind == FrontColon {
+        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(tokens, idx + 1).kind == FrontColon {
             let typeEnd = frontFindTypeEnd(tokens, idx + 2, close)
             out = frontTreePushNode(out, frontParseNode(FrontNodeParam, idx, typeEnd, depth, 0))
             out = frontCollectTypeTree(tokens, idx + 2, typeEnd, depth + 1, out)
@@ -3950,14 +3488,7 @@ pub fn frontCollectParamNodes(
     }
     out
 }
-
-pub fn frontCollectTypeTree(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectTypeTree(tokens: List<FrontToken>, start: Int, end: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     for idx in start..end {
         let kind = frontTokenAtList(tokens, idx).kind
@@ -3968,23 +3499,13 @@ pub fn frontCollectTypeTree(
         } else if kind == FrontLParen {
             let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
             if close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeType, idx, close + 1, depth, 2),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeType, idx, close + 1, depth, 2))
             }
         }
     }
     out
 }
-
-pub fn frontCollectTreeSpan(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectTreeSpan(tokens: List<FrontToken>, start: Int, end: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     let mut skip = 0
     for idx in start..end {
@@ -3994,15 +3515,9 @@ pub fn frontCollectTreeSpan(
             let kind = frontTokenAtList(tokens, idx).kind
             if kind == FrontLet {
                 let stmtEnd = frontFindStatementEnd(tokens, idx, end)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeLetStmt, idx, stmtEnd, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeLetStmt, idx, stmtEnd, depth, 0))
                 let patternEnd = frontFindLetPatternEnd(tokens, idx + 1, stmtEnd)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodePattern, idx + 1, patternEnd, depth + 1, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodePattern, idx + 1, patternEnd, depth + 1, 0))
                 for exprStart in patternEnd..stmtEnd {
                     if frontTokenAtList(tokens, exprStart).kind == FrontAssign {
                         out = frontCollectTreeSpan(tokens, exprStart + 1, stmtEnd, depth + 1, out)
@@ -4010,188 +3525,81 @@ pub fn frontCollectTreeSpan(
                 }
                 skip = stmtEnd - idx - 1
             } else if kind == FrontReturn {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(
-                        FrontNodeReturnStmt,
-                        idx,
-                        frontFindStatementEnd(tokens, idx, end),
-                        depth,
-                        0,
-                    ),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeReturnStmt, idx, frontFindStatementEnd(tokens, idx, end), depth, 0))
             } else if kind == FrontBreak {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeBreakStmt, idx, idx + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeBreakStmt, idx, idx + 1, depth, 0))
             } else if kind == FrontContinue {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeContinueStmt, idx, idx + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeContinueStmt, idx, idx + 1, depth, 0))
             } else if kind == FrontFor {
                 let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeForStmt, idx, bodyClose + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeForStmt, idx, bodyClose + 1, depth, 0))
             } else if kind == FrontDefer {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(
-                        FrontNodeDeferStmt,
-                        idx,
-                        frontFindStatementEnd(tokens, idx, end),
-                        depth,
-                        0,
-                    ),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeDeferStmt, idx, frontFindStatementEnd(tokens, idx, end), depth, 0))
             } else if kind == FrontIf {
                 let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeIfExpr, idx, bodyClose + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeIfExpr, idx, bodyClose + 1, depth, 0))
             } else if kind == FrontMatch {
                 let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeMatchExpr, idx, bodyClose + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeMatchExpr, idx, bodyClose + 1, depth, 0))
                 out = frontCollectMatchArmNodes(tokens, idx, bodyClose, depth + 1, out)
             } else if kind == FrontLParen && frontIsCallOpen(tokens, idx, start) {
                 let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeCallExpr, idx - 1, close + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeCallExpr, idx - 1, close + 1, depth, 0))
             } else if kind == FrontLBracket {
                 let close = frontFindMatching(tokens, idx, end, FrontLBracket, FrontRBracket)
                 if frontIsIndexOpen(tokens, idx, start) {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeIndexExpr, idx - 1, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeIndexExpr, idx - 1, close + 1, depth, 0))
                 } else {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeListExpr, idx, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeListExpr, idx, close + 1, depth, 0))
                 }
             } else if kind == FrontLParen {
                 let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
                 if close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma) {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeTupleExpr, idx, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeTupleExpr, idx, close + 1, depth, 0))
                 }
             } else if kind == FrontLBrace {
                 let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
                 if frontIsStructLiteralOpen(tokens, idx, start) {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeStructExpr, idx - 1, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeStructExpr, idx - 1, close + 1, depth, 0))
                 } else if frontIsMapLiteralOpen(tokens, idx, end) {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeMapExpr, idx, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeMapExpr, idx, close + 1, depth, 0))
                 } else {
-                    out = frontTreePushNode(
-                        out,
-                        frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0),
-                    )
+                    out = frontTreePushNode(out, frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0))
                 }
             } else if kind == FrontColonColon && frontTokenAtList(tokens, idx + 1).kind == FrontLt {
                 let close = frontFindMatching(tokens, idx + 1, end, FrontLt, FrontGt)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeTurbofishExpr, idx, close + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeTurbofishExpr, idx, close + 1, depth, 0))
                 skip = close - idx
             } else if kind == FrontBitOr && frontIsClosurePipe(tokens, idx, start, end) {
                 let close = frontFindNextTokenKind(tokens, idx + 1, end, FrontBitOr)
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeClosureExpr, idx, close + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeClosureExpr, idx, close + 1, depth, 0))
             } else if kind == FrontOr && frontIsClosureZeroPipe(tokens, idx, start) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeClosureExpr, idx, idx + 1, depth, 1),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeClosureExpr, idx, idx + 1, depth, 1))
             } else if kind == FrontDot || kind == FrontQDot {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeSelectorExpr, idx, idx + 1, depth, 0),
-                )
-                if frontTokenAtList(tokens, idx + 1).kind == FrontNewline || frontTokenAtList(
-                    tokens,
-                    idx + 1,
-                ).kind == FrontEOF {
-                    out = frontTreePushDiagnostic(
-                        out,
-                        frontParseDiagnostic(
-                            FrontParseDiagTrailingSelector,
-                            idx,
-                            idx + 1,
-                            FrontIdent,
-                            frontTokenAtList(tokens, idx + 1).kind,
-                        ),
-                    )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeSelectorExpr, idx, idx + 1, depth, 0))
+                if frontTokenAtList(tokens, idx + 1).kind == FrontNewline || frontTokenAtList(tokens, idx + 1).kind == FrontEOF {
+                    out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagTrailingSelector, idx, idx + 1, FrontIdent, frontTokenAtList(tokens, idx + 1).kind))
                 }
             } else if kind == FrontChanArrow {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeChannelSendStmt, idx - 1, idx + 2, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeChannelSendStmt, idx - 1, idx + 2, depth, 0))
             } else if kind == FrontQuestion {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeQuestionExpr, idx, idx + 1, depth, 0),
-                )
-            } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(
-                tokens,
-                idx,
-                start,
-            )) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeRangeExpr, idx, idx + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeQuestionExpr, idx, idx + 1, depth, 0))
+            } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(tokens, idx, start)) {
+                out = frontTreePushNode(out, frontParseNode(FrontNodeRangeExpr, idx, idx + 1, depth, 0))
                 out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
             } else if frontIsAssignOp(kind) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeAssignStmt, idx - 1, idx + 2, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeAssignStmt, idx - 1, idx + 2, depth, 0))
             } else if frontIsBinaryOp(kind) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeBinaryExpr, idx, idx + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeBinaryExpr, idx, idx + 1, depth, 0))
                 out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
             } else if frontIsUnaryOp(kind) {
-                out = frontTreePushNode(
-                    out,
-                    frontParseNode(FrontNodeUnaryExpr, idx, idx + 1, depth, 0),
-                )
+                out = frontTreePushNode(out, frontParseNode(FrontNodeUnaryExpr, idx, idx + 1, depth, 0))
             }
         }
     }
     out
 }
-
-pub fn frontCollectMatchArmNodes(
-    tokens: List<FrontToken>,
-    matchIdx: Int,
-    close: Int,
-    depth: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontCollectMatchArmNodes(tokens: List<FrontToken>, matchIdx: Int, close: Int, depth: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     let mut armStart = matchIdx + 1
     let mut braceDepth = 0
@@ -4204,14 +3612,8 @@ pub fn frontCollectMatchArmNodes(
                 braceDepth = braceDepth - 1
             }
         } else if braceDepth == 1 && kind == FrontArrow {
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodeMatchArm, armStart, idx + 1, depth, 0),
-            )
-            out = frontTreePushNode(
-                out,
-                frontParseNode(FrontNodePattern, armStart, idx, depth + 1, 0),
-            )
+            out = frontTreePushNode(out, frontParseNode(FrontNodeMatchArm, armStart, idx + 1, depth, 0))
+            out = frontTreePushNode(out, frontParseNode(FrontNodePattern, armStart, idx, depth + 1, 0))
             armStart = idx + 1
         } else if braceDepth == 1 && kind == FrontComma {
             armStart = idx + 1
@@ -4219,13 +3621,7 @@ pub fn frontCollectMatchArmNodes(
     }
     out
 }
-
-pub fn frontMaybeNonAssocDiagnostic(
-    tokens: List<FrontToken>,
-    idx: Int,
-    end: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontMaybeNonAssocDiagnostic(tokens: List<FrontToken>, idx: Int, end: Int, tree: FrontParseTree) -> FrontParseTree {
     let op = frontTokenAtList(tokens, idx).kind
     if !(frontIsNonAssocOp(op)) {
         return tree
@@ -4233,21 +3629,11 @@ pub fn frontMaybeNonAssocDiagnostic(
     let next = frontFindNextTopLevelOperator(tokens, idx + 1, end)
     let nextKind = frontTokenAtList(tokens, next).kind
     if next < end && frontIsNonAssocOp(nextKind) && frontSameNonAssocLevel(op, nextKind) {
-        frontTreePushDiagnostic(
-            tree,
-            frontParseDiagnostic(
-                FrontParseDiagNonAssociativeOperator,
-                next,
-                next + 1,
-                FrontLParen,
-                nextKind,
-            ),
-        )
+        frontTreePushDiagnostic(tree, frontParseDiagnostic(FrontParseDiagNonAssociativeOperator, next, next + 1, FrontLParen, nextKind))
     } else {
         tree
     }
 }
-
 pub fn frontFindNextTopLevelOperator(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut parenDepth = 0
     let mut bracketDepth = 0
@@ -4278,27 +3664,19 @@ pub fn frontFindNextTopLevelOperator(tokens: List<FrontToken>, start: Int, end: 
     }
     end
 }
-
 pub fn frontIsNonAssocOp(kind: FrontTokenKind) -> Bool {
     kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq || kind == FrontDotDot || kind == FrontDotDotEq
 }
-
 pub fn frontSameNonAssocLevel(left: FrontTokenKind, right: FrontTokenKind) -> Bool {
     if (left == FrontDotDot || left == FrontDotDotEq) && (right == FrontDotDot || right == FrontDotDotEq) {
         return true
     }
     frontIsComparisonOp(left) && frontIsComparisonOp(right)
 }
-
 pub fn frontIsComparisonOp(kind: FrontTokenKind) -> Bool {
     kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq
 }
-
-pub fn frontAddDelimiterDiagnostics(
-    tokens: List<FrontToken>,
-    count: Int,
-    tree: FrontParseTree,
-) -> FrontParseTree {
+pub fn frontAddDelimiterDiagnostics(tokens: List<FrontToken>, count: Int, tree: FrontParseTree) -> FrontParseTree {
     let mut out = tree
     let mut parenDepth = 0
     let mut braceDepth = 0
@@ -4309,16 +3687,7 @@ pub fn frontAddDelimiterDiagnostics(
             parenDepth = parenDepth + 1
         } else if kind == FrontRParen {
             if parenDepth == 0 {
-                out = frontTreePushDiagnostic(
-                    out,
-                    frontParseDiagnostic(
-                        FrontParseDiagUnmatchedDelimiter,
-                        idx,
-                        idx + 1,
-                        FrontLParen,
-                        kind,
-                    ),
-                )
+                out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagUnmatchedDelimiter, idx, idx + 1, FrontLParen, kind))
             } else {
                 parenDepth = parenDepth - 1
             }
@@ -4326,16 +3695,7 @@ pub fn frontAddDelimiterDiagnostics(
             braceDepth = braceDepth + 1
         } else if kind == FrontRBrace {
             if braceDepth == 0 {
-                out = frontTreePushDiagnostic(
-                    out,
-                    frontParseDiagnostic(
-                        FrontParseDiagUnmatchedDelimiter,
-                        idx,
-                        idx + 1,
-                        FrontLBrace,
-                        kind,
-                    ),
-                )
+                out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagUnmatchedDelimiter, idx, idx + 1, FrontLBrace, kind))
             } else {
                 braceDepth = braceDepth - 1
             }
@@ -4343,60 +3703,23 @@ pub fn frontAddDelimiterDiagnostics(
             bracketDepth = bracketDepth + 1
         } else if kind == FrontRBracket {
             if bracketDepth == 0 {
-                out = frontTreePushDiagnostic(
-                    out,
-                    frontParseDiagnostic(
-                        FrontParseDiagUnmatchedDelimiter,
-                        idx,
-                        idx + 1,
-                        FrontLBracket,
-                        kind,
-                    ),
-                )
+                out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagUnmatchedDelimiter, idx, idx + 1, FrontLBracket, kind))
             } else {
                 bracketDepth = bracketDepth - 1
             }
         }
     }
     if parenDepth > 0 {
-        out = frontTreePushDiagnostic(
-            out,
-            frontParseDiagnostic(
-                FrontParseDiagMissingDelimiter,
-                count - 1,
-                count,
-                FrontRParen,
-                FrontEOF,
-            ),
-        )
+        out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagMissingDelimiter, count - 1, count, FrontRParen, FrontEOF))
     }
     if braceDepth > 0 {
-        out = frontTreePushDiagnostic(
-            out,
-            frontParseDiagnostic(
-                FrontParseDiagMissingDelimiter,
-                count - 1,
-                count,
-                FrontRBrace,
-                FrontEOF,
-            ),
-        )
+        out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagMissingDelimiter, count - 1, count, FrontRBrace, FrontEOF))
     }
     if bracketDepth > 0 {
-        out = frontTreePushDiagnostic(
-            out,
-            frontParseDiagnostic(
-                FrontParseDiagMissingDelimiter,
-                count - 1,
-                count,
-                FrontRBracket,
-                FrontEOF,
-            ),
-        )
+        out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagMissingDelimiter, count - 1, count, FrontRBracket, FrontEOF))
     }
     out
 }
-
 pub fn frontParseTreeNodeCount(tree: FrontParseTree) -> Int {
     let mut count = 0
     for node in tree.nodes {
@@ -4405,7 +3728,6 @@ pub fn frontParseTreeNodeCount(tree: FrontParseTree) -> Int {
     }
     count
 }
-
 pub fn frontParseTreeDiagnosticCount(tree: FrontParseTree) -> Int {
     let mut count = 0
     for diag in tree.diagnostics {
@@ -4414,7 +3736,6 @@ pub fn frontParseTreeDiagnosticCount(tree: FrontParseTree) -> Int {
     }
     count
 }
-
 pub fn frontParseTreeNodeKindCount(tree: FrontParseTree, kind: FrontNodeKind) -> Int {
     let mut count = 0
     for node in tree.nodes {
@@ -4424,11 +3745,7 @@ pub fn frontParseTreeNodeKindCount(tree: FrontParseTree, kind: FrontNodeKind) ->
     }
     count
 }
-
-pub fn frontParseTreeDiagnosticKindCount(
-    tree: FrontParseTree,
-    kind: FrontParseDiagnosticKind,
-) -> Int {
+pub fn frontParseTreeDiagnosticKindCount(tree: FrontParseTree, kind: FrontParseDiagnosticKind) -> Int {
     let mut count = 0
     for diag in tree.diagnostics {
         if diag.kind == kind {
@@ -4437,15 +3754,12 @@ pub fn frontParseTreeDiagnosticKindCount(
     }
     count
 }
-
 pub fn frontParseTreeNodeNameCount(tree: FrontParseTree, name: String) -> Int {
     frontParseTreeNodeKindCount(tree, frontNodeKindByName(name))
 }
-
 pub fn frontParseTreeDiagnosticNameCount(tree: FrontParseTree, name: String) -> Int {
     frontParseTreeDiagnosticKindCount(tree, frontParseDiagnosticKindByName(name))
 }
-
 pub fn frontNodeKindByName(name: String) -> FrontNodeKind {
     if name == "file" {
         FrontNodeFile
@@ -4535,7 +3849,6 @@ pub fn frontNodeKindByName(name: String) -> FrontNodeKind {
         FrontNodeRecovery
     }
 }
-
 pub fn frontParseDiagnosticKindByName(name: String) -> FrontParseDiagnosticKind {
     if name == "unexpected" {
         FrontParseDiagUnexpectedToken
@@ -4553,7 +3866,6 @@ pub fn frontParseDiagnosticKindByName(name: String) -> FrontParseDiagnosticKind 
         FrontParseDiagLexerError
     }
 }
-
 pub fn frontParseTreeInvalidSpanCount(tree: FrontParseTree) -> Int {
     let mut invalid = 0
     for node in tree.nodes {
@@ -4568,7 +3880,6 @@ pub fn frontParseTreeInvalidSpanCount(tree: FrontParseTree) -> Int {
     }
     invalid
 }
-
 pub fn frontParseUseConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     let mut consumed = 1
     for idx in start + 1..count {
@@ -4584,13 +3895,7 @@ pub fn frontParseUseConsumed(tokens: List<FrontToken>, start: Int, count: Int) -
     }
     consumed
 }
-
-pub fn frontParseUseShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseUseShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let consumed = frontParseUseConsumed(tokens, start, count)
     let end = start + consumed
@@ -4608,13 +3913,7 @@ pub fn frontParseUseShape(
     }
     frontParseResult(out, consumed)
 }
-
-pub fn frontParseFnShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseFnShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let mut idx = start + 1
     if frontTokenAtList(tokens, idx).kind == FrontIdent {
@@ -4622,14 +3921,12 @@ pub fn frontParseFnShape(
     } else {
         out.errors = out.errors + 1
     }
-
     if frontTokenAtList(tokens, idx).kind == FrontLt {
         let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
         out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
         out = frontScanTypeShape(tokens, idx + 1, close, out)
         idx = close + 1
     }
-
     if frontTokenAtList(tokens, idx).kind == FrontLParen {
         let close = frontFindMatching(tokens, idx, count, FrontLParen, FrontRParen)
         out.params = out.params + frontCountParams(tokens, idx, close)
@@ -4638,32 +3935,21 @@ pub fn frontParseFnShape(
     } else {
         out.errors = out.errors + 1
     }
-
     if frontTokenAtList(tokens, idx).kind == FrontArrow {
         let typeEnd = frontFindTypeEnd(tokens, idx + 1, count)
         out = frontScanTypeShape(tokens, idx + 1, typeEnd, out)
         idx = typeEnd
     }
-
     if frontTokenAtList(tokens, idx).kind == FrontLBrace {
         let parsed = frontParseBlockShape(tokens, idx, count, out)
         out = parsed.summary
         idx = idx + parsed.consumed
-    } else if frontTokenAtList(tokens, idx).kind != FrontNewline && frontTokenAtList(tokens, idx).kind != FrontEOF && frontTokenAtList(
-        tokens,
-        idx,
-    ).kind != FrontComma && frontTokenAtList(tokens, idx).kind != FrontRBrace {
+    } else if frontTokenAtList(tokens, idx).kind != FrontNewline && frontTokenAtList(tokens, idx).kind != FrontEOF && frontTokenAtList(tokens, idx).kind != FrontComma && frontTokenAtList(tokens, idx).kind != FrontRBrace {
         out.errors = out.errors + 1
     }
     frontParseResult(out, idx - start)
 }
-
-pub fn frontParseStructShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseStructShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let mut idx = start + 1
     if frontTokenAtList(tokens, idx).kind == FrontIdent {
@@ -4690,13 +3976,7 @@ pub fn frontParseStructShape(
             let kind = frontTokenAtList(tokens, at).kind
             if kind == FrontHash && frontTokenAtList(tokens, at + 1).kind == FrontLBracket {
                 out.annotations = out.annotations + 1
-                let annClose = frontFindMatching(
-                    tokens,
-                    at + 1,
-                    close,
-                    FrontLBracket,
-                    FrontRBracket,
-                )
+                let annClose = frontFindMatching(tokens, at + 1, close, FrontLBracket, FrontRBracket)
                 skip = annClose - at
             } else if kind == FrontFn || (kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn) {
                 out.methods = out.methods + 1
@@ -4722,13 +4002,7 @@ pub fn frontParseStructShape(
     }
     frontParseResult(out, close - start + 1)
 }
-
-pub fn frontParseEnumShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseEnumShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let mut idx = start + 1
     if frontTokenAtList(tokens, idx).kind == FrontIdent {
@@ -4755,13 +4029,7 @@ pub fn frontParseEnumShape(
             let kind = frontTokenAtList(tokens, at).kind
             if kind == FrontHash && frontTokenAtList(tokens, at + 1).kind == FrontLBracket {
                 out.annotations = out.annotations + 1
-                let annClose = frontFindMatching(
-                    tokens,
-                    at + 1,
-                    close,
-                    FrontLBracket,
-                    FrontRBracket,
-                )
+                let annClose = frontFindMatching(tokens, at + 1, close, FrontLBracket, FrontRBracket)
                 skip = annClose - at
             } else if kind == FrontFn || (kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn) {
                 out.methods = out.methods + 1
@@ -4772,13 +4040,7 @@ pub fn frontParseEnumShape(
             } else if kind == FrontIdent {
                 out.variants = out.variants + 1
                 if frontTokenAtList(tokens, at + 1).kind == FrontLParen {
-                    let parenClose = frontFindMatching(
-                        tokens,
-                        at + 1,
-                        close,
-                        FrontLParen,
-                        FrontRParen,
-                    )
+                    let parenClose = frontFindMatching(tokens, at + 1, close, FrontLParen, FrontRParen)
                     let fields = frontCountTopLevelCommaItems(tokens, at + 2, parenClose)
                     out.variantFields = out.variantFields + fields
                     out = frontScanTypeShape(tokens, at + 2, parenClose, out)
@@ -4791,13 +4053,7 @@ pub fn frontParseEnumShape(
     }
     frontParseResult(out, close - start + 1)
 }
-
-pub fn frontParseInterfaceShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseInterfaceShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let mut idx = start + 1
     if frontTokenAtList(tokens, idx).kind == FrontIdent {
@@ -4824,10 +4080,7 @@ pub fn frontParseInterfaceShape(
             out.annotations = out.annotations + 1
             let annClose = frontFindMatching(tokens, at + 1, close, FrontLBracket, FrontRBracket)
             skip = annClose - at
-        } else if frontTokenAtList(tokens, at).kind == FrontFn || (frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(
-            tokens,
-            at + 1,
-        ).kind == FrontFn) {
+        } else if frontTokenAtList(tokens, at).kind == FrontFn || (frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn) {
             out.methods = out.methods + 1
             let fnStart = frontFnStartAt(tokens, at)
             let parsed = frontParseFnShape(tokens, fnStart, close, out)
@@ -4841,13 +4094,7 @@ pub fn frontParseInterfaceShape(
     }
     frontParseResult(out, close - start + 1)
 }
-
-pub fn frontParseTypeAliasShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseTypeAliasShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let mut idx = start + 1
     if frontTokenAtList(tokens, idx).kind == FrontIdent {
@@ -4870,13 +4117,7 @@ pub fn frontParseTypeAliasShape(
     }
     frontParseResult(out, idx - start)
 }
-
-pub fn frontParseLetShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseLetShape(tokens: List<FrontToken>, start: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     let end = frontFindStatementEnd(tokens, start, count)
     out.statements = out.statements + 1
@@ -4899,13 +4140,7 @@ pub fn frontParseLetShape(
     }
     frontParseResult(out, end - start)
 }
-
-pub fn frontParseBlockShape(
-    tokens: List<FrontToken>,
-    open: Int,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseResult {
+pub fn frontParseBlockShape(tokens: List<FrontToken>, open: Int, count: Int, summary: FrontParseSummary) -> FrontParseResult {
     let mut out = summary
     out.blocks = out.blocks + 1
     let close = frontFindMatching(tokens, open, count, FrontLBrace, FrontRBrace)
@@ -4934,13 +4169,7 @@ pub fn frontParseBlockShape(
     }
     frontParseResult(out, close - open + 1)
 }
-
-pub fn frontScanExprShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    summary: FrontParseSummary,
-) -> FrontParseSummary {
+pub fn frontScanExprShape(tokens: List<FrontToken>, start: Int, end: Int, summary: FrontParseSummary) -> FrontParseSummary {
     let mut out = summary
     for idx in start..end {
         let kind = frontTokenAtList(tokens, idx).kind
@@ -4980,11 +4209,7 @@ pub fn frontScanExprShape(
             if frontIsStructLiteralOpen(tokens, idx, start) {
                 let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
                 out.structLits = out.structLits + 1
-                out.structLitFields = out.structLitFields + frontCountStructLiteralFields(
-                    tokens,
-                    idx + 1,
-                    close,
-                )
+                out.structLitFields = out.structLitFields + frontCountStructLiteralFields(tokens, idx + 1, close)
                 out.spreads = out.spreads + frontCountSpreads(tokens, idx + 1, close)
             } else if frontIsMapLiteralOpen(tokens, idx, end) {
                 out.mapLits = out.mapLits + 1
@@ -4996,11 +4221,7 @@ pub fn frontScanExprShape(
         } else if kind == FrontBitOr && frontIsClosurePipe(tokens, idx, start, end) {
             let close = frontFindNextTokenKind(tokens, idx + 1, end, FrontBitOr)
             out.closures = out.closures + 1
-            out.closureParams = out.closureParams + frontCountTopLevelCommaItems(
-                tokens,
-                idx + 1,
-                close,
-            )
+            out.closureParams = out.closureParams + frontCountTopLevelCommaItems(tokens, idx + 1, close)
         } else if kind == FrontOr && frontIsClosureZeroPipe(tokens, idx, start) {
             out.closures = out.closures + 1
         } else if kind == FrontDot || kind == FrontQDot {
@@ -5009,11 +4230,7 @@ pub fn frontScanExprShape(
             out.channelSends = out.channelSends + 1
         } else if kind == FrontQuestion {
             out.questionOps = out.questionOps + 1
-        } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(
-            tokens,
-            idx,
-            start,
-        )) {
+        } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(tokens, idx, start)) {
             out.ranges = out.ranges + 1
             out.binaryOps = out.binaryOps + 1
         } else if frontIsAssignOp(kind) {
@@ -5026,7 +4243,6 @@ pub fn frontScanExprShape(
     }
     out
 }
-
 pub fn frontIsCallOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
     if open <= start {
         return false
@@ -5034,7 +4250,6 @@ pub fn frontIsCallOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool 
     let prev = frontTokenAtList(tokens, open - 1).kind
     prev == FrontIdent || prev == FrontRParen || prev == FrontRBracket || prev == FrontQuestion || prev == FrontGt
 }
-
 pub fn frontIsIndexOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
     if open <= start {
         return false
@@ -5042,7 +4257,6 @@ pub fn frontIsIndexOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool
     let prev = frontTokenAtList(tokens, open - 1).kind
     prev == FrontIdent || prev == FrontRParen || prev == FrontRBracket || prev == FrontQuestion
 }
-
 pub fn frontIsStructLiteralOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
     if open <= start {
         return false
@@ -5053,7 +4267,6 @@ pub fn frontIsStructLiteralOpen(tokens: List<FrontToken>, open: Int, start: Int)
     }
     !(frontLineHasControlBefore(tokens, open, start))
 }
-
 pub fn frontIsMapLiteralOpen(tokens: List<FrontToken>, open: Int, end: Int) -> Bool {
     if frontTokenAtList(tokens, open + 1).kind == FrontColon {
         return true
@@ -5061,7 +4274,6 @@ pub fn frontIsMapLiteralOpen(tokens: List<FrontToken>, open: Int, end: Int) -> B
     let close = frontFindMatching(tokens, open, end, FrontLBrace, FrontRBrace)
     frontContainsTopLevelKind(tokens, open + 1, close, FrontColon)
 }
-
 pub fn frontLineHasControlBefore(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
     let mut sawControl = false
     for idx in start..at {
@@ -5075,7 +4287,6 @@ pub fn frontLineHasControlBefore(tokens: List<FrontToken>, at: Int, start: Int) 
     }
     sawControl
 }
-
 pub fn frontCountStructLiteralFields(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut fields = 0
     let mut depth = 0
@@ -5107,7 +4318,6 @@ pub fn frontCountStructLiteralFields(tokens: List<FrontToken>, start: Int, end: 
     }
     fields
 }
-
 pub fn frontCountSpreads(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut spreads = 0
     let mut depth = 0
@@ -5125,7 +4335,6 @@ pub fn frontCountSpreads(tokens: List<FrontToken>, start: Int, end: Int) -> Int 
     }
     spreads
 }
-
 pub fn frontIsSpreadToken(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
     if frontTokenAtList(tokens, at).kind != FrontDotDot {
         return false
@@ -5136,20 +4345,12 @@ pub fn frontIsSpreadToken(tokens: List<FrontToken>, at: Int, start: Int) -> Bool
     let prev = frontTokenAtList(tokens, at - 1).kind
     prev == FrontLBrace || prev == FrontComma
 }
-
 pub fn frontIsClosurePipe(tokens: List<FrontToken>, pipe: Int, start: Int, end: Int) -> Bool {
-    frontIsExprPrefixContext(tokens, pipe, start) && frontFindNextTokenKind(
-        tokens,
-        pipe + 1,
-        end,
-        FrontBitOr,
-    ) < end
+    frontIsExprPrefixContext(tokens, pipe, start) && frontFindNextTokenKind(tokens, pipe + 1, end, FrontBitOr) < end
 }
-
 pub fn frontIsClosureZeroPipe(tokens: List<FrontToken>, pipe: Int, start: Int) -> Bool {
     frontIsExprPrefixContext(tokens, pipe, start)
 }
-
 pub fn frontIsExprPrefixContext(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
     if at <= start {
         return true
@@ -5157,13 +4358,7 @@ pub fn frontIsExprPrefixContext(tokens: List<FrontToken>, at: Int, start: Int) -
     let prev = frontTokenAtList(tokens, at - 1).kind
     prev == FrontLParen || prev == FrontLBracket || prev == FrontLBrace || prev == FrontComma || prev == FrontAssign || prev == FrontReturn || prev == FrontArrow || prev == FrontNewline || prev == FrontColon
 }
-
-pub fn frontFindNextTokenKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    target: FrontTokenKind,
-) -> Int {
+pub fn frontFindNextTokenKind(tokens: List<FrontToken>, start: Int, end: Int, target: FrontTokenKind) -> Int {
     for idx in start..end {
         if frontTokenAtList(tokens, idx).kind == target {
             return idx
@@ -5171,7 +4366,6 @@ pub fn frontFindNextTokenKind(
     }
     end
 }
-
 pub fn frontFindFollowingBlockClose(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     for idx in start..end {
         if frontTokenAtList(tokens, idx).kind == FrontLBrace {
@@ -5180,7 +4374,6 @@ pub fn frontFindFollowingBlockClose(tokens: List<FrontToken>, start: Int, end: I
     }
     start
 }
-
 pub fn frontCountKeywordArgs(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut args = 0
     let mut depth = 0
@@ -5198,7 +4391,6 @@ pub fn frontCountKeywordArgs(tokens: List<FrontToken>, start: Int, end: Int) -> 
     }
     args
 }
-
 pub fn frontCountMatchArms(tokens: List<FrontToken>, matchIdx: Int, close: Int) -> Int {
     let mut arms = 0
     let mut depth = 0
@@ -5216,7 +4408,6 @@ pub fn frontCountMatchArms(tokens: List<FrontToken>, matchIdx: Int, close: Int) 
     }
     arms
 }
-
 pub fn frontCountMatchGuards(tokens: List<FrontToken>, matchIdx: Int, close: Int) -> Int {
     let mut guards = 0
     let mut depth = 0
@@ -5234,14 +4425,7 @@ pub fn frontCountMatchGuards(tokens: List<FrontToken>, matchIdx: Int, close: Int
     }
     guards
 }
-
-pub fn frontFindMatching(
-    tokens: List<FrontToken>,
-    open: Int,
-    count: Int,
-    openKind: FrontTokenKind,
-    closeKind: FrontTokenKind,
-) -> Int {
+pub fn frontFindMatching(tokens: List<FrontToken>, open: Int, count: Int, openKind: FrontTokenKind, closeKind: FrontTokenKind) -> Int {
     let mut depth = 0
     for idx in open..count {
         let kind = frontTokenAtList(tokens, idx).kind
@@ -5258,7 +4442,6 @@ pub fn frontFindMatching(
     }
     count - 1
 }
-
 pub fn frontFindTypeEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     let mut parenDepth = 0
     let mut bracketDepth = 0
@@ -5296,7 +4479,6 @@ pub fn frontFindTypeEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int
     }
     count
 }
-
 pub fn frontFindStatementEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     let mut parenDepth = 0
     let mut bracketDepth = 0
@@ -5328,7 +4510,6 @@ pub fn frontFindStatementEnd(tokens: List<FrontToken>, start: Int, count: Int) -
     }
     count
 }
-
 pub fn frontFindMemberEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     let mut parenDepth = 0
     let mut bracketDepth = 0
@@ -5363,20 +4544,15 @@ pub fn frontFindMemberEnd(tokens: List<FrontToken>, start: Int, count: Int) -> I
             }
         } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && (kind == FrontComma || kind == FrontNewline || kind == FrontFn || kind == FrontEOF) {
             return idx
-        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && kind == FrontPub && frontTokenAtList(
-            tokens,
-            idx + 1,
-        ).kind == FrontFn {
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && kind == FrontPub && frontTokenAtList(tokens, idx + 1).kind == FrontFn {
             return idx
         }
     }
     count
 }
-
 pub fn frontLineConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     frontFindStatementEnd(tokens, start, count) - start
 }
-
 pub fn frontVariantConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
     for idx in start..count {
         let kind = frontTokenAtList(tokens, idx).kind
@@ -5386,7 +4562,6 @@ pub fn frontVariantConsumed(tokens: List<FrontToken>, start: Int, count: Int) ->
     }
     count - start
 }
-
 pub fn frontFnStartAt(tokens: List<FrontToken>, at: Int) -> Int {
     if frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn {
         at + 1
@@ -5394,17 +4569,9 @@ pub fn frontFnStartAt(tokens: List<FrontToken>, at: Int) -> Int {
         at
     }
 }
-
 pub fn frontIsFieldStart(tokens: List<FrontToken>, at: Int) -> Bool {
-    frontTokenAtList(tokens, at).kind == FrontIdent && frontTokenAtList(tokens, at + 1).kind == FrontColon || frontTokenAtList(
-        tokens,
-        at,
-    ).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontIdent && frontTokenAtList(
-        tokens,
-        at + 2,
-    ).kind == FrontColon
+    frontTokenAtList(tokens, at).kind == FrontIdent && frontTokenAtList(tokens, at + 1).kind == FrontColon || frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontIdent && frontTokenAtList(tokens, at + 2).kind == FrontColon
 }
-
 pub fn frontFieldNameIndex(tokens: List<FrontToken>, at: Int) -> Int {
     if frontTokenAtList(tokens, at).kind == FrontPub {
         at + 1
@@ -5412,13 +4579,7 @@ pub fn frontFieldNameIndex(tokens: List<FrontToken>, at: Int) -> Int {
         at
     }
 }
-
-pub fn frontScanParamListShape(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    summary: FrontParseSummary,
-) -> FrontParseSummary {
+pub fn frontScanParamListShape(tokens: List<FrontToken>, open: Int, close: Int, summary: FrontParseSummary) -> FrontParseSummary {
     let mut out = summary
     let mut skip = 0
     for idx in open + 1..close {
@@ -5449,13 +4610,7 @@ pub fn frontScanParamListShape(
     }
     out
 }
-
-pub fn frontScanTypeShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    summary: FrontParseSummary,
-) -> FrontParseSummary {
+pub fn frontScanTypeShape(tokens: List<FrontToken>, start: Int, end: Int, summary: FrontParseSummary) -> FrontParseSummary {
     let mut out = summary
     let mut skip = 0
     for idx in start..end {
@@ -5474,12 +4629,7 @@ pub fn frontScanTypeShape(
                 out.optionalTypes = out.optionalTypes + 2
             } else if kind == FrontLParen {
                 let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
-                if frontTokenAtList(tokens, idx - 1).kind != FrontFn && (close == idx + 1 || frontContainsTopLevelKind(
-                    tokens,
-                    idx + 1,
-                    close,
-                    FrontComma,
-                )) {
+                if frontTokenAtList(tokens, idx - 1).kind != FrontFn && (close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma)) {
                     out.tupleTypes = out.tupleTypes + 1
                 }
             }
@@ -5487,7 +4637,6 @@ pub fn frontScanTypeShape(
     }
     out
 }
-
 pub fn frontFindParamDefaultEnd(tokens: List<FrontToken>, start: Int, close: Int) -> Int {
     let mut parenDepth = 0
     let mut bracketDepth = 0
@@ -5518,7 +4667,6 @@ pub fn frontFindParamDefaultEnd(tokens: List<FrontToken>, start: Int, close: Int
     }
     close
 }
-
 pub fn frontFindLetPatternEnd(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut parenDepth = 0
     let mut braceDepth = 0
@@ -5542,13 +4690,7 @@ pub fn frontFindLetPatternEnd(tokens: List<FrontToken>, start: Int, end: Int) ->
     }
     end
 }
-
-pub fn frontScanPatternShape(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    summary: FrontParseSummary,
-) -> FrontParseSummary {
+pub fn frontScanPatternShape(tokens: List<FrontToken>, start: Int, end: Int, summary: FrontParseSummary) -> FrontParseSummary {
     let mut out = summary
     for idx in start..end {
         let kind = frontTokenAtList(tokens, idx).kind
@@ -5568,13 +4710,7 @@ pub fn frontScanPatternShape(
     }
     out
 }
-
-pub fn frontContainsTopLevelKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    target: FrontTokenKind,
-) -> Bool {
+pub fn frontContainsTopLevelKind(tokens: List<FrontToken>, start: Int, end: Int, target: FrontTokenKind) -> Bool {
     let mut parenDepth = 0
     let mut bracketDepth = 0
     let mut braceDepth = 0
@@ -5611,17 +4747,13 @@ pub fn frontContainsTopLevelKind(
     }
     false
 }
-
 pub fn frontCountParams(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
     let mut count = 0
     let mut skip = 0
     for idx in open + 1..close {
         if skip > 0 {
             skip = skip - 1
-        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(
-            tokens,
-            idx + 1,
-        ).kind == FrontColon {
+        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(tokens, idx + 1).kind == FrontColon {
             count = count + 1
             let typeEnd = frontFindTypeEnd(tokens, idx + 2, close)
             skip = typeEnd - idx - 1
@@ -5629,7 +4761,6 @@ pub fn frontCountParams(tokens: List<FrontToken>, open: Int, close: Int) -> Int 
     }
     count
 }
-
 pub fn frontCountParamTypeRefs(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
     let mut refs = 0
     let mut skip = 0
@@ -5644,7 +4775,6 @@ pub fn frontCountParamTypeRefs(tokens: List<FrontToken>, open: Int, close: Int) 
     }
     refs
 }
-
 pub fn frontCountGenericParams(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut count = 0
     for idx in start..end {
@@ -5657,7 +4787,6 @@ pub fn frontCountGenericParams(tokens: List<FrontToken>, start: Int, end: Int) -
     }
     count
 }
-
 pub fn frontCountTopLevelCommaItems(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     if start >= end {
         return 0
@@ -5678,7 +4807,6 @@ pub fn frontCountTopLevelCommaItems(tokens: List<FrontToken>, start: Int, end: I
     }
     count
 }
-
 pub fn frontCountTypeRefs(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
     let mut count = 0
     for idx in start..end {
@@ -5689,16 +4817,10 @@ pub fn frontCountTypeRefs(tokens: List<FrontToken>, start: Int, end: Int) -> Int
     }
     count
 }
-
 pub fn frontIsTypeRefToken(kind: FrontTokenKind) -> Bool {
     kind == FrontIdent || kind == FrontFn
 }
-
-pub fn frontScanProgramExtras(
-    tokens: List<FrontToken>,
-    count: Int,
-    summary: FrontParseSummary,
-) -> FrontParseSummary {
+pub fn frontScanProgramExtras(tokens: List<FrontToken>, count: Int, summary: FrontParseSummary) -> FrontParseSummary {
     let mut out = summary
     let mut skip = 0
     for idx in 0..count {
@@ -5731,19 +4853,15 @@ pub fn frontScanProgramExtras(
     }
     out
 }
-
 pub fn frontIsAssignOp(kind: FrontTokenKind) -> Bool {
     kind == FrontAssign || kind == FrontPlusEq || kind == FrontMinusEq || kind == FrontStarEq || kind == FrontSlashEq || kind == FrontPercentEq || kind == FrontBitAndEq || kind == FrontBitOrEq || kind == FrontBitXorEq || kind == FrontShlEq || kind == FrontShrEq
 }
-
 pub fn frontIsBinaryOp(kind: FrontTokenKind) -> Bool {
     kind == FrontPlus || kind == FrontMinus || kind == FrontStar || kind == FrontSlash || kind == FrontPercent || kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq || kind == FrontAnd || kind == FrontOr || kind == FrontBitAnd || kind == FrontBitOr || kind == FrontBitXor || kind == FrontShl || kind == FrontShr || kind == FrontQQ || kind == FrontDotDot || kind == FrontDotDotEq
 }
-
 pub fn frontIsUnaryOp(kind: FrontTokenKind) -> Bool {
     kind == FrontNot || kind == FrontBitNot || kind == FrontQuestion
 }
-
 pub fn frontMaxBraceDepth(tokens: List<FrontToken>) -> Int {
     let mut depth = 0
     let mut maxDepth = 0
@@ -5761,7 +4879,6 @@ pub fn frontMaxBraceDepth(tokens: List<FrontToken>) -> Int {
     }
     maxDepth
 }
-
 pub fn frontBraceBalanceErrors(tokens: List<FrontToken>) -> Int {
     let mut depth = 0
     let mut errors = 0
@@ -5781,7 +4898,6 @@ pub fn frontBraceBalanceErrors(tokens: List<FrontToken>) -> Int {
     }
     errors
 }
-
 /// frontendParseSummary recognizes top-level declaration heads and performs
 /// brace-balance recovery in the shape of the Go parser's first pass.
 pub fn frontendParseSummary(tokens: List<FrontToken>) -> FrontParseSummary {
@@ -5841,7 +4957,8 @@ pub fn frontendParseSummary(tokens: List<FrontToken>) -> FrontParseSummary {
             } else {
                 depth = depth - 1
             }
-        } else if tok.kind == FrontNewline || tok.kind == FrontEOF {} else {
+        } else if tok.kind == FrontNewline || tok.kind == FrontEOF {
+        } else {
             pendingPub = false
         }
     }
@@ -5850,7 +4967,6 @@ pub fn frontendParseSummary(tokens: List<FrontToken>) -> FrontParseSummary {
     }
     summary
 }
-
 pub fn frontTypeByName(name: String) -> FrontTypeKind {
     if name == "Int" {
         FrontTypeInt
@@ -5876,35 +4992,52 @@ pub fn frontTypeByName(name: String) -> FrontTypeKind {
         FrontTypeInvalid
     }
 }
-
 pub fn frontTypeName(kind: FrontTypeKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == FrontTypeInvalid { return "Invalid" }
-    if kind == FrontTypeInt { return "Int" }
-    if kind == FrontTypeFloat { return "Float" }
-    if kind == FrontTypeBool { return "Bool" }
-    if kind == FrontTypeString { return "String" }
-    if kind == FrontTypeBytes { return "Bytes" }
-    if kind == FrontTypeChar { return "Char" }
-    if kind == FrontTypeUnit { return "()" }
-    if kind == FrontTypeNever { return "Never" }
-    if kind == FrontTypeUntypedInt { return "UntypedInt" }
-    if kind == FrontTypeUntypedFloat { return "UntypedFloat" }
+    if kind == FrontTypeInvalid {
+        return "Invalid"
+    }
+    if kind == FrontTypeInt {
+        return "Int"
+    }
+    if kind == FrontTypeFloat {
+        return "Float"
+    }
+    if kind == FrontTypeBool {
+        return "Bool"
+    }
+    if kind == FrontTypeString {
+        return "String"
+    }
+    if kind == FrontTypeBytes {
+        return "Bytes"
+    }
+    if kind == FrontTypeChar {
+        return "Char"
+    }
+    if kind == FrontTypeUnit {
+        return "()"
+    }
+    if kind == FrontTypeNever {
+        return "Never"
+    }
+    if kind == FrontTypeUntypedInt {
+        return "UntypedInt"
+    }
+    if kind == FrontTypeUntypedFloat {
+        return "UntypedFloat"
+    }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn frontTypeIsInteger(kind: FrontTypeKind) -> Bool {
     kind == FrontTypeInt || kind == FrontTypeUntypedInt
 }
-
 pub fn frontTypeIsFloat(kind: FrontTypeKind) -> Bool {
     kind == FrontTypeFloat || kind == FrontTypeUntypedFloat
 }
-
 pub fn frontTypeIsNumeric(kind: FrontTypeKind) -> Bool {
     frontTypeIsInteger(kind) || frontTypeIsFloat(kind)
 }
-
 pub fn frontAssignable(dst: FrontTypeKind, src: FrontTypeKind) -> Bool {
     if dst == FrontTypeInvalid || src == FrontTypeInvalid {
         return false
@@ -5923,11 +5056,9 @@ pub fn frontAssignable(dst: FrontTypeKind, src: FrontTypeKind) -> Bool {
     }
     false
 }
-
 pub fn frontAssignableName(dst: String, src: String) -> Bool {
     frontAssignable(frontTypeByName(dst), frontTypeByName(src))
 }
-
 pub fn frontInferLiteralKind(text: String) -> FrontTypeKind {
     if strings.hasPrefix(text, "\"") {
         return FrontTypeString
@@ -5943,11 +5074,9 @@ pub fn frontInferLiteralKind(text: String) -> FrontTypeKind {
     }
     FrontTypeInvalid
 }
-
 pub fn frontInferLiteralName(text: String) -> String {
     frontTypeName(frontInferLiteralKind(text))
 }
-
 pub fn frontBinaryResult(op: String, left: FrontTypeKind, right: FrontTypeKind) -> FrontTypeKind {
     if op == "==" || op == "!=" {
         if frontAssignable(left, right) || frontAssignable(right, left) {
@@ -5975,13 +5104,11 @@ pub fn frontBinaryResult(op: String, left: FrontTypeKind, right: FrontTypeKind) 
     }
     FrontTypeInvalid
 }
-
 pub fn frontBinaryResultName(op: String, left: String, right: String) -> String {
     frontTypeName(frontBinaryResult(op, frontTypeByName(left), frontTypeByName(right)))
 }
-
 pub fn frontendCheckAssignments(assignments: List<FrontAssignment>) -> FrontCheckSummary {
-    let mut summary = FrontCheckSummary { assignments: 0, accepted: 0, errors: 0 }
+    let mut summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
     for assignment in assignments {
         summary.assignments = summary.assignments + 1
         if frontAssignableName(assignment.dst, assignment.src) {
@@ -5992,18 +5119,15 @@ pub fn frontendCheckAssignments(assignments: List<FrontAssignment>) -> FrontChec
     }
     summary
 }
-
 // ===================================================================
 // PURE OSTY FORMATTER
 // ===================================================================
-
 /// OstyFormatResult is the pure-Osty formatter result surface.
 pub struct OstyFormatResult {
     pub ok: Bool,
     pub output: String,
     pub message: String,
 }
-
 /// OstyFormatCheckResult reports whether a source string is already in the
 /// formatter's canonical form.
 pub struct OstyFormatCheckResult {
@@ -6012,7 +5136,6 @@ pub struct OstyFormatCheckResult {
     pub output: String,
     pub message: String,
 }
-
 /// ostyFormatSource formats Osty source without calling the Go formatter.
 ///
 /// The public formatter routes through the self-hosted AST parser and printer.
@@ -6022,22 +5145,11 @@ pub struct OstyFormatCheckResult {
 pub fn ostyFormatSource(source: String) -> OstyFormatResult {
     ostyAstFormatSource(source)
 }
-
 /// ostyFormatCheck formats source and marks whether the result differs.
 pub fn ostyFormatCheck(source: String) -> OstyFormatCheckResult {
     let formatted = ostyFormatSource(source)
     if !(formatted.ok) {
-        return OstyFormatCheckResult {
-            ok: false,
-            changed: false,
-            output: "",
-            message: formatted.message,
-        }
+        return OstyFormatCheckResult {ok: false, changed: false, output: "", message: formatted.message}
     }
-    OstyFormatCheckResult {
-        ok: true,
-        changed: formatted.output != source,
-        output: formatted.output,
-        message: "",
-    }
+    OstyFormatCheckResult {ok: true, changed: formatted.output != source, output: formatted.output, message: ""}
 }

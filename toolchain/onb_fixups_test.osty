@@ -14,14 +14,12 @@
 // loop targets, etc.) lands in Phase 2e along with the Function /
 // Program container types.
 use std.testing
-
 fn assertWordsEq(actual: List<Int>, expected: List<Int>) {
     testing.assertEq(actual.len(), expected.len())
     for i in 0..expected.len() {
         testing.assertEq(actual[i], expected[i])
     }
 }
-
 // emitBlocks walks the block list, producing a flat word stream + a
 // fixup list + the byte offset of each block's first word. Mirror of
 // the block-walking loop in `internal/onb/macho.go`'s
@@ -46,20 +44,15 @@ fn emitBlocks(blocks: List<List<OnbInstr>>) -> EmitResult {
             }
         }
     }
-    EmitResult { words: words, fixups: fixups, blockOffsets: blockOffsets }
+    EmitResult {words: words, fixups: fixups, blockOffsets: blockOffsets}
 }
-
 struct EmitResult {
     words: List<Int>,
     fixups: List<OnbBranchFixup>,
     blockOffsets: List<Int>,
 }
-
 // === Forward branch — `b bb1` followed by `bb1: ret` =================
-
 fn testFixupForwardBranch() {
-    // bb0: b bb1
-    // bb1: ret
     let mut bb0: List<OnbInstr> = []
     bb0.push(onbInstrBranch(1))
     let mut bb1: List<OnbInstr> = []
@@ -67,31 +60,26 @@ fn testFixupForwardBranch() {
     let mut blocks: List<List<OnbInstr>> = []
     blocks.push(bb0)
     blocks.push(bb1)
-
     let emitted = emitBlocks(blocks)
-    // Pre-resolve: placeholder b 0 + ret
     let mut prePlaceholder: List<Int> = []
     prePlaceholder.push(0x14000000)
     prePlaceholder.push(0xd65f03c0)
     assertWordsEq(emitted.words, prePlaceholder)
     testing.assertEq(emitted.fixups.len(), 1)
-
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
     testing.assert(outcome.ok)
-    // bb0 byte 0; bb1 byte 4. Displacement = 4 - 0 = 4. imm26 = 1.
-    // b imm26=1 → 0x14000000 | 1 = 0x14000001
     let mut expected: List<Int> = []
     expected.push(0x14000001)
     expected.push(0xd65f03c0)
     assertWordsEq(outcome.words, expected)
 }
-
+// bb0: b bb1
+// bb1: ret
+// Pre-resolve: placeholder b 0 + ret
+// bb0 byte 0; bb1 byte 4. Displacement = 4 - 0 = 4. imm26 = 1.
+// b imm26=1 → 0x14000000 | 1 = 0x14000001
 // === Backward branch — looping `b bb0` from bb1 =====================
-
 fn testFixupBackwardBranch() {
-    // bb0: ret              (placeholder; we never hit this in flow,
-    //                        but it gives bb0 a byte offset != 0)
-    // bb1: b bb0
     let mut bb0: List<OnbInstr> = []
     bb0.push(onbInstrRet())
     let mut bb1: List<OnbInstr> = []
@@ -99,25 +87,22 @@ fn testFixupBackwardBranch() {
     let mut blocks: List<List<OnbInstr>> = []
     blocks.push(bb0)
     blocks.push(bb1)
-
     let emitted = emitBlocks(blocks)
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
     testing.assert(outcome.ok)
-    // bb0 at byte 0; bb1 at byte 4. Branch sits at byte 4, displacement
-    // = 0 - 4 = -4. imm26 = -1 → encoded as 0x3ffffff (26-bit two's
-    // complement). 0x14000000 | 0x3ffffff = 0x17ffffff.
     let mut expected: List<Int> = []
     expected.push(0xd65f03c0)
     expected.push(0x17ffffff)
     assertWordsEq(outcome.words, expected)
 }
-
+// bb0: ret              (placeholder; we never hit this in flow,
+//                        but it gives bb0 a byte offset != 0)
+// bb1: b bb0
+// bb0 at byte 0; bb1 at byte 4. Branch sits at byte 4, displacement
+// = 0 - 4 = -4. imm26 = -1 → encoded as 0x3ffffff (26-bit two's
+// complement). 0x14000000 | 0x3ffffff = 0x17ffffff.
 // === Conditional branch — b.eq + ret + ret pattern ================
-
 fn testFixupBranchCond() {
-    // bb0: b.eq bb2
-    // bb1: ret             (fall-through path)
-    // bb2: ret
     let mut bb0: List<OnbInstr> = []
     bb0.push(onbInstrBranchCond(OnbCond.OnbCondEq, 2))
     let mut bb1: List<OnbInstr> = []
@@ -128,24 +113,22 @@ fn testFixupBranchCond() {
     blocks.push(bb0)
     blocks.push(bb1)
     blocks.push(bb2)
-
     let emitted = emitBlocks(blocks)
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
     testing.assert(outcome.ok)
-    // bb0 byte 0; bb2 byte 8. Displacement = 8. imm19 = 2.
-    // b.eq imm19=2, cond=0 → 0x54000000 | (2 << 5) | 0 = 0x54000040
     let mut expected: List<Int> = []
     expected.push(0x54000040)
     expected.push(0xd65f03c0)
     expected.push(0xd65f03c0)
     assertWordsEq(outcome.words, expected)
 }
-
+// bb0: b.eq bb2
+// bb1: ret             (fall-through path)
+// bb2: ret
+// bb0 byte 0; bb2 byte 8. Displacement = 8. imm19 = 2.
+// b.eq imm19=2, cond=0 → 0x54000000 | (2 << 5) | 0 = 0x54000040
 // === Conditional-not-zero — cbnz x9, bb_target =======================
-
 fn testFixupCbnz() {
-    // bb0: cbnz x9, bb1
-    // bb1: ret
     let mut bb0: List<OnbInstr> = []
     bb0.push(onbInstrBranchCondNotZero("x9", 1))
     let mut bb1: List<OnbInstr> = []
@@ -153,27 +136,24 @@ fn testFixupCbnz() {
     let mut blocks: List<List<OnbInstr>> = []
     blocks.push(bb0)
     blocks.push(bb1)
-
     let emitted = emitBlocks(blocks)
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
     testing.assert(outcome.ok)
-    // Displacement = 4. imm19 = 1. Rt = 9.
-    // cbnz Xt, imm19=1 → 0xb5000000 | (1 << 5) | 9 = 0xb5000029
     let mut expected: List<Int> = []
     expected.push(0xb5000029)
     expected.push(0xd65f03c0)
     assertWordsEq(outcome.words, expected)
 }
-
+// bb0: cbnz x9, bb1
+// bb1: ret
+// Displacement = 4. imm19 = 1. Rt = 9.
+// cbnz Xt, imm19=1 → 0xb5000000 | (1 << 5) | 9 = 0xb5000029
 // === Failure — out-of-range target block ==========================
-
 fn testFixupOutOfRangeBlock() {
     let mut bb0: List<OnbInstr> = []
-    // targetBlock 99 doesn't exist → resolve should fail.
     bb0.push(onbInstrBranch(99))
     let mut blocks: List<List<OnbInstr>> = []
     blocks.push(bb0)
-
     let emitted = emitBlocks(blocks)
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
     testing.assert(!outcome.ok)

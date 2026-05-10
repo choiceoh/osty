@@ -1,5 +1,4 @@
 use std.testing
-
 fn testIsValidScaffoldNameHappyPaths() {
     testing.assert(isValidScaffoldName("myproj"))
     testing.assert(isValidScaffoldName("my-tool"))
@@ -9,20 +8,16 @@ fn testIsValidScaffoldNameHappyPaths() {
     testing.assert(isValidScaffoldName("abc123"))
     testing.assert(isValidScaffoldName("a_b-c_0-9"))
 }
-
 fn testIsValidScaffoldNameRejectsEmpty() {
     testing.assert(!(isValidScaffoldName("")))
 }
-
 fn testIsValidScaffoldNameRejectsLeadingDigit() {
     testing.assert(!(isValidScaffoldName("1abc")))
     testing.assert(!(isValidScaffoldName("9")))
 }
-
 fn testIsValidScaffoldNameRejectsLeadingHyphen() {
     testing.assert(!(isValidScaffoldName("-abc")))
 }
-
 fn testIsValidScaffoldNameRejectsBadChars() {
     testing.assert(!(isValidScaffoldName("my.tool")))
     testing.assert(!(isValidScaffoldName("my tool")))
@@ -30,41 +25,33 @@ fn testIsValidScaffoldNameRejectsBadChars() {
     testing.assert(!(isValidScaffoldName("my@tool")))
     testing.assert(!(isValidScaffoldName("한글")))
 }
-
 fn testResolveFixtureCasesDefaultsWhenZeroOrNegative() {
     let zero = resolveFixtureCases(0)
     testing.assertEq(zero.count, 3)
     testing.assert(!(zero.overCap))
-
     let neg = resolveFixtureCases(-5)
     testing.assertEq(neg.count, 3)
     testing.assert(!(neg.overCap))
 }
-
 fn testResolveFixtureCasesPassesThroughWithinRange() {
     let one = resolveFixtureCases(1)
     testing.assertEq(one.count, 1)
     testing.assert(!(one.overCap))
-
     let ten = resolveFixtureCases(10)
     testing.assertEq(ten.count, 10)
     testing.assert(!(ten.overCap))
-
     let max = resolveFixtureCases(64)
     testing.assertEq(max.count, 64)
     testing.assert(!(max.overCap))
 }
-
 fn testScaffoldFixtureCapsConstants() {
     testing.assertEq(scaffoldFixtureCasesDefault, 3)
     testing.assertEq(scaffoldFixtureCasesMax, 64)
 }
-
 fn testResolveFixtureCasesClampsOverCap() {
     let r = resolveFixtureCases(65)
     testing.assertEq(r.count, 64)
     testing.assert(r.overCap)
-
     let big = resolveFixtureCases(1000)
     testing.assertEq(big.count, 64)
     testing.assert(big.overCap)

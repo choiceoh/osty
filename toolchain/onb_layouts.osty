@@ -6,7 +6,6 @@
 // integer byte offsets. No MIR/LIR dependency — these encode the
 // runtime's object layout (closure env, enum slot, struct slot)
 // rather than per-program decisions.
-
 // === Closure env layout =================================================
 //
 // `osty_rt_closure_env_alloc_v2` returns a heap struct shaped
@@ -17,49 +16,55 @@
 // fn_ptr lives at offset 0 — the indirect-call site loads it
 // directly. Captures begin at offset 24, so MIR-level FieldProj
 // indices map non-uniformly: index 0 → 0, index N≥1 → 24+(N-1)*8.
-
 // onbClosureEnvCapturesOffset returns the byte offset where the
 // captures array begins inside the env. Mirror of
 // `closureEnvCapturesOffset` (== 24).
-pub fn onbClosureEnvCapturesOffset() -> Int { 24 }
-
+pub fn onbClosureEnvCapturesOffset() -> Int {
+    24
+}
 // onbClosureEnvFieldByteOffset maps an MIR-level FieldProj index on
 // a ClosureEnv pointee to the runtime layout offset. Phase A2 Week
 // 20: index 0 is the fn-pointer slot (offset 0); index N≥1 is
 // capture[N-1] starting at `onbClosureEnvCapturesOffset()`.
 pub fn onbClosureEnvFieldByteOffset(index: Int) -> Int {
-    if index <= 0 { 0 } else { onbClosureEnvCapturesOffset() + (index - 1) * 8 }
+    if index <= 0 {
+        0
+    } else {
+        onbClosureEnvCapturesOffset() + (index - 1) * 8
+    }
 }
-
 // === Enum slot layout ===================================================
 //
 // ONB lays every small enum out as `[disc 8B][payload N×8B]`. The
 // discriminant lives at slot offset 0; the payload starts at slot
 // offset 8. Variant payload's FieldIdx = -1 means "the whole
 // payload tuple" → start of the payload region.
-
 // onbEnumPayloadOffset returns the byte offset (relative to the
 // enum's slot base) of the FieldIdx-th payload element. Mirror of
 // `enumPayloadOffset`.
 pub fn onbEnumPayloadOffset(fieldIdx: Int) -> Int {
-    if fieldIdx < 0 { 8 } else { 8 + fieldIdx * 8 }
+    if fieldIdx < 0 {
+        8
+    } else {
+        8 + fieldIdx * 8
+    }
 }
-
 // onbEnumDiscriminantOffset is always 0 — kept as a named function
 // so the call site documents its intent rather than threading a
 // magic 0 through every load/store.
-pub fn onbEnumDiscriminantOffset() -> Int { 0 }
-
+pub fn onbEnumDiscriminantOffset() -> Int {
+    0
+}
 // === Struct slot layout =================================================
 //
 // All-scalar structs (Phase A2 Week 12+): each field consumes a
 // single 8-byte slot in the local. The byte offset is just
 // `index * 8`.
-
 // onbStructFieldByteOffset is the static field offset for
 // all-scalar structs. Identical to `fieldByteOffset` in lower.go.
-pub fn onbStructFieldByteOffset(index: Int) -> Int { index * 8 }
-
+pub fn onbStructFieldByteOffset(index: Int) -> Int {
+    index * 8
+}
 // === ABI register-class limits =========================================
 //
 // `abiSmallStructRegLimit = 2` — structs ≤16B (one or two scalar
@@ -70,12 +75,17 @@ pub fn onbStructFieldByteOffset(index: Int) -> Int { index * 8 }
 // structs are passed indirectly through a caller-allocated buffer
 // (sret on return, pointer arg on input). Bigger structs fall
 // back to the LLVM backend.
-pub fn onbAbiSmallStructRegLimit() -> Int { 2 }
-pub fn onbAbiIndirectStructFieldLimit() -> Int { 4 }
-
+pub fn onbAbiSmallStructRegLimit() -> Int {
+    2
+}
+pub fn onbAbiIndirectStructFieldLimit() -> Int {
+    4
+}
 // onbAbiPointerRegSlotBytes = 8 — every 1-reg ABI value (scalar,
 // pointer-shaped builtin, no-payload enum, single-scalar struct)
 // occupies 8 bytes on the stack. Surfaced as a function so future
 // targets with a different word size can override it without a
 // shotgun rename.
-pub fn onbAbiPointerRegSlotBytes() -> Int { 8 }
+pub fn onbAbiPointerRegSlotBytes() -> Int {
+    8
+}

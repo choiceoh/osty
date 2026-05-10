@@ -21,28 +21,27 @@
 // recursive walk. Keeping rewrite scope tight lets Stage D's
 // scanBody pass reuse the per-node rewriter without inadvertently
 // re-visiting shared subtrees.
-
 use std.strings as strings
-
 // ====================================================================
 // Predicates (shared with Stage C+)
 // ====================================================================
-
 /// hirIsUnresolvedType reports whether `t` is the poisoned ErrType
 /// sentinel or an invalid default — both treated as "the checker
 /// gave up; try to recover from context". Matches Go's
 /// `isUnresolvedType` predicate.
 pub fn hirIsUnresolvedType(t: HirType) -> Bool {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if t.kind == HirTypeInvalid { return true }
-    if t.kind == HirTypeErr { return true }
+    if t.kind == HirTypeInvalid {
+        return true
+    }
+    if t.kind == HirTypeErr {
+        return true
+    }
     false
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================
 // Expression-level type rewrite
 // ====================================================================
-
 /// hirRewriteExprType walks a single HirExpr and applies the subst
 /// env to every embedded type field. Does NOT descend into
 /// children — the caller walks the tree and calls this on each
@@ -68,10 +67,10 @@ pub fn hirRewriteExprType(e: HirExpr, env: HirSubstEnv) {
             e.mapValT = hirSubstType(e.mapValT, env)
         },
         HirExprClosure -> hirRewriteClosureTypes(e, env),
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirRewriteIdentTypeArgs(e: HirExpr, env: HirSubstEnv) {
     let n = e.identTypeArgs.len()
     if n == 0 {
@@ -83,7 +82,6 @@ fn hirRewriteIdentTypeArgs(e: HirExpr, env: HirSubstEnv) {
     }
     e.identTypeArgs = substituted
 }
-
 fn hirRewriteCallTypeArgs(e: HirExpr, env: HirSubstEnv) {
     let n = e.callTypeArgs.len()
     if n == 0 {
@@ -95,7 +93,6 @@ fn hirRewriteCallTypeArgs(e: HirExpr, env: HirSubstEnv) {
     }
     e.callTypeArgs = substituted
 }
-
 fn hirRewriteMethodTypeArgs(e: HirExpr, env: HirSubstEnv) {
     let n = e.methodTypeArgs.len()
     if n == 0 {
@@ -107,10 +104,8 @@ fn hirRewriteMethodTypeArgs(e: HirExpr, env: HirSubstEnv) {
     }
     e.methodTypeArgs = substituted
 }
-
 fn hirRewriteClosureTypes(e: HirExpr, env: HirSubstEnv) {
     e.closureReturn = hirSubstType(e.closureReturn, env)
-    // Param types + default-value types.
     let mut rewrittenParams: List<HirParam> = []
     for p in e.closureParams {
         let mut np = p
@@ -121,7 +116,6 @@ fn hirRewriteClosureTypes(e: HirExpr, env: HirSubstEnv) {
         rewrittenParams.push(np)
     }
     e.closureParams = rewrittenParams
-    // Capture types.
     let mut rewrittenCaps: List<HirCapture> = []
     for c in e.closureCaptures {
         let mut nc = c
@@ -130,11 +124,11 @@ fn hirRewriteClosureTypes(e: HirExpr, env: HirSubstEnv) {
     }
     e.closureCaptures = rewrittenCaps
 }
-
+// Param types + default-value types.
+// Capture types.
 // ====================================================================
 // Statement-level type rewrite
 // ====================================================================
-
 /// hirRewriteStmtTypes walks the type fields of a single stmt node.
 /// Does NOT descend into contained exprs / blocks — the caller's
 /// body walker visits them and calls `hirRewriteExprType` /
@@ -149,14 +143,13 @@ pub fn hirRewriteStmtTypes(s: HirStmt, env: HirSubstEnv) {
         HirStmtLet -> {
             s.letTyp = hirSubstType(s.letTyp, env)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 // ====================================================================
 // Block-level type rewrite (walks stmts + trailing result expr)
 // ====================================================================
-
 /// hirRewriteBlockTypes walks every stmt in the block and, when
 /// the block has a trailing result expression, rewrites its type
 /// fields. Does NOT recursively descend into nested blocks or
@@ -173,11 +166,9 @@ pub fn hirRewriteBlockTypes(b: HirBlock, env: HirSubstEnv) {
         hirRewriteExprType(b.result, env)
     }
 }
-
 // ====================================================================
 // FnDecl-shaped rewrite (params + return + body traversal shell)
 // ====================================================================
-
 /// hirRewriteFnDeclTypes rewrites every type field reachable from
 /// `fn` without descending into expression subtrees. Parameters get
 /// their declared type + (if present) default value types rewritten;
@@ -189,9 +180,7 @@ pub fn hirRewriteBlockTypes(b: HirBlock, env: HirSubstEnv) {
 /// nested blocks / expressions.
 pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
     let mut out = decl
-    // Return type.
     out.ret = hirSubstType(out.ret, env)
-    // Parameters.
     let mut rewrittenParams: List<HirParam> = []
     for p in out.params {
         let mut np = p
@@ -202,9 +191,6 @@ pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
         rewrittenParams.push(np)
     }
     out.params = rewrittenParams
-    // Generic bounds (the specialization's remaining generics —
-    // usually empty after a full substitution, but keep the walk
-    // defensive for partial-specialization cases).
     let mut rewrittenGenerics: List<HirTypeParam> = []
     for gp in out.generics {
         let mut ngp = gp
@@ -216,16 +202,19 @@ pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
         rewrittenGenerics.push(ngp)
     }
     out.generics = rewrittenGenerics
-    // Top-level block type surfaces (children visited by the
-    // scanner).
     hirRewriteBlockTypes(out.body, env)
     out
 }
-
+// Return type.
+// Parameters.
+// Generic bounds (the specialization's remaining generics —
+// usually empty after a full substitution, but keep the walk
+// defensive for partial-specialization cases).
+// Top-level block type surfaces (children visited by the
+// scanner).
 // ====================================================================
 // Field / Variant rewrite
 // ====================================================================
-
 /// hirRewriteFieldTypes rewrites the declared type of each struct
 /// field and, when present, its default value's type fields.
 /// Called during struct specialization before field-access type
@@ -242,7 +231,6 @@ pub fn hirRewriteFieldTypes(fields: List<HirField>, env: HirSubstEnv) -> List<Hi
     }
     out
 }
-
 /// hirRewriteVariantPayload rewrites each payload-position type of
 /// a variant list. Enum variants don't carry an expression default,
 /// so only the per-position HirType is substituted.
@@ -259,11 +247,9 @@ pub fn hirRewriteVariantPayload(variants: List<HirVariant>, env: HirSubstEnv) ->
     }
     out
 }
-
 // ====================================================================
 // Tuple / List / Map literal element-type shortcuts
 // ====================================================================
-
 /// hirRewriteListLitElemType is a shortcut for the common case of
 /// rewriting ListLit.listElem + the outer typ field in tandem.
 /// Called at the two spots that want to update both in sync
@@ -274,10 +260,10 @@ pub fn hirRewriteListLitElemType(e: HirExpr, env: HirSubstEnv) {
             e.typ = hirSubstType(e.typ, env)
             e.listElem = hirSubstType(e.listElem, env)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 /// hirRewriteMapLitTypes rewrites MapLit.mapKeyT / mapValT / typ
 /// in one shot. Symmetric with hirRewriteListLitElemType.
 pub fn hirRewriteMapLitTypes(e: HirExpr, env: HirSubstEnv) {
@@ -287,10 +273,10 @@ pub fn hirRewriteMapLitTypes(e: HirExpr, env: HirSubstEnv) {
             e.mapKeyT = hirSubstType(e.mapKeyT, env)
             e.mapValT = hirSubstType(e.mapValT, env)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 // ====================================================================
 // Pattern-level type rewrite
 // ====================================================================
@@ -303,7 +289,6 @@ pub fn hirRewriteMapLitTypes(e: HirExpr, env: HirSubstEnv) {
 // via the match walker). This helper only handles the LitPat case
 // where the literal's type is directly visible at the pattern
 // layer — everything else is scanner-driven.
-
 pub fn hirRewritePatternLitTypes(p: HirPattern, env: HirSubstEnv) {
     match p.kind {
         HirPatLit -> {
@@ -311,14 +296,13 @@ pub fn hirRewritePatternLitTypes(p: HirPattern, env: HirSubstEnv) {
                 hirRewriteExprType(p.litValue[0], env)
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 // ====================================================================
 // Arg + StringPart rewrite
 // ====================================================================
-
 /// hirRewriteArgTypes walks a HirArg list and rewrites each arg
 /// value's type fields. Used at call-site specialization.
 pub fn hirRewriteArgTypes(args: List<HirArg>, env: HirSubstEnv) {
@@ -326,7 +310,6 @@ pub fn hirRewriteArgTypes(args: List<HirArg>, env: HirSubstEnv) {
         hirRewriteExprType(a.value, env)
     }
 }
-
 /// hirRewriteStringPartTypes walks an interpolated StringLit's
 /// parts and rewrites the type of each embedded expression.
 pub fn hirRewriteStringPartTypes(parts: List<HirStringPart>, env: HirSubstEnv) {
@@ -336,11 +319,9 @@ pub fn hirRewriteStringPartTypes(parts: List<HirStringPart>, env: HirSubstEnv) {
         }
     }
 }
-
 // ====================================================================
 // Entry convenience: specialize-and-return
 // ====================================================================
-
 /// hirSpecializeFnDecl clones a HirFnDecl, applies the given subst
 /// env via hirRewriteFnDeclTypes, and returns the clone. The clone
 /// is fully detached from the original HIR so later scanners can
@@ -355,15 +336,12 @@ pub fn hirSpecializeFnDecl(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
     clone = hirRewriteFnDeclTypes(clone, env)
     clone
 }
-
 /// hirSpecializeStructDecl clones a HirStructDecl and rewrites
 /// field + method signature types. Method bodies are not fully
 /// walked here — Stage C's recursive scanner visits them.
 pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStructDecl {
     let mut clone = hirCloneStructDecl(decl)
     clone.fields = hirRewriteFieldTypes(clone.fields, env)
-    // Method signatures (params + return) are rewritten; bodies
-    // are walked by the scanner.
     let mut rewrittenMethods: List<HirFnDecl> = []
     for m in clone.methods {
         let mut nm = m
@@ -371,9 +349,6 @@ pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStru
         rewrittenMethods.push(nm)
     }
     clone.methods = rewrittenMethods
-    // Builtin-source args carry the original template's concrete
-    // type args post-mono; rewrite them too so the LLVM emitter
-    // sees the right shape.
     let mut rewrittenBuiltinArgs: List<HirType> = []
     for a in clone.builtinSourceArgs {
         rewrittenBuiltinArgs.push(hirSubstType(a, env))
@@ -381,7 +356,11 @@ pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStru
     clone.builtinSourceArgs = rewrittenBuiltinArgs
     clone
 }
-
+// Method signatures (params + return) are rewritten; bodies
+// are walked by the scanner.
+// Builtin-source args carry the original template's concrete
+// type args post-mono; rewrite them too so the LLVM emitter
+// sees the right shape.
 /// hirSpecializeEnumDecl clones a HirEnumDecl and rewrites variant
 /// payloads + method signature types.
 pub fn hirSpecializeEnumDecl(decl: HirEnumDecl, env: HirSubstEnv) -> HirEnumDecl {
@@ -401,11 +380,9 @@ pub fn hirSpecializeEnumDecl(decl: HirEnumDecl, env: HirSubstEnv) -> HirEnumDecl
     clone.builtinSourceArgs = rewrittenBuiltinArgs
     clone
 }
-
 // ====================================================================
 // Stats / debug (Stage D will consume these for worklist logging)
 // ====================================================================
-
 /// hirCountExprTypeVars returns the number of type-var occurrences
 /// reachable from `e`'s embedded type fields. Doesn't descend into
 /// children — call on a fully-specialised root to sanity-check
@@ -467,7 +444,8 @@ pub fn hirCountExprTypeVars(e: HirExpr) -> Int {
                 }
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
     count
 }

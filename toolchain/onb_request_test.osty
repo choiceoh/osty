@@ -1,8 +1,6 @@
 // onb_request_test.osty — Request / Plan / target-resolution tests.
 use std.testing
-
 // === Request shape =================================================
-
 fn testOnbRequestDefaults() {
     let r = onbRequest("mymod", "aarch64-apple-darwin", "object")
     testing.assertEq(r.moduleName, "mymod")
@@ -13,9 +11,7 @@ fn testOnbRequestDefaults() {
     testing.assertEq(r.sourcePath, "")
     testing.assertEq(r.packageName, "")
 }
-
 // === resolveTarget ==================================================
-
 fn testOnbResolveTargetDarwin() {
     let r = onbResolveTarget("aarch64-apple-darwin", "")
     testing.assert(r.ok)
@@ -24,63 +20,53 @@ fn testOnbResolveTargetDarwin() {
     testing.assertEq(r.target.arch, "aarch64")
     testing.assertEq(r.target.objectFormat, "mach-o")
 }
-
 fn testOnbResolveTargetLinux() {
     let r = onbResolveTarget("aarch64-unknown-linux-gnu", "")
     testing.assert(r.ok)
     testing.assertEq(r.target.os, "linux")
     testing.assertEq(r.target.objectFormat, "elf")
 }
-
 fn testOnbResolveTargetArm64Apple() {
-    // arm64- prefix is also accepted (Apple's preferred form).
     let r = onbResolveTarget("arm64-apple-darwin", "")
     testing.assert(r.ok)
     testing.assertEq(r.target.os, "darwin")
 }
-
+// arm64- prefix is also accepted (Apple's preferred form).
 fn testOnbResolveTargetEmptyUsesHost() {
     let r = onbResolveTarget("", "aarch64-apple-darwin")
     testing.assert(r.ok)
     testing.assertEq(r.target.os, "darwin")
 }
-
 fn testOnbResolveTargetX86Rejected() {
     let r = onbResolveTarget("x86_64-pc-linux-gnu", "")
     testing.assert(!r.ok)
     testing.assert(onbDevTestContains(r.err, "outside phase 1.0 scope"))
 }
-
 fn testOnbResolveTargetUnknownOsRejected() {
-    // Aarch64 triple but neither darwin nor linux — falls through.
     let r = onbResolveTarget("aarch64-unknown-freebsd", "")
     testing.assert(!r.ok)
 }
-
+// Aarch64 triple but neither darwin nor linux — falls through.
 // === isAarch64Triple ===============================================
-
 fn testOnbIsAarch64Triple() {
     testing.assert(onbIsAarch64Triple("aarch64-apple-darwin"))
     testing.assert(onbIsAarch64Triple("arm64-apple-darwin"))
     testing.assert(!onbIsAarch64Triple("x86_64-pc-linux-gnu"))
     testing.assert(!onbIsAarch64Triple(""))
 }
-
 // === buildPlan + stages ============================================
-
 fn testOnbBuildPlanMacho() {
     let req = onbRequest("mymod", "aarch64-apple-darwin", "object")
     let r = onbBuildPlan(req, "")
     testing.assert(r.ok)
     testing.assertEq(r.plan.target.objectFormat, "mach-o")
     testing.assertEq(r.plan.stages.len(), 9)
-    // mach-o → object writer + relocs + dwarf are implemented.
     testing.assertEq(r.plan.stages[5].name, "mach-o object writer")
     testing.assertEq(r.plan.stages[5].status, "implemented")
     testing.assertEq(r.plan.stages[6].status, "implemented")
     testing.assertEq(r.plan.stages[7].status, "implemented (line program only)")
 }
-
+// mach-o → object writer + relocs + dwarf are implemented.
 fn testOnbBuildPlanLinuxStillPlanned() {
     let req = onbRequest("mymod", "aarch64-unknown-linux-gnu", "object")
     let r = onbBuildPlan(req, "")
@@ -90,79 +76,64 @@ fn testOnbBuildPlanLinuxStillPlanned() {
     testing.assertEq(r.plan.stages[6].status, "planned")
     testing.assertEq(r.plan.stages[7].status, "planned")
 }
-
 fn testOnbBuildPlanRejectsEmptyModule() {
     let req = onbRequest("", "aarch64-apple-darwin", "object")
     let r = onbBuildPlan(req, "")
     testing.assert(!r.ok)
     testing.assertEq(r.err, "onb: missing MIR module")
 }
-
 fn testOnbBuildPlanPropagatesTargetError() {
     let req = onbRequest("mymod", "x86_64-pc-linux-gnu", "object")
     let r = onbBuildPlan(req, "")
     testing.assert(!r.ok)
     testing.assert(onbDevTestContains(r.err, "outside phase 1.0 scope"))
 }
-
 // === nextPlannedStage ==============================================
-
 fn testOnbNextPlannedStage() {
     let req = onbRequest("mymod", "aarch64-apple-darwin", "object")
     let r = onbBuildPlan(req, "")
     testing.assert(r.ok)
-    // Mach-O plan: first planned stage is "4-pass minimal optimizer".
     testing.assertEq(onbNextPlannedStage(r.plan), "4-pass minimal optimizer")
 }
-
+// Mach-O plan: first planned stage is "4-pass minimal optimizer".
 fn testOnbNextPlannedStageEmpty() {
-    let plan = OnbPlan {
-        target: OnbBuildTarget { triple: "", os: "", arch: "", objectFormat: "" },
-        emit: "",
-        sourcePath: "",
-        packageName: "",
-        stages: [],
-    }
+    let plan = OnbPlan {target: OnbBuildTarget {triple: "", os: "", arch: "", objectFormat: ""}, emit: "", sourcePath: "", packageName: "", stages: []}
     testing.assertEq(onbNextPlannedStage(plan), "")
 }
-
 // === stageSummary ==================================================
-
 fn testOnbStageSummaryFormat() {
     let mut stages: List<OnbStage> = []
     stages.push(onbStage("a", "implemented"))
     stages.push(onbStage("b", "planned"))
     stages.push(onbStage("c", ""))
-    let plan = OnbPlan {
-        target: OnbBuildTarget { triple: "", os: "", arch: "", objectFormat: "" },
-        emit: "",
-        sourcePath: "",
-        packageName: "",
-        stages: stages,
-    }
+    let plan = OnbPlan {target: OnbBuildTarget {triple: "", os: "", arch: "", objectFormat: ""}, emit: "", sourcePath: "", packageName: "", stages: stages}
     testing.assertEq(onbStageSummary(plan), "a=implemented, b=planned, c")
 }
-
 // === Sentinel strings ==============================================
-
 fn testOnbErrSentinels() {
     testing.assertEq(onbErrUnsupportedTarget(), "onb target is outside phase 1.0 scope")
     testing.assertEq(onbErrNotImplemented(), "onb phase slice is not implemented")
 }
-
 // === Local string-helper checker ==================================
-
 // onbDevTestContains is the test-side mirror of `onbDevStrContains`
 // — same byte-comparison search shape. Used by request tests so we
 // don't import std.strings here (the source files don't, so the
 // tests should exercise the same private path).
 fn onbDevTestContains(s: String, needle: String) -> Bool {
     let mut sBytes: List<Int> = []
-    for b in s.bytes() { sBytes.push(b.toInt()) }
+    for b in s.bytes() {
+        sBytes.push(b.toInt())
+    }
     let mut nBytes: List<Int> = []
-    for b in needle.bytes() { nBytes.push(b.toInt()) }
-    if nBytes.len() == 0 { return true }
-    if nBytes.len() > sBytes.len() { return false }
+    for b in needle.bytes() {
+        nBytes.push(b.toInt())
+    }
+    if nBytes.len() == 0 {
+        return true
+    }
+    if nBytes.len() > sBytes.len() {
+        return false
+    }
     let limit = sBytes.len() - nBytes.len() + 1
     for i in 0..limit {
         let mut matched = true
@@ -172,7 +143,9 @@ fn onbDevTestContains(s: String, needle: String) -> Bool {
                 break
             }
         }
-        if matched { return true }
+        if matched {
+            return true
+        }
     }
     false
 }

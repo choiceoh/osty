@@ -1,5 +1,4 @@
 use std.strings as strings
-
 /// SelfSymbol is the self-hosting resolver's compact symbol record.
 pub struct SelfSymbol {
     pub name: String,
@@ -12,7 +11,6 @@ pub struct SelfSymbol {
     pub public: Bool,
     pub node: Int,
 }
-
 /// SelfResolveDiagnostic mirrors the compiler's name-resolution diagnostics in
 /// a small, self-host-friendly shape.
 pub struct SelfResolveDiagnostic {
@@ -24,7 +22,6 @@ pub struct SelfResolveDiagnostic {
     pub node: Int,
     pub hint: String,
 }
-
 /// SelfPartialDecl tracks one struct/enum name that may be declared across
 /// multiple files in a package per LANG_SPEC v0.5 §3.4 / grammar R19.
 /// The resolver accumulates state as it walks each partial declaration so
@@ -47,7 +44,6 @@ pub struct SelfPartialDecl {
     pub firstFieldsStart: Int,
     pub firstFieldsEnd: Int,
 }
-
 /// SelfResolvedRef is one resolved value-ref site: the identifier's AST node
 /// plus the target symbol it binds to. `target` is the target symbol's node,
 /// or `-1` for builtins / unresolved. `targetStart` / `targetEnd` carry the
@@ -62,7 +58,6 @@ pub struct SelfResolvedRef {
     pub targetStart: Int,
     pub targetEnd: Int,
 }
-
 /// SelfResolvedTypeRef is one resolved type-ref head site plus the resolver-
 /// owned target span when the head resolved to a declared symbol.
 pub struct SelfResolvedTypeRef {
@@ -72,7 +67,6 @@ pub struct SelfResolvedTypeRef {
     pub targetStart: Int,
     pub targetEnd: Int,
 }
-
 /// SelfResolveResult contains package symbols plus resolver diagnostics and
 /// references collected while walking lexical scopes in function bodies.
 pub struct SelfResolveResult {
@@ -84,14 +78,13 @@ pub struct SelfResolveResult {
     pub typeRefList: List<SelfResolvedTypeRef>,
     pub unresolved: Int,
     pub duplicates: Int,
-    /// partials is scratch state used by the top-level collect pass to
-    /// detect R19 violations across partial struct/enum declarations.
-    /// Consumers of SelfResolveResult can ignore this field — it stays
-    /// in the struct so the pass can thread state through the existing
-    /// walker signatures without extra tuple returns.
     pub partials: List<SelfPartialDecl>,
 }
-
+/// partials is scratch state used by the top-level collect pass to
+/// detect R19 violations across partial struct/enum declarations.
+/// Consumers of SelfResolveResult can ignore this field — it stays
+/// in the struct so the pass can thread state through the existing
+/// walker signatures without extra tuple returns.
 /// SelfResolveCfgEnv carries the `#[cfg(key = "value")]` evaluation
 /// context per LANG_SPEC v0.5 §5 / G29. When `enabled` is false every
 /// `#[cfg(...)]` guard is treated as passing — callers that want
@@ -112,110 +105,44 @@ pub struct SelfResolveCfgEnv {
     pub target: String,
     pub features: List<String>,
 }
-
-pub fn selfSymbol(
-    name: String,
-    kind: String,
-    typeName: String,
-    arity: Int,
-    depth: Int,
-    start: Int,
-    end: Int,
-    public: Bool,
-) -> SelfSymbol {
-    SelfSymbol { name, kind, typeName, arity, depth, start, end, public, node: -1 }
+pub fn selfSymbol(name: String, kind: String, typeName: String, arity: Int, depth: Int, start: Int, end: Int, public: Bool) -> SelfSymbol {
+    SelfSymbol {name, kind, typeName, arity, depth, start, end, public, node: -1}
 }
-
-fn selfSymbolAtNode(
-    name: String,
-    kind: String,
-    typeName: String,
-    arity: Int,
-    depth: Int,
-    start: Int,
-    end: Int,
-    public: Bool,
-    node: Int,
-) -> SelfSymbol {
-    SelfSymbol { name, kind, typeName, arity, depth, start, end, public, node }
+fn selfSymbolAtNode(name: String, kind: String, typeName: String, arity: Int, depth: Int, start: Int, end: Int, public: Bool, node: Int) -> SelfSymbol {
+    SelfSymbol {name, kind, typeName, arity, depth, start, end, public, node}
 }
-
-pub fn selfResolveDiagnostic(
-    code: String,
-    message: String,
-    name: String,
-    start: Int,
-    end: Int,
-) -> SelfResolveDiagnostic {
+pub fn selfResolveDiagnostic(code: String, message: String, name: String, start: Int, end: Int) -> SelfResolveDiagnostic {
     selfResolveDiagnosticAtNode(code, message, name, start, end, -1)
 }
-
-fn selfResolveDiagnosticAtNode(
-    code: String,
-    message: String,
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> SelfResolveDiagnostic {
+fn selfResolveDiagnosticAtNode(code: String, message: String, name: String, start: Int, end: Int, node: Int) -> SelfResolveDiagnostic {
     selfResolveDiagnosticHintAtNode(code, message, name, start, end, node, "")
 }
-
-fn selfResolveDiagnosticHintAtNode(
-    code: String,
-    message: String,
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    hint: String,
-) -> SelfResolveDiagnostic {
-    SelfResolveDiagnostic { code, message, name, start, end, node, hint }
+fn selfResolveDiagnosticHintAtNode(code: String, message: String, name: String, start: Int, end: Int, node: Int, hint: String) -> SelfResolveDiagnostic {
+    SelfResolveDiagnostic {code, message, name, start, end, node, hint}
 }
-
 pub fn emptySelfResolveResult() -> SelfResolveResult {
-    SelfResolveResult {
-        symbols: [],
-        diagnostics: [],
-        refs: 0,
-        refList: [],
-        typeRefs: 0,
-        typeRefList: [],
-        unresolved: 0,
-        duplicates: 0,
-        partials: [],
-    }
+    SelfResolveResult {symbols: [], diagnostics: [], refs: 0, refList: [], typeRefs: 0, typeRefList: [], unresolved: 0, duplicates: 0, partials: []}
 }
-
 /// selfResolveSource builds a package-level symbol table and resolves simple
 /// function-body references using the self-hosted AST surface.
 pub fn selfResolveSource(source: String) -> SelfResolveResult {
     selfResolveAstFile(astParse(source))
 }
-
 pub fn selfResolveAstFile(file: AstFile) -> SelfResolveResult {
     selfResolveAstFileWithCfg(file, selfResolveCfgDisabled())
 }
-
 /// selfResolveCfgDisabled constructs a sentinel env whose `enabled` flag is
 /// false — the resolver treats every `#[cfg(...)]` guard as passing while
 /// still emitting shape-validation diagnostics for malformed args.
 pub fn selfResolveCfgDisabled() -> SelfResolveCfgEnv {
-    SelfResolveCfgEnv { enabled: false, os: "", arch: "", target: "", features: [] }
+    SelfResolveCfgEnv {enabled: false, os: "", arch: "", target: "", features: []}
 }
-
 /// selfResolveCfgEnv builds an enabled env from the host-derived values that
 /// `#[cfg(os = ...)]`, `#[cfg(arch = ...)]`, `#[cfg(target = ...)]`, and
 /// `#[cfg(feature = ...)]` predicates compare against.
-pub fn selfResolveCfgEnv(
-    os: String,
-    arch: String,
-    target: String,
-    features: List<String>,
-) -> SelfResolveCfgEnv {
-    SelfResolveCfgEnv { enabled: true, os, arch, target, features }
+pub fn selfResolveCfgEnv(os: String, arch: String, target: String, features: List<String>) -> SelfResolveCfgEnv {
+    SelfResolveCfgEnv {enabled: true, os, arch, target, features}
 }
-
 pub fn selfResolveAstFileWithCfg(file: AstFile, cfg: SelfResolveCfgEnv) -> SelfResolveResult {
     let mut result = emptySelfResolveResult()
     result = selfResolveAstCollectTopLevel(file, cfg, result)
@@ -223,7 +150,6 @@ pub fn selfResolveAstFileWithCfg(file: AstFile, cfg: SelfResolveCfgEnv) -> SelfR
     result = selfResolveAstScanFunctions(file, cfg, scope, result)
     result
 }
-
 /// SelfUseEdge is one `use target.path` edge in the workspace import
 /// graph. `pos` / `endPos` are source offsets pointing at the use site
 /// that introduced the edge — cycle diagnostics anchor on them.
@@ -233,7 +159,6 @@ pub struct SelfUseEdge {
     pub endPos: Int,
     pub file: String,
 }
-
 /// SelfPackageUses groups every non-FFI `use` edge emitted by one
 /// package. `path` is the dotted package key (same format as `UseKey`
 /// in internal/resolve).
@@ -241,7 +166,6 @@ pub struct SelfPackageUses {
     pub path: String,
     pub uses: List<SelfUseEdge>,
 }
-
 /// SelfWorkspaceUses is the cross-package input accepted by
 /// `selfDetectImportCycles`. Callers should pre-sort `packages` by
 /// `path` so the diagnostic emission order is deterministic — the
@@ -249,7 +173,6 @@ pub struct SelfPackageUses {
 pub struct SelfWorkspaceUses {
     pub packages: List<SelfPackageUses>,
 }
-
 /// SelfCycleDiag is one `E0506` cyclic-import diagnostic carrying the
 /// edge that closed the cycle. The rendered message matches the Go
 /// resolver's existing wording (v0.2 §5.4) so golden snapshots stay
@@ -262,12 +185,10 @@ pub struct SelfCycleDiag {
     pub file: String,
     pub message: String,
 }
-
 struct SelfCycleState {
     colors: List<Int>,
     out: List<SelfCycleDiag>,
 }
-
 /// selfDetectImportCycles walks the workspace import graph and emits one
 /// SelfCycleDiag per edge that completes a cycle. Mirrors
 /// internal/resolve/workspace.go::detectCycles — DFS with a tri-state
@@ -286,7 +207,7 @@ pub fn selfDetectImportCycles(input: SelfWorkspaceUses) -> List<SelfCycleDiag> {
         let _keep = p
         colors.push(0)
     }
-    let mut state = SelfCycleState { colors, out: [] }
+    let mut state = SelfCycleState {colors, out: []}
     let mut idx = 0
     for p in paths {
         let _keep = p
@@ -295,13 +216,7 @@ pub fn selfDetectImportCycles(input: SelfWorkspaceUses) -> List<SelfCycleDiag> {
     }
     state.out
 }
-
-fn selfCycleDfs(
-    idx: Int,
-    paths: List<String>,
-    usesLists: List<List<SelfUseEdge>>,
-    state: SelfCycleState,
-) -> SelfCycleState {
+fn selfCycleDfs(idx: Int, paths: List<String>, usesLists: List<List<SelfUseEdge>>, state: SelfCycleState) -> SelfCycleState {
     if state.colors[idx] == 2 {
         return state
     }
@@ -314,14 +229,7 @@ fn selfCycleDfs(
         }
         if out.colors[targetIdx] == 1 {
             let message = "cyclic import: `" + paths[idx] + "` imports `" + edge.target + "` which (transitively) imports `" + paths[idx] + "`"
-            out.out.push(SelfCycleDiag {
-                importer: paths[idx],
-                target: edge.target,
-                pos: edge.pos,
-                endPos: edge.endPos,
-                file: edge.file,
-                message,
-            })
+            out.out.push(SelfCycleDiag {importer: paths[idx], target: edge.target, pos: edge.pos, endPos: edge.endPos, file: edge.file, message})
             continue
         }
         if out.colors[targetIdx] == 0 {
@@ -331,7 +239,6 @@ fn selfCycleDfs(
     out.colors[idx] = 2
     out
 }
-
 /// SelfMemberLookupResult encodes the outcome of a cross-package
 /// `pkg.member` lookup plus the diagnostic wording that should be
 /// emitted (if any). The Go resolver owns the Scope traversal — this
@@ -353,7 +260,6 @@ pub struct SelfMemberLookupResult {
     pub note: String,
     pub hint: String,
 }
-
 /// selfLookupPackageMember computes the cross-package member-access
 /// diagnostic for `pkg.member` access sites. Mirrors the wording of
 /// internal/resolve/resolve.go::lookupPackageMember so golden
@@ -367,52 +273,27 @@ pub struct SelfMemberLookupResult {
 /// `found` — true when pkgScope lookup returned a symbol.
 /// `public` — true when the found symbol is marked `pub`. Ignored
 ///             when `found` is false.
-pub fn selfLookupPackageMember(
-    pkgName: String,
-    member: String,
-    typePos: Bool,
-    found: Bool,
-    public: Bool,
-) -> SelfMemberLookupResult {
+pub fn selfLookupPackageMember(pkgName: String, member: String, typePos: Bool, found: Bool, public: Bool) -> SelfMemberLookupResult {
     if !found {
-        let noun = if typePos { "type" } else { "name" }
-        let message = "package `" + pkgName + "` has no exported " + noun + " `" + member + "`"
-        return SelfMemberLookupResult {
-            status: 2,
-            code: "E0508",
-            message,
-            primary: "unknown member",
-            note: "",
-            hint: "",
+        let noun = if typePos {
+            "type"
+        } else {
+            "name"
         }
+        let message = "package `" + pkgName + "` has no exported " + noun + " `" + member + "`"
+        return SelfMemberLookupResult {status: 2, code: "E0508", message, primary: "unknown member", note: "", hint: ""}
     }
     if !public {
         let message = "`" + pkgName + "." + member + "` is not exported from package `" + pkgName + "`"
         let note = "declared without `pub` in package `" + pkgName + "`"
         let hint = "add `pub` to the declaration of `" + member + "` or access it only from within its package"
-        return SelfMemberLookupResult {
-            status: 1,
-            code: "E0507",
-            message,
-            primary: "private across packages",
-            note,
-            hint,
-        }
+        return SelfMemberLookupResult {status: 1, code: "E0507", message, primary: "private across packages", note, hint}
     }
-    SelfMemberLookupResult {
-        status: 0,
-        code: "",
-        message: "",
-        primary: "",
-        note: "",
-        hint: "",
-    }
+    SelfMemberLookupResult {status: 0, code: "", message: "", primary: "", note: "", hint: ""}
 }
-
 pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
     result.diagnostics.len()
 }
-
 pub fn selfResolveCodeCount(result: SelfResolveResult, code: String) -> Int {
     let mut count = 0
     for diag in result.diagnostics {
@@ -422,7 +303,6 @@ pub fn selfResolveCodeCount(result: SelfResolveResult, code: String) -> Int {
     }
     count
 }
-
 pub fn selfResolveSymbolCount(result: SelfResolveResult, kind: String) -> Int {
     let mut count = 0
     for sym in result.symbols {
@@ -432,7 +312,6 @@ pub fn selfResolveSymbolCount(result: SelfResolveResult, kind: String) -> Int {
     }
     count
 }
-
 pub fn selfResolveHasSymbol(result: SelfResolveResult, name: String, kind: String) -> Bool {
     for sym in result.symbols {
         if sym.name == name && sym.kind == kind {
@@ -441,7 +320,6 @@ pub fn selfResolveHasSymbol(result: SelfResolveResult, name: String, kind: Strin
     }
     false
 }
-
 pub fn selfResolveHasRef(result: SelfResolveResult, name: String) -> Bool {
     for ref in result.refList {
         if ref.name == name {
@@ -450,7 +328,6 @@ pub fn selfResolveHasRef(result: SelfResolveResult, name: String) -> Bool {
     }
     false
 }
-
 pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
     for ref in result.refList {
         if ref.node == node {
@@ -459,7 +336,6 @@ pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
     }
     false
 }
-
 pub fn selfResolveHasTypeRef(result: SelfResolveResult, name: String) -> Bool {
     for ref in result.typeRefList {
         if ref.name == name {
@@ -468,14 +344,7 @@ pub fn selfResolveHasTypeRef(result: SelfResolveResult, name: String) -> Bool {
     }
     false
 }
-
-pub fn selfResolveHasRefTarget(
-    result: SelfResolveResult,
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> Bool {
+pub fn selfResolveHasRefTarget(result: SelfResolveResult, name: String, start: Int, end: Int, node: Int) -> Bool {
     for ref in result.refList {
         if ref.name == name {
             if node >= 0 && ref.target >= 0 && ref.target == node {
@@ -488,15 +357,7 @@ pub fn selfResolveHasRefTarget(
     }
     false
 }
-
-pub fn selfResolveRefNodeTargets(
-    result: SelfResolveResult,
-    refNode: Int,
-    name: String,
-    start: Int,
-    end: Int,
-    targetNode: Int,
-) -> Bool {
+pub fn selfResolveRefNodeTargets(result: SelfResolveResult, refNode: Int, name: String, start: Int, end: Int, targetNode: Int) -> Bool {
     for ref in result.refList {
         if ref.node == refNode && ref.name == name {
             if targetNode >= 0 && ref.target >= 0 && ref.target == targetNode {
@@ -509,16 +370,7 @@ pub fn selfResolveRefNodeTargets(
     }
     false
 }
-
-pub fn selfResolveRefNodesSameTarget(
-    result: SelfResolveResult,
-    leftNode: Int,
-    rightNode: Int,
-) -> Bool {
-    // Fused single-pass scan: the previous version walked `refNodes`
-    // twice, once to find each side. Merging both checks into one
-    // traversal halves the work and the early `break` lets us leave
-    // as soon as both sides are resolved.
+pub fn selfResolveRefNodesSameTarget(result: SelfResolveResult, leftNode: Int, rightNode: Int) -> Bool {
     let mut leftFound = false
     let mut leftTarget = -1
     let mut leftStart = -1
@@ -543,7 +395,6 @@ pub fn selfResolveRefNodesSameTarget(
             break
         }
     }
-
     if !(leftFound) || !(rightFound) {
         return false
     }
@@ -552,18 +403,19 @@ pub fn selfResolveRefNodesSameTarget(
     }
     leftStart >= 0 && leftStart == rightStart && leftEnd == rightEnd
 }
-
+// Fused single-pass scan: the previous version walked `refNodes`
+// twice, once to find each side. Merging both checks into one
+// traversal halves the work and the early `break` lets us leave
+// as soon as both sides are resolved.
 struct SelfResolveName {
     name: String,
     start: Int,
     end: Int,
     node: Int,
 }
-
 fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolveName {
-    SelfResolveName { name, start, end, node }
+    SelfResolveName {name, start, end, node}
 }
-
 /// SelfResolveScope is the self-hosted resolver's compact lexical scope. It
 /// stores the currently visible symbols as a flat list and uses `depth` to
 /// distinguish same-scope duplicates from legal child-scope shadowing.
@@ -582,64 +434,19 @@ struct SelfResolveScope {
     loopLabelStarts: List<Int>,
     loopLabelEnds: List<Int>,
 }
-
 fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
-    SelfResolveScope {
-        symbols: srSymbolListCopy(result.symbols),
-        depth: 0,
-        ifaceDefault: false,
-        inFn: false,
-        inLoop: false,
-        loopLabels: [],
-        loopLabelStarts: [],
-        loopLabelEnds: [],
-    }
+    SelfResolveScope {symbols: srSymbolListCopy(result.symbols), depth: 0, ifaceDefault: false, inFn: false, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
 }
-
 fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
-    SelfResolveScope {
-        symbols: srSymbolListCopy(parent.symbols),
-        depth: parent.depth + 1,
-        ifaceDefault: parent.ifaceDefault,
-        inFn: parent.inFn,
-        inLoop: parent.inLoop,
-        loopLabels: srStringListCopy(parent.loopLabels),
-        loopLabelStarts: srIntListCopy(parent.loopLabelStarts),
-        loopLabelEnds: srIntListCopy(parent.loopLabelEnds),
-    }
+    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: parent.inLoop, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
 }
-
 fn srFnChildScope(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveScope {
-    SelfResolveScope {
-        symbols: srSymbolListCopy(parent.symbols),
-        depth: parent.depth + 1,
-        ifaceDefault,
-        inFn: true,
-        inLoop: false,
-        loopLabels: [],
-        loopLabelStarts: [],
-        loopLabelEnds: [],
-    }
+    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault, inFn: true, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
 }
-
 fn srLoopChildScope(parent: SelfResolveScope) -> SelfResolveScope {
-    SelfResolveScope {
-        symbols: srSymbolListCopy(parent.symbols),
-        depth: parent.depth + 1,
-        ifaceDefault: parent.ifaceDefault,
-        inFn: parent.inFn,
-        inLoop: true,
-        loopLabels: srStringListCopy(parent.loopLabels),
-        loopLabelStarts: srIntListCopy(parent.loopLabelStarts),
-        loopLabelEnds: srIntListCopy(parent.loopLabelEnds),
-    }
+    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: true, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
 }
-
-fn srScopeDefine(
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-    sym: SelfSymbol,
-) -> SelfResolveResult {
+fn srScopeDefine(scope: SelfResolveScope, result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srIsDiscardName(sym.name) {
         return out
@@ -652,7 +459,6 @@ fn srScopeDefine(
     scope.symbols.push(scoped)
     out
 }
-
 fn srScopeLookup(scope: SelfResolveScope, name: String) -> SelfSymbol {
     let mut found = selfSymbol("", "", "", 0, -1, 0, 0, false)
     for sym in scope.symbols {
@@ -662,38 +468,21 @@ fn srScopeLookup(scope: SelfResolveScope, name: String) -> SelfSymbol {
     }
     found
 }
-
 fn srScopeHas(scope: SelfResolveScope, name: String) -> Bool {
     srScopeLookup(scope, name).name != ""
 }
-
-fn selfResolveAstCollectTopLevel(
-    file: AstFile,
-    cfg: SelfResolveCfgEnv,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn selfResolveAstCollectTopLevel(file: AstFile, cfg: SelfResolveCfgEnv, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     for declIdx in file.arena.decls {
         out = srAstCollectDecl(file, declIdx, cfg, out)
     }
     out
 }
-
-fn srAstCollectDecl(
-    file: AstFile,
-    idx: Int,
-    cfg: SelfResolveCfgEnv,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstCollectDecl(file: AstFile, idx: Int, cfg: SelfResolveCfgEnv, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
     let node = srAstNode(file, idx)
-    // cfg arg shape validation runs whether or not the decl will drop —
-    // tooling surfaces E0405/E0739 on malformed cfg even when the filter
-    // would have removed the decl. The main annotation walk below does
-    // NOT re-validate cfg (see srCheckAnnotationArgs) so diags don't
-    // double-fire for decls that survive.
     let mut out = srValidateCfgAnnotationsOnDecl(file, node.extra, result)
     if !srCfgDeclPasses(file, node, cfg) {
         return out
@@ -707,10 +496,7 @@ fn srAstCollectDecl(
         }
         let alias = srAstUseAlias(file, node)
         if alias != "" {
-            out = srAddUseSymbol(
-                out,
-                selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, astUseDeclIsPub(node), idx),
-            )
+            out = srAddUseSymbol(out, selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, astUseDeclIsPub(node), idx))
         }
     } else if node.kind == AstNFnDecl {
         out = srAstAddFunctionSymbol(file, idx, out)
@@ -720,10 +506,7 @@ fn srAstCollectDecl(
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
         out = srCheckTypeMemberAnnotations(file, node, out)
     } else if node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
-        out = srAddSymbol(
-            out,
-            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
-        )
+        out = srAddSymbol(out, selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx))
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
         out = srCheckTypeMemberAnnotations(file, node, out)
     } else if node.kind == AstNEnumDecl {
@@ -732,20 +515,7 @@ fn srAstCollectDecl(
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNVariant {
-                out = srAddSymbol(
-                    out,
-                    selfSymbolAtNode(
-                        member.text,
-                        "variant",
-                        "",
-                        0,
-                        0,
-                        member.start,
-                        member.end,
-                        true,
-                        memberIdx,
-                    ),
-                )
+                out = srAddSymbol(out, selfSymbolAtNode(member.text, "variant", "", 0, 0, member.start, member.end, true, memberIdx))
                 out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetVariant(), out)
             } else if member.kind == AstNFnDecl {
                 out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
@@ -755,21 +525,18 @@ fn srAstCollectDecl(
     } else if node.kind == AstNLet {
         let names = srAstPatternNames(file, node.left, [])
         for item in names {
-            out = srAddSymbol(
-                out,
-                selfSymbolAtNode(item.name, "value", srAstLetTypeName(file, node), 0, 0, item.start, item.end, false, item.node),
-            )
+            out = srAddSymbol(out, selfSymbolAtNode(item.name, "value", srAstLetTypeName(file, node), 0, 0, item.start, item.end, false, item.node))
         }
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
     }
     out
 }
-
-fn srCheckTypeMemberAnnotations(
-    file: AstFile,
-    node: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+// cfg arg shape validation runs whether or not the decl will drop —
+// tooling surfaces E0405/E0739 on malformed cfg even when the filter
+// would have removed the decl. The main annotation walk below does
+// NOT re-validate cfg (see srCheckAnnotationArgs) so diags don't
+// double-fire for decls that survive.
+fn srCheckTypeMemberAnnotations(file: AstFile, node: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if node.kind == AstNStructDecl {
         for memberIdx in node.children {
@@ -791,49 +558,18 @@ fn srCheckTypeMemberAnnotations(
     }
     out
 }
-
-fn srAstAddFunctionSymbol(
-    file: AstFile,
-    idx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstAddFunctionSymbol(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfResolveResult {
     let node = srAstNode(file, idx)
-    srAddSymbol(
-        result,
-        selfSymbolAtNode(
-            node.text,
-            "fn",
-            "",
-            srAstListCount(node.children),
-            0,
-            node.start,
-            node.end,
-            node.flags == 1,
-            idx,
-        ),
-    )
+    srAddSymbol(result, selfSymbolAtNode(node.text, "fn", "", srAstListCount(node.children), 0, node.start, node.end, node.flags == 1, idx))
 }
-
-fn selfResolveAstScanFunctions(
-    file: AstFile,
-    cfg: SelfResolveCfgEnv,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn selfResolveAstScanFunctions(file: AstFile, cfg: SelfResolveCfgEnv, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     for declIdx in file.arena.decls {
         out = srAstScanFunctionsInDecl(file, declIdx, cfg, scope, out)
     }
     out
 }
-
-fn srAstScanFunctionsInDecl(
-    file: AstFile,
-    idx: Int,
-    cfg: SelfResolveCfgEnv,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstScanFunctionsInDecl(file: AstFile, idx: Int, cfg: SelfResolveCfgEnv, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -857,20 +593,10 @@ fn srAstScanFunctionsInDecl(
     }
     out
 }
-
-fn srAstResolveTypeDecl(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveTypeDecl(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let node = srAstNode(file, idx)
     let typeScope = srChildScope(scope)
-    let mut out = srScopeDefine(
-        typeScope,
-        result,
-        selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx),
-    )
+    let mut out = srScopeDefine(typeScope, result, selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx))
     if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
         out = srAstDeclareGenerics(file, node.children2, typeScope, out)
     }
@@ -910,32 +636,16 @@ fn srAstResolveTypeDecl(
     }
     out
 }
-
-fn srAstResolveTypeAlias(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveTypeAlias(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let aliasScope = srChildScope(scope)
     let mut out = srAstDeclareGenerics(file, node.children, aliasScope, result)
     srAstResolveType(file, node.left, aliasScope, "", out)
 }
-
-fn srAstDeclareGenerics(
-    file: AstFile,
-    generics: List<Int>,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstDeclareGenerics(file: AstFile, generics: List<Int>, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     for genericIdx in generics {
         let generic = srAstNode(file, genericIdx)
-        out = srScopeDefine(
-            scope,
-            out,
-            selfSymbolAtNode(generic.text, "generic", "", 0, scope.depth, generic.start, generic.end, false, genericIdx),
-        )
+        out = srScopeDefine(scope, out, selfSymbolAtNode(generic.text, "generic", "", 0, scope.depth, generic.start, generic.end, false, genericIdx))
     }
     for genericIdx in generics {
         let generic = srAstNode(file, genericIdx)
@@ -945,15 +655,7 @@ fn srAstDeclareGenerics(
     }
     out
 }
-
-fn srAstResolveFunction(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    owner: String,
-    ifaceDefault: Bool,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveFunction(file: AstFile, idx: Int, scope: SelfResolveScope, owner: String, ifaceDefault: Bool, result: SelfResolveResult) -> SelfResolveResult {
     let node = srAstNode(file, idx)
     let mut out = result
     let fnScope = srFnChildScope(scope, ifaceDefault)
@@ -970,13 +672,7 @@ fn srAstResolveFunction(
     let bodyScope = srChildScope(fnScope)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
-
-fn srAstResolveBlock(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveBlock(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -999,13 +695,7 @@ fn srAstResolveBlock(
     }
     out
 }
-
-fn srAstResolveStmt(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveStmt(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1016,84 +706,36 @@ fn srAstResolveStmt(
     }
     if node.kind == AstNReturn {
         if !scope.inFn {
-            out = srPushFlowDiag(
-                out,
-                "E0602",
-                "`return` is only valid inside a function body",
-                node.start,
-                node.end,
-                idx,
-            )
+            out = srPushFlowDiag(out, "E0602", "`return` is only valid inside a function body", node.start, node.end, idx)
         }
         return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNDefer {
         if !scope.inFn {
-            out = srPushFlowDiag(
-                out,
-                "E0603",
-                "`defer` is only valid inside a function body",
-                node.start,
-                node.end,
-                idx,
-            )
+            out = srPushFlowDiag(out, "E0603", "`defer` is only valid inside a function body", node.start, node.end, idx)
         }
         return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNBreak {
         if !scope.inLoop {
-            out = srPushFlowDiag(
-                out,
-                "E0600",
-                "`break` is only valid inside a `for` loop",
-                node.start,
-                node.end,
-                idx,
-            )
+            out = srPushFlowDiag(out, "E0600", "`break` is only valid inside a `for` loop", node.start, node.end, idx)
         }
         if scope.inLoop && node.extra >= 0 {
             let labelNode = srAstNode(file, node.extra)
             if srFindLoopLabel(scope, labelNode.text) < 0 {
-                out.diagnostics.push(
-                    selfResolveDiagnosticHintAtNode(
-                        "E0763",
-                        "undefined loop label",
-                        labelNode.text,
-                        labelNode.start,
-                        labelNode.end,
-                        node.extra,
-                        "add the label to an enclosing `for`/`loop`, or remove it from the break",
-                    ),
-                )
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0763", "undefined loop label", labelNode.text, labelNode.start, labelNode.end, node.extra, "add the label to an enclosing `for`/`loop`, or remove it from the break"))
             }
         }
         return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNContinue {
         if !scope.inLoop {
-            out = srPushFlowDiag(
-                out,
-                "E0601",
-                "`continue` is only valid inside a `for` loop",
-                node.start,
-                node.end,
-                idx,
-            )
+            out = srPushFlowDiag(out, "E0601", "`continue` is only valid inside a `for` loop", node.start, node.end, idx)
         }
         if scope.inLoop && node.extra >= 0 {
             let labelNode = srAstNode(file, node.extra)
             if srFindLoopLabel(scope, labelNode.text) < 0 {
-                out.diagnostics.push(
-                    selfResolveDiagnosticHintAtNode(
-                        "E0763",
-                        "undefined loop label",
-                        labelNode.text,
-                        labelNode.start,
-                        labelNode.end,
-                        node.extra,
-                        "add the label to an enclosing `for`/`loop`, or remove it from the continue",
-                    ),
-                )
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0763", "undefined loop label", labelNode.text, labelNode.start, labelNode.end, node.extra, "add the label to an enclosing `for`/`loop`, or remove it from the continue"))
             }
         }
         return out
@@ -1107,20 +749,11 @@ fn srAstResolveStmt(
     }
     srAstResolveExpr(file, idx, scope, out)
 }
-
-fn srPushFlowDiag(
-    result: SelfResolveResult,
-    code: String,
-    message: String,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> SelfResolveResult {
+fn srPushFlowDiag(result: SelfResolveResult, code: String, message: String, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticAtNode(code, message, "", start, end, node))
     out
 }
-
 fn srFindLoopLabel(scope: SelfResolveScope, name: String) -> Int {
     let mut idx = scope.loopLabels.len() - 1
     for idx >= 0 {
@@ -1131,13 +764,7 @@ fn srFindLoopLabel(scope: SelfResolveScope, name: String) -> Int {
     }
     -1
 }
-
-fn srPushLoopLabelShadowDiag(
-    scope: SelfResolveScope,
-    file: AstFile,
-    labelIdx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srPushLoopLabelShadowDiag(scope: SelfResolveScope, file: AstFile, labelIdx: Int, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if labelIdx < 0 {
         return out
@@ -1145,26 +772,11 @@ fn srPushLoopLabelShadowDiag(
     let labelNode = srAstNode(file, labelIdx)
     let shadow = srFindLoopLabel(scope, labelNode.text)
     if shadow >= 0 {
-        out.diagnostics.push(
-            selfResolveDiagnosticHintAtNode(
-                "E0764",
-                "loop label shadows an outer loop label",
-                labelNode.text,
-                labelNode.start,
-                labelNode.end,
-                labelIdx,
-                "rename one of the two loop labels so each nested loop name stays unique",
-            ),
-        )
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0764", "loop label shadows an outer loop label", labelNode.text, labelNode.start, labelNode.end, labelIdx, "rename one of the two loop labels so each nested loop name stays unique"))
     }
     out
 }
-
-fn srScopeWithLoopLabel(
-    scope: SelfResolveScope,
-    file: AstFile,
-    labelIdx: Int,
-) -> SelfResolveScope {
+fn srScopeWithLoopLabel(scope: SelfResolveScope, file: AstFile, labelIdx: Int) -> SelfResolveScope {
     let mut next = scope
     if labelIdx < 0 {
         return next
@@ -1175,13 +787,7 @@ fn srScopeWithLoopLabel(
     next.loopLabelEnds.push(labelNode.end)
     next
 }
-
-fn srAstResolveFor(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveFor(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     out = srAstResolveExpr(file, node.left, scope, out)
     let iterIdx = srAstChildAt(node.children, 1)
@@ -1194,14 +800,7 @@ fn srAstResolveFor(
     let bodyScope = srLoopChildScope(loopScope2)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
-
-fn srAstResolveType(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    owner: String,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveType(file: AstFile, idx: Int, scope: SelfResolveScope, owner: String, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1238,13 +837,7 @@ fn srAstResolveType(
     }
     out
 }
-
-fn srAstResolveExpr(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveExpr(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1298,13 +891,7 @@ fn srAstResolveExpr(
     }
     out
 }
-
-fn srAstResolveStructField(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveStructField(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1317,14 +904,7 @@ fn srAstResolveStructField(
     }
     srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, result)
 }
-
-fn srAstResolveField(
-    file: AstFile,
-    idx: Int,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveField(file: AstFile, idx: Int, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = srAstResolveExpr(file, node.left, scope, result)
     let base = srAstNode(file, node.left)
     if base.kind == AstNIdent {
@@ -1338,13 +918,7 @@ fn srAstResolveField(
     }
     out
 }
-
-fn srAstResolveCall(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveCall(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let callee = srAstNode(file, node.left)
     if callee.kind == AstNField {
@@ -1357,13 +931,7 @@ fn srAstResolveCall(
     }
     out
 }
-
-fn srAstResolveCallField(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveCallField(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = srAstResolveExpr(file, node.left, scope, result)
     let base = srAstNode(file, node.left)
     if base.kind == AstNIdent {
@@ -1374,13 +942,7 @@ fn srAstResolveCallField(
     }
     out
 }
-
-fn srAstResolveIf(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveIf(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = srAstResolveExpr(file, node.left, scope, result)
     let thenScope = srChildScope(scope)
     if node.flags == 1 {
@@ -1392,13 +954,7 @@ fn srAstResolveIf(
     let elseIdx = srAstChildAt(node.children, 0)
     srAstResolveExpr(file, elseIdx, scope, out)
 }
-
-fn srAstResolveMatch(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveMatch(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = srAstResolveExpr(file, node.left, scope, result)
     for armIdx in node.children {
         let arm = srAstNode(file, armIdx)
@@ -1410,13 +966,7 @@ fn srAstResolveMatch(
     }
     out
 }
-
-fn srAstResolveClosure(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveClosure(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let closureScope = srFnChildScope(scope, false)
     for paramIdx in node.children {
@@ -1427,22 +977,9 @@ fn srAstResolveClosure(
     out = srAstResolveType(file, node.right, closureScope, "", out)
     srAstResolveExpr(file, node.left, closureScope, out)
 }
-
-fn srResolveOneAstIdent(
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srResolveOneAstIdent(name: String, start: Int, end: Int, node: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if name == "_" {
-        // `_` is a pattern wildcard; in an expression it is never a value.
-        // The parser rejects it at the token level too (E0604), but we
-        // emit here to match Go's resolver contract and to suppress the
-        // misleading "undefined name `_`" that the normal lookup path
-        // would otherwise produce.
         return srWildcardInExprAtNode(out, start, end, node)
     }
     if srIsBuiltinName(name) {
@@ -1471,22 +1008,16 @@ fn srResolveOneAstIdent(
     if hint == "" {
         out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
     } else {
-        out.diagnostics.push(
-            selfResolveDiagnosticHintAtNode("E0500", "undefined name", name, start, end, node, hint),
-        )
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0500", "undefined name", name, start, end, node, hint))
     }
     out
 }
-
-fn srResolveOneAstType(
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    scope: SelfResolveScope,
-    owner: String,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+// `_` is a pattern wildcard; in an expression it is never a value.
+// The parser rejects it at the token level too (E0604), but we
+// emit here to match Go's resolver contract and to suppress the
+// misleading "undefined name `_`" that the normal lookup path
+// would otherwise produce.
+fn srResolveOneAstType(name: String, start: Int, end: Int, node: Int, scope: SelfResolveScope, owner: String, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let head = srPathHead(name)
     if head == "" {
@@ -1513,17 +1044,7 @@ fn srResolveOneAstType(
     }
     srRecordTypeRef(out, name, node, sym)
 }
-
-fn srResolvePackageMember(
-    file: AstFile,
-    pkgSym: SelfSymbol,
-    member: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    typePos: Bool,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srResolvePackageMember(file: AstFile, pkgSym: SelfSymbol, member: String, start: Int, end: Int, node: Int, typePos: Bool, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let useNode = srAstUseNode(file, pkgSym)
     if useNode.kind != AstNUseDecl {
@@ -1539,16 +1060,7 @@ fn srResolvePackageMember(
         } else {
             "name"
         }
-        out.diagnostics.push(
-            selfResolveDiagnosticAtNode(
-                "E0508",
-                "package `{pkgSym.name}` has no exported {noun}",
-                member,
-                start,
-                end,
-                node,
-            ),
-        )
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0508", "package `{pkgSym.name}` has no exported {noun}", member, start, end, node))
         return out
     }
     if typePos && !(srSymbolCanBeType(sym)) {
@@ -1556,96 +1068,42 @@ fn srResolvePackageMember(
     }
     out
 }
-
-fn srRecordRef(
-    result: SelfResolveResult,
-    name: String,
-    node: Int,
-    target: SelfSymbol,
-) -> SelfResolveResult {
+fn srRecordRef(result: SelfResolveResult, name: String, node: Int, target: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     out.refs = out.refs + 1
-    out.refList.push(SelfResolvedRef {
-        name: name,
-        node: node,
-        target: target.node,
-        targetStart: target.start,
-        targetEnd: target.end,
-    })
+    out.refList.push(SelfResolvedRef {name: name, node: node, target: target.node, targetStart: target.start, targetEnd: target.end})
     out
 }
-
 fn srRecordBareRef(result: SelfResolveResult, name: String, node: Int) -> SelfResolveResult {
     srRecordRef(result, name, node, srEmptySymbol())
 }
-
 fn srRecordTypeRef(result: SelfResolveResult, name: String, node: Int, target: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     out.typeRefs = out.typeRefs + 1
-    out.typeRefList.push(SelfResolvedTypeRef {
-        name: name,
-        node: node,
-        target: target.node,
-        targetStart: target.start,
-        targetEnd: target.end,
-    })
+    out.typeRefList.push(SelfResolvedTypeRef {name: name, node: node, target: target.node, targetStart: target.start, targetEnd: target.end})
     out
 }
-
 fn srSelfOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0503", "`self` outside method", "self", start, end, node))
     out
 }
-
 fn srSelfTypeOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0504", "`Self` outside type body", "Self", start, end, node))
     out
 }
-
 fn srWildcardInExprAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
-    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-        "E0604",
-        "`_` is only valid as a pattern wildcard, not as an expression",
-        "_",
-        start,
-        end,
-        node,
-        "use `let _ = expr` to ignore a value",
-    ))
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0604", "`_` is only valid as a pattern wildcard, not as an expression", "_", start, end, node, "use `let _ = expr` to ignore a value"))
     out
 }
-
-fn srInterfaceDefaultFieldAtNode(
-    result: SelfResolveResult,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> SelfResolveResult {
+fn srInterfaceDefaultFieldAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
-    out.diagnostics.push(
-        selfResolveDiagnosticHintAtNode(
-            "E0606",
-            "interface default method bodies may not access fields on `self`",
-            "",
-            start,
-            end,
-            node,
-            "expose the value through an interface method and call that instead",
-        ),
-    )
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0606", "interface default method bodies may not access fields on `self`", "", start, end, node, "expose the value through an interface method and call that instead"))
     out
 }
-
-fn srAstResolveParamBindings(
-    file: AstFile,
-    paramIdx: Int,
-    scope: SelfResolveScope,
-    owner: String,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveParamBindings(file: AstFile, paramIdx: Int, scope: SelfResolveScope, owner: String, result: SelfResolveResult) -> SelfResolveResult {
     if paramIdx < 0 {
         return result
     }
@@ -1655,31 +1113,11 @@ fn srAstResolveParamBindings(
         if param.text == "self" && owner == "" {
             out = srSelfOutsideAtNode(out, param.start, param.end, paramIdx)
         }
-        return srScopeDefine(
-            scope,
-            out,
-            selfSymbolAtNode(
-                param.text,
-                "value",
-                srAstTypeName(file, param.right),
-                0,
-                scope.depth,
-                param.start,
-                param.end,
-                false,
-                paramIdx,
-            ),
-        )
+        return srScopeDefine(scope, out, selfSymbolAtNode(param.text, "value", srAstTypeName(file, param.right), 0, scope.depth, param.start, param.end, false, paramIdx))
     }
     srAstResolvePattern(file, param.left, scope, out)
 }
-
-fn srAstResolvePattern(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolvePattern(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1738,13 +1176,7 @@ fn srAstResolvePattern(
     }
     out
 }
-
-fn srAstResolveIdentPattern(
-    node: AstNode,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveIdentPattern(node: AstNode, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if srIsUpperName(node.text) {
         if srIsBuiltinVariantName(node.text) {
             return srRecordBareRef(result, node.text, idx)
@@ -1756,28 +1188,13 @@ fn srAstResolveIdentPattern(
     }
     srAstBindPatternName(scope, result, selfResolveName(node.text, node.start, node.end, idx))
 }
-
-fn srAstBindPatternName(
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-    item: SelfResolveName,
-) -> SelfResolveResult {
+fn srAstBindPatternName(scope: SelfResolveScope, result: SelfResolveResult, item: SelfResolveName) -> SelfResolveResult {
     if srIsDiscardName(item.name) {
         return result
     }
-    srScopeDefine(
-        scope,
-        result,
-        selfSymbolAtNode(item.name, "value", "", 0, scope.depth, item.start, item.end, false, item.node),
-    )
+    srScopeDefine(scope, result, selfSymbolAtNode(item.name, "value", "", 0, scope.depth, item.start, item.end, false, item.node))
 }
-
-fn srAstResolvePatternValue(
-    file: AstFile,
-    idx: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolvePatternValue(file: AstFile, idx: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
@@ -1810,13 +1227,7 @@ fn srAstResolvePatternValue(
     }
     out
 }
-
-fn srAstResolveOrPattern(
-    file: AstFile,
-    node: AstNode,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srAstResolveOrPattern(file: AstFile, node: AstNode, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let mut alts: List<Int> = []
     alts = srAstOrPatternAlts(file, node.left, alts)
     alts = srAstOrPatternAlts(file, node.right, alts)
@@ -1854,7 +1265,6 @@ fn srAstResolveOrPattern(
     }
     out
 }
-
 fn srAstOrPatternAlts(file: AstFile, idx: Int, alts: List<Int>) -> List<Int> {
     if idx < 0 {
         return alts
@@ -1869,15 +1279,7 @@ fn srAstOrPatternAlts(file: AstFile, idx: Int, alts: List<Int>) -> List<Int> {
     }
     out
 }
-
-fn srResolvePatternTypePath(
-    path: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srResolvePatternTypePath(path: String, start: Int, end: Int, node: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let head = srPathHead(path)
     let mut out = result
     if head == "" {
@@ -1905,15 +1307,7 @@ fn srResolvePatternTypePath(
     }
     srRecordTypeRef(out, head, node, sym)
 }
-
-fn srResolvePatternVariantPath(
-    path: String,
-    start: Int,
-    end: Int,
-    node: Int,
-    scope: SelfResolveScope,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srResolvePatternVariantPath(path: String, start: Int, end: Int, node: Int, scope: SelfResolveScope, result: SelfResolveResult) -> SelfResolveResult {
     let head = srPathHead(path)
     let name = srPathLastSegment(path)
     let mut out = result
@@ -1954,7 +1348,6 @@ fn srResolvePatternVariantPath(
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a pattern path", head, start, end, node))
     out
 }
-
 fn srSymbolsAtDepth(symbols: List<SelfSymbol>, depth: Int) -> List<SelfSymbol> {
     let mut out: List<SelfSymbol> = []
     for sym in symbols {
@@ -1964,27 +1357,12 @@ fn srSymbolsAtDepth(symbols: List<SelfSymbol>, depth: Int) -> List<SelfSymbol> {
     }
     out
 }
-
 fn srOrPatternMismatch(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
-    out.diagnostics.push(
-        selfResolveDiagnosticAtNode(
-            "E0605",
-            "name is not bound by every alternative of the or-pattern",
-            sym.name,
-            sym.start,
-            sym.end,
-            sym.node,
-        ),
-    )
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0605", "name is not bound by every alternative of the or-pattern", sym.name, sym.start, sym.end, sym.node))
     out
 }
-
-fn srAstPatternNames(
-    file: AstFile,
-    idx: Int,
-    names: List<SelfResolveName>,
-) -> List<SelfResolveName> {
+fn srAstPatternNames(file: AstFile, idx: Int, names: List<SelfResolveName>) -> List<SelfResolveName> {
     if idx < 0 {
         return names
     }
@@ -2017,17 +1395,18 @@ fn srAstPatternNames(
     }
     out
 }
-
-fn srPatternIdentKind() -> Int { 3 }
-
-fn srPatternBindingKind() -> Int { 9 }
-
-fn srPatternFieldKind() -> Int { 10 }
-
+fn srPatternIdentKind() -> Int {
+    3
+}
+fn srPatternBindingKind() -> Int {
+    9
+}
+fn srPatternFieldKind() -> Int {
+    10
+}
 fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
     srAstTypeName(file, srAstChildAt(node.children, 0))
 }
-
 fn srAstTypeName(file: AstFile, idx: Int) -> String {
     if idx < 0 {
         return ""
@@ -2038,7 +1417,6 @@ fn srAstTypeName(file: AstFile, idx: Int) -> String {
     }
     ""
 }
-
 fn srAstUseAlias(file: AstFile, node: AstNode) -> String {
     let aliasIdx = srAstChildAt(node.children2, 0)
     if aliasIdx >= 0 {
@@ -2049,7 +1427,6 @@ fn srAstUseAlias(file: AstFile, node: AstNode) -> String {
     }
     srPathLastSegment(node.text)
 }
-
 fn srPathLastSegment(path: String) -> String {
     let parts = strings.split(path, ".")
     let mut last = ""
@@ -2060,7 +1437,6 @@ fn srPathLastSegment(path: String) -> String {
     }
     last
 }
-
 fn srPathHead(path: String) -> String {
     let parts = strings.split(path, ".")
     for part in parts {
@@ -2070,30 +1446,30 @@ fn srPathHead(path: String) -> String {
     }
     ""
 }
-
 fn srAstNode(file: AstFile, idx: Int) -> AstNode {
     astArenaNodeAt(file.arena, idx)
 }
-
 fn srAstChildAt(children: List<Int>, target: Int) -> Int {
-    if target < 0 || target >= children.len() { return -1 }
+    if target < 0 || target >= children.len() {
+        return -1
+    }
     children[target]
 }
-
 fn srAstListCount(items: List<Int>) -> Int {
     items.len()
 }
-
 fn srIntListAt(items: List<Int>, target: Int) -> Int {
-    if target < 0 || target >= items.len() { return -1 }
+    if target < 0 || target >= items.len() {
+        return -1
+    }
     items[target]
 }
-
 fn srStringListAt(items: List<String>, target: Int) -> String {
-    if target < 0 || target >= items.len() { return "" }
+    if target < 0 || target >= items.len() {
+        return ""
+    }
     items[target]
 }
-
 fn srIntListCopy(items: List<Int>) -> List<Int> {
     let mut out: List<Int> = []
     for item in items {
@@ -2101,7 +1477,6 @@ fn srIntListCopy(items: List<Int>) -> List<Int> {
     }
     out
 }
-
 fn srStringListCopy(items: List<String>) -> List<String> {
     let mut out: List<String> = []
     for item in items {
@@ -2109,7 +1484,6 @@ fn srStringListCopy(items: List<String>) -> List<String> {
     }
     out
 }
-
 fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
     let mut out: List<SelfSymbol> = []
     for item in items {
@@ -2117,7 +1491,6 @@ fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
     }
     out
 }
-
 /// srHandlePartialType routes a struct or enum declaration through the
 /// partial-merge flow (LANG_SPEC v0.5 §3.4 / R19). The first declaration
 /// of a name installs its symbol and registers a SelfPartialDecl tracker;
@@ -2126,41 +1499,28 @@ fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
 /// the normal duplicate-declaration path. Methods spread across partials
 /// are merged into the tracker so cross-declaration method-name
 /// collisions can fire E0501 with a targeted message.
-fn srHandlePartialType(
-    file: AstFile,
-    node: AstNode,
-    idx: Int,
-    kind: String,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srHandlePartialType(file: AstFile, node: AstNode, idx: Int, kind: String, result: SelfResolveResult) -> SelfResolveResult {
     let partialIdx = srFindPartialIdx(result.partials, node.text)
     let isPub = node.flags == 1
     if partialIdx < 0 {
-        // First time — install symbol and seed the partial tracker.
-        let mut out = srAddSymbol(
-            result,
-            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx),
-        )
+        let mut out = srAddSymbol(result, selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx))
         out = srRegisterPartial(file, node, idx, kind, isPub, out)
         return out
     }
     let prev = result.partials[partialIdx]
     if prev.kind != kind {
-        // Struct-vs-enum mismatch is a normal duplicate — route through
-        // srAddSymbol so the E0501 / duplicates counter fire as usual.
-        return srAddSymbol(
-            result,
-            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx),
-        )
+        return srAddSymbol(result, selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx))
     }
-    // Legal partial — no new symbol is added; instead, validate R19
-    // invariants against the canonical (first) declaration and merge the
-    // new partial's methods into the shared tracker.
     let mut out = srValidatePartialConsistency(file, node, idx, isPub, kind, prev, result)
     out = srMergePartialMembers(file, node, idx, kind, partialIdx, out)
     out
 }
-
+// First time — install symbol and seed the partial tracker.
+// Struct-vs-enum mismatch is a normal duplicate — route through
+// srAddSymbol so the E0501 / duplicates counter fire as usual.
+// Legal partial — no new symbol is added; instead, validate R19
+// invariants against the canonical (first) declaration and merge the
+// new partial's methods into the shared tracker.
 fn srFindPartialIdx(partials: List<SelfPartialDecl>, name: String) -> Int {
     let mut idx = 0
     for p in partials {
@@ -2171,23 +1531,14 @@ fn srFindPartialIdx(partials: List<SelfPartialDecl>, name: String) -> Int {
     }
     -1
 }
-
-fn srRegisterPartial(
-    file: AstFile,
-    node: AstNode,
-    idx: Int,
-    kind: String,
-    isPub: Bool,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srRegisterPartial(file: AstFile, node: AstNode, idx: Int, kind: String, isPub: Bool, result: SelfResolveResult) -> SelfResolveResult {
     let generics = srCollectGenericNames(file, node.children2)
     let mut hasFields = false
     let mut firstFieldsStart = -1
     let mut firstFieldsEnd = -1
     for memberIdx in node.children {
         let member = srAstNode(file, memberIdx)
-        let isMember = (kind == "struct" && member.kind == AstNField_) ||
-                       (kind == "enum" && member.kind == AstNVariant)
+        let isMember = (kind == "struct" && member.kind == AstNField_) || (kind == "enum" && member.kind == AstNVariant)
         if isMember && !hasFields {
             hasFields = true
             firstFieldsStart = member.start
@@ -2207,27 +1558,11 @@ fn srRegisterPartial(
             methodNodes.push(memberIdx)
         }
     }
-    let entry = SelfPartialDecl {
-        name: node.text,
-        kind,
-        firstNode: idx,
-        firstStart: node.start,
-        firstEnd: node.end,
-        firstPub: isPub,
-        firstGenerics: generics,
-        methodNames,
-        methodStarts,
-        methodEnds,
-        methodNodes,
-        hasFields,
-        firstFieldsStart,
-        firstFieldsEnd,
-    }
+    let entry = SelfPartialDecl {name: node.text, kind, firstNode: idx, firstStart: node.start, firstEnd: node.end, firstPub: isPub, firstGenerics: generics, methodNames, methodStarts, methodEnds, methodNodes, hasFields, firstFieldsStart, firstFieldsEnd}
     let mut out = result
     out.partials.push(entry)
     out
 }
-
 fn srCollectGenericNames(file: AstFile, generics: List<Int>) -> List<String> {
     let mut names: List<String> = []
     for gIdx in generics {
@@ -2236,48 +1571,22 @@ fn srCollectGenericNames(file: AstFile, generics: List<Int>) -> List<String> {
     }
     names
 }
-
-fn srValidatePartialConsistency(
-    file: AstFile,
-    node: AstNode,
-    idx: Int,
-    isPub: Bool,
-    kind: String,
-    prev: SelfPartialDecl,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srValidatePartialConsistency(file: AstFile, node: AstNode, idx: Int, isPub: Bool, kind: String, prev: SelfPartialDecl, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if isPub != prev.firstPub {
         let message = "partial declarations of " + kind + " `" + node.text + "` disagree on visibility"
-        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-            "E0501",
-            message,
-            node.text,
-            node.start,
-            node.end,
-            idx,
-            "v0.5 R19: all partial declarations of the same type must have matching `pub` modifiers",
-        ))
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0501", message, node.text, node.start, node.end, idx, "v0.5 R19: all partial declarations of the same type must have matching `pub` modifiers"))
     }
     let newGenerics = srCollectGenericNames(file, node.children2)
     if !srGenericsEqual(prev.firstGenerics, newGenerics) {
-        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-            "E0501",
-            "partial declarations of `" + node.text + "` disagree on type parameters",
-            node.text,
-            node.start,
-            node.end,
-            idx,
-            "v0.5 R19: all partial declarations must have the same type-parameter list",
-        ))
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0501", "partial declarations of `" + node.text + "` disagree on type parameters", node.text, node.start, node.end, idx, "v0.5 R19: all partial declarations must have the same type-parameter list"))
     }
     let mut newHasFields = false
     let mut newFieldsStart = -1
     let mut newFieldsEnd = -1
     for memberIdx in node.children {
         let member = srAstNode(file, memberIdx)
-        let isMember = (kind == "struct" && member.kind == AstNField_) ||
-                       (kind == "enum" && member.kind == AstNVariant)
+        let isMember = (kind == "struct" && member.kind == AstNField_) || (kind == "enum" && member.kind == AstNVariant)
         if isMember && !newHasFields {
             newHasFields = true
             newFieldsStart = member.start
@@ -2285,48 +1594,35 @@ fn srValidatePartialConsistency(
         }
     }
     if prev.hasFields && newHasFields {
-        let label = if kind == "struct" { "fields" } else { "variants" }
-        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-            "E0501",
-            kind + " `" + node.text + "` may declare " + label + " in exactly one partial declaration",
-            node.text,
-            newFieldsStart,
-            newFieldsEnd,
-            idx,
-            "v0.5 R19: a partial struct/enum may spread methods across files, but its fields or variants must live in exactly one declaration",
-        ))
+        let label = if kind == "struct" {
+            "fields"
+        } else {
+            "variants"
+        }
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0501", kind + " `" + node.text + "` may declare " + label + " in exactly one partial declaration", node.text, newFieldsStart, newFieldsEnd, idx, "v0.5 R19: a partial struct/enum may spread methods across files, but its fields or variants must live in exactly one declaration"))
     }
     out
 }
-
 fn srGenericsEqual(a: List<String>, b: List<String>) -> Bool {
     if a.len() != b.len() {
         return false
     }
     let mut i = 0
     for name in a {
-        if name != b[i] { return false }
+        if name != b[i] {
+            return false
+        }
         i = i + 1
     }
     true
 }
-
-fn srMergePartialMembers(
-    file: AstFile,
-    node: AstNode,
-    idx: Int,
-    kind: String,
-    partialIdx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srMergePartialMembers(file: AstFile, node: AstNode, idx: Int, kind: String, partialIdx: Int, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
-    // Update hasFields if the new partial is the first to declare members.
     let prev = out.partials[partialIdx]
     if !prev.hasFields {
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
-            let isMember = (kind == "struct" && member.kind == AstNField_) ||
-                           (kind == "enum" && member.kind == AstNVariant)
+            let isMember = (kind == "struct" && member.kind == AstNField_) || (kind == "enum" && member.kind == AstNVariant)
             if isMember {
                 let mut entry = out.partials[partialIdx]
                 entry.hasFields = true
@@ -2337,8 +1633,6 @@ fn srMergePartialMembers(
             }
         }
     }
-    // Walk new partial's methods: cross-declaration duplicates emit
-    // E0501 with the method-specific message; fresh names are recorded.
     for memberIdx in node.children {
         let member = srAstNode(file, memberIdx)
         if member.kind != AstNFnDecl {
@@ -2347,15 +1641,7 @@ fn srMergePartialMembers(
         let dupIdx = srStringListIndex(out.partials[partialIdx].methodNames, member.text)
         if dupIdx >= 0 {
             let message = "method `" + member.text + "` is declared more than once on type `" + node.text + "`"
-            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-                "E0501",
-                message,
-                member.text,
-                member.start,
-                member.end,
-                memberIdx,
-                "v0.5 R19: methods spread across partial declarations must have unique names",
-            ))
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0501", message, member.text, member.start, member.end, memberIdx, "v0.5 R19: methods spread across partial declarations must have unique names"))
             continue
         }
         let mut entry = out.partials[partialIdx]
@@ -2367,7 +1653,9 @@ fn srMergePartialMembers(
     }
     out
 }
-
+// Update hasFields if the new partial is the first to declare members.
+// Walk new partial's methods: cross-declaration duplicates emit
+// E0501 with the method-specific message; fresh names are recorded.
 fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
@@ -2377,7 +1665,6 @@ fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult 
     }
     out
 }
-
 fn srAddUseSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
@@ -2387,49 +1674,21 @@ fn srAddUseSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResu
     }
     out
 }
-
 fn srDuplicate(result: SelfResolveResult, name: String, start: Int, end: Int) -> SelfResolveResult {
     srDuplicateAtNode(result, name, start, end, -1)
 }
-
-fn srDuplicateAtNode(
-    result: SelfResolveResult,
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> SelfResolveResult {
+fn srDuplicateAtNode(result: SelfResolveResult, name: String, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.duplicates = out.duplicates + 1
-    out.diagnostics.push(
-        selfResolveDiagnosticAtNode("E0501", "duplicate declaration", name, start, end, node),
-    )
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0501", "duplicate declaration", name, start, end, node))
     out
 }
-
-fn srDuplicateUseAtNode(
-    result: SelfResolveResult,
-    name: String,
-    start: Int,
-    end: Int,
-    node: Int,
-) -> SelfResolveResult {
+fn srDuplicateUseAtNode(result: SelfResolveResult, name: String, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.duplicates = out.duplicates + 1
-    out.diagnostics.push(
-        selfResolveDiagnosticHintAtNode(
-            "E0554",
-            "duplicate import name",
-            name,
-            start,
-            end,
-            node,
-            "remove the duplicate import or rename one side with `as`",
-        ),
-    )
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0554", "duplicate import name", name, start, end, node, "remove the duplicate import or rename one side with `as`"))
     out
 }
-
 fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) -> Bool {
     for sym in symbols {
         if sym.name == name && sym.depth == depth {
@@ -2438,7 +1697,6 @@ fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) ->
     }
     false
 }
-
 fn srStringListIndex(items: List<String>, target: String) -> Int {
     let mut idx = 0
     for item in items {
@@ -2449,7 +1707,6 @@ fn srStringListIndex(items: List<String>, target: String) -> Int {
     }
     -1
 }
-
 fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
     let suggestion = srSuggestSimilar(scope, name)
     if suggestion == "" {
@@ -2457,7 +1714,6 @@ fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
     }
     "did you mean `{suggestion}`?"
 }
-
 fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
     let mut names: List<String> = []
     for sym in scope.symbols {
@@ -2465,7 +1721,6 @@ fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
     }
     srSuggestFromList(name, names)
 }
-
 fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
     if left == right {
         return 0
@@ -2525,7 +1780,6 @@ fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
     }
     prev[rightLen]
 }
-
 fn srStringUnitCount(text: String) -> Int {
     let mut count = 0
     for unit in strings.split(text, "") {
@@ -2535,38 +1789,24 @@ fn srStringUnitCount(text: String) -> Int {
     }
     count
 }
-
 fn srSymbolCanBeType(sym: SelfSymbol) -> Bool {
     sym.kind == "type" || sym.kind == "generic" || sym.kind == "package"
 }
-
 fn srAstUseNode(file: AstFile, pkgSym: SelfSymbol) -> AstNode {
     if pkgSym.node < 0 {
         return emptyAstNode(AstNFile)
     }
     srAstNode(file, pkgSym.node)
 }
-
 fn srAstLookupPackageMember(file: AstFile, useNode: AstNode, member: String) -> SelfSymbol {
     for childIdx in useNode.children {
         let child = srAstNode(file, childIdx)
         if child.text == member {
-            return selfSymbolAtNode(
-                member,
-                srAstPackageMemberKind(child),
-                "",
-                0,
-                0,
-                child.start,
-                child.end,
-                true,
-                childIdx,
-            )
+            return selfSymbolAtNode(member, srAstPackageMemberKind(child), "", 0, 0, child.start, child.end, true, childIdx)
         }
     }
     srEmptySymbol()
 }
-
 fn srAstPackageMemberKind(node: AstNode) -> String {
     if node.kind == AstNFnDecl {
         return "fn"
@@ -2579,106 +1819,159 @@ fn srAstPackageMemberKind(node: AstNode) -> String {
     }
     ""
 }
-
 fn srEmptySymbol() -> SelfSymbol {
     selfSymbolAtNode("", "", "", 0, -1, -1, -1, false, -1)
 }
-
 fn srSymbolFound(sym: SelfSymbol) -> Bool {
     sym.name != ""
 }
-
 fn srIsBuiltinName(name: String) -> Bool {
     name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "unreachable" || name == "todo" || name == "abort" || name == "likely" || name == "unlikely" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
-
 fn srIsBuiltinTypeName(name: String) -> Bool {
     name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
-
 fn srIsBuiltinVariantName(name: String) -> Bool {
     name == "None" || name == "Some" || name == "Ok" || name == "Err"
 }
-
 fn srIsUpperName(name: String) -> Bool {
     astIsUpperName(name)
 }
-
 fn srIsDiscardName(name: String) -> Bool {
     name == "_" || strings.hasPrefix(name, "_")
 }
-
 // Annotation target bitmask. Matches the Go resolver's
 // `ast.AnnotationTarget` values (internal/ast/ast.go:79) so the
 // self-hosted checker can reuse the same allow-list logic.
-fn srAnnotTargetField() -> Int { 1 }
-fn srAnnotTargetTopLevel() -> Int { 2 }
-fn srAnnotTargetMethod() -> Int { 4 }
-fn srAnnotTargetVariant() -> Int { 8 }
-
+fn srAnnotTargetField() -> Int {
+    1
+}
+fn srAnnotTargetTopLevel() -> Int {
+    2
+}
+fn srAnnotTargetMethod() -> Int {
+    4
+}
+fn srAnnotTargetVariant() -> Int {
+    8
+}
 /// srAnnotAllowedTargets returns the bitmask of valid targets for a
 /// permitted annotation, or 0 for unknown names. Keep in sync with
 /// `annotationRules` in internal/ast/ast.go:93.
 fn srAnnotAllowedTargets(name: String) -> Int {
-    if name == "json" { return srAnnotTargetField() | srAnnotTargetVariant() }
-    if name == "deprecated" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "json" {
+        return srAnnotTargetField() | srAnnotTargetVariant()
+    }
+    if name == "deprecated" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
     if name == "allow" {
         return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
     }
-    if name == "intrinsic_methods" { return srAnnotTargetTopLevel() }
-    if name == "requires" { return srAnnotTargetMethod() }
-    if name == "no_alloc" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "intrinsic" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "c_abi" { return srAnnotTargetTopLevel() }
-    if name == "export" { return srAnnotTargetTopLevel() }
-    if name == "pod" { return srAnnotTargetTopLevel() }
-    if name == "repr" { return srAnnotTargetTopLevel() }
+    if name == "intrinsic_methods" {
+        return srAnnotTargetTopLevel()
+    }
+    if name == "requires" {
+        return srAnnotTargetMethod()
+    }
+    if name == "no_alloc" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "intrinsic" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "c_abi" {
+        return srAnnotTargetTopLevel()
+    }
+    if name == "export" {
+        return srAnnotTargetTopLevel()
+    }
+    if name == "pod" {
+        return srAnnotTargetTopLevel()
+    }
+    if name == "repr" {
+        return srAnnotTargetTopLevel()
+    }
     if name == "cfg" {
         return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
     }
-    if name == "op" { return srAnnotTargetMethod() }
-    if name == "test" { return srAnnotTargetTopLevel() }
-    // performance annotations (A5–A11, A13). All target fn / method.
-    if name == "vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "no_vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "parallel" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "unroll" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "inline" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "hot" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "cold" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "pure" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "target_feature" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "noalias" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "op" {
+        return srAnnotTargetMethod()
+    }
+    if name == "test" {
+        return srAnnotTargetTopLevel()
+    }
+    if name == "vectorize" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "no_vectorize" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "parallel" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "unroll" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "inline" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "hot" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "cold" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "pure" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "target_feature" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
+    if name == "noalias" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+    }
     0
 }
-
+// performance annotations (A5–A11, A13). All target fn / method.
 fn srIsAllowedAnnotation(name: String) -> Bool {
     srAnnotAllowedTargets(name) != 0
 }
-
 fn srAnnotationAllowedAt(name: String, target: Int) -> Bool {
     let allowed = srAnnotAllowedTargets(name)
     allowed != 0 && (allowed & target) != 0
 }
-
 fn srAnnotationTargetString(name: String) -> String {
     let allowed = srAnnotAllowedTargets(name)
     if allowed == 0 {
         return "(unknown)"
     }
     let mut parts: List<String> = []
-    if (allowed & srAnnotTargetField()) != 0 { parts.push("struct fields") }
-    if (allowed & srAnnotTargetTopLevel()) != 0 { parts.push("top-level declarations") }
-    if (allowed & srAnnotTargetMethod()) != 0 { parts.push("methods") }
-    if (allowed & srAnnotTargetVariant()) != 0 { parts.push("enum variants") }
+    if (allowed & srAnnotTargetField()) != 0 {
+        parts.push("struct fields")
+    }
+    if (allowed & srAnnotTargetTopLevel()) != 0 {
+        parts.push("top-level declarations")
+    }
+    if (allowed & srAnnotTargetMethod()) != 0 {
+        parts.push("methods")
+    }
+    if (allowed & srAnnotTargetVariant()) != 0 {
+        parts.push("enum variants")
+    }
     srJoinWithAnd(parts)
 }
-
 fn srJoinWithAnd(parts: List<String>) -> String {
     let n = parts.len()
-    if n == 0 { return "" }
-    if n == 1 { return parts[0] }
-    if n == 2 { return parts[0] + " and " + parts[1] }
+    if n == 0 {
+        return ""
+    }
+    if n == 1 {
+        return parts[0]
+    }
+    if n == 2 {
+        return parts[0] + " and " + parts[1]
+    }
     let mut out = ""
     let mut idx = 0
     for p in parts {
@@ -2693,7 +1986,6 @@ fn srJoinWithAnd(parts: List<String>) -> String {
     }
     out
 }
-
 /// srCollectAnnotationNodes unpacks a decl's `extra` field into the flat
 /// list of AstNAnnotation nodes that hang off it. The parser packs 0, 1,
 /// or N annotations differently (-1 / direct idx / "__group" wrapper);
@@ -2719,20 +2011,12 @@ fn srCollectAnnotationNodes(file: AstFile, extraIdx: Int) -> List<AstNode> {
     }
     anns
 }
-
 /// srCheckDeclAnnotations validates the annotations attached to a single
 /// declaration (or member) against v0.4 §18.1:
 ///   - unknown names → E0400 (with did-you-mean hint)
 ///   - wrong target kind → E0607
 ///   - same name twice on one target → E0609
-fn srCheckDeclAnnotations(
-    file: AstFile,
-    extraIdx: Int,
-    target: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    // Most decls carry no annotations; skip the unpack call (and its
-    // list allocation) in the common case.
+fn srCheckDeclAnnotations(file: AstFile, extraIdx: Int, target: Int, result: SelfResolveResult) -> SelfResolveResult {
     if extraIdx < 0 {
         return result
     }
@@ -2742,27 +2026,11 @@ fn srCheckDeclAnnotations(
     for ann in anns {
         let name = ann.text
         if !srIsAllowedAnnotation(name) {
-            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-                "E0400",
-                "unknown annotation `#[" + name + "]`",
-                name,
-                ann.start,
-                ann.end,
-                -1,
-                srDidYouMeanHint(name, srAnnotationNameList()),
-            ))
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0400", "unknown annotation `#[" + name + "]`", name, ann.start, ann.end, -1, srDidYouMeanHint(name, srAnnotationNameList())))
             continue
         }
         if !srAnnotationAllowedAt(name, target) {
-            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-                "E0607",
-                "annotation `#[" + name + "]` is not allowed here",
-                name,
-                ann.start,
-                ann.end,
-                -1,
-                "`#[" + name + "]` is permitted on " + srAnnotationTargetString(name),
-            ))
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0607", "annotation `#[" + name + "]` is not allowed here", name, ann.start, ann.end, -1, "`#[" + name + "]` is permitted on " + srAnnotationTargetString(name)))
         }
         let mut isDup = false
         for prev in seen {
@@ -2771,13 +2039,7 @@ fn srCheckDeclAnnotations(
             }
         }
         if isDup {
-            out.diagnostics.push(selfResolveDiagnostic(
-                "E0609",
-                "annotation `#[" + name + "]` is repeated on the same target",
-                name,
-                ann.start,
-                ann.end,
-            ))
+            out.diagnostics.push(selfResolveDiagnostic("E0609", "annotation `#[" + name + "]` is repeated on the same target", name, ann.start, ann.end))
             continue
         }
         seen.push(name)
@@ -2785,7 +2047,8 @@ fn srCheckDeclAnnotations(
     }
     out
 }
-
+// Most decls carry no annotations; skip the unpack call (and its
+// list allocation) in the common case.
 /// SrAnnotArgView normalizes the three shapes the parser emits for
 /// annotation args into one record. `#[json(key = "x")]` produces
 /// AstNField_ (keyed value); `#[json(skip)]` produces AstNIdent (bare
@@ -2798,25 +2061,22 @@ struct SrAnnotArgView {
     start: Int,
     end: Int,
 }
-
 fn srAnnotArgView(file: AstFile, argIdx: Int) -> SrAnnotArgView {
     let arg = srAstNode(file, argIdx)
     if arg.kind == AstNField_ {
-        return SrAnnotArgView { key: arg.text, valueIdx: arg.left, isFlag: false, start: arg.start, end: arg.end }
+        return SrAnnotArgView {key: arg.text, valueIdx: arg.left, isFlag: false, start: arg.start, end: arg.end}
     }
     if arg.kind == AstNIdent {
-        return SrAnnotArgView { key: arg.text, valueIdx: -1, isFlag: true, start: arg.start, end: arg.end }
+        return SrAnnotArgView {key: arg.text, valueIdx: -1, isFlag: true, start: arg.start, end: arg.end}
     }
-    SrAnnotArgView { key: "", valueIdx: argIdx, isFlag: false, start: arg.start, end: arg.end }
+    SrAnnotArgView {key: "", valueIdx: argIdx, isFlag: false, start: arg.start, end: arg.end}
 }
-
 fn srIsStringLitAtIdx(file: AstFile, idx: Int) -> Bool {
     if idx < 0 {
         return false
     }
     srAstNode(file, idx).kind == AstNStringLit
 }
-
 fn srIsFlagOrTrue(file: AstFile, view: SrAnnotArgView) -> Bool {
     if view.isFlag {
         return true
@@ -2827,86 +2087,70 @@ fn srIsFlagOrTrue(file: AstFile, view: SrAnnotArgView) -> Bool {
     let v = srAstNode(file, view.valueIdx)
     v.kind == AstNBoolLit && v.flags == 1
 }
-
-fn srPushBadArg(
-    result: SelfResolveResult,
-    message: String,
-    start: Int,
-    end: Int,
-) -> SelfResolveResult {
+fn srPushBadArg(result: SelfResolveResult, message: String, start: Int, end: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnostic("E0739", message, "", start, end))
     out
 }
-
-fn srPushUnknownArg(
-    result: SelfResolveResult,
-    message: String,
-    name: String,
-    start: Int,
-    end: Int,
-    hint: String,
-) -> SelfResolveResult {
-    // Matches the Go resolver's quirk: unknown annotation-arg keys are
-    // emitted as E0400 (CodeUnknownAnnotation), not E0739. See
-    // internal/resolve/resolve.go:711. The `hint` field carries the
-    // did-you-mean suggestion (empty if none) — this is a strict
-    // improvement over Go, which emits no suggestion.
+fn srPushUnknownArg(result: SelfResolveResult, message: String, name: String, start: Int, end: Int, hint: String) -> SelfResolveResult {
     let mut out = result
-    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-        "E0400",
-        message,
-        name,
-        start,
-        end,
-        -1,
-        hint,
-    ))
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0400", message, name, start, end, -1, hint))
     out
 }
-
+// Matches the Go resolver's quirk: unknown annotation-arg keys are
+// emitted as E0400 (CodeUnknownAnnotation), not E0739. See
+// internal/resolve/resolve.go:711. The `hint` field carries the
+// did-you-mean suggestion (empty if none) — this is a strict
+// improvement over Go, which emits no suggestion.
 /// srCheckAnnotationArgs dispatches to the per-annotation argument
 /// validator. Only runs on allowed + non-duplicate annotations. Mirrors
 /// the Go resolver's `checkAnnotationArgs` (internal/resolve/resolve.go:546).
-fn srCheckAnnotationArgs(
-    file: AstFile,
-    ann: AstNode,
-    target: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    if ann.text == "json" { return srCheckJSONArgs(file, ann, target, result) }
-    if ann.text == "deprecated" { return srCheckDeprecatedArgs(file, ann, result) }
-    if ann.text == "repr" { return srCheckReprArgs(file, ann, result) }
-    if ann.text == "export" { return srCheckExportArgs(file, ann, result) }
-    // cfg args are validated up front in srAstCollectDecl (before the
-    // filter drop) so dropped decls still surface E0405/E0739. Skipping
-    // cfg here avoids double-emission for decls that survive.
+fn srCheckAnnotationArgs(file: AstFile, ann: AstNode, target: Int, result: SelfResolveResult) -> SelfResolveResult {
+    if ann.text == "json" {
+        return srCheckJSONArgs(file, ann, target, result)
+    }
+    if ann.text == "deprecated" {
+        return srCheckDeprecatedArgs(file, ann, result)
+    }
+    if ann.text == "repr" {
+        return srCheckReprArgs(file, ann, result)
+    }
+    if ann.text == "export" {
+        return srCheckExportArgs(file, ann, result)
+    }
     if ann.text == "intrinsic" || ann.text == "pod" || ann.text == "c_abi" || ann.text == "no_alloc" {
         return srCheckNoArgsRuntime(file, ann, result)
     }
-    // bare-flag annotations (A5.2 / A6 / A9 / A13): reject any args.
-    if ann.text == "hot" || ann.text == "cold" || ann.text == "pure" ||
-       ann.text == "no_vectorize" || ann.text == "parallel" {
+    if ann.text == "hot" || ann.text == "cold" || ann.text == "pure" || ann.text == "no_vectorize" || ann.text == "parallel" {
         return srCheckBareFlagAnnotation(file, ann, result)
     }
-    if ann.text == "inline" { return srCheckInlineArgs(file, ann, result) }
-    if ann.text == "unroll" { return srCheckUnrollArgs(file, ann, result) }
-    if ann.text == "vectorize" { return srCheckVectorizeArgs(file, ann, result) }
-    if ann.text == "target_feature" { return srCheckTargetFeatureArgs(file, ann, result) }
-    if ann.text == "noalias" { return srCheckNoaliasArgs(file, ann, result) }
+    if ann.text == "inline" {
+        return srCheckInlineArgs(file, ann, result)
+    }
+    if ann.text == "unroll" {
+        return srCheckUnrollArgs(file, ann, result)
+    }
+    if ann.text == "vectorize" {
+        return srCheckVectorizeArgs(file, ann, result)
+    }
+    if ann.text == "target_feature" {
+        return srCheckTargetFeatureArgs(file, ann, result)
+    }
+    if ann.text == "noalias" {
+        return srCheckNoaliasArgs(file, ann, result)
+    }
     result
 }
-
+// cfg args are validated up front in srAstCollectDecl (before the
+// filter drop) so dropped decls still surface E0405/E0739. Skipping
+// cfg here avoids double-emission for decls that survive.
+// bare-flag annotations (A5.2 / A6 / A9 / A13): reject any args.
 /// srValidateCfgAnnotationsOnDecl runs cfg shape validation over every
 /// `#[cfg(...)]` annotation attached to a decl. Called from the top-level
 /// decl walker before the filter drop so dropped decls still surface
 /// E0405 / E0739. Non-cfg annotations are skipped here — the main
 /// srCheckDeclAnnotations walk handles them when the decl survives.
-fn srValidateCfgAnnotationsOnDecl(
-    file: AstFile,
-    extraIdx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srValidateCfgAnnotationsOnDecl(file: AstFile, extraIdx: Int, result: SelfResolveResult) -> SelfResolveResult {
     if extraIdx < 0 {
         return result
     }
@@ -2919,7 +2163,6 @@ fn srValidateCfgAnnotationsOnDecl(
     }
     out
 }
-
 /// srCheckCfgArgs validates `#[cfg(key = "value")]` arguments. Emits
 /// E0739 when the annotation is empty or an arg is not `key = string`,
 /// and E0405 when the key is not one of `os / arch / target / feature`.
@@ -2927,22 +2170,10 @@ fn srValidateCfgAnnotationsOnDecl(
 /// evaluateCfgArg (internal/resolve/cfg.go:111, 139). Diag emission is
 /// independent of filter evaluation — tooling sees the same shape
 /// errors whether or not filtering is enabled.
-fn srCheckCfgArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckCfgArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if srAstListCount(ann.children) == 0 {
-        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-            "E0739",
-            "`#[cfg(...)]` requires at least one predicate",
-            "cfg",
-            ann.start,
-            ann.end,
-            -1,
-            "v0.5 §5 / G29: use `#[cfg(key = \"value\")]` where key is `os`, `target`, `arch`, or `feature`",
-        ))
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "`#[cfg(...)]` requires at least one predicate", "cfg", ann.start, ann.end, -1, "v0.5 §5 / G29: use `#[cfg(key = \"value\")]` where key is `os`, `target`, `arch`, or `feature`"))
         return out
     }
     for argIdx in ann.children {
@@ -2950,27 +2181,14 @@ fn srCheckCfgArgs(
     }
     out
 }
-
-fn srCheckCfgArg(
-    file: AstFile,
-    argIdx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckCfgArg(file: AstFile, argIdx: Int, result: SelfResolveResult) -> SelfResolveResult {
     let arg = srAstNode(file, argIdx)
     if arg.kind == AstNCall && arg.left >= 0 {
         let callee = srAstNode(file, arg.left)
         if callee.kind == AstNIdent && (callee.text == "all" || callee.text == "any" || callee.text == "not") {
             let mut out = result
             if callee.text == "not" && arg.children.len() != 1 {
-                out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-                    "E0739",
-                    "`not(...)` requires exactly one argument",
-                    "cfg",
-                    arg.start,
-                    arg.end,
-                    -1,
-                    "v0.5 §5 / G29: `not` takes exactly one cfg predicate",
-                ))
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "`not(...)` requires exactly one argument", "cfg", arg.start, arg.end, -1, "v0.5 §5 / G29: `not` takes exactly one cfg predicate"))
                 return out
             }
             for childIdx in arg.children {
@@ -2982,32 +2200,15 @@ fn srCheckCfgArg(
     let view = srAnnotArgView(file, argIdx)
     let mut out = result
     if view.isFlag || view.key == "" || view.valueIdx < 0 || !srIsStringLitAtIdx(file, view.valueIdx) {
-        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-            "E0739",
-            "`#[cfg(...)]` requires a `key = \"value\"` argument",
-            "cfg",
-            view.start,
-            view.end,
-            -1,
-            "v0.5 §5: cfg argument values must be string literals — no identifiers or computed expressions",
-        ))
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "`#[cfg(...)]` requires a `key = \"value\"` argument", "cfg", view.start, view.end, -1, "v0.5 §5: cfg argument values must be string literals — no identifiers or computed expressions"))
         return out
     }
     if view.key == "os" || view.key == "arch" || view.key == "target" || view.key == "feature" {
         return out
     }
-    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-        "E0405",
-        "unknown cfg key `" + view.key + "`",
-        "cfg",
-        view.start,
-        view.end,
-        -1,
-        "v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`",
-    ))
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0405", "unknown cfg key `" + view.key + "`", "cfg", view.start, view.end, -1, "v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`"))
     out
 }
-
 /// srCfgDeclPasses decides whether a decl survives the `#[cfg(...)]`
 /// pre-resolve filter. When the env is disabled every decl passes.
 /// Otherwise multiple cfg annotations are conjoined — all must hold —
@@ -3031,7 +2232,6 @@ fn srCfgDeclPasses(file: AstFile, node: AstNode, cfg: SelfResolveCfgEnv) -> Bool
     }
     true
 }
-
 fn srCfgAnnotationPasses(file: AstFile, ann: AstNode, cfg: SelfResolveCfgEnv) -> Bool {
     if srAstListCount(ann.children) == 0 {
         return false
@@ -3043,7 +2243,6 @@ fn srCfgAnnotationPasses(file: AstFile, ann: AstNode, cfg: SelfResolveCfgEnv) ->
     }
     true
 }
-
 fn srCfgArgIdxPasses(file: AstFile, argIdx: Int, cfg: SelfResolveCfgEnv) -> Bool {
     let arg = srAstNode(file, argIdx)
     if arg.kind == AstNCall && arg.left >= 0 {
@@ -3076,20 +2275,32 @@ fn srCfgArgIdxPasses(file: AstFile, argIdx: Int, cfg: SelfResolveCfgEnv) -> Bool
     let view = srAnnotArgView(file, argIdx)
     return srCfgArgPasses(file, view, cfg)
 }
-
 fn srCfgArgPasses(file: AstFile, view: SrAnnotArgView, cfg: SelfResolveCfgEnv) -> Bool {
-    if view.isFlag { return false }
-    if view.valueIdx < 0 { return false }
+    if view.isFlag {
+        return false
+    }
+    if view.valueIdx < 0 {
+        return false
+    }
     let v = srAstNode(file, view.valueIdx)
-    if v.kind != AstNStringLit { return false }
+    if v.kind != AstNStringLit {
+        return false
+    }
     let value = srStringLitContent(v.text)
-    if view.key == "os" { return cfg.os == value }
-    if view.key == "arch" { return cfg.arch == value }
-    if view.key == "target" { return cfg.target == value }
-    if view.key == "feature" { return srCfgEnvHasFeature(cfg, value) }
+    if view.key == "os" {
+        return cfg.os == value
+    }
+    if view.key == "arch" {
+        return cfg.arch == value
+    }
+    if view.key == "target" {
+        return cfg.target == value
+    }
+    if view.key == "feature" {
+        return srCfgEnvHasFeature(cfg, value)
+    }
     false
 }
-
 /// srStringLitContent unwraps the raw string-literal lexeme stored on an
 /// AstNStringLit node. The parser records the full source text (including
 /// the surrounding `"` / `"""` / `r"…"` syntax) so the formatter can
@@ -3111,7 +2322,6 @@ fn srStringLitContent(text: String) -> String {
     }
     text
 }
-
 fn srCfgEnvHasFeature(cfg: SelfResolveCfgEnv, name: String) -> Bool {
     for f in cfg.features {
         if f == name {
@@ -3120,13 +2330,7 @@ fn srCfgEnvHasFeature(cfg: SelfResolveCfgEnv, name: String) -> Bool {
     }
     false
 }
-
-fn srCheckJSONArgs(
-    file: AstFile,
-    ann: AstNode,
-    target: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckJSONArgs(file: AstFile, ann: AstNode, target: Int, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let mut hasKey = false
     let mut hasSkip = false
@@ -3152,14 +2356,7 @@ fn srCheckJSONArgs(
                 out = srPushBadArg(out, "`#[json(optional)]` takes no value or `optional = true`", view.start, view.end)
             }
         } else {
-            out = srPushUnknownArg(
-                out,
-                "`#[json]` does not accept argument `" + view.key + "`",
-                view.key,
-                view.start,
-                view.end,
-                srDidYouMeanHint(view.key, srJSONArgKeys()),
-            )
+            out = srPushUnknownArg(out, "`#[json]` does not accept argument `" + view.key + "`", view.key, view.start, view.end, srDidYouMeanHint(view.key, srJSONArgKeys()))
         }
     }
     if hasSkip && (hasKey || hasOptional) {
@@ -3167,7 +2364,6 @@ fn srCheckJSONArgs(
     }
     out
 }
-
 /// srCheckJSONFieldArgs validates that `#[json(optional)]` is only
 /// attached to struct fields whose declared type is already optional —
 /// either the `T?` sugar or an unqualified `Option<T>`. Runs after the
@@ -3175,11 +2371,7 @@ fn srCheckJSONArgs(
 /// shape) are already reported; this pass only adds the type-shape
 /// check that needs the field node as context. Mirrors
 /// internal/resolve/resolve.go::checkJSONFieldArgs.
-fn srCheckJSONFieldArgs(
-    file: AstFile,
-    field: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckJSONFieldArgs(file: AstFile, field: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     if field.extra < 0 {
         return result
     }
@@ -3195,18 +2387,12 @@ fn srCheckJSONFieldArgs(
                 continue
             }
             if !srJsonFieldTypeAllowsOptional(file, field.right) {
-                out = srPushBadArg(
-                    out,
-                    "`#[json(optional)]` requires an optional field type",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "`#[json(optional)]` requires an optional field type", view.start, view.end)
             }
         }
     }
     out
 }
-
 /// srJsonFieldTypeAllowsOptional reports whether an AST type node
 /// represents `T?` or an unqualified `Option<T>` — the two shapes the
 /// JSON decoder treats as optional for `#[json(optional)]`. Mirrors
@@ -3227,7 +2413,6 @@ fn srJsonFieldTypeAllowsOptional(file: AstFile, typeIdx: Int) -> Bool {
     let parts = strings.split(t.text, ".")
     parts.len() == 1 && t.text == "Option"
 }
-
 /// srJsonVariantTag returns the JSON tag for a variant node, or None if
 /// the variant has `#[json(skip)]`. Mirrors
 /// internal/resolve/resolve.go::jsonVariantTag.
@@ -3253,17 +2438,16 @@ fn srJsonVariantTag(file: AstFile, variantIdx: Int) -> Option<String> {
             }
         }
     }
-    if skipped { None } else { Some(tag) }
+    if skipped {
+        None
+    } else {
+        Some(tag)
+    }
 }
-
 /// srCheckDuplicateVariantJSONTags checks for duplicate JSON tags
 /// across variants of a single enum. Mirrors
 /// internal/resolve/resolve.go::checkDuplicateVariantJSONTags.
-fn srCheckDuplicateVariantJSONTags(
-    file: AstFile,
-    enumIdx: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckDuplicateVariantJSONTags(file: AstFile, enumIdx: Int, result: SelfResolveResult) -> SelfResolveResult {
     let node = srAstNode(file, enumIdx)
     let mut out = result
     let mut seenTags: List<String> = []
@@ -3278,27 +2462,16 @@ fn srCheckDuplicateVariantJSONTags(
         if tagOpt.isNone() {
             continue
         }
-        let tag = match tagOpt { Some(t) -> t, None -> "" }
+        let tag = match tagOpt {
+            Some(t) -> t,
+            None -> "",
+        }
         let mut dup = false
         for i in 0..seenTags.len() {
             if seenTags[i] == tag {
                 dup = true
-                out.diagnostics.push(selfResolveDiagnostic(
-                    "E0501",
-                    "enum `{node.text}` has duplicate JSON tag `{tag}`",
-                    "",
-                    member.start,
-                    member.end,
-                ))
-                out.diagnostics.push(selfResolveDiagnosticHintAtNode(
-                    "E0501",
-                    "previous JSON tag here",
-                    "",
-                    seenStarts[i],
-                    seenEnds[i],
-                    -1,
-                    "",
-                ))
+                out.diagnostics.push(selfResolveDiagnostic("E0501", "enum `{node.text}` has duplicate JSON tag `{tag}`", "", member.start, member.end))
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0501", "previous JSON tag here", "", seenStarts[i], seenEnds[i], -1, ""))
                 break
             }
         }
@@ -3310,45 +2483,21 @@ fn srCheckDuplicateVariantJSONTags(
     }
     out
 }
-
-fn srCheckDeprecatedArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckDeprecatedArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     for argIdx in ann.children {
         let view = srAnnotArgView(file, argIdx)
         if view.key == "since" || view.key == "use" || view.key == "message" {
             if view.valueIdx < 0 || !srIsStringLitAtIdx(file, view.valueIdx) {
-                out = srPushUnknownArg(
-                    out,
-                    "`#[deprecated(" + view.key + " = ...)]` requires a string literal",
-                    view.key,
-                    view.start,
-                    view.end,
-                    "",
-                )
+                out = srPushUnknownArg(out, "`#[deprecated(" + view.key + " = ...)]` requires a string literal", view.key, view.start, view.end, "")
             }
         } else {
-            out = srPushUnknownArg(
-                out,
-                "`#[deprecated]` does not accept argument `" + view.key + "`",
-                view.key,
-                view.start,
-                view.end,
-                srDidYouMeanHint(view.key, srDeprecatedArgKeys()),
-            )
+            out = srPushUnknownArg(out, "`#[deprecated]` does not accept argument `" + view.key + "`", view.key, view.start, view.end, srDidYouMeanHint(view.key, srDeprecatedArgKeys()))
         }
     }
     out
 }
-
-fn srCheckReprArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckReprArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let args = ann.children
     let n = args.len()
@@ -3368,12 +2517,7 @@ fn srCheckReprArgs(
     }
     out
 }
-
-fn srCheckExportArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckExportArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let args = ann.children
     let n = args.len()
@@ -3386,171 +2530,88 @@ fn srCheckExportArgs(
     }
     let view = srAnnotArgView(file, args[0])
     if view.key != "" {
-        return srPushBadArg(
-            out,
-            "`#[export]` takes a positional string literal, not a key-value argument",
-            view.start,
-            view.end,
-        )
+        return srPushBadArg(out, "`#[export]` takes a positional string literal, not a key-value argument", view.start, view.end)
     }
     if !srIsStringLitAtIdx(file, view.valueIdx) {
         return srPushBadArg(out, "`#[export]` requires a string literal argument", view.start, view.end)
     }
     out
 }
-
-fn srCheckNoArgsRuntime(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckNoArgsRuntime(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     if ann.children.len() == 0 {
         return result
     }
     let first = srAnnotArgView(file, ann.children[0])
-    srPushBadArg(
-        result,
-        "`#[" + ann.text + "]` does not take arguments",
-        first.start,
-        first.end,
-    )
+    srPushBadArg(result, "`#[" + ann.text + "]` does not take arguments", first.start, first.end)
 }
-
 /// srCheckBareFlagAnnotation validates the bare-flag annotations
 /// (`#[hot]`, `#[cold]`, `#[pure]`, `#[no_vectorize]`, `#[parallel]`):
 /// any argument is an E0739 error. Mirrors internal/resolve/resolve.go
 /// ::checkBareFlag / ::checkNoVectorizeArgs / ::checkParallelArgs.
-fn srCheckBareFlagAnnotation(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckBareFlagAnnotation(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     if ann.children.len() == 0 {
         return result
     }
     let first = srAnnotArgView(file, ann.children[0])
-    srPushBadArg(
-        result,
-        "`#[" + ann.text + "]` does not take arguments",
-        first.start,
-        first.end,
-    )
+    srPushBadArg(result, "`#[" + ann.text + "]` does not take arguments", first.start, first.end)
 }
-
 /// srCheckInlineArgs validates `#[inline]` / `#[inline(always)]` /
 /// `#[inline(never)]` (A8). Bare form is a soft hint; the
 /// `always` / `never` sub-flags pick the hard `alwaysinline` /
 /// `noinline` LLVM attributes. Mirrors
 /// internal/resolve/resolve.go::checkInlineArgs.
-fn srCheckInlineArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckInlineArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     if ann.children.len() == 0 {
         return result
     }
     if ann.children.len() > 1 {
         let second = srAnnotArgView(file, ann.children[1])
-        return srPushBadArgHint(
-            result,
-            "`#[inline(...)]` takes at most one argument",
-            second.start,
-            second.end,
-            "use either `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`",
-        )
+        return srPushBadArgHint(result, "`#[inline(...)]` takes at most one argument", second.start, second.end, "use either `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`")
     }
     let view = srAnnotArgView(file, ann.children[0])
     if view.key == "always" || view.key == "never" {
         if !srIsFlagOrTrue(file, view) {
-            return srPushBadArg(
-                result,
-                "`" + view.key + "` in `#[inline(...)]` is a bare flag",
-                view.start,
-                view.end,
-            )
+            return srPushBadArg(result, "`" + view.key + "` in `#[inline(...)]` is a bare flag", view.start, view.end)
         }
         return result
     }
-    srPushBadArgHint(
-        result,
-        "unknown `#[inline]` argument `" + view.key + "`",
-        view.start,
-        view.end,
-        "accepted: `always` (force inlining), `never` (forbid inlining), or no argument (soft hint)",
-    )
+    srPushBadArgHint(result, "unknown `#[inline]` argument `" + view.key + "`", view.start, view.end, "accepted: `always` (force inlining), `never` (forbid inlining), or no argument (soft hint)")
 }
-
 /// srCheckUnrollArgs validates `#[unroll]` / `#[unroll(count = N)]`
 /// (A7). Bare form lets LLVM choose the factor; the `count = N`
 /// form pins it to 1..1024. Mirrors
 /// internal/resolve/resolve.go::checkUnrollArgs.
-fn srCheckUnrollArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckUnrollArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     if ann.children.len() == 0 {
         return result
     }
     if ann.children.len() > 1 {
         let second = srAnnotArgView(file, ann.children[1])
-        return srPushBadArg(
-            result,
-            "`#[unroll(...)]` takes at most one argument",
-            second.start,
-            second.end,
-        )
+        return srPushBadArg(result, "`#[unroll(...)]` takes at most one argument", second.start, second.end)
     }
     let view = srAnnotArgView(file, ann.children[0])
     if view.key != "count" {
-        return srPushBadArgHint(
-            result,
-            "unknown `#[unroll]` argument `" + view.key + "`",
-            view.start,
-            view.end,
-            "accepted: `count = N` for a fixed unroll factor",
-        )
+        return srPushBadArgHint(result, "unknown `#[unroll]` argument `" + view.key + "`", view.start, view.end, "accepted: `count = N` for a fixed unroll factor")
     }
     srCheckUnrollCountValue(file, view, result)
 }
-
-fn srCheckUnrollCountValue(
-    file: AstFile,
-    view: SrAnnotArgView,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckUnrollCountValue(file: AstFile, view: SrAnnotArgView, result: SelfResolveResult) -> SelfResolveResult {
     let n = srAnnotIntValue(file, view)
     if n < 0 {
-        return srPushBadArg(
-            result,
-            "`#[unroll(count = N)]` requires a positive integer literal",
-            view.start,
-            view.end,
-        )
+        return srPushBadArg(result, "`#[unroll(count = N)]` requires a positive integer literal", view.start, view.end)
     }
     if n < 1 || n > 1024 {
-        return srPushBadArg(
-            result,
-            "`#[unroll(count = N)]` value must be in 1..1024",
-            view.start,
-            view.end,
-        )
+        return srPushBadArg(result, "`#[unroll(count = N)]` value must be in 1..1024", view.start, view.end)
     }
     result
 }
-
 /// srCheckVectorizeArgs validates `#[vectorize]` (A5 / A5.1).
 /// Accepts the bare form (default treatment; redundant hint) plus
 /// named tuning args: `scalable` flag, `predicate` flag, and
 /// `width = N` with N in 1..1024. Duplicates and unknown keys fire
 /// E0739 apiece. Mirrors
 /// internal/resolve/resolve.go::checkVectorizeArgs.
-fn srCheckVectorizeArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckVectorizeArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     let mut hasScalable = false
     let mut hasPredicate = false
@@ -3559,161 +2620,84 @@ fn srCheckVectorizeArgs(
         let view = srAnnotArgView(file, argIdx)
         if view.key == "scalable" {
             if hasScalable {
-                out = srPushBadArg(
-                    out,
-                    "duplicate `scalable` in `#[vectorize(...)]`",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "duplicate `scalable` in `#[vectorize(...)]`", view.start, view.end)
                 continue
             }
             hasScalable = true
             if !srIsFlagOrTrue(file, view) {
-                out = srPushBadArg(
-                    out,
-                    "`scalable` in `#[vectorize(...)]` is a bare flag",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "`scalable` in `#[vectorize(...)]` is a bare flag", view.start, view.end)
             }
             continue
         }
         if view.key == "predicate" {
             if hasPredicate {
-                out = srPushBadArg(
-                    out,
-                    "duplicate `predicate` in `#[vectorize(...)]`",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "duplicate `predicate` in `#[vectorize(...)]`", view.start, view.end)
                 continue
             }
             hasPredicate = true
             if !srIsFlagOrTrue(file, view) {
-                out = srPushBadArg(
-                    out,
-                    "`predicate` in `#[vectorize(...)]` is a bare flag",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "`predicate` in `#[vectorize(...)]` is a bare flag", view.start, view.end)
             }
             continue
         }
         if view.key == "width" {
             if hasWidth {
-                out = srPushBadArg(
-                    out,
-                    "duplicate `width` in `#[vectorize(...)]`",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "duplicate `width` in `#[vectorize(...)]`", view.start, view.end)
                 continue
             }
             hasWidth = true
             let n = srAnnotIntValue(file, view)
             if n < 0 {
-                out = srPushBadArg(
-                    out,
-                    "`width` in `#[vectorize(...)]` requires a positive integer literal",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "`width` in `#[vectorize(...)]` requires a positive integer literal", view.start, view.end)
                 continue
             }
             if n < 1 || n > 1024 {
-                out = srPushBadArg(
-                    out,
-                    "`width` in `#[vectorize(...)]` must be in 1..1024",
-                    view.start,
-                    view.end,
-                )
+                out = srPushBadArg(out, "`width` in `#[vectorize(...)]` must be in 1..1024", view.start, view.end)
             }
             continue
         }
         if view.key == "" {
-            out = srPushBadArg(
-                out,
-                "`#[vectorize(...)]` arguments must be named",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "`#[vectorize(...)]` arguments must be named", view.start, view.end)
             continue
         }
-        out = srPushBadArgHint(
-            out,
-            "unknown `#[vectorize]` argument `" + view.key + "`",
-            view.start,
-            view.end,
-            "accepted: `scalable`, `predicate`, `width = N`",
-        )
+        out = srPushBadArgHint(out, "unknown `#[vectorize]` argument `" + view.key + "`", view.start, view.end, "accepted: `scalable`, `predicate`, `width = N`")
     }
     out
 }
-
 /// srCheckTargetFeatureArgs validates `#[target_feature(...)]` (
 /// A10): at least one bare-identifier feature name, no duplicates,
 /// no `key = value` shapes. Mirrors
 /// internal/resolve/resolve.go::checkTargetFeatureArgs.
-fn srCheckTargetFeatureArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckTargetFeatureArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if ann.children.len() == 0 {
-        return srPushBadArgHint(
-            out,
-            "`#[target_feature(...)]` requires at least one feature name",
-            ann.start,
-            ann.end,
-            "example: `#[target_feature(avx512f, avx512bw)]`",
-        )
+        return srPushBadArgHint(out, "`#[target_feature(...)]` requires at least one feature name", ann.start, ann.end, "example: `#[target_feature(avx512f, avx512bw)]`")
     }
     let mut seen: List<String> = []
     for argIdx in ann.children {
         let view = srAnnotArgView(file, argIdx)
         if view.key == "" {
-            out = srPushBadArg(
-                out,
-                "`#[target_feature(...)]` feature names must be bare identifiers",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "`#[target_feature(...)]` feature names must be bare identifiers", view.start, view.end)
             continue
         }
         if !srIsFlagOrTrue(file, view) {
-            out = srPushBadArg(
-                out,
-                "feature `" + view.key + "` in `#[target_feature(...)]` takes no value",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "feature `" + view.key + "` in `#[target_feature(...)]` takes no value", view.start, view.end)
             continue
         }
         if srStringListIndex(seen, view.key) >= 0 {
-            out = srPushBadArg(
-                out,
-                "duplicate feature `" + view.key + "` in `#[target_feature(...)]`",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "duplicate feature `" + view.key + "` in `#[target_feature(...)]`", view.start, view.end)
             continue
         }
         seen.push(view.key)
     }
     out
 }
-
 /// srCheckNoaliasArgs validates `#[noalias]` / `#[noalias(p1, p2)]`
 /// (A11). Bare form marks every pointer param; the arg-list form
 /// names specific parameter identifiers. Each arg must be a bare
 /// identifier; duplicates are rejected. Mirrors
 /// internal/resolve/resolve.go::checkNoaliasArgs.
-fn srCheckNoaliasArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
+fn srCheckNoaliasArgs(file: AstFile, ann: AstNode, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
     if ann.children.len() == 0 {
         return out
@@ -3722,64 +2706,46 @@ fn srCheckNoaliasArgs(
     for argIdx in ann.children {
         let view = srAnnotArgView(file, argIdx)
         if view.key == "" {
-            out = srPushBadArg(
-                out,
-                "`#[noalias(...)]` parameter names must be bare identifiers",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "`#[noalias(...)]` parameter names must be bare identifiers", view.start, view.end)
             continue
         }
         if !srIsFlagOrTrue(file, view) {
-            out = srPushBadArg(
-                out,
-                "parameter `" + view.key + "` in `#[noalias(...)]` takes no value",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "parameter `" + view.key + "` in `#[noalias(...)]` takes no value", view.start, view.end)
             continue
         }
         if srStringListIndex(seen, view.key) >= 0 {
-            out = srPushBadArg(
-                out,
-                "duplicate parameter `" + view.key + "` in `#[noalias(...)]`",
-                view.start,
-                view.end,
-            )
+            out = srPushBadArg(out, "duplicate parameter `" + view.key + "` in `#[noalias(...)]`", view.start, view.end)
             continue
         }
         seen.push(view.key)
     }
     out
 }
-
-fn srPushBadArgHint(
-    result: SelfResolveResult,
-    message: String,
-    start: Int,
-    end: Int,
-    hint: String,
-) -> SelfResolveResult {
+fn srPushBadArgHint(result: SelfResolveResult, message: String, start: Int, end: Int, hint: String) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", message, "", start, end, -1, hint))
     out
 }
-
 /// srAnnotIntValue extracts a non-negative integer literal from an
 /// annotation arg's value slot. Returns -1 when the value slot is
 /// empty, not an IntLit, or parses to a non-representable value.
 /// Supports decimal / hex / octal / binary + underscores, matching
 /// the Osty numeric grammar (§1.6.1).
 fn srAnnotIntValue(file: AstFile, view: SrAnnotArgView) -> Int {
-    if view.valueIdx < 0 { return -1 }
+    if view.valueIdx < 0 {
+        return -1
+    }
     let v = srAstNode(file, view.valueIdx)
-    if v.kind != AstNIntLit { return -1 }
+    if v.kind != AstNIntLit {
+        return -1
+    }
     srParseAnnotationInt(v.text)
 }
-
 fn srParseAnnotationInt(raw: String) -> Int {
     let stripped = strings.replaceAll(raw, "_", "")
-    if stripped.len() == 0 { return -1 }
+    if stripped.len() == 0 {
+        return -1
+    }
     let mut text = stripped
     let mut base = 10
     if strings.hasPrefix(text, "0x") || strings.hasPrefix(text, "0X") {
@@ -3792,16 +2758,19 @@ fn srParseAnnotationInt(raw: String) -> Int {
         base = 2
         text = strings.slice(text, 2, text.len())
     }
-    if text.len() == 0 { return -1 }
+    if text.len() == 0 {
+        return -1
+    }
     let mut acc = 0
     for ch in text.chars() {
         let d = srCharToDigit(ch)
-        if d < 0 || d >= base { return -1 }
+        if d < 0 || d >= base {
+            return -1
+        }
         acc = acc * base + d
     }
     acc
 }
-
 fn srCharToDigit(ch: Char) -> Int {
     let cp = ch.toInt()
     if cp >= 48 && cp <= 57 {
@@ -3814,48 +2783,19 @@ fn srCharToDigit(ch: Char) -> Int {
         -1
     }
 }
-
 /// srAnnotationNameList returns every permitted annotation name as a
 /// flat list for did-you-mean suggestions. Keep in sync with the
 /// `srAnnotAllowedTargets` switch.
 fn srAnnotationNameList() -> List<String> {
-    [
-        "json",
-        "deprecated",
-        "allow",
-        "intrinsic_methods",
-        "requires",
-        "no_alloc",
-        "intrinsic",
-        "c_abi",
-        "export",
-        "pod",
-        "repr",
-        "cfg",
-        "op",
-        "test",
-        // performance hints (A5–A11, A13).
-        "vectorize",
-        "no_vectorize",
-        "parallel",
-        "unroll",
-        "inline",
-        "hot",
-        "cold",
-        "pure",
-        "target_feature",
-        "noalias",
-    ]
+    ["json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias"]
 }
-
+// performance hints (A5–A11, A13).
 fn srJSONArgKeys() -> List<String> {
     ["key", "skip", "optional"]
 }
-
 fn srDeprecatedArgKeys() -> List<String> {
     ["since", "use", "message"]
 }
-
 /// srSuggestFromList finds the closest candidate (Levenshtein distance
 /// < 3) from a fixed list. Returns "" if nothing is within reach. This
 /// is the typo-suggestion primitive for annotation names and arg keys —
@@ -3882,7 +2822,6 @@ fn srSuggestFromList(name: String, candidates: List<String>) -> String {
     }
     best
 }
-
 fn srDidYouMeanHint(name: String, candidates: List<String>) -> String {
     let suggestion = srSuggestFromList(name, candidates)
     if suggestion == "" {

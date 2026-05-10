@@ -25,20 +25,16 @@
 // All enum kinds are bare (no variant payload); payload fields live on
 // the flat struct keyed by the kind. Readers must check `kind` before
 // interpreting kind-specific fields.
-
 use std.strings as strings
-
 // ====================================================================
 // Enum kinds
 // ====================================================================
-
 pub enum MirOperandKind {
     MirOpInvalid,
     MirOpCopy,
     MirOpMove,
     MirOpConst,
 }
-
 pub enum MirConstKind {
     MirConstInvalid,
     MirConstInt,
@@ -52,7 +48,6 @@ pub enum MirConstKind {
     MirConstNull,
     MirConstFn,
 }
-
 pub enum MirProjectionKind {
     MirProjInvalid,
     MirProjField,
@@ -61,7 +56,6 @@ pub enum MirProjectionKind {
     MirProjIndex,
     MirProjDeref,
 }
-
 pub enum MirRValueKind {
     MirRVInvalid,
     MirRVUse,
@@ -76,7 +70,6 @@ pub enum MirRValueKind {
     MirRVGlobalRef,
     MirRVNullary,
 }
-
 pub enum MirInstrKind {
     MirInstrInvalid,
     MirInstrAssign,
@@ -85,13 +78,11 @@ pub enum MirInstrKind {
     MirInstrStorageLive,
     MirInstrStorageDead,
 }
-
 pub enum MirCalleeKind {
     MirCalleeNone,
     MirCalleeFn,
     MirCalleeIndirect,
 }
-
 pub enum MirTermKind {
     MirTermInvalid,
     MirTermGoto,
@@ -100,7 +91,6 @@ pub enum MirTermKind {
     MirTermReturn,
     MirTermUnreachable,
 }
-
 pub enum MirUnaryOp {
     MirUnInvalid,
     MirUnNeg,
@@ -108,7 +98,6 @@ pub enum MirUnaryOp {
     MirUnNot,
     MirUnBitNot,
 }
-
 pub enum MirBinaryOp {
     MirBinInvalid,
     MirBinAdd,
@@ -130,7 +119,6 @@ pub enum MirBinaryOp {
     MirBinShl,
     MirBinShr,
 }
-
 pub enum MirAggregateKind {
     MirAggInvalid,
     MirAggTuple,
@@ -140,7 +128,6 @@ pub enum MirAggregateKind {
     MirAggMap,
     MirAggClosure,
 }
-
 pub enum MirCastKind {
     MirCastInvalid,
     MirCastIntResize,
@@ -151,18 +138,15 @@ pub enum MirCastKind {
     MirCastOptionalUnwrap,
     MirCastBitcast,
 }
-
 pub enum MirNullaryRVKind {
     MirNullaryInvalid,
     MirNullaryNone,
 }
-
 /// MirIntrinsicKind enumerates MIR-visible intrinsics. The ordering
 /// matches `mir.IntrinsicKind` in `internal/mir/mir.go`; keep them in
 /// sync so the Go side and self-hosted emitters agree on names.
 pub enum MirIntrinsicKind {
     MirIntrinsicInvalid,
-    // print family
     MirIntrinsicPrint,
     MirIntrinsicPrintln,
     MirIntrinsicEprint,
@@ -170,34 +154,28 @@ pub enum MirIntrinsicKind {
     MirIntrinsicAbort,
     MirIntrinsicStringConcat,
     MirIntrinsicBytesConcat,
-    // concurrency: channels
     MirIntrinsicChanMake,
     MirIntrinsicChanSend,
     MirIntrinsicChanRecv,
     MirIntrinsicChanClose,
     MirIntrinsicChanIsClosed,
-    // concurrency: structured tasks
     MirIntrinsicTaskGroup,
     MirIntrinsicSpawn,
     MirIntrinsicHandleJoin,
     MirIntrinsicGroupCancel,
     MirIntrinsicGroupIsCancelled,
-    // concurrency: high-level helpers
     MirIntrinsicParallel,
     MirIntrinsicRace,
     MirIntrinsicCollectAll,
-    // concurrency: select
     MirIntrinsicSelect,
     MirIntrinsicSelectRecv,
     MirIntrinsicSelectSend,
     MirIntrinsicSelectTimeout,
     MirIntrinsicSelectDefault,
-    // concurrency: cancellation
     MirIntrinsicIsCancelled,
     MirIntrinsicCheckCancelled,
     MirIntrinsicYield,
     MirIntrinsicSleep,
-    // collections: List<T>
     MirIntrinsicListPush,
     MirIntrinsicListLen,
     MirIntrinsicListGet,
@@ -212,7 +190,6 @@ pub enum MirIntrinsicKind {
     MirIntrinsicListReverse,
     MirIntrinsicListReversed,
     MirIntrinsicListToString,
-    // collections: Map<K,V>
     MirIntrinsicMapNew,
     MirIntrinsicMapGet,
     MirIntrinsicMapSet,
@@ -223,7 +200,6 @@ pub enum MirIntrinsicKind {
     MirIntrinsicMapRemove,
     MirIntrinsicMapKeysSorted,
     MirIntrinsicMapToString,
-    // collections: Set<T>
     MirIntrinsicSetNew,
     MirIntrinsicSetInsert,
     MirIntrinsicSetContains,
@@ -231,7 +207,6 @@ pub enum MirIntrinsicKind {
     MirIntrinsicSetToList,
     MirIntrinsicSetRemove,
     MirIntrinsicSetToString,
-    // String
     MirIntrinsicStringLen,
     MirIntrinsicStringIsEmpty,
     MirIntrinsicStringContains,
@@ -248,7 +223,6 @@ pub enum MirIntrinsicKind {
     MirIntrinsicStringReplace,
     MirIntrinsicStringChars,
     MirIntrinsicStringBytes,
-    // Bytes
     MirIntrinsicBytesLen,
     MirIntrinsicBytesIsEmpty,
     MirIntrinsicBytesGet,
@@ -270,7 +244,6 @@ pub enum MirIntrinsicKind {
     MirIntrinsicBytesToLower,
     MirIntrinsicBytesToHex,
     MirIntrinsicBytesSlice,
-    // Option / Result
     MirIntrinsicOptionIsSome,
     MirIntrinsicOptionIsNone,
     MirIntrinsicOptionUnwrap,
@@ -279,9 +252,7 @@ pub enum MirIntrinsicKind {
     MirIntrinsicResultIsErr,
     MirIntrinsicResultUnwrap,
     MirIntrinsicResultUnwrapOr,
-    // runtime sublanguage (LANG_SPEC §19)
     MirIntrinsicRawNull,
-    // deferred String + late additions
     MirIntrinsicStringJoin,
     MirIntrinsicListPop,
     MirIntrinsicStringSubstring,
@@ -314,30 +285,38 @@ pub enum MirIntrinsicKind {
     MirIntrinsicMapClear,
     MirIntrinsicSetClear,
 }
-
+// print family
+// concurrency: channels
+// concurrency: structured tasks
+// concurrency: high-level helpers
+// concurrency: select
+// concurrency: cancellation
+// collections: List<T>
+// collections: Map<K,V>
+// collections: Set<T>
+// String
+// Bytes
+// Option / Result
+// runtime sublanguage (LANG_SPEC §19)
+// deferred String + late additions
 // ====================================================================
 // Spans and primitives
 // ====================================================================
-
 /// MirSpan is a half-open [start, end) byte range in the original source.
 /// Every MIR node carries one so diagnostics can anchor back.
 pub struct MirSpan {
     pub start: Int,
     pub end: Int,
 }
-
 pub fn mirSpan(start: Int, end: Int) -> MirSpan {
-    MirSpan { start, end }
+    MirSpan {start, end}
 }
-
 pub fn mirNoSpan() -> MirSpan {
-    MirSpan { start: 0, end: 0 }
+    MirSpan {start: 0, end: 0}
 }
-
 // ====================================================================
 // Constants
 // ====================================================================
-
 /// MirConst is a compile-time value. `kind` selects which of the
 /// payload fields below is live. `typ` is the canonical type name
 /// string (e.g. "Int", "String", "Option<Int>") — MIR operates on
@@ -353,21 +332,9 @@ pub struct MirConst {
     pub fnSymbol: String,
     pub typ: String,
 }
-
 pub fn mirConstInvalid() -> MirConst {
-    MirConst {
-        kind: MirConstInvalid,
-        intValue: 0,
-        boolValue: false,
-        floatText: "",
-        strValue: "",
-        charValue: 0,
-        byteValue: 0,
-        fnSymbol: "",
-        typ: "",
-    }
+    MirConst {kind: MirConstInvalid, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ: ""}
 }
-
 pub fn mirConstInt(value: Int, typ: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstInt
@@ -375,7 +342,6 @@ pub fn mirConstInt(value: Int, typ: String) -> MirConst {
     c.typ = typ
     c
 }
-
 pub fn mirConstBool(value: Bool) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstBool
@@ -383,7 +349,6 @@ pub fn mirConstBool(value: Bool) -> MirConst {
     c.typ = "Bool"
     c
 }
-
 pub fn mirConstFloat(text: String, typ: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstFloat
@@ -391,7 +356,6 @@ pub fn mirConstFloat(text: String, typ: String) -> MirConst {
     c.typ = typ
     c
 }
-
 pub fn mirConstString(value: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstString
@@ -399,7 +363,6 @@ pub fn mirConstString(value: String) -> MirConst {
     c.typ = "String"
     c
 }
-
 pub fn mirConstBytes(value: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstBytes
@@ -407,7 +370,6 @@ pub fn mirConstBytes(value: String) -> MirConst {
     c.typ = "Bytes"
     c
 }
-
 pub fn mirConstChar(codePoint: Int) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstChar
@@ -415,7 +377,6 @@ pub fn mirConstChar(codePoint: Int) -> MirConst {
     c.typ = "Char"
     c
 }
-
 pub fn mirConstByte(value: Int) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstByte
@@ -423,21 +384,18 @@ pub fn mirConstByte(value: Int) -> MirConst {
     c.typ = "Byte"
     c
 }
-
 pub fn mirConstUnit() -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstUnit
     c.typ = "Unit"
     c
 }
-
 pub fn mirConstNull(typ: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstNull
     c.typ = typ
     c
 }
-
 pub fn mirConstFn(symbol: String, typ: String) -> MirConst {
     let mut c = mirConstInvalid()
     c.kind = MirConstFn
@@ -445,11 +403,9 @@ pub fn mirConstFn(symbol: String, typ: String) -> MirConst {
     c.typ = typ
     c
 }
-
 // ====================================================================
 // Projections and Places
 // ====================================================================
-
 /// MirProjection is one step refining a Place:
 ///   - Field    : struct field by (index, name, type)
 ///   - Tuple    : tuple element by index + type
@@ -463,26 +419,21 @@ pub fn mirConstFn(symbol: String, typ: String) -> MirConst {
 ///   - Deref    : pointer / optional unwrap (reserved for future).
 pub struct MirProjection {
     pub kind: MirProjectionKind,
-    pub index: Int,         // Field/Tuple/Variant: index
-    pub name: String,       // Field/Variant: name (empty for Tuple)
-    pub variantField: Int,  // Variant only: -1 = whole payload
-    pub indexLocal: Int,    // Index only: local id (-1 if constant path)
-    pub indexConst: Int,    // Index only: constant index (when indexLocal < 0)
+    pub index: Int,
+    pub name: String,
+    pub variantField: Int,
+    pub indexLocal: Int,
+    pub indexConst: Int,
     pub typ: String,
 }
-
+// Field/Tuple/Variant: index
+// Field/Variant: name (empty for Tuple)
+// Variant only: -1 = whole payload
+// Index only: local id (-1 if constant path)
+// Index only: constant index (when indexLocal < 0)
 pub fn mirProjInvalid() -> MirProjection {
-    MirProjection {
-        kind: MirProjInvalid,
-        index: 0,
-        name: "",
-        variantField: -1,
-        indexLocal: -1,
-        indexConst: 0,
-        typ: "",
-    }
+    MirProjection {kind: MirProjInvalid, index: 0, name: "", variantField: -1, indexLocal: -1, indexConst: 0, typ: ""}
 }
-
 pub fn mirFieldProj(index: Int, name: String, typ: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjField
@@ -491,7 +442,6 @@ pub fn mirFieldProj(index: Int, name: String, typ: String) -> MirProjection {
     p.typ = typ
     p
 }
-
 pub fn mirTupleProj(index: Int, typ: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjTuple
@@ -499,7 +449,6 @@ pub fn mirTupleProj(index: Int, typ: String) -> MirProjection {
     p.typ = typ
     p
 }
-
 pub fn mirVariantProj(variantIndex: Int, name: String, fieldIdx: Int, typ: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjVariant
@@ -509,7 +458,6 @@ pub fn mirVariantProj(variantIndex: Int, name: String, fieldIdx: Int, typ: Strin
     p.typ = typ
     p
 }
-
 pub fn mirIndexProjLocal(localId: Int, elemTyp: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjIndex
@@ -517,7 +465,6 @@ pub fn mirIndexProjLocal(localId: Int, elemTyp: String) -> MirProjection {
     p.typ = elemTyp
     p
 }
-
 pub fn mirIndexProjConst(value: Int, elemTyp: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjIndex
@@ -526,25 +473,21 @@ pub fn mirIndexProjConst(value: Int, elemTyp: String) -> MirProjection {
     p.typ = elemTyp
     p
 }
-
 pub fn mirDerefProj(typ: String) -> MirProjection {
     let mut p = mirProjInvalid()
     p.kind = MirProjDeref
     p.typ = typ
     p
 }
-
 /// MirPlace identifies a storage location: a local, optionally refined
 /// by a chain of projections.
 pub struct MirPlace {
     pub local: Int,
     pub projections: List<MirProjection>,
 }
-
 pub fn mirPlace(local: Int) -> MirPlace {
-    MirPlace { local, projections: [] }
+    MirPlace {local, projections: []}
 }
-
 /// mirPlaceProject returns a new Place extending `p` with `proj`.
 pub fn mirPlaceProject(p: MirPlace, proj: MirProjection) -> MirPlace {
     let mut next: List<MirProjection> = []
@@ -552,21 +495,17 @@ pub fn mirPlaceProject(p: MirPlace, proj: MirProjection) -> MirPlace {
         next.push(existing)
     }
     next.push(proj)
-    MirPlace { local: p.local, projections: next }
+    MirPlace {local: p.local, projections: next}
 }
-
 pub fn mirPlaceHasProjections(p: MirPlace) -> Bool {
     p.projections.len() > 0
 }
-
 pub fn mirPlaceBase(p: MirPlace) -> MirPlace {
     mirPlace(p.local)
 }
-
 // ====================================================================
 // Operands
 // ====================================================================
-
 /// MirOperand is a read-only value feed: either a Place read
 /// (Copy/Move) or a compile-time Const.
 pub struct MirOperand {
@@ -575,16 +514,9 @@ pub struct MirOperand {
     pub const: MirConst,
     pub typ: String,
 }
-
 pub fn mirOperandInvalid() -> MirOperand {
-    MirOperand {
-        kind: MirOpInvalid,
-        place: mirPlace(-1),
-        const: mirConstInvalid(),
-        typ: "",
-    }
+    MirOperand {kind: MirOpInvalid, place: mirPlace(-1), const: mirConstInvalid(), typ: ""}
 }
-
 pub fn mirOperandCopy(place: MirPlace, typ: String) -> MirOperand {
     let mut op = mirOperandInvalid()
     op.kind = MirOpCopy
@@ -592,7 +524,6 @@ pub fn mirOperandCopy(place: MirPlace, typ: String) -> MirOperand {
     op.typ = typ
     op
 }
-
 pub fn mirOperandMove(place: MirPlace, typ: String) -> MirOperand {
     let mut op = mirOperandInvalid()
     op.kind = MirOpMove
@@ -600,7 +531,6 @@ pub fn mirOperandMove(place: MirPlace, typ: String) -> MirOperand {
     op.typ = typ
     op
 }
-
 pub fn mirOperandConst(c: MirConst) -> MirOperand {
     let mut op = mirOperandInvalid()
     op.kind = MirOpConst
@@ -608,11 +538,9 @@ pub fn mirOperandConst(c: MirConst) -> MirOperand {
     op.typ = c.typ
     op
 }
-
 // ====================================================================
 // RValues
 // ====================================================================
-
 /// MirRValue is the right-hand side of an Assign instruction. RValues
 /// never have side effects on their own; side-effectful operations
 /// become Call or Intrinsic instructions.
@@ -622,55 +550,32 @@ pub fn mirOperandConst(c: MirConst) -> MirOperand {
 pub struct MirRValue {
     pub kind: MirRValueKind,
     pub typ: String,
-
-    // Use / unary / binary operands
     pub unaryOp: MirUnaryOp,
     pub binaryOp: MirBinaryOp,
-    pub arg: MirOperand,     // Use / Unary: the source operand
-    pub right: MirOperand,   // Binary: the right-hand operand
-
-    // Aggregate construction
+    pub arg: MirOperand,
+    pub right: MirOperand,
     pub aggKind: MirAggregateKind,
     pub aggFields: List<MirOperand>,
     pub aggVariantIdx: Int,
     pub aggVariantTag: String,
-
-    // Place-carrying forms (Discriminant / Len / Ref / AddressOf)
     pub place: MirPlace,
     pub hasPlace: Bool,
-
-    // Cast
     pub castKind: MirCastKind,
     pub castFrom: String,
     pub castTo: String,
-
-    // GlobalRef / Nullary
     pub globalName: String,
     pub nullaryKind: MirNullaryRVKind,
 }
-
+// Use / unary / binary operands
+// Use / Unary: the source operand
+// Binary: the right-hand operand
+// Aggregate construction
+// Place-carrying forms (Discriminant / Len / Ref / AddressOf)
+// Cast
+// GlobalRef / Nullary
 pub fn mirRValueInvalid() -> MirRValue {
-    MirRValue {
-        kind: MirRVInvalid,
-        typ: "",
-        unaryOp: MirUnInvalid,
-        binaryOp: MirBinInvalid,
-        arg: mirOperandInvalid(),
-        right: mirOperandInvalid(),
-        aggKind: MirAggInvalid,
-        aggFields: [],
-        aggVariantIdx: 0,
-        aggVariantTag: "",
-        place: mirPlace(-1),
-        hasPlace: false,
-        castKind: MirCastInvalid,
-        castFrom: "",
-        castTo: "",
-        globalName: "",
-        nullaryKind: MirNullaryInvalid,
-    }
+    MirRValue {kind: MirRVInvalid, typ: "", unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields: [], aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
-
 pub fn mirRVUse(op: MirOperand) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVUse
@@ -678,7 +583,6 @@ pub fn mirRVUse(op: MirOperand) -> MirRValue {
     rv.typ = op.typ
     rv
 }
-
 pub fn mirRVUnary(op: MirUnaryOp, arg: MirOperand, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVUnary
@@ -687,7 +591,6 @@ pub fn mirRVUnary(op: MirUnaryOp, arg: MirOperand, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVBinary(op: MirBinaryOp, left: MirOperand, right: MirOperand, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVBinary
@@ -697,7 +600,6 @@ pub fn mirRVBinary(op: MirBinaryOp, left: MirOperand, right: MirOperand, typ: St
     rv.typ = typ
     rv
 }
-
 pub fn mirRVAggregate(kind: MirAggregateKind, fields: List<MirOperand>, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVAggregate
@@ -706,19 +608,12 @@ pub fn mirRVAggregate(kind: MirAggregateKind, fields: List<MirOperand>, typ: Str
     rv.typ = typ
     rv
 }
-
-pub fn mirRVVariant(
-    variantIdx: Int,
-    variantTag: String,
-    fields: List<MirOperand>,
-    typ: String,
-) -> MirRValue {
+pub fn mirRVVariant(variantIdx: Int, variantTag: String, fields: List<MirOperand>, typ: String) -> MirRValue {
     let mut rv = mirRVAggregate(MirAggEnumVariant, fields, typ)
     rv.aggVariantIdx = variantIdx
     rv.aggVariantTag = variantTag
     rv
 }
-
 pub fn mirRVDiscriminant(place: MirPlace, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVDiscriminant
@@ -727,7 +622,6 @@ pub fn mirRVDiscriminant(place: MirPlace, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVLen(place: MirPlace, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVLen
@@ -736,7 +630,6 @@ pub fn mirRVLen(place: MirPlace, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVCast(kind: MirCastKind, arg: MirOperand, from: String, to: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVCast
@@ -747,7 +640,6 @@ pub fn mirRVCast(kind: MirCastKind, arg: MirOperand, from: String, to: String) -
     rv.typ = to
     rv
 }
-
 pub fn mirRVRef(place: MirPlace, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVRef
@@ -756,7 +648,6 @@ pub fn mirRVRef(place: MirPlace, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVAddressOf(place: MirPlace, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVAddressOf
@@ -765,7 +656,6 @@ pub fn mirRVAddressOf(place: MirPlace, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVGlobalRef(name: String, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVGlobalRef
@@ -773,7 +663,6 @@ pub fn mirRVGlobalRef(name: String, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 pub fn mirRVNullary(kind: MirNullaryRVKind, typ: String) -> MirRValue {
     let mut rv = mirRValueInvalid()
     rv.kind = MirRVNullary
@@ -781,11 +670,9 @@ pub fn mirRVNullary(kind: MirNullaryRVKind, typ: String) -> MirRValue {
     rv.typ = typ
     rv
 }
-
 // ====================================================================
 // Instructions
 // ====================================================================
-
 /// MirInstr is one instruction inside a basic block. The `kind` field
 /// selects which payload fields are live:
 ///
@@ -800,47 +687,26 @@ pub fn mirRVNullary(kind: MirNullaryRVKind, typ: String) -> MirRValue {
 pub struct MirInstr {
     pub kind: MirInstrKind,
     pub span: MirSpan,
-
-    // Dest place (Assign always has one; Call/Intrinsic optional via hasDest)
     pub dest: MirPlace,
     pub hasDest: Bool,
-
-    // Assign payload
     pub src: MirRValue,
-
-    // Call payload
     pub calleeKind: MirCalleeKind,
     pub calleeSymbol: String,
     pub calleeOperand: MirOperand,
     pub calleeType: String,
-
-    // Intrinsic payload
     pub intrinsic: MirIntrinsicKind,
-
-    // Shared args list (Call + Intrinsic)
     pub args: List<MirOperand>,
-
-    // Storage Live/Dead payload
     pub storageLocal: Int,
 }
-
+// Dest place (Assign always has one; Call/Intrinsic optional via hasDest)
+// Assign payload
+// Call payload
+// Intrinsic payload
+// Shared args list (Call + Intrinsic)
+// Storage Live/Dead payload
 pub fn mirInstrInvalid() -> MirInstr {
-    MirInstr {
-        kind: MirInstrInvalid,
-        span: mirNoSpan(),
-        dest: mirPlace(-1),
-        hasDest: false,
-        src: mirRValueInvalid(),
-        calleeKind: MirCalleeNone,
-        calleeSymbol: "",
-        calleeOperand: mirOperandInvalid(),
-        calleeType: "",
-        intrinsic: MirIntrinsicInvalid,
-        args: [],
-        storageLocal: -1,
-    }
+    MirInstr {kind: MirInstrInvalid, span: mirNoSpan(), dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: -1}
 }
-
 pub fn mirAssignInstr(dest: MirPlace, src: MirRValue, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrAssign
@@ -850,15 +716,7 @@ pub fn mirAssignInstr(dest: MirPlace, src: MirRValue, span: MirSpan) -> MirInstr
     i.span = span
     i
 }
-
-pub fn mirCallInstr(
-    hasDest: Bool,
-    dest: MirPlace,
-    calleeSymbol: String,
-    calleeType: String,
-    args: List<MirOperand>,
-    span: MirSpan,
-) -> MirInstr {
+pub fn mirCallInstr(hasDest: Bool, dest: MirPlace, calleeSymbol: String, calleeType: String, args: List<MirOperand>, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrCall
     i.hasDest = hasDest
@@ -870,14 +728,7 @@ pub fn mirCallInstr(
     i.span = span
     i
 }
-
-pub fn mirIndirectCallInstr(
-    hasDest: Bool,
-    dest: MirPlace,
-    callee: MirOperand,
-    args: List<MirOperand>,
-    span: MirSpan,
-) -> MirInstr {
+pub fn mirIndirectCallInstr(hasDest: Bool, dest: MirPlace, callee: MirOperand, args: List<MirOperand>, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrCall
     i.hasDest = hasDest
@@ -889,14 +740,7 @@ pub fn mirIndirectCallInstr(
     i.span = span
     i
 }
-
-pub fn mirIntrinsicInstr(
-    hasDest: Bool,
-    dest: MirPlace,
-    intrinsic: MirIntrinsicKind,
-    args: List<MirOperand>,
-    span: MirSpan,
-) -> MirInstr {
+pub fn mirIntrinsicInstr(hasDest: Bool, dest: MirPlace, intrinsic: MirIntrinsicKind, args: List<MirOperand>, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrIntrinsic
     i.hasDest = hasDest
@@ -906,7 +750,6 @@ pub fn mirIntrinsicInstr(
     i.span = span
     i
 }
-
 pub fn mirStorageLiveInstr(local: Int, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrStorageLive
@@ -914,7 +757,6 @@ pub fn mirStorageLiveInstr(local: Int, span: MirSpan) -> MirInstr {
     i.span = span
     i
 }
-
 pub fn mirStorageDeadInstr(local: Int, span: MirSpan) -> MirInstr {
     let mut i = mirInstrInvalid()
     i.kind = MirInstrStorageDead
@@ -922,22 +764,18 @@ pub fn mirStorageDeadInstr(local: Int, span: MirSpan) -> MirInstr {
     i.span = span
     i
 }
-
 // ====================================================================
 // Terminators
 // ====================================================================
-
 /// MirSwitchCase is one arm of a SwitchInt terminator.
 pub struct MirSwitchCase {
     pub value: Int,
     pub target: Int,
     pub label: String,
 }
-
 pub fn mirSwitchCase(value: Int, target: Int, label: String) -> MirSwitchCase {
-    MirSwitchCase { value, target, label }
+    MirSwitchCase {value, target, label}
 }
-
 /// MirTerm is the control-flow edge leaving a basic block. Every block
 /// has exactly one after lowering is complete.
 ///
@@ -951,34 +789,24 @@ pub fn mirSwitchCase(value: Int, target: Int, label: String) -> MirSwitchCase {
 pub struct MirTerm {
     pub kind: MirTermKind,
     pub span: MirSpan,
-
-    // Goto / Branch / SwitchInt targets
-    pub target: Int,         // Goto; SwitchInt default
-    pub thenBlock: Int,      // Branch
-    pub elseBlock: Int,      // Branch
-    pub cases: List<MirSwitchCase>, // SwitchInt
-
-    // Branch / SwitchInt scrutinee
+    pub target: Int,
+    pub thenBlock: Int,
+    pub elseBlock: Int,
+    pub cases: List<MirSwitchCase>,
     pub cond: MirOperand,
-
-    // Loop-back-edge marker: true when this terminator closes one
-    // iteration of an enclosing loop (body → header).
     pub loopBackEdge: Bool,
 }
-
+// Goto / Branch / SwitchInt targets
+// Goto; SwitchInt default
+// Branch
+// Branch
+// SwitchInt
+// Branch / SwitchInt scrutinee
+// Loop-back-edge marker: true when this terminator closes one
+// iteration of an enclosing loop (body → header).
 pub fn mirTermInvalid() -> MirTerm {
-    MirTerm {
-        kind: MirTermInvalid,
-        span: mirNoSpan(),
-        target: -1,
-        thenBlock: -1,
-        elseBlock: -1,
-        cases: [],
-        cond: mirOperandInvalid(),
-        loopBackEdge: false,
-    }
+    MirTerm {kind: MirTermInvalid, span: mirNoSpan(), target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
 }
-
 pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
     let mut t = mirTermInvalid()
     t.kind = MirTermGoto
@@ -986,7 +814,6 @@ pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
     t.span = span
     t
 }
-
 /// Goto terminator that closes one iteration of an enclosing loop. The
 /// LIR-Proto backend attaches `!llvm.loop` metadata to the resulting
 /// `br label %header` so vectorize / unroll / parallel hints land on
@@ -996,7 +823,6 @@ pub fn mirGotoBackEdgeTerm(target: Int, span: MirSpan) -> MirTerm {
     t.loopBackEdge = true
     t
 }
-
 pub fn mirBranchTerm(cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) -> MirTerm {
     let mut t = mirTermInvalid()
     t.kind = MirTermBranch
@@ -1006,13 +832,7 @@ pub fn mirBranchTerm(cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) ->
     t.span = span
     t
 }
-
-pub fn mirSwitchIntTerm(
-    scrutinee: MirOperand,
-    cases: List<MirSwitchCase>,
-    default: Int,
-    span: MirSpan,
-) -> MirTerm {
+pub fn mirSwitchIntTerm(scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) -> MirTerm {
     let mut t = mirTermInvalid()
     t.kind = MirTermSwitchInt
     t.cond = scrutinee
@@ -1021,25 +841,21 @@ pub fn mirSwitchIntTerm(
     t.span = span
     t
 }
-
 pub fn mirReturnTerm(span: MirSpan) -> MirTerm {
     let mut t = mirTermInvalid()
     t.kind = MirTermReturn
     t.span = span
     t
 }
-
 pub fn mirUnreachableTerm(span: MirSpan) -> MirTerm {
     let mut t = mirTermInvalid()
     t.kind = MirTermUnreachable
     t.span = span
     t
 }
-
 // ====================================================================
 // Locals, Basic blocks, Functions
 // ====================================================================
-
 /// MirLocal is one slot in a function's frame — parameter, return, or
 /// user/synthetic binding. `name` is empty for synthetic temporaries.
 pub struct MirLocal {
@@ -1051,19 +867,9 @@ pub struct MirLocal {
     pub isReturn: Bool,
     pub span: MirSpan,
 }
-
 pub fn mirLocal(id: Int, name: String, typ: String, mutable: Bool, span: MirSpan) -> MirLocal {
-    MirLocal {
-        id,
-        name,
-        typ,
-        mutable,
-        isParam: false,
-        isReturn: false,
-        span,
-    }
+    MirLocal {id, name, typ, mutable, isParam: false, isReturn: false, span}
 }
-
 /// MirBasicBlock is a straight-line run of instructions followed by
 /// exactly one terminator (post-lowering).
 pub struct MirBasicBlock {
@@ -1073,26 +879,16 @@ pub struct MirBasicBlock {
     pub hasTerm: Bool,
     pub span: MirSpan,
 }
-
 pub fn mirBasicBlock(id: Int, span: MirSpan) -> MirBasicBlock {
-    MirBasicBlock {
-        id,
-        instrs: [],
-        term: mirTermInvalid(),
-        hasTerm: false,
-        span,
-    }
+    MirBasicBlock {id, instrs: [], term: mirTermInvalid(), hasTerm: false, span}
 }
-
 pub fn mirBlockAppend(block: MirBasicBlock, instr: MirInstr) {
     block.instrs.push(instr)
 }
-
 pub fn mirBlockSetTerminator(block: MirBasicBlock, t: MirTerm) {
     block.term = t
     block.hasTerm = true
 }
-
 /// MirFunction is one lowered function: parameters, return slot, locals
 /// and a CFG of basic blocks. `entry` is the entry block ID (usually 0).
 pub struct MirFunction {
@@ -1109,16 +905,6 @@ pub struct MirFunction {
     pub exportSymbol: String,
     pub cAbi: Bool,
     pub span: MirSpan,
-
-    // A5–A13 annotation-sourced metadata. Mirrors HirFnDecl so
-    // the MIR → LLVM pass can emit fn attrs / loop metadata without
-    // re-walking HIR. Defaults leave every flag off; hirLowerFnDecl
-    // populates the values, mirLowerCopyFnAnnotations threads them
-    // through. See LLVM_MIGRATION_PLAN.md "annotation semantic lowering"
-    // for the per-field backend emission plan — today llvmgen.osty
-    // is still scalar-only, so these fields are consumed exclusively
-    // by the Go-side ir.FnDecl shim until the toolchain LLVMgen
-    // learns to emit them.
     pub vectorize: Bool,
     pub noVectorize: Bool,
     pub vectorizeWidth: Int,
@@ -1135,7 +921,15 @@ pub struct MirFunction {
     pub noaliasParams: List<String>,
     pub pure: Bool,
 }
-
+// A5–A13 annotation-sourced metadata. Mirrors HirFnDecl so
+// the MIR → LLVM pass can emit fn attrs / loop metadata without
+// re-walking HIR. Defaults leave every flag off; hirLowerFnDecl
+// populates the values, mirLowerCopyFnAnnotations threads them
+// through. See LLVM_MIGRATION_PLAN.md "annotation semantic lowering"
+// for the per-field backend emission plan — today llvmgen.osty
+// is still scalar-only, so these fields are consumed exclusively
+// by the Go-side ir.FnDecl shim until the toolchain LLVMgen
+// learns to emit them.
 /// MirInlineMode mirrors HirInlineMode / ir.InlineNone–Never so the
 /// MIR→LLVM pass can translate `#[inline]` / `#[inline(always)]` /
 /// `#[inline(never)]` into the matching LLVM fn attribute without a
@@ -1150,69 +944,38 @@ pub enum MirInlineMode {
     MirInlineAlways,
     MirInlineNever,
 }
-
 /// mirInlineModeName renders a MirInlineMode for diagnostic /
 /// debug-print callers. Matches hirInlineModeName verbatim.
 pub fn mirInlineModeName(mode: MirInlineMode) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if mode == MirInlineNone { return "none" }
-    if mode == MirInlineSoft { return "soft" }
-    if mode == MirInlineAlways { return "always" }
-    if mode == MirInlineNever { return "never" }
+    if mode == MirInlineNone {
+        return "none"
+    }
+    if mode == MirInlineSoft {
+        return "soft"
+    }
+    if mode == MirInlineAlways {
+        return "always"
+    }
+    if mode == MirInlineNever {
+        return "never"
+    }
     "none"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFunction {
-    MirFunction {
-        name,
-        params: [],
-        returnType,
-        returnLocal: -1,
-        locals: [],
-        blocks: [],
-        entry: 0,
-        isExternal: false,
-        isIntrinsic: false,
-        exported: false,
-        exportSymbol: "",
-        cAbi: false,
-        span,
-        // A5–A13 annotation defaults match HirFnDecl's bare
-        // constructor: every flag off, empty targetFeatures list,
-        // inlineMode defaults to None. mirLowerCopyFnAnnotations
-        // overwrites these from the HIR source of truth.
-        vectorize: false,
-        noVectorize: false,
-        vectorizeWidth: 0,
-        vectorizeScalable: false,
-        vectorizePredicate: false,
-        parallel: false,
-        unroll: false,
-        unrollCount: 0,
-        inlineMode: MirInlineNone,
-        hot: false,
-        cold: false,
-        targetFeatures: [],
-        noaliasAll: false,
-        noaliasParams: [],
-        pure: false,
-    }
+    MirFunction {name, params: [], returnType, returnLocal: -1, locals: [], blocks: [], entry: 0, isExternal: false, isIntrinsic: false, exported: false, exportSymbol: "", cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures: [], noaliasAll: false, noaliasParams: [], pure: false}
 }
-
+// A5–A13 annotation defaults match HirFnDecl's bare
+// constructor: every flag off, empty targetFeatures list,
+// inlineMode defaults to None. mirLowerCopyFnAnnotations
+// overwrites these from the HIR source of truth.
 /// mirFunctionNewLocal appends a fresh local and returns its ID.
-pub fn mirFunctionNewLocal(
-    func: MirFunction,
-    name: String,
-    typ: String,
-    mutable: Bool,
-    span: MirSpan,
-) -> Int {
+pub fn mirFunctionNewLocal(func: MirFunction, name: String, typ: String, mutable: Bool, span: MirSpan) -> Int {
     let id = func.locals.len()
     let local = mirLocal(id, name, typ, mutable, span)
     func.locals.push(local)
     id
 }
-
 /// mirFunctionNewBlock appends a fresh block with no instructions and no
 /// terminator. Callers must install a terminator before printing.
 pub fn mirFunctionNewBlock(func: MirFunction, span: MirSpan) -> Int {
@@ -1221,59 +984,45 @@ pub fn mirFunctionNewBlock(func: MirFunction, span: MirSpan) -> Int {
     func.blocks.push(block)
     id
 }
-
 pub fn mirFunctionAppend(func: MirFunction, blockId: Int, instr: MirInstr) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
     mirBlockAppend(func.blocks[blockId], instr)
 }
-
 pub fn mirFunctionTerminate(func: MirFunction, blockId: Int, term: MirTerm) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
     mirBlockSetTerminator(func.blocks[blockId], term)
 }
-
 pub fn mirFunctionLocal(func: MirFunction, id: Int) -> MirLocal {
     if id < 0 || id >= func.locals.len() {
         return mirLocal(-1, "", "", false, mirNoSpan())
     }
     func.locals[id]
 }
-
 pub fn mirFunctionBlock(func: MirFunction, id: Int) -> MirBasicBlock {
     if id < 0 || id >= func.blocks.len() {
         return mirBasicBlock(-1, mirNoSpan())
     }
     func.blocks[id]
 }
-
 // ====================================================================
 // Globals, Uses, Layouts, Modules
 // ====================================================================
-
 pub struct MirGlobal {
     pub name: String,
     pub typ: String,
     pub mutable: Bool,
     pub hasInit: Bool,
-    pub initSymbol: String,   // name of the init MIR function, empty when none
+    pub initSymbol: String,
     pub span: MirSpan,
 }
-
+// name of the init MIR function, empty when none
 pub fn mirGlobal(name: String, typ: String, mutable: Bool, span: MirSpan) -> MirGlobal {
-    MirGlobal {
-        name,
-        typ,
-        mutable,
-        hasInit: false,
-        initSymbol: "",
-        span,
-    }
+    MirGlobal {name, typ, mutable, hasInit: false, initSymbol: "", span}
 }
-
 pub struct MirUse {
     pub rawPath: String,
     pub alias: String,
@@ -1283,25 +1032,14 @@ pub struct MirUse {
     pub runtimePath: String,
     pub span: MirSpan,
 }
-
 pub fn mirUse(rawPath: String, alias: String, span: MirSpan) -> MirUse {
-    MirUse {
-        rawPath,
-        alias,
-        isGoFFI: false,
-        isRuntimeFFI: false,
-        goPath: "",
-        runtimePath: "",
-        span,
-    }
+    MirUse {rawPath, alias, isGoFFI: false, isRuntimeFFI: false, goPath: "", runtimePath: "", span}
 }
-
 pub struct MirFieldLayout {
     pub index: Int,
     pub name: String,
     pub typ: String,
 }
-
 pub struct MirStructLayout {
     pub name: String,
     pub mangled: String,
@@ -1309,58 +1047,44 @@ pub struct MirStructLayout {
     pub size: Int,
     pub align: Int,
 }
-
 pub struct MirVariantLayout {
     pub index: Int,
     pub name: String,
     pub payload: List<MirFieldLayout>,
 }
-
 pub struct MirEnumLayout {
     pub name: String,
     pub mangled: String,
     pub discriminant: String,
     pub variants: List<MirVariantLayout>,
 }
-
 pub struct MirTupleLayout {
     pub key: String,
     pub mangled: String,
     pub fields: List<MirFieldLayout>,
 }
-
 pub struct MirInterfaceMethod {
     pub name: String,
     pub slot: Int,
 }
-
 pub struct MirInterfaceImpl {
     pub implName: String,
     pub vtableSym: String,
 }
-
 pub struct MirInterfaceLayout {
     pub name: String,
     pub methods: List<MirInterfaceMethod>,
     pub impls: List<MirInterfaceImpl>,
 }
-
 pub struct MirLayoutTable {
     pub structs: List<MirStructLayout>,
     pub enums: List<MirEnumLayout>,
     pub tuples: List<MirTupleLayout>,
     pub interfaces: List<MirInterfaceLayout>,
 }
-
 pub fn mirLayoutTable() -> MirLayoutTable {
-    MirLayoutTable {
-        structs: [],
-        enums: [],
-        tuples: [],
-        interfaces: [],
-    }
+    MirLayoutTable {structs: [], enums: [], tuples: [], interfaces: []}
 }
-
 /// MirModule is the MIR form of one compilation unit. It is always
 /// monomorphic: no type variable reaches a MIR node.
 pub struct MirModule {
@@ -1371,18 +1095,9 @@ pub struct MirModule {
     pub layouts: MirLayoutTable,
     pub span: MirSpan,
 }
-
 pub fn mirModule(packageName: String) -> MirModule {
-    MirModule {
-        packageName,
-        functions: [],
-        globals: [],
-        uses: [],
-        layouts: mirLayoutTable(),
-        span: mirNoSpan(),
-    }
+    MirModule {packageName, functions: [], globals: [], uses: [], layouts: mirLayoutTable(), span: mirNoSpan()}
 }
-
 pub fn mirModuleLookupFunction(m: MirModule, symbol: String) -> Int {
     let mut i = 0
     for f in m.functions {
@@ -1393,11 +1108,9 @@ pub fn mirModuleLookupFunction(m: MirModule, symbol: String) -> Int {
     }
     -1
 }
-
 // ====================================================================
 // CFG helpers
 // ====================================================================
-
 /// mirSuccessors returns the successor block IDs of a terminator in
 /// source order. Returns [] for Return / Unreachable / Invalid.
 pub fn mirSuccessors(t: MirTerm) -> List<Int> {
@@ -1416,11 +1129,11 @@ pub fn mirSuccessors(t: MirTerm) -> List<Int> {
             }
             out.push(t.target)
         },
-        _ -> {},
+        _ -> {
+        },
     }
     out
 }
-
 /// mirReachableBlocks returns the set of block IDs reachable from
 /// `func.entry` by walking terminator successors. The result is encoded
 /// as a List<Bool> parallel to `func.blocks`; unreachable blocks map to
@@ -1465,8 +1178,6 @@ pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
     }
     seen
 }
-
-
 /// mirCountReachable returns the number of reachable blocks in `func`.
 pub fn mirCountReachable(func: MirFunction) -> Int {
     let seen = mirReachableBlocks(func)
@@ -1478,11 +1189,9 @@ pub fn mirCountReachable(func: MirFunction) -> Int {
     }
     count
 }
-
 // ====================================================================
 // Printer
 // ====================================================================
-
 /// mirPrintModule renders a MIR module in a stable, human-readable form
 /// close to Rust MIR dumps. Used by tests and when inspecting backend
 /// output during development.
@@ -1500,7 +1209,6 @@ pub fn mirPrintModule(m: MirModule) -> String {
     }
     strings.join(parts, "")
 }
-
 /// mirPrintFunction renders one function using the same format as
 /// mirPrintModule.
 pub fn mirPrintFunction(func: MirFunction) -> String {
@@ -1516,13 +1224,16 @@ pub fn mirPrintFunction(func: MirFunction) -> String {
         parts.push("_{mirIntToString(loc.id)}: {loc.typ}")
     }
     parts.push(") -> {func.returnType} \{\n")
-    // Locals declaration block (skip parameters; they are in the signature)
     for loc in func.locals {
         if loc.isParam {
             continue
         }
         let annot = mirLocalAnnotation(loc)
-        let displayName = if loc.name == "" { "_" } else { loc.name }
+        let displayName = if loc.name == "" {
+            "_"
+        } else {
+            loc.name
+        }
         parts.push("{mirIndent(1)}let{annot} _{mirIntToString(loc.id)}: {loc.typ}  // {displayName}\n")
     }
     if !(func.isExternal) {
@@ -1533,7 +1244,7 @@ pub fn mirPrintFunction(func: MirFunction) -> String {
     parts.push("\}\n")
     strings.join(parts, "")
 }
-
+// Locals declaration block (skip parameters; they are in the signature)
 fn mirLocalAnnotation(loc: MirLocal) -> String {
     if loc.isReturn {
         return " return"
@@ -1543,7 +1254,6 @@ fn mirLocalAnnotation(loc: MirLocal) -> String {
     }
     ""
 }
-
 fn mirPrintUse(u: MirUse) -> String {
     if u.isGoFFI {
         return "use go \"" + u.goPath + "\" as " + u.alias
@@ -1553,7 +1263,6 @@ fn mirPrintUse(u: MirUse) -> String {
     }
     "use " + u.rawPath + " as " + u.alias
 }
-
 fn mirPrintGlobal(g: MirGlobal) -> String {
     let mut out = "global " + g.name + ": " + g.typ
     if g.mutable {
@@ -1564,7 +1273,6 @@ fn mirPrintGlobal(g: MirGlobal) -> String {
     }
     out + "\n"
 }
-
 fn mirPrintBlock(bb: MirBasicBlock, func: MirFunction) -> String {
     let mut parts: List<String> = []
     parts.push("{mirIndent(1)}bb{mirIntToString(bb.id)}:\n")
@@ -1578,43 +1286,53 @@ fn mirPrintBlock(bb: MirBasicBlock, func: MirFunction) -> String {
     }
     strings.join(parts, "")
 }
-
 fn mirPrintInstr(i: MirInstr, func: MirFunction) -> String {
     match i.kind {
         MirInstrAssign -> mirPrintPlace(i.dest, func) + " = " + mirPrintRValue(i.src, func),
         MirInstrCall -> {
-            let head = if i.hasDest { mirPrintPlace(i.dest, func) + " = " } else { "" }
+            let head = if i.hasDest {
+                mirPrintPlace(i.dest, func) + " = "
+            } else {
+                ""
+            }
             let callee = mirPrintCallee(i, func)
             head + "call " + callee + "(" + mirPrintOperandList(i.args, func) + ")"
         },
         MirInstrIntrinsic -> {
-            let head = if i.hasDest { mirPrintPlace(i.dest, func) + " = " } else { "" }
-            head + "intrinsic " + mirIntrinsicName(i.intrinsic)
-                + "(" + mirPrintOperandList(i.args, func) + ")"
+            let head = if i.hasDest {
+                mirPrintPlace(i.dest, func) + " = "
+            } else {
+                ""
+            }
+            head + "intrinsic " + mirIntrinsicName(i.intrinsic) + "(" + mirPrintOperandList(i.args, func) + ")"
         },
         MirInstrStorageLive -> "storage_live _" + mirIntToString(i.storageLocal),
         MirInstrStorageDead -> "storage_dead _" + mirIntToString(i.storageLocal),
         _ -> "(invalid instr)",
     }
 }
-
 fn mirPrintCallee(i: MirInstr, func: MirFunction) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if i.calleeKind == MirCalleeFn { return i.calleeSymbol }
-    if i.calleeKind == MirCalleeIndirect { return "*" + mirPrintOperand(i.calleeOperand, func) }
+    if i.calleeKind == MirCalleeFn {
+        return i.calleeSymbol
+    }
+    if i.calleeKind == MirCalleeIndirect {
+        return "*" + mirPrintOperand(i.calleeOperand, func)
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
     match t.kind {
         MirTermGoto -> "goto -> bb" + mirIntToString(t.target),
-        MirTermBranch -> "branch " + mirPrintOperand(t.cond, func)
-            + " -> [true: bb" + mirIntToString(t.thenBlock)
-            + ", false: bb" + mirIntToString(t.elseBlock) + "]",
+        MirTermBranch -> "branch " + mirPrintOperand(t.cond, func) + " -> [true: bb" + mirIntToString(t.thenBlock) + ", false: bb" + mirIntToString(t.elseBlock) + "]",
         MirTermSwitchInt -> {
             let mut armParts: List<String> = []
             for c in t.cases {
-                let label = if c.label == "" { mirIntToString(c.value) } else { c.label }
+                let label = if c.label == "" {
+                    mirIntToString(c.value)
+                } else {
+                    c.label
+                }
                 armParts.push("{label} -> bb{mirIntToString(c.target)}")
             }
             armParts.push("_ -> bb{mirIntToString(t.target)}")
@@ -1626,7 +1344,6 @@ fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
         _ -> "(invalid terminator)",
     }
 }
-
 fn mirPrintPlace(p: MirPlace, func: MirFunction) -> String {
     let mut parts: List<String> = []
     parts.push("_{mirIntToString(p.local)}")
@@ -1635,7 +1352,6 @@ fn mirPrintPlace(p: MirPlace, func: MirFunction) -> String {
     }
     strings.join(parts, "")
 }
-
 fn mirPrintProjection(proj: MirProjection, func: MirFunction) -> String {
     match proj.kind {
         MirProjField -> {
@@ -1664,15 +1380,19 @@ fn mirPrintProjection(proj: MirProjection, func: MirFunction) -> String {
         _ -> "(?)",
     }
 }
-
 fn mirPrintOperand(op: MirOperand, func: MirFunction) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op.kind == MirOpCopy { return mirPrintPlace(op.place, func) }
-    if op.kind == MirOpMove { return "move " + mirPrintPlace(op.place, func) }
-    if op.kind == MirOpConst { return mirPrintConst(op.const) }
+    if op.kind == MirOpCopy {
+        return mirPrintPlace(op.place, func)
+    }
+    if op.kind == MirOpMove {
+        return "move " + mirPrintPlace(op.place, func)
+    }
+    if op.kind == MirOpConst {
+        return mirPrintConst(op.const)
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirPrintOperandList(ops: List<MirOperand>, func: MirFunction) -> String {
     let mut parts: List<String> = []
     for op in ops {
@@ -1680,12 +1400,15 @@ fn mirPrintOperandList(ops: List<MirOperand>, func: MirFunction) -> String {
     }
     strings.join(parts, ", ")
 }
-
 fn mirPrintConst(c: MirConst) -> String {
     match c.kind {
         MirConstInt -> "const " + mirIntToString(c.intValue) + " " + c.typ,
         MirConstBool -> {
-            if c.boolValue { "const true" } else { "const false" }
+            if c.boolValue {
+                "const true"
+            } else {
+                "const false"
+            }
         },
         MirConstFloat -> "const " + c.floatText + " " + c.typ,
         MirConstString -> "const \"" + c.strValue + "\"",
@@ -1697,14 +1420,11 @@ fn mirPrintConst(c: MirConst) -> String {
         _ -> "(?)",
     }
 }
-
 fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
     match rv.kind {
         MirRVUse -> "use " + mirPrintOperand(rv.arg, func),
         MirRVUnary -> mirUnaryOpName(rv.unaryOp) + " " + mirPrintOperand(rv.arg, func),
-        MirRVBinary -> mirPrintOperand(rv.arg, func) + " "
-            + mirBinaryOpName(rv.binaryOp) + " "
-            + mirPrintOperand(rv.right, func),
+        MirRVBinary -> mirPrintOperand(rv.arg, func) + " " + mirBinaryOpName(rv.binaryOp) + " " + mirPrintOperand(rv.right, func),
         MirRVAggregate -> {
             if rv.aggKind == MirAggEnumVariant {
                 let tag = if rv.aggVariantTag == "" {
@@ -1712,17 +1432,14 @@ fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
                 } else {
                     rv.aggVariantTag
                 }
-                "aggregate " + mirAggregateKindName(rv.aggKind) + " "
-                    + tag + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
+                "aggregate " + mirAggregateKindName(rv.aggKind) + " " + tag + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
             } else {
-                "aggregate " + mirAggregateKindName(rv.aggKind)
-                    + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
+                "aggregate " + mirAggregateKindName(rv.aggKind) + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
             }
         },
         MirRVDiscriminant -> "discriminant " + mirPrintPlace(rv.place, func),
         MirRVLen -> "len " + mirPrintPlace(rv.place, func),
-        MirRVCast -> "cast " + mirCastKindName(rv.castKind) + " "
-            + mirPrintOperand(rv.arg, func) + " as " + rv.castTo,
+        MirRVCast -> "cast " + mirCastKindName(rv.castKind) + " " + mirPrintOperand(rv.arg, func) + " as " + rv.castTo,
         MirRVRef -> "ref " + mirPrintPlace(rv.place, func),
         MirRVAddressOf -> "&" + mirPrintPlace(rv.place, func),
         MirRVGlobalRef -> "global " + rv.globalName + " " + rv.typ,
@@ -1730,7 +1447,6 @@ fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
         _ -> "(?)",
     }
 }
-
 // ====================================================================
 // Enum name helpers (for printer)
 //
@@ -1740,218 +1456,556 @@ fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
 // `mirUnaryKindName` / `mirBinaryKindName` (below in the diagnostic block)
 // expose those. The printer-facing helpers stay unchanged.
 // ====================================================================
-
 pub fn mirUnaryOpName(op: MirUnaryOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == MirUnNeg { return "-" }
-    if op == MirUnPlus { return "+" }
-    if op == MirUnNot { return "!" }
-    if op == MirUnBitNot { return "~" }
+    if op == MirUnNeg {
+        return "-"
+    }
+    if op == MirUnPlus {
+        return "+"
+    }
+    if op == MirUnNot {
+        return "!"
+    }
+    if op == MirUnBitNot {
+        return "~"
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirBinaryOpName(op: MirBinaryOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == MirBinAdd { return "+" }
-    if op == MirBinSub { return "-" }
-    if op == MirBinMul { return "*" }
-    if op == MirBinDiv { return "/" }
-    if op == MirBinMod { return "%" }
-    if op == MirBinEq { return "==" }
-    if op == MirBinNeq { return "!=" }
-    if op == MirBinLt { return "<" }
-    if op == MirBinLeq { return "<=" }
-    if op == MirBinGt { return ">" }
-    if op == MirBinGeq { return ">=" }
-    if op == MirBinAnd { return "&&" }
-    if op == MirBinOr { return "||" }
-    if op == MirBinBitAnd { return "&" }
-    if op == MirBinBitOr { return "|" }
-    if op == MirBinBitXor { return "^" }
-    if op == MirBinShl { return "<<" }
-    if op == MirBinShr { return ">>" }
+    if op == MirBinAdd {
+        return "+"
+    }
+    if op == MirBinSub {
+        return "-"
+    }
+    if op == MirBinMul {
+        return "*"
+    }
+    if op == MirBinDiv {
+        return "/"
+    }
+    if op == MirBinMod {
+        return "%"
+    }
+    if op == MirBinEq {
+        return "=="
+    }
+    if op == MirBinNeq {
+        return "!="
+    }
+    if op == MirBinLt {
+        return "<"
+    }
+    if op == MirBinLeq {
+        return "<="
+    }
+    if op == MirBinGt {
+        return ">"
+    }
+    if op == MirBinGeq {
+        return ">="
+    }
+    if op == MirBinAnd {
+        return "&&"
+    }
+    if op == MirBinOr {
+        return "||"
+    }
+    if op == MirBinBitAnd {
+        return "&"
+    }
+    if op == MirBinBitOr {
+        return "|"
+    }
+    if op == MirBinBitXor {
+        return "^"
+    }
+    if op == MirBinShl {
+        return "<<"
+    }
+    if op == MirBinShr {
+        return ">>"
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirAggregateKindName(k: MirAggregateKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirAggTuple { return "Tuple" }
-    if k == MirAggStruct { return "Struct" }
-    if k == MirAggEnumVariant { return "EnumVariant" }
-    if k == MirAggList { return "List" }
-    if k == MirAggMap { return "Map" }
-    if k == MirAggClosure { return "Closure" }
+    if k == MirAggTuple {
+        return "Tuple"
+    }
+    if k == MirAggStruct {
+        return "Struct"
+    }
+    if k == MirAggEnumVariant {
+        return "EnumVariant"
+    }
+    if k == MirAggList {
+        return "List"
+    }
+    if k == MirAggMap {
+        return "Map"
+    }
+    if k == MirAggClosure {
+        return "Closure"
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirCastKindName(k: MirCastKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirCastIntResize { return "int_resize" }
-    if k == MirCastIntToFloat { return "int_to_float" }
-    if k == MirCastFloatToInt { return "float_to_int" }
-    if k == MirCastFloatResize { return "float_resize" }
-    if k == MirCastOptionalWrap { return "optional_wrap" }
-    if k == MirCastOptionalUnwrap { return "optional_unwrap" }
-    if k == MirCastBitcast { return "bitcast" }
+    if k == MirCastIntResize {
+        return "int_resize"
+    }
+    if k == MirCastIntToFloat {
+        return "int_to_float"
+    }
+    if k == MirCastFloatToInt {
+        return "float_to_int"
+    }
+    if k == MirCastFloatResize {
+        return "float_resize"
+    }
+    if k == MirCastOptionalWrap {
+        return "optional_wrap"
+    }
+    if k == MirCastOptionalUnwrap {
+        return "optional_unwrap"
+    }
+    if k == MirCastBitcast {
+        return "bitcast"
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirNullaryKindName(k: MirNullaryRVKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirNullaryNone { return "none" }
+    if k == MirNullaryNone {
+        return "none"
+    }
     "(?)"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// mirIntrinsicName returns the canonical printable name of a MIR
 /// intrinsic. Kept in sync with the Stringer-like behaviour of the Go
 /// IntrinsicKind; callers that need a stable on-disk encoding should
 /// use this rather than the raw enum tag.
 pub fn mirIntrinsicName(k: MirIntrinsicKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirIntrinsicPrint { return "print" }
-    if k == MirIntrinsicPrintln { return "println" }
-    if k == MirIntrinsicEprint { return "eprint" }
-    if k == MirIntrinsicEprintln { return "eprintln" }
-    if k == MirIntrinsicAbort { return "abort" }
-    if k == MirIntrinsicStringConcat { return "string_concat" }
-    if k == MirIntrinsicBytesConcat { return "bytes_concat" }
-    if k == MirIntrinsicChanMake { return "chan_make" }
-    if k == MirIntrinsicChanSend { return "chan_send" }
-    if k == MirIntrinsicChanRecv { return "chan_recv" }
-    if k == MirIntrinsicChanClose { return "chan_close" }
-    if k == MirIntrinsicChanIsClosed { return "chan_is_closed" }
-    if k == MirIntrinsicTaskGroup { return "task_group" }
-    if k == MirIntrinsicSpawn { return "spawn" }
-    if k == MirIntrinsicHandleJoin { return "handle_join" }
-    if k == MirIntrinsicGroupCancel { return "group_cancel" }
-    if k == MirIntrinsicGroupIsCancelled { return "group_is_cancelled" }
-    if k == MirIntrinsicParallel { return "parallel" }
-    if k == MirIntrinsicRace { return "race" }
-    if k == MirIntrinsicCollectAll { return "collect_all" }
-    if k == MirIntrinsicSelect { return "select" }
-    if k == MirIntrinsicSelectRecv { return "select_recv" }
-    if k == MirIntrinsicSelectSend { return "select_send" }
-    if k == MirIntrinsicSelectTimeout { return "select_timeout" }
-    if k == MirIntrinsicSelectDefault { return "select_default" }
-    if k == MirIntrinsicIsCancelled { return "is_cancelled" }
-    if k == MirIntrinsicCheckCancelled { return "check_cancelled" }
-    if k == MirIntrinsicYield { return "yield" }
-    if k == MirIntrinsicSleep { return "sleep" }
-    if k == MirIntrinsicListPush { return "list_push" }
-    if k == MirIntrinsicListLen { return "list_len" }
-    if k == MirIntrinsicListGet { return "list_get" }
-    if k == MirIntrinsicListIsEmpty { return "list_is_empty" }
-    if k == MirIntrinsicListFirst { return "list_first" }
-    if k == MirIntrinsicListLast { return "list_last" }
-    if k == MirIntrinsicListSorted { return "list_sorted" }
-    if k == MirIntrinsicListContains { return "list_contains" }
-    if k == MirIntrinsicListIndexOf { return "list_index_of" }
-    if k == MirIntrinsicListToSet { return "list_to_set" }
-    if k == MirIntrinsicListRemoveAt { return "list_remove_at" }
-    if k == MirIntrinsicListReverse { return "list_reverse" }
-    if k == MirIntrinsicListReversed { return "list_reversed" }
-    if k == MirIntrinsicListToString { return "list_to_string" }
-    if k == MirIntrinsicMapNew { return "map_new" }
-    if k == MirIntrinsicMapGet { return "map_get" }
-    if k == MirIntrinsicMapSet { return "map_set" }
-    if k == MirIntrinsicMapContains { return "map_contains" }
-    if k == MirIntrinsicMapLen { return "map_len" }
-    if k == MirIntrinsicMapKeys { return "map_keys" }
-    if k == MirIntrinsicMapValues { return "map_values" }
-    if k == MirIntrinsicMapRemove { return "map_remove" }
-    if k == MirIntrinsicMapKeysSorted { return "map_keys_sorted" }
-    if k == MirIntrinsicMapToString { return "map_to_string" }
-    if k == MirIntrinsicSetNew { return "set_new" }
-    if k == MirIntrinsicSetInsert { return "set_insert" }
-    if k == MirIntrinsicSetContains { return "set_contains" }
-    if k == MirIntrinsicSetLen { return "set_len" }
-    if k == MirIntrinsicSetToList { return "set_to_list" }
-    if k == MirIntrinsicSetRemove { return "set_remove" }
-    if k == MirIntrinsicSetToString { return "set_to_string" }
-    if k == MirIntrinsicStringLen { return "string_len" }
-    if k == MirIntrinsicStringIsEmpty { return "string_is_empty" }
-    if k == MirIntrinsicStringContains { return "string_contains" }
-    if k == MirIntrinsicStringCount { return "string_count" }
-    if k == MirIntrinsicStringStartsWith { return "string_starts_with" }
-    if k == MirIntrinsicStringEndsWith { return "string_ends_with" }
-    if k == MirIntrinsicStringIndexOf { return "string_index_of" }
-    if k == MirIntrinsicStringSplit { return "string_split" }
-    if k == MirIntrinsicStringTrim { return "string_trim" }
-    if k == MirIntrinsicStringToUpper { return "string_to_upper" }
-    if k == MirIntrinsicStringToLower { return "string_to_lower" }
-    if k == MirIntrinsicStringToInt { return "string_to_int" }
-    if k == MirIntrinsicStringToFloat { return "string_to_float" }
-    if k == MirIntrinsicStringReplace { return "string_replace" }
-    if k == MirIntrinsicStringChars { return "string_chars" }
-    if k == MirIntrinsicStringBytes { return "string_bytes" }
-    if k == MirIntrinsicBytesLen { return "bytes_len" }
-    if k == MirIntrinsicBytesIsEmpty { return "bytes_is_empty" }
-    if k == MirIntrinsicBytesGet { return "bytes_get" }
-    if k == MirIntrinsicBytesContains { return "bytes_contains" }
-    if k == MirIntrinsicBytesStartsWith { return "bytes_starts_with" }
-    if k == MirIntrinsicBytesEndsWith { return "bytes_ends_with" }
-    if k == MirIntrinsicBytesIndexOf { return "bytes_index_of" }
-    if k == MirIntrinsicBytesLastIndexOf { return "bytes_last_index_of" }
-    if k == MirIntrinsicBytesSplit { return "bytes_split" }
-    if k == MirIntrinsicBytesJoin { return "bytes_join" }
-    if k == MirIntrinsicBytesRepeat { return "bytes_repeat" }
-    if k == MirIntrinsicBytesReplace { return "bytes_replace" }
-    if k == MirIntrinsicBytesReplaceAll { return "bytes_replace_all" }
-    if k == MirIntrinsicBytesTrimLeft { return "bytes_trim_left" }
-    if k == MirIntrinsicBytesTrimRight { return "bytes_trim_right" }
-    if k == MirIntrinsicBytesTrim { return "bytes_trim" }
-    if k == MirIntrinsicBytesTrimSpace { return "bytes_trim_space" }
-    if k == MirIntrinsicBytesToUpper { return "bytes_to_upper" }
-    if k == MirIntrinsicBytesToLower { return "bytes_to_lower" }
-    if k == MirIntrinsicBytesToHex { return "bytes_to_hex" }
-    if k == MirIntrinsicBytesSlice { return "bytes_slice" }
-    if k == MirIntrinsicOptionIsSome { return "option_is_some" }
-    if k == MirIntrinsicOptionIsNone { return "option_is_none" }
-    if k == MirIntrinsicOptionUnwrap { return "option_unwrap" }
-    if k == MirIntrinsicOptionUnwrapOr { return "option_unwrap_or" }
-    if k == MirIntrinsicResultIsOk { return "result_is_ok" }
-    if k == MirIntrinsicResultIsErr { return "result_is_err" }
-    if k == MirIntrinsicResultUnwrap { return "result_unwrap" }
-    if k == MirIntrinsicResultUnwrapOr { return "result_unwrap_or" }
-    if k == MirIntrinsicRawNull { return "raw_null" }
-    if k == MirIntrinsicStringJoin { return "string_join" }
-    if k == MirIntrinsicListPop { return "list_pop" }
-    if k == MirIntrinsicStringSubstring { return "string_substring" }
-    if k == MirIntrinsicByteToInt { return "byte_to_int" }
-    if k == MirIntrinsicCharToInt { return "char_to_int" }
-    if k == MirIntrinsicListSlice { return "list_slice" }
-    if k == MirIntrinsicMapGetOr { return "map_get_or" }
-    if k == MirIntrinsicStringSplitInto { return "string_split_into" }
-    if k == MirIntrinsicStringNthSegment { return "string_nth_segment" }
-    if k == MirIntrinsicMapIncr { return "map_incr" }
-    if k == MirIntrinsicStringRepeat { return "string_repeat" }
-    if k == MirIntrinsicStringTrimPrefix { return "string_trim_prefix" }
-    if k == MirIntrinsicStringTrimSuffix { return "string_trim_suffix" }
-    if k == MirIntrinsicStringTrimStart { return "string_trim_start" }
-    if k == MirIntrinsicStringTrimEnd { return "string_trim_end" }
-    if k == MirIntrinsicStringReplaceAll { return "string_replace_all" }
-    if k == MirIntrinsicStringSplitN { return "string_split_n" }
-    if k == MirIntrinsicStringFields { return "string_fields" }
-    if k == MirIntrinsicStringLastIndexOf { return "string_last_index_of" }
-    if k == MirIntrinsicBytesFromList { return "bytes_from_list" }
-    if k == MirIntrinsicBytesFromString { return "bytes_from_string" }
-    if k == MirIntrinsicBytesToString { return "bytes_to_string" }
-    if k == MirIntrinsicBytesFromHex { return "bytes_from_hex" }
-    if k == MirIntrinsicIntToByte { return "int_to_byte" }
-    if k == MirIntrinsicIntToChar { return "int_to_char" }
-    if k == MirIntrinsicByteToChar { return "byte_to_char" }
-    if k == MirIntrinsicCharToByte { return "char_to_byte" }
-    if k == MirIntrinsicListInsert { return "list_insert" }
-    if k == MirIntrinsicListClear { return "list_clear" }
-    if k == MirIntrinsicMapClear { return "map_clear" }
-    if k == MirIntrinsicSetClear { return "set_clear" }
+    if k == MirIntrinsicPrint {
+        return "print"
+    }
+    if k == MirIntrinsicPrintln {
+        return "println"
+    }
+    if k == MirIntrinsicEprint {
+        return "eprint"
+    }
+    if k == MirIntrinsicEprintln {
+        return "eprintln"
+    }
+    if k == MirIntrinsicAbort {
+        return "abort"
+    }
+    if k == MirIntrinsicStringConcat {
+        return "string_concat"
+    }
+    if k == MirIntrinsicBytesConcat {
+        return "bytes_concat"
+    }
+    if k == MirIntrinsicChanMake {
+        return "chan_make"
+    }
+    if k == MirIntrinsicChanSend {
+        return "chan_send"
+    }
+    if k == MirIntrinsicChanRecv {
+        return "chan_recv"
+    }
+    if k == MirIntrinsicChanClose {
+        return "chan_close"
+    }
+    if k == MirIntrinsicChanIsClosed {
+        return "chan_is_closed"
+    }
+    if k == MirIntrinsicTaskGroup {
+        return "task_group"
+    }
+    if k == MirIntrinsicSpawn {
+        return "spawn"
+    }
+    if k == MirIntrinsicHandleJoin {
+        return "handle_join"
+    }
+    if k == MirIntrinsicGroupCancel {
+        return "group_cancel"
+    }
+    if k == MirIntrinsicGroupIsCancelled {
+        return "group_is_cancelled"
+    }
+    if k == MirIntrinsicParallel {
+        return "parallel"
+    }
+    if k == MirIntrinsicRace {
+        return "race"
+    }
+    if k == MirIntrinsicCollectAll {
+        return "collect_all"
+    }
+    if k == MirIntrinsicSelect {
+        return "select"
+    }
+    if k == MirIntrinsicSelectRecv {
+        return "select_recv"
+    }
+    if k == MirIntrinsicSelectSend {
+        return "select_send"
+    }
+    if k == MirIntrinsicSelectTimeout {
+        return "select_timeout"
+    }
+    if k == MirIntrinsicSelectDefault {
+        return "select_default"
+    }
+    if k == MirIntrinsicIsCancelled {
+        return "is_cancelled"
+    }
+    if k == MirIntrinsicCheckCancelled {
+        return "check_cancelled"
+    }
+    if k == MirIntrinsicYield {
+        return "yield"
+    }
+    if k == MirIntrinsicSleep {
+        return "sleep"
+    }
+    if k == MirIntrinsicListPush {
+        return "list_push"
+    }
+    if k == MirIntrinsicListLen {
+        return "list_len"
+    }
+    if k == MirIntrinsicListGet {
+        return "list_get"
+    }
+    if k == MirIntrinsicListIsEmpty {
+        return "list_is_empty"
+    }
+    if k == MirIntrinsicListFirst {
+        return "list_first"
+    }
+    if k == MirIntrinsicListLast {
+        return "list_last"
+    }
+    if k == MirIntrinsicListSorted {
+        return "list_sorted"
+    }
+    if k == MirIntrinsicListContains {
+        return "list_contains"
+    }
+    if k == MirIntrinsicListIndexOf {
+        return "list_index_of"
+    }
+    if k == MirIntrinsicListToSet {
+        return "list_to_set"
+    }
+    if k == MirIntrinsicListRemoveAt {
+        return "list_remove_at"
+    }
+    if k == MirIntrinsicListReverse {
+        return "list_reverse"
+    }
+    if k == MirIntrinsicListReversed {
+        return "list_reversed"
+    }
+    if k == MirIntrinsicListToString {
+        return "list_to_string"
+    }
+    if k == MirIntrinsicMapNew {
+        return "map_new"
+    }
+    if k == MirIntrinsicMapGet {
+        return "map_get"
+    }
+    if k == MirIntrinsicMapSet {
+        return "map_set"
+    }
+    if k == MirIntrinsicMapContains {
+        return "map_contains"
+    }
+    if k == MirIntrinsicMapLen {
+        return "map_len"
+    }
+    if k == MirIntrinsicMapKeys {
+        return "map_keys"
+    }
+    if k == MirIntrinsicMapValues {
+        return "map_values"
+    }
+    if k == MirIntrinsicMapRemove {
+        return "map_remove"
+    }
+    if k == MirIntrinsicMapKeysSorted {
+        return "map_keys_sorted"
+    }
+    if k == MirIntrinsicMapToString {
+        return "map_to_string"
+    }
+    if k == MirIntrinsicSetNew {
+        return "set_new"
+    }
+    if k == MirIntrinsicSetInsert {
+        return "set_insert"
+    }
+    if k == MirIntrinsicSetContains {
+        return "set_contains"
+    }
+    if k == MirIntrinsicSetLen {
+        return "set_len"
+    }
+    if k == MirIntrinsicSetToList {
+        return "set_to_list"
+    }
+    if k == MirIntrinsicSetRemove {
+        return "set_remove"
+    }
+    if k == MirIntrinsicSetToString {
+        return "set_to_string"
+    }
+    if k == MirIntrinsicStringLen {
+        return "string_len"
+    }
+    if k == MirIntrinsicStringIsEmpty {
+        return "string_is_empty"
+    }
+    if k == MirIntrinsicStringContains {
+        return "string_contains"
+    }
+    if k == MirIntrinsicStringCount {
+        return "string_count"
+    }
+    if k == MirIntrinsicStringStartsWith {
+        return "string_starts_with"
+    }
+    if k == MirIntrinsicStringEndsWith {
+        return "string_ends_with"
+    }
+    if k == MirIntrinsicStringIndexOf {
+        return "string_index_of"
+    }
+    if k == MirIntrinsicStringSplit {
+        return "string_split"
+    }
+    if k == MirIntrinsicStringTrim {
+        return "string_trim"
+    }
+    if k == MirIntrinsicStringToUpper {
+        return "string_to_upper"
+    }
+    if k == MirIntrinsicStringToLower {
+        return "string_to_lower"
+    }
+    if k == MirIntrinsicStringToInt {
+        return "string_to_int"
+    }
+    if k == MirIntrinsicStringToFloat {
+        return "string_to_float"
+    }
+    if k == MirIntrinsicStringReplace {
+        return "string_replace"
+    }
+    if k == MirIntrinsicStringChars {
+        return "string_chars"
+    }
+    if k == MirIntrinsicStringBytes {
+        return "string_bytes"
+    }
+    if k == MirIntrinsicBytesLen {
+        return "bytes_len"
+    }
+    if k == MirIntrinsicBytesIsEmpty {
+        return "bytes_is_empty"
+    }
+    if k == MirIntrinsicBytesGet {
+        return "bytes_get"
+    }
+    if k == MirIntrinsicBytesContains {
+        return "bytes_contains"
+    }
+    if k == MirIntrinsicBytesStartsWith {
+        return "bytes_starts_with"
+    }
+    if k == MirIntrinsicBytesEndsWith {
+        return "bytes_ends_with"
+    }
+    if k == MirIntrinsicBytesIndexOf {
+        return "bytes_index_of"
+    }
+    if k == MirIntrinsicBytesLastIndexOf {
+        return "bytes_last_index_of"
+    }
+    if k == MirIntrinsicBytesSplit {
+        return "bytes_split"
+    }
+    if k == MirIntrinsicBytesJoin {
+        return "bytes_join"
+    }
+    if k == MirIntrinsicBytesRepeat {
+        return "bytes_repeat"
+    }
+    if k == MirIntrinsicBytesReplace {
+        return "bytes_replace"
+    }
+    if k == MirIntrinsicBytesReplaceAll {
+        return "bytes_replace_all"
+    }
+    if k == MirIntrinsicBytesTrimLeft {
+        return "bytes_trim_left"
+    }
+    if k == MirIntrinsicBytesTrimRight {
+        return "bytes_trim_right"
+    }
+    if k == MirIntrinsicBytesTrim {
+        return "bytes_trim"
+    }
+    if k == MirIntrinsicBytesTrimSpace {
+        return "bytes_trim_space"
+    }
+    if k == MirIntrinsicBytesToUpper {
+        return "bytes_to_upper"
+    }
+    if k == MirIntrinsicBytesToLower {
+        return "bytes_to_lower"
+    }
+    if k == MirIntrinsicBytesToHex {
+        return "bytes_to_hex"
+    }
+    if k == MirIntrinsicBytesSlice {
+        return "bytes_slice"
+    }
+    if k == MirIntrinsicOptionIsSome {
+        return "option_is_some"
+    }
+    if k == MirIntrinsicOptionIsNone {
+        return "option_is_none"
+    }
+    if k == MirIntrinsicOptionUnwrap {
+        return "option_unwrap"
+    }
+    if k == MirIntrinsicOptionUnwrapOr {
+        return "option_unwrap_or"
+    }
+    if k == MirIntrinsicResultIsOk {
+        return "result_is_ok"
+    }
+    if k == MirIntrinsicResultIsErr {
+        return "result_is_err"
+    }
+    if k == MirIntrinsicResultUnwrap {
+        return "result_unwrap"
+    }
+    if k == MirIntrinsicResultUnwrapOr {
+        return "result_unwrap_or"
+    }
+    if k == MirIntrinsicRawNull {
+        return "raw_null"
+    }
+    if k == MirIntrinsicStringJoin {
+        return "string_join"
+    }
+    if k == MirIntrinsicListPop {
+        return "list_pop"
+    }
+    if k == MirIntrinsicStringSubstring {
+        return "string_substring"
+    }
+    if k == MirIntrinsicByteToInt {
+        return "byte_to_int"
+    }
+    if k == MirIntrinsicCharToInt {
+        return "char_to_int"
+    }
+    if k == MirIntrinsicListSlice {
+        return "list_slice"
+    }
+    if k == MirIntrinsicMapGetOr {
+        return "map_get_or"
+    }
+    if k == MirIntrinsicStringSplitInto {
+        return "string_split_into"
+    }
+    if k == MirIntrinsicStringNthSegment {
+        return "string_nth_segment"
+    }
+    if k == MirIntrinsicMapIncr {
+        return "map_incr"
+    }
+    if k == MirIntrinsicStringRepeat {
+        return "string_repeat"
+    }
+    if k == MirIntrinsicStringTrimPrefix {
+        return "string_trim_prefix"
+    }
+    if k == MirIntrinsicStringTrimSuffix {
+        return "string_trim_suffix"
+    }
+    if k == MirIntrinsicStringTrimStart {
+        return "string_trim_start"
+    }
+    if k == MirIntrinsicStringTrimEnd {
+        return "string_trim_end"
+    }
+    if k == MirIntrinsicStringReplaceAll {
+        return "string_replace_all"
+    }
+    if k == MirIntrinsicStringSplitN {
+        return "string_split_n"
+    }
+    if k == MirIntrinsicStringFields {
+        return "string_fields"
+    }
+    if k == MirIntrinsicStringLastIndexOf {
+        return "string_last_index_of"
+    }
+    if k == MirIntrinsicBytesFromList {
+        return "bytes_from_list"
+    }
+    if k == MirIntrinsicBytesFromString {
+        return "bytes_from_string"
+    }
+    if k == MirIntrinsicBytesToString {
+        return "bytes_to_string"
+    }
+    if k == MirIntrinsicBytesFromHex {
+        return "bytes_from_hex"
+    }
+    if k == MirIntrinsicIntToByte {
+        return "int_to_byte"
+    }
+    if k == MirIntrinsicIntToChar {
+        return "int_to_char"
+    }
+    if k == MirIntrinsicByteToChar {
+        return "byte_to_char"
+    }
+    if k == MirIntrinsicCharToByte {
+        return "char_to_byte"
+    }
+    if k == MirIntrinsicListInsert {
+        return "list_insert"
+    }
+    if k == MirIntrinsicListClear {
+        return "list_clear"
+    }
+    if k == MirIntrinsicMapClear {
+        return "map_clear"
+    }
+    if k == MirIntrinsicSetClear {
+        return "set_clear"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================
 // Formatting helpers
 // ====================================================================
-
 fn mirIndent(level: Int) -> String {
     let mut out = ""
     for _i in 0..level {
@@ -1959,7 +2013,6 @@ fn mirIndent(level: Int) -> String {
     }
     out
 }
-
 /// mirIntToString formats an integer using base-10 digits. Kept as a
 /// local helper so the MIR printer does not depend on any stdlib
 /// conversion that may not be available in early bootstrap.
@@ -1995,128 +2048,249 @@ fn mirIntToString(n: Int) -> String {
     }
     out
 }
-
 fn mirDigitChar(d: Int) -> String {
-    // B2: Int dispatch as if-else chain (stage0 P0–P15).
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
+    if d == 0 {
+        return "0"
+    }
+    if d == 1 {
+        return "1"
+    }
+    if d == 2 {
+        return "2"
+    }
+    if d == 3 {
+        return "3"
+    }
+    if d == 4 {
+        return "4"
+    }
+    if d == 5 {
+        return "5"
+    }
+    if d == 6 {
+        return "6"
+    }
+    if d == 7 {
+        return "7"
+    }
+    if d == 8 {
+        return "8"
+    }
+    if d == 9 {
+        return "9"
+    }
     "?"
 }
-
+// B2: Int dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================
 // Enum name exports (useful for diagnostics / test assertions)
 // ====================================================================
-
 pub fn mirInstrKindName(k: MirInstrKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirInstrAssign { return "assign" }
-    if k == MirInstrCall { return "call" }
-    if k == MirInstrIntrinsic { return "intrinsic" }
-    if k == MirInstrStorageLive { return "storage_live" }
-    if k == MirInstrStorageDead { return "storage_dead" }
+    if k == MirInstrAssign {
+        return "assign"
+    }
+    if k == MirInstrCall {
+        return "call"
+    }
+    if k == MirInstrIntrinsic {
+        return "intrinsic"
+    }
+    if k == MirInstrStorageLive {
+        return "storage_live"
+    }
+    if k == MirInstrStorageDead {
+        return "storage_dead"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirTermKindName(k: MirTermKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirTermGoto { return "goto" }
-    if k == MirTermBranch { return "branch" }
-    if k == MirTermSwitchInt { return "switch_int" }
-    if k == MirTermReturn { return "return" }
-    if k == MirTermUnreachable { return "unreachable" }
+    if k == MirTermGoto {
+        return "goto"
+    }
+    if k == MirTermBranch {
+        return "branch"
+    }
+    if k == MirTermSwitchInt {
+        return "switch_int"
+    }
+    if k == MirTermReturn {
+        return "return"
+    }
+    if k == MirTermUnreachable {
+        return "unreachable"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirRValueKindName(k: MirRValueKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirRVUse { return "use" }
-    if k == MirRVUnary { return "unary" }
-    if k == MirRVBinary { return "binary" }
-    if k == MirRVAggregate { return "aggregate" }
-    if k == MirRVDiscriminant { return "discriminant" }
-    if k == MirRVLen { return "len" }
-    if k == MirRVCast { return "cast" }
-    if k == MirRVRef { return "ref" }
-    if k == MirRVAddressOf { return "address_of" }
-    if k == MirRVGlobalRef { return "global_ref" }
-    if k == MirRVNullary { return "nullary" }
+    if k == MirRVUse {
+        return "use"
+    }
+    if k == MirRVUnary {
+        return "unary"
+    }
+    if k == MirRVBinary {
+        return "binary"
+    }
+    if k == MirRVAggregate {
+        return "aggregate"
+    }
+    if k == MirRVDiscriminant {
+        return "discriminant"
+    }
+    if k == MirRVLen {
+        return "len"
+    }
+    if k == MirRVCast {
+        return "cast"
+    }
+    if k == MirRVRef {
+        return "ref"
+    }
+    if k == MirRVAddressOf {
+        return "address_of"
+    }
+    if k == MirRVGlobalRef {
+        return "global_ref"
+    }
+    if k == MirRVNullary {
+        return "nullary"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirConstKindName(k: MirConstKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirConstInt { return "int" }
-    if k == MirConstBool { return "bool" }
-    if k == MirConstFloat { return "float" }
-    if k == MirConstString { return "string" }
-    if k == MirConstChar { return "char" }
-    if k == MirConstByte { return "byte" }
-    if k == MirConstUnit { return "unit" }
-    if k == MirConstNull { return "null" }
-    if k == MirConstFn { return "fn" }
+    if k == MirConstInt {
+        return "int"
+    }
+    if k == MirConstBool {
+        return "bool"
+    }
+    if k == MirConstFloat {
+        return "float"
+    }
+    if k == MirConstString {
+        return "string"
+    }
+    if k == MirConstChar {
+        return "char"
+    }
+    if k == MirConstByte {
+        return "byte"
+    }
+    if k == MirConstUnit {
+        return "unit"
+    }
+    if k == MirConstNull {
+        return "null"
+    }
+    if k == MirConstFn {
+        return "fn"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirCalleeKindName(k: MirCalleeKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirCalleeNone { return "none" }
-    if k == MirCalleeFn { return "fn" }
-    if k == MirCalleeIndirect { return "indirect" }
+    if k == MirCalleeNone {
+        return "none"
+    }
+    if k == MirCalleeFn {
+        return "fn"
+    }
+    if k == MirCalleeIndirect {
+        return "indirect"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // Diagnostic-facing identifier names for unary / binary ops. The printer
 // helpers `mirUnaryOpName` / `mirBinaryOpName` (above) return the operator
 // glyph; these return the variant identifier suitable for E0700-class
 // diagnostic messages.
 pub fn mirUnaryKindName(op: MirUnaryOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == MirUnNeg { return "neg" }
-    if op == MirUnPlus { return "plus" }
-    if op == MirUnNot { return "not" }
-    if op == MirUnBitNot { return "bit_not" }
+    if op == MirUnNeg {
+        return "neg"
+    }
+    if op == MirUnPlus {
+        return "plus"
+    }
+    if op == MirUnNot {
+        return "not"
+    }
+    if op == MirUnBitNot {
+        return "bit_not"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirBinaryKindName(op: MirBinaryOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == MirBinAdd { return "add" }
-    if op == MirBinSub { return "sub" }
-    if op == MirBinMul { return "mul" }
-    if op == MirBinDiv { return "div" }
-    if op == MirBinMod { return "mod" }
-    if op == MirBinEq { return "eq" }
-    if op == MirBinNeq { return "neq" }
-    if op == MirBinLt { return "lt" }
-    if op == MirBinLeq { return "leq" }
-    if op == MirBinGt { return "gt" }
-    if op == MirBinGeq { return "geq" }
-    if op == MirBinAnd { return "and" }
-    if op == MirBinOr { return "or" }
-    if op == MirBinBitAnd { return "bit_and" }
-    if op == MirBinBitOr { return "bit_or" }
-    if op == MirBinBitXor { return "bit_xor" }
-    if op == MirBinShl { return "shl" }
-    if op == MirBinShr { return "shr" }
+    if op == MirBinAdd {
+        return "add"
+    }
+    if op == MirBinSub {
+        return "sub"
+    }
+    if op == MirBinMul {
+        return "mul"
+    }
+    if op == MirBinDiv {
+        return "div"
+    }
+    if op == MirBinMod {
+        return "mod"
+    }
+    if op == MirBinEq {
+        return "eq"
+    }
+    if op == MirBinNeq {
+        return "neq"
+    }
+    if op == MirBinLt {
+        return "lt"
+    }
+    if op == MirBinLeq {
+        return "leq"
+    }
+    if op == MirBinGt {
+        return "gt"
+    }
+    if op == MirBinGeq {
+        return "geq"
+    }
+    if op == MirBinAnd {
+        return "and"
+    }
+    if op == MirBinOr {
+        return "or"
+    }
+    if op == MirBinBitAnd {
+        return "bit_and"
+    }
+    if op == MirBinBitOr {
+        return "bit_or"
+    }
+    if op == MirBinBitXor {
+        return "bit_xor"
+    }
+    if op == MirBinShl {
+        return "shl"
+    }
+    if op == MirBinShr {
+        return "shr"
+    }
     "invalid"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirOperandKindName(k: MirOperandKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if k == MirOpCopy { return "copy" }
-    if k == MirOpMove { return "move" }
-    if k == MirOpConst { return "const" }
+    if k == MirOpCopy {
+        return "copy"
+    }
+    if k == MirOpMove {
+        return "move"
+    }
+    if k == MirOpConst {
+        return "const"
+    }
     "invalid"
 }
-
-// Note: `mirProjectionKindName` already exists in `mir_generator.osty`
-// (legacy printer helper); we reuse it from diagnostic call sites instead
-// of duplicating here.

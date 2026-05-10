@@ -10,9 +10,7 @@
 // the layout table's lists by name; the ABI helpers compose the
 // result with the predicates from `onb_abi.osty` to decide which
 // register-class an arbitrary MIR type rides at the call boundary.
-
 // === Lookup =========================================================
-
 // onbLookupStructLayout finds the layout entry for `typeName`
 // in the module's layout table. Returns `None` for unknown names
 // or a malformed table. Mirror of `lookupStructLayout` —
@@ -26,7 +24,6 @@ pub fn onbLookupStructLayout(table: MirLayoutTable, typeName: String) -> MirStru
     }
     None
 }
-
 pub fn onbLookupEnumLayout(table: MirLayoutTable, typeName: String) -> MirEnumLayout? {
     for e in table.enums {
         if e.name == typeName {
@@ -35,7 +32,6 @@ pub fn onbLookupEnumLayout(table: MirLayoutTable, typeName: String) -> MirEnumLa
     }
     None
 }
-
 // onbExtractTypeName extracts the head name of a MIR type repr.
 // E.g. `"Point"` → `"Point"`, `"List<Int>"` → `"List"`,
 // `"Map<String, Int>"` → `"Map"`. Used by the layout lookup
@@ -56,9 +52,7 @@ pub fn onbExtractTypeName(typ: String) -> String {
     }
     head
 }
-
 // === Field / payload classification ================================
-
 // onbStructLayoutAllScalar reports whether every field of a
 // struct fits in one ABI register. Used by the small-struct path
 // to gate which structs ride the AAPCS64 register convention.
@@ -70,7 +64,6 @@ pub fn onbStructLayoutAllScalar(layout: MirStructLayout) -> Bool {
     }
     true
 }
-
 // onbEnumPayloadAllScalar reports whether every payload field of
 // a single enum variant is a 1-reg type. Mirror of
 // `payloadAllScalar` in lower.go.
@@ -82,7 +75,6 @@ pub fn onbEnumPayloadAllScalar(payload: List<MirFieldLayout>) -> Bool {
     }
     true
 }
-
 // onbEnumLayoutAllScalar reports whether every variant of an
 // enum has all-scalar payloads. Required for the small-enum
 // register path; mixed payloads fall back to the LLVM backend.
@@ -94,9 +86,7 @@ pub fn onbEnumLayoutAllScalar(layout: MirEnumLayout) -> Bool {
     }
     true
 }
-
 // === Slot sizes ====================================================
-
 // onbStructLayoutByteSize returns the on-stack byte size for a
 // struct local. Each scalar field reserves one 8-byte slot; the
 // total is `len(fields) * 8`. Mirror of the relevant branch in
@@ -104,7 +94,6 @@ pub fn onbEnumLayoutAllScalar(layout: MirEnumLayout) -> Bool {
 pub fn onbStructLayoutByteSize(layout: MirStructLayout) -> Int {
     layout.fields.len() * 8
 }
-
 // onbEnumSlotSize returns the on-stack byte size for an enum
 // local: 8 (discriminant) + maxPayload * 8. Capped at 16 — past
 // that the AAPCS64 small-struct ABI doesn't apply and the value
@@ -128,9 +117,7 @@ pub fn onbEnumSlotSize(layout: MirEnumLayout) -> Int {
     }
     total
 }
-
 // === Layout-aware ABI register-slot count =========================
-
 // onbAbiRegSlotsResult is the (count, ok) pair `abiRegSlots`
 // returns. `ok = false` means "this type isn't ABI-passable
 // today"; the lowering layer routes such types through the LLVM
@@ -139,11 +126,9 @@ pub struct OnbAbiRegSlotsResult {
     pub slots: Int,
     pub ok: Bool,
 }
-
 pub fn onbAbiRegSlotsResult(slots: Int, ok: Bool) -> OnbAbiRegSlotsResult {
-    OnbAbiRegSlotsResult { slots: slots, ok: ok }
+    OnbAbiRegSlotsResult {slots: slots, ok: ok}
 }
-
 // onbAbiRegSlots returns how many registers an ABI value of type
 // `typ` consumes. Mirror of `abiRegSlots`. Resolution order:
 //
@@ -179,7 +164,8 @@ pub fn onbAbiRegSlots(table: MirLayoutTable, typ: String) -> OnbAbiRegSlotsResul
             }
             return onbAbiRegSlotsResult(0, false)
         },
-        None -> {},
+        None -> {
+        },
     }
     match onbLookupEnumLayout(table, head) {
         Some(layout) -> {
@@ -189,11 +175,11 @@ pub fn onbAbiRegSlots(table: MirLayoutTable, typ: String) -> OnbAbiRegSlotsResul
             }
             return onbAbiRegSlotsResult(size / 8, true)
         },
-        None -> {},
+        None -> {
+        },
     }
     onbAbiRegSlotsResult(0, false)
 }
-
 // onbAbiUsesIndirectStruct reports whether type `typ` rides the
 // AAPCS64 indirect (sret) ABI: a pointer to a caller-allocated
 // buffer in one regular argument register (params) or x8
@@ -211,7 +197,6 @@ pub fn onbAbiUsesIndirectStruct(table: MirLayoutTable, typ: String) -> Bool {
         None -> false,
     }
 }
-
 // onbAbiIndirectStructByteSize returns the byte size of an
 // indirect-passed struct's slot — `n * 8` where n is the field
 // count. Caller pre-checks `onbAbiUsesIndirectStruct`.
@@ -222,7 +207,6 @@ pub fn onbAbiIndirectStructByteSize(table: MirLayoutTable, typ: String) -> Int {
         None -> 0,
     }
 }
-
 // onbAbiIsPassableType reports whether `typ` is something the
 // function-boundary ABI guards accept as a parameter or return
 // type. Mirror of `isABIPassableType`.

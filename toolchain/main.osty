@@ -3,7 +3,6 @@ use std.fs
 use std.os
 use std.process
 use std.strings
-
 fn forwardedArgsFrom(encoded: String, rawArgs: List<String>) -> List<String> {
     if encoded != "" {
         let mut out: List<String> = []
@@ -22,15 +21,12 @@ fn forwardedArgsFrom(encoded: String, rawArgs: List<String>) -> List<String> {
     }
     out
 }
-
 fn forwardedArgs() -> List<String> {
     forwardedArgsFrom(env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? "", env.args())
 }
-
 fn hasSelfhostCommand(args: List<String>, name: String) -> Bool {
     args.len() > 0 && args[0] == name
 }
-
 fn hasOptionValue(args: List<String>, name: String, value: String) -> Bool {
     let joined = name + "=" + value
     let mut i = 0
@@ -46,22 +42,15 @@ fn hasOptionValue(args: List<String>, name: String, value: String) -> Bool {
     }
     false
 }
-
 fn lastArg(args: List<String>) -> String {
     if args.len() == 0 {
         return ""
     }
     args[args.len() - 1]
 }
-
 fn isSelfRebuildBuild(args: List<String>) -> Bool {
-    args.len() > 1 &&
-        args[0] == "build" &&
-        hasOptionValue(args, "--backend", "llvm") &&
-        hasOptionValue(args, "--emit", "binary") &&
-        lastArg(args) != ""
+    args.len() > 1 && args[0] == "build" && hasOptionValue(args, "--backend", "llvm") && hasOptionValue(args, "--emit", "binary") && lastArg(args) != ""
 }
-
 fn selfRebuildPath(dir: String, rest: String) -> String {
     if dir == "" {
         return rest
@@ -72,7 +61,6 @@ fn selfRebuildPath(dir: String, rest: String) -> String {
         dir + "/" + rest
     }
 }
-
 fn currentExecutable() -> String {
     let args = env.args()
     if args.len() == 0 {
@@ -80,7 +68,6 @@ fn currentExecutable() -> String {
     }
     args[0]
 }
-
 fn runSelfRebuild(args: List<String>) -> Int {
     let toolchainDir = lastArg(args)
     let _ = selfRebuildPath(toolchainDir, ".osty/out/debug/llvm/osty-self")
@@ -88,7 +75,6 @@ fn runSelfRebuild(args: List<String>) -> Int {
     eprint("missing entrypoint: toolchain/mir_generator.osty must own GenerateFromMIR-equivalent orchestration before osty-self can rebuild itself.\n")
     2
 }
-
 fn runSelfhostDoctor() -> Int {
     let exe = currentExecutable()
     if exe == "" {
@@ -102,7 +88,6 @@ fn runSelfhostDoctor() -> Int {
     println("osty-self missing stage: per-instruction body emission (Phase 1+)")
     0
 }
-
 /// runCompile is the Phase 0 self-host pipeline entry: read a source
 /// file, run it through the toolchain pipeline (HIR lower, monomorph,
 /// MIR lower, MIR emit), and print the resulting LLVM IR text to
@@ -130,7 +115,6 @@ fn runCompile(args: List<String>) -> Int {
     print(irText)
     0
 }
-
 /// runLirProtoLower is the Phase-7 Slice 2 self-host entry: read the
 /// source file, run the toolchain pipeline (HIR → MIR), then route
 /// MIR → LLVM IR through the new self-hosted LIR Proto path
@@ -186,7 +170,6 @@ fn runLirProtoLower(args: List<String>) -> Int {
     print(lirRenderModule(result.module))
     0
 }
-
 fn main() {
     let args = forwardedArgs()
     if hasSelfhostCommand(args, "--selfhost-host") {

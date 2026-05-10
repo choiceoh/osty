@@ -1,15 +1,11 @@
 // onb_dev_test.osty — dev / cross-validation env helper tests.
 use std.testing
-
 // === Env-var name pinning ==========================================
-
 fn testOnbEnvVarNames() {
     testing.assertEq(onbEnvStrictName(), "OSTY_ONB_STRICT")
     testing.assertEq(onbEnvTimingName(), "OSTY_ONB_TIMING")
 }
-
 // === onbEnvTrue parsing ============================================
-
 fn testOnbEnvTrueAccepts() {
     testing.assert(onbEnvTrue("1"))
     testing.assert(onbEnvTrue("true"))
@@ -17,10 +13,10 @@ fn testOnbEnvTrueAccepts() {
     testing.assert(onbEnvTrue("yes"))
     testing.assert(onbEnvTrue("Yes"))
     testing.assert(onbEnvTrue("on"))
-    testing.assert(onbEnvTrue(" 1 "))      // whitespace-trimmed
+    testing.assert(onbEnvTrue(" 1 "))
     testing.assert(onbEnvTrue("\ttrue\t"))
 }
-
+// whitespace-trimmed
 fn testOnbEnvTrueRejects() {
     testing.assert(!onbEnvTrue(""))
     testing.assert(!onbEnvTrue("0"))
@@ -29,25 +25,20 @@ fn testOnbEnvTrueRejects() {
     testing.assert(!onbEnvTrue("off"))
     testing.assert(!onbEnvTrue("disabled"))
 }
-
 fn testOnbStrictModeAndTimingEnabled() {
     testing.assert(onbStrictMode("1"))
     testing.assert(!onbStrictMode(""))
     testing.assert(onbTimingEnabled("yes"))
     testing.assert(!onbTimingEnabled("no"))
 }
-
 // === Timing path naming ============================================
-
 fn testOnbTimingPathName() {
     testing.assertEq(onbTimingPathName(OnbTimingPath.OnbTimingPathNative), "native")
     testing.assertEq(onbTimingPathName(OnbTimingPath.OnbTimingPathLlvmFallback), "llvm-fallback")
     testing.assertEq(onbTimingPathName(OnbTimingPath.OnbTimingPathError), "error")
     testing.assertEq(onbTimingPathName(OnbTimingPath.OnbTimingPathOther), "other")
 }
-
 // === formatElapsed ================================================
-
 fn testOnbFormatElapsedEdges() {
     testing.assertEq(onbFormatElapsed(0), "0ms")
     testing.assertEq(onbFormatElapsed(-5), "0ms")
@@ -58,54 +49,43 @@ fn testOnbFormatElapsedEdges() {
     testing.assertEq(onbFormatElapsed(1230), "1.23s")
     testing.assertEq(onbFormatElapsed(1090), "1.09s")
 }
-
 // === LogTiming format ==============================================
-
 fn testOnbFormatTimingNative() {
     let ev = onbTimingEvent(OnbTimingPath.OnbTimingPathNative, "aarch64-apple-darwin", 42)
     let line = onbFormatTiming(ev)
     testing.assertEq(line, "onb: emit 42ms [native: aarch64-apple-darwin]\n")
 }
-
 fn testOnbFormatTimingNativeHostFallback() {
     let ev = onbTimingEvent(OnbTimingPath.OnbTimingPathNative, "", 100)
     let line = onbFormatTiming(ev)
     testing.assertEq(line, "onb: emit 100ms [native: host]\n")
 }
-
 fn testOnbFormatTimingLlvmFallback() {
     let mut ev = onbTimingEvent(OnbTimingPath.OnbTimingPathLlvmFallback, "host", 5)
     ev.reason = "list_get_string"
     let line = onbFormatTiming(ev)
     testing.assertEq(line, "onb: emit 5ms [fallback to llvm: list_get_string]\n")
 }
-
 fn testOnbFormatTimingLlvmFallbackDefault() {
     let ev = onbTimingEvent(OnbTimingPath.OnbTimingPathLlvmFallback, "host", 5)
     let line = onbFormatTiming(ev)
     testing.assertEq(line, "onb: emit 5ms [fallback to llvm: shape unsupported]\n")
 }
-
 fn testOnbFormatTimingError() {
     let mut ev = onbTimingEvent(OnbTimingPath.OnbTimingPathError, "host", 0)
     ev.reason = "linker failed"
     let line = onbFormatTiming(ev)
     testing.assertEq(line, "onb: emit 0ms [error: linker failed]\n")
 }
-
 // === UnsupportedShapeReason ========================================
-
 fn testOnbUnsupportedShapeSentinelStr() {
     testing.assertEq(onbUnsupportedShapeSentinel(), "onb: unsupported mir shape")
 }
-
 fn testOnbUnsupportedShapeReasonStrip() {
     let err = "onb: unsupported mir shape: list_push value type"
     testing.assertEq(onbUnsupportedShapeReason(err), "list_push value type")
 }
-
 fn testOnbUnsupportedShapeReasonOther() {
-    // Non-sentinel error string passes through verbatim.
     testing.assertEq(onbUnsupportedShapeReason("onb: missing MIR module"), "onb: missing MIR module")
     testing.assertEq(onbUnsupportedShapeReason(""), "")
 }

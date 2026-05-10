@@ -8,7 +8,6 @@
 // the low 8 bits and the encoder masks before each push so
 // negative inputs (sign-extended) produce the same byte stream
 // the Go encoder emits.
-
 // onbWriteULEB128 appends an unsigned LEB128-encoded integer to
 // `out`. The non-negative bit pattern of `v` is what the encoder
 // reads — passing a negative `Int` would emit garbage that
@@ -23,18 +22,10 @@ pub fn onbWriteULEB128(out: List<Int>, v: Int) -> List<Int> {
     let mut done = false
     for guard in 0..16 {
         if done {
-            // Skip-rest invariant — every iteration after the
-            // terminator is a no-op. We can't `break` cleanly
-            // inside `for ... in range`, so the loop runs the
-            // full 16 iterations even though the byte stream is
-            // already complete. 16 covers the worst case for
-            // i64 (10 bytes of payload + slack).
             continue
         }
         let chunk = value & 0x7f
         value = value >> 7
-        // Treat `value` like an unsigned 64-bit by masking off
-        // any sign-extended high bits before the zero check.
         let upper = value & 0xffffffffffffff80
         if upper != 0 || value > 0 {
             buf.push(chunk | 0x80)
@@ -45,7 +36,14 @@ pub fn onbWriteULEB128(out: List<Int>, v: Int) -> List<Int> {
     }
     buf
 }
-
+// Skip-rest invariant — every iteration after the
+// terminator is a no-op. We can't `break` cleanly
+// inside `for ... in range`, so the loop runs the
+// full 16 iterations even though the byte stream is
+// already complete. 16 covers the worst case for
+// i64 (10 bytes of payload + slack).
+// Treat `value` like an unsigned 64-bit by masking off
+// any sign-extended high bits before the zero check.
 // onbWriteSLEB128 appends a signed LEB128-encoded integer.
 // Algorithm: same 7-bit chunking as the unsigned form, but the
 // terminator is "next-chunk equals 0 and high-bit clear" OR
@@ -62,9 +60,6 @@ pub fn onbWriteSLEB128(out: List<Int>, v: Int) -> List<Int> {
             continue
         }
         let chunk = value & 0x7f
-        // Osty's `>>` on a signed Int is arithmetic shift, so
-        // negative inputs preserve their sign bit across the
-        // shift — mirroring the Go `int64` semantics.
         value = value >> 7
         let signBitSet = (chunk & 0x40) != 0
         let stopPositive = value == 0 && !signBitSet
@@ -78,7 +73,9 @@ pub fn onbWriteSLEB128(out: List<Int>, v: Int) -> List<Int> {
     }
     buf
 }
-
+// Osty's `>>` on a signed Int is arithmetic shift, so
+// negative inputs preserve their sign bit across the
+// shift — mirroring the Go `int64` semantics.
 // onbWriteULEB128Pair pushes two unsigned LEB128 ints back to
 // back. Used by the abbreviation table builder where every
 // (attr, form) pair carries this shape.

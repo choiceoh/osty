@@ -3,12 +3,10 @@ pub struct RegistryVersion {
     pub version: SemVersion,
     pub yanked: Bool,
 }
-
 /// registryVersion constructs one registry index entry.
 pub fn registryVersion(version: SemVersion, yanked: Bool) -> RegistryVersion {
-    RegistryVersion { version, yanked }
+    RegistryVersion {version, yanked}
 }
-
 /// visibleRegistryCount mirrors the registry client's yanked-version filter.
 pub fn visibleRegistryCount(versions: List<RegistryVersion>) -> Int {
     let mut count = 0
@@ -19,7 +17,6 @@ pub fn visibleRegistryCount(versions: List<RegistryVersion>) -> Int {
     }
     count
 }
-
 /// bestRegistryVersion selects the highest non-yanked matching version.
 pub fn bestRegistryVersion(req: SemReq, versions: List<RegistryVersion>) -> SemMaxResult {
     let mut found = false
@@ -32,5 +29,5 @@ pub fn bestRegistryVersion(req: SemReq, versions: List<RegistryVersion>) -> SemM
             }
         }
     }
-    SemMaxResult { found, version: best }
+    SemMaxResult {found, version: best}
 }

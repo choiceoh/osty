@@ -9,28 +9,40 @@
 // All exported helpers return `Option<String>` to encode "this kind
 // is outside the dev backend's runtime support" as None. Callers
 // that want a hard failure pair the lookup with a diagnostic site.
-
 // === ABI kind tags =======================================================
 //
 // Mirrors `OSTY_RT_ABI_*` in the C runtime + `containerAbiKind` in
 // the LLVM backend. ONB's `abiKindFor` returns one of these values
 // for a MIR type when dispatching list/map runtime calls.
-pub fn onbAbiKindI64() -> Int { 1 }
-pub fn onbAbiKindI1() -> Int { 2 }
-pub fn onbAbiKindF64() -> Int { 3 }
-pub fn onbAbiKindPtr() -> Int { 4 }
-pub fn onbAbiKindString() -> Int { 5 }
-
+pub fn onbAbiKindI64() -> Int {
+    1
+}
+pub fn onbAbiKindI1() -> Int {
+    2
+}
+pub fn onbAbiKindF64() -> Int {
+    3
+}
+pub fn onbAbiKindPtr() -> Int {
+    4
+}
+pub fn onbAbiKindString() -> Int {
+    5
+}
 // === String runtime ======================================================
-
-pub fn onbRuntimeSymStringConcat() -> String { "osty_rt_strings_Concat" }
-pub fn onbRuntimeSymStringByteLen() -> String { "osty_rt_strings_ByteLen" }
-
+pub fn onbRuntimeSymStringConcat() -> String {
+    "osty_rt_strings_Concat"
+}
+pub fn onbRuntimeSymStringByteLen() -> String {
+    "osty_rt_strings_ByteLen"
+}
 // === List runtime =======================================================
-
-pub fn onbRuntimeSymListNew() -> String { "osty_rt_list_new" }
-pub fn onbRuntimeSymListLen() -> String { "osty_rt_list_len" }
-
+pub fn onbRuntimeSymListNew() -> String {
+    "osty_rt_list_new"
+}
+pub fn onbRuntimeSymListLen() -> String {
+    "osty_rt_list_len"
+}
 // onbListPushSymbolForKind picks the runtime push symbol for a list
 // element ABI kind. Element-type-aware dispatch is what unlocked
 // `List<Bool>` / `List<Float64>` / `List<String>` in Phase A2 Week
@@ -50,7 +62,6 @@ pub fn onbListPushSymbolForKind(kind: Int) -> String? {
         None
     }
 }
-
 // onbListGetSymbolForKind picks the runtime indexed-read symbol —
 // `osty_rt_list_get_<kind>(list, idx) -> elem`. Used by `xs[i]`
 // IndexProj reads (Week 17).
@@ -69,12 +80,13 @@ pub fn onbListGetSymbolForKind(kind: Int) -> String? {
         None
     }
 }
-
 // === Map runtime ========================================================
-
-pub fn onbRuntimeSymMapNew() -> String { "osty_rt_map_new" }
-pub fn onbRuntimeSymMapLen() -> String { "osty_rt_map_len" }
-
+pub fn onbRuntimeSymMapNew() -> String {
+    "osty_rt_map_new"
+}
+pub fn onbRuntimeSymMapLen() -> String {
+    "osty_rt_map_len"
+}
 // onbMapInsertSymbolForKeyKind picks `osty_rt_map_insert_<key_kind>`
 // for `m.insert(k, v)`. The runtime takes (map, key, &value); the
 // caller's responsibility is to stage value into a stack scratch
@@ -94,7 +106,6 @@ pub fn onbMapInsertSymbolForKeyKind(kind: Int) -> String? {
         None
     }
 }
-
 // onbMapGetSymbolForKeyKind picks `osty_rt_map_get_<key_kind>` for
 // `m.get(k) -> V?`. The runtime returns Bool (found) and writes the
 // payload through the caller-provided out pointer.
@@ -113,7 +124,6 @@ pub fn onbMapGetSymbolForKeyKind(kind: Int) -> String? {
         None
     }
 }
-
 // onbMapContainsSymbolForKeyKind picks `osty_rt_map_contains_<...>`
 // for `m.containsKey(k) -> Bool`.
 pub fn onbMapContainsSymbolForKeyKind(kind: Int) -> String? {
@@ -131,7 +141,6 @@ pub fn onbMapContainsSymbolForKeyKind(kind: Int) -> String? {
         None
     }
 }
-
 // onbMapRemoveSymbolForKeyKind picks `osty_rt_map_remove_<...>` for
 // `m.remove(k) -> Bool`.
 pub fn onbMapRemoveSymbolForKeyKind(kind: Int) -> String? {
@@ -149,10 +158,10 @@ pub fn onbMapRemoveSymbolForKeyKind(kind: Int) -> String? {
         None
     }
 }
-
 // === Closure runtime ====================================================
-
 // onbRuntimeSymClosureEnvAllocV2 — the dotted form runtime exports
 // via `__asm__("osty.rt.closure_env_alloc_v2")`. Mach-O symbol
 // encoding adds the leading underscore at emit time.
-pub fn onbRuntimeSymClosureEnvAllocV2() -> String { "osty.rt.closure_env_alloc_v2" }
+pub fn onbRuntimeSymClosureEnvAllocV2() -> String {
+    "osty.rt.closure_env_alloc_v2"
+}

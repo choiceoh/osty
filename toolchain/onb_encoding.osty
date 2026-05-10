@@ -17,9 +17,7 @@
 // truncate when emitting bytes. Negative inputs trip the bounds
 // guards before any sign-bit corruption can leak into the encoded
 // word. Same convention `internal/onb/macho.go` follows.
-
 // === Common register encodings ===========================================
-
 // xRegisterNumber maps an x-register name to its 0..31 encoding.
 // Returns -1 on a name the encoder doesn't recognise; callers
 // distinguish that from the legitimate `x0` (== 0) by the sign.
@@ -28,18 +26,67 @@
 // the Osty port keeps the table identical so the Go encoder and the
 // future Osty encoder agree byte-for-byte on every program.
 pub fn onbXRegisterNumber(name: String) -> Int {
-    if name == "x0" { 0 } else if name == "x1" { 1 } else if name == "x2" { 2 } else if name == "x3" { 3 } else if name == "x4" { 4 } else if name == "x5" { 5 } else if name == "x6" { 6 } else if name == "x7" { 7 } else if name == "x8" { 8 } else if name == "x9" { 9 } else if name == "x10" { 10 } else if name == "x29" { 29 } else if name == "x30" { 30 } else if name == "sp" { 31 } else { -1 }
+    if name == "x0" {
+        0
+    } else if name == "x1" {
+        1
+    } else if name == "x2" {
+        2
+    } else if name == "x3" {
+        3
+    } else if name == "x4" {
+        4
+    } else if name == "x5" {
+        5
+    } else if name == "x6" {
+        6
+    } else if name == "x7" {
+        7
+    } else if name == "x8" {
+        8
+    } else if name == "x9" {
+        9
+    } else if name == "x10" {
+        10
+    } else if name == "x29" {
+        29
+    } else if name == "x30" {
+        30
+    } else if name == "sp" {
+        31
+    } else {
+        -1
+    }
 }
-
 // onbDRegisterNumber maps a d-register name to its 0..31 encoding.
 // Phase A2 only uses d0..d9; the table keeps the higher names
 // reserved for follow-up callee-saved spills.
 pub fn onbDRegisterNumber(name: String) -> Int {
-    if name == "d0" { 0 } else if name == "d1" { 1 } else if name == "d2" { 2 } else if name == "d3" { 3 } else if name == "d4" { 4 } else if name == "d5" { 5 } else if name == "d6" { 6 } else if name == "d7" { 7 } else if name == "d8" { 8 } else if name == "d9" { 9 } else { -1 }
+    if name == "d0" {
+        0
+    } else if name == "d1" {
+        1
+    } else if name == "d2" {
+        2
+    } else if name == "d3" {
+        3
+    } else if name == "d4" {
+        4
+    } else if name == "d5" {
+        5
+    } else if name == "d6" {
+        6
+    } else if name == "d7" {
+        7
+    } else if name == "d8" {
+        8
+    } else if name == "d9" {
+        9
+    } else {
+        -1
+    }
 }
-
 // === Instruction encoders ================================================
-
 // onbEncodeBrk produces the 32-bit aarch64 word for `brk #imm16`.
 // Layout: `1101 0100 001<imm16> 000 00`. ONB uses this for
 // `mir.UnreachableTerm` lowering — match exhaustiveness inserts an
@@ -52,7 +99,6 @@ pub fn onbEncodeBrk(imm: Int) -> Int? {
         Some(0xd4200000 | (imm << 5))
     }
 }
-
 // onbEncodeFmovDFromX encodes `FMOV Dd, Xn` — bitcast a 64-bit
 // integer register into a double-precision FP register without
 // changing bits. Returns None if either register name is invalid.
@@ -65,7 +111,6 @@ pub fn onbEncodeFmovDFromX(dst: String, src: String) -> Int? {
         Some(0x9e670000 | (n << 5) | d)
     }
 }
-
 // onbEncodeFmovXFromD encodes `FMOV Xd, Dn` — the inverse of
 // onbEncodeFmovDFromX. Same opcode family with op = 110 (general →
 // FP) vs 111 (FP → general).
@@ -78,7 +123,6 @@ pub fn onbEncodeFmovXFromD(dst: String, src: String) -> Int? {
         Some(0x9e660000 | (n << 5) | d)
     }
 }
-
 // onbEncodeFPArith encodes the FP binary arithmetic family
 // `F<op> Dd, Dn, Dm` (FADD/FSUB/FMUL/FDIV) for double precision.
 // Base values (mirror `internal/onb/macho.go`):
@@ -99,7 +143,6 @@ pub fn onbEncodeFPArith(base: Int, dst: String, lhs: String, rhs: String) -> Int
         Some(base | (m << 16) | (n << 5) | d)
     }
 }
-
 // onbEncodeBlr encodes `blr Xn` — indirect branch with link. Used
 // for closure dispatch: the env's first slot holds the lifted-fn
 // address; the lowerer loads that into a scratch register and
@@ -112,13 +155,13 @@ pub fn onbEncodeBlr(reg: String) -> Int? {
         Some(0xd63f0000 | (n << 5))
     }
 }
-
 // onbEncodeRet encodes `ret` — the conventional `ret x30` form.
 // Always the same 4 bytes (0xd65f03c0) but expressed as an Int
 // so the caller's emit path stays uniform with the rest of this
 // table.
-pub fn onbEncodeRet() -> Int { 0xd65f03c0 }
-
+pub fn onbEncodeRet() -> Int {
+    0xd65f03c0
+}
 // onbEncodeFPStack encodes `STR Dt, [SP, #imm12]` (base
 // 0xfd000000) and `LDR Dt, [SP, #imm12]` (base 0xfd400000) for
 // double-precision scalar transfers. The immediate is scaled by 8
@@ -139,10 +182,9 @@ pub fn onbEncodeFPStack(base: Int, reg: String, offset: Int) -> Int? {
     if scaled > 0xfff {
         return None
     }
-    // SP encodes as register 31 in the Rn field (bits 5-9).
     Some(base | (scaled << 10) | (31 << 5) | r)
 }
-
+// SP encodes as register 31 in the Rn field (bits 5-9).
 // onbEncodeLoadStoreReg encodes `LDR Xt, [Xn, #imm]` (base
 // 0xf9400000) or `STR Xt, [Xn, #imm]` (base 0xf9000000) for
 // 64-bit register-relative loads/stores. Used by the indirect-ABI
@@ -169,7 +211,6 @@ pub fn onbEncodeLoadStoreReg(base: Int, t: String, n: String, offset: Int) -> In
     }
     Some(base | (scaled << 10) | (nn << 5) | tn)
 }
-
 // onbEncodeMovRegReg encodes `MOV Xd, Xm` (alias for `ORR Xd, XZR,
 // Xm`). Used to move the env pointer between registers when staging
 // a closure call.
@@ -182,10 +223,9 @@ pub fn onbEncodeMovRegReg(dst: String, src: String) -> Int? {
     if m < 0 {
         return None
     }
-    // 0xaa0003e0 | (Xm << 16) | Xd. XZR encodes as 31 in the Rn slot.
     Some(0xaa0003e0 | (m << 16) | d)
 }
-
+// 0xaa0003e0 | (Xm << 16) | Xd. XZR encodes as 31 in the Rn slot.
 // onbEncodeArithReg encodes ADD / SUB (shifted register) for 64-bit
 // registers with no shift. Layout: `base | (Rm << 16) | (Rn << 5) | Rd`.
 // Base values:
@@ -204,7 +244,6 @@ pub fn onbEncodeArithReg(base: Int, dst: String, lhs: String, rhs: String) -> In
         Some(base | (m << 16) | (n << 5) | d)
     }
 }
-
 // onbEncodeMulReg encodes `MUL Xd, Xn, Xm` — alias for
 // `MADD Xd, Xn, Xm, XZR`. Layout: 0x9b007c00 | (Rm << 16) | (Rn << 5) | Rd
 // with Ra = 31 (XZR).
@@ -218,7 +257,6 @@ pub fn onbEncodeMulReg(dst: String, lhs: String, rhs: String) -> Int? {
         Some(0x9b007c00 | (m << 16) | (n << 5) | d)
     }
 }
-
 // onbEncodeCmp encodes `CMP Xn, Xm` — alias for `SUBS XZR, Xn, Xm`.
 // Layout: 0xeb00001f | (Rm << 16) | (Rn << 5). Rd is hard-wired to
 // XZR (=31), so the destination slot is `0x1f`.
@@ -231,17 +269,27 @@ pub fn onbEncodeCmp(lhs: String, rhs: String) -> Int? {
         Some(0xeb00001f | (m << 16) | (n << 5))
     }
 }
-
 // onbCondCode maps the Osty-side condition enum to the aarch64
 // condition encoding. Mirrors the Go `Cond` constants in
 // `internal/onb/lir.go` — values are bit fields, not source order.
-pub fn onbCondCodeEq() -> Int { 0 }
-pub fn onbCondCodeNe() -> Int { 1 }
-pub fn onbCondCodeGe() -> Int { 10 }
-pub fn onbCondCodeLt() -> Int { 11 }
-pub fn onbCondCodeGt() -> Int { 12 }
-pub fn onbCondCodeLe() -> Int { 13 }
-
+pub fn onbCondCodeEq() -> Int {
+    0
+}
+pub fn onbCondCodeNe() -> Int {
+    1
+}
+pub fn onbCondCodeGe() -> Int {
+    10
+}
+pub fn onbCondCodeLt() -> Int {
+    11
+}
+pub fn onbCondCodeGt() -> Int {
+    12
+}
+pub fn onbCondCodeLe() -> Int {
+    13
+}
 // onbEncodeCset encodes `CSET Xd, <cond>` — write 1 to Xd if
 // condition holds (after a flag-setting predecessor like CMP),
 // else 0. Internally an alias for `CSINC Xd, XZR, XZR, !cond`.
@@ -257,7 +305,6 @@ pub fn onbEncodeCset(dst: String, cond: Int) -> Int? {
     }
     Some(0x9a9f07e0 | ((cond ^ 1) << 12) | d)
 }
-
 // onbEncodeStackLoad / onbEncodeStackStore encode the SP-relative
 // 64-bit transfer family used by the local-slot lowering. Base
 // values:
@@ -281,7 +328,6 @@ pub fn onbEncodeStackLoad(t: String, offset: Int) -> Int? {
     }
     Some(0xf94003e0 | (scaled << 10) | r)
 }
-
 pub fn onbEncodeStackStore(t: String, offset: Int) -> Int? {
     if offset < 0 || (offset % 8) != 0 {
         return None
@@ -296,14 +342,12 @@ pub fn onbEncodeStackStore(t: String, offset: Int) -> Int? {
     }
     Some(0xf90003e0 | (scaled << 10) | r)
 }
-
 // === Multi-word constant materialisation ============================
 //
 // Movz/Movk chains and the W-register movz form. These produce
 // **lists of 32-bit words** rather than a single Int — variable
 // length encoding is the price of materialising arbitrary 64-bit
 // immediates without a literal pool.
-
 // onbEncodeMovz encodes `MOVZ Xd, #imm16, lsl #(hw*16)`. Layout:
 // 0xd2800000 | (hw << 21) | (imm16 << 5) | Rd. hw is 0..3 for a
 // 64-bit register; the caller's chunking pass decides where in the
@@ -321,7 +365,6 @@ pub fn onbEncodeMovz(dst: String, hw: Int, imm16: Int) -> Int? {
     }
     Some(0xd2800000 | (hw << 21) | (imm16 << 5) | r)
 }
-
 // onbEncodeMovk encodes `MOVK Xd, #imm16, lsl #(hw*16)`. Same field
 // layout as MOVZ with bit 30 flipped (op=11 vs op=10) — so the
 // base mask is 0xf2800000 instead of 0xd2800000. MOVK preserves
@@ -341,7 +384,6 @@ pub fn onbEncodeMovk(dst: String, hw: Int, imm16: Int) -> Int? {
     }
     Some(0xf2800000 | (hw << 21) | (imm16 << 5) | r)
 }
-
 // onbEncodeMovzW encodes `MOVZ Wd, #imm16, lsl #(hw*16)` — the
 // W-register variant. Same layout as the X form with bit 31
 // cleared (sf=0): base 0x52800000 instead of 0xd2800000. ONB
@@ -354,15 +396,14 @@ pub fn onbEncodeMovzW(dst: String, hw: Int, imm16: Int) -> Int? {
     if imm16 < 0 || imm16 > 0xffff {
         return None
     }
-    // W-registers share their numeric encoding with the X
-    // counterpart at the same index.
     let r = onbXRegisterNumber(onbWToXAlias(dst))
     if r < 0 {
         return None
     }
     Some(0x52800000 | (hw << 21) | (imm16 << 5) | r)
 }
-
+// W-registers share their numeric encoding with the X
+// counterpart at the same index.
 // onbWToXAlias rewrites a w-register name ("w0" / "w1" / ...) into
 // the matching x-name so xRegisterNumber can encode it. This
 // matches the aarch64 convention where `Wn` and `Xn` share the
@@ -389,7 +430,6 @@ fn onbWToXAlias(name: String) -> String {
         name
     }
 }
-
 // onbEncodeMovImm64Words materialises an arbitrary 64-bit
 // immediate into Xd via a movz/movk chain. Returns a list of 1..4
 // 32-bit words covering the non-zero 16-bit chunks, with the
@@ -412,29 +452,30 @@ pub fn onbEncodeMovImm64Words(dst: String, imm: Int) -> List<Int> {
         let chunk = (imm >> shift) & 0xffff
         let isFirst = out.isEmpty()
         if isFirst {
-            // First chunk MUST be emitted (as MOVZ) so the
-            // register's other bits get cleared. Subsequent zero
-            // chunks are skipped because MOVK would leave the
-            // register's existing bits intact.
             match onbEncodeMovz(dst, hw, chunk) {
                 Some(w) -> out.push(w),
-                None -> {},
+                None -> {
+                },
             }
         } else if chunk != 0 {
             match onbEncodeMovk(dst, hw, chunk) {
                 Some(w) -> out.push(w),
-                None -> {},
+                None -> {
+                },
             }
         }
     }
     if out.isEmpty() {
-        // Defensive fallback when the destination register name
-        // wasn't recognised — every encode call returned None.
-        // Producing an empty list signals failure to the dispatcher.
     }
     out
 }
-
+// First chunk MUST be emitted (as MOVZ) so the
+// register's other bits get cleared. Subsequent zero
+// chunks are skipped because MOVK would leave the
+// register's existing bits intact.
+// Defensive fallback when the destination register name
+// wasn't recognised — every encode call returned None.
+// Producing an empty list signals failure to the dispatcher.
 // onbEncodeMovImm32Word emits a single MOVZ-flavoured word for a
 // 16-bit immediate destined for a W-register. ONB's only call
 // site is `mov w0, #0` (the process exit-code stamp at the top of
@@ -447,7 +488,6 @@ pub fn onbEncodeMovImm32Word(dst: String, imm: Int) -> Int? {
     }
     onbEncodeMovzW(dst, 0, imm)
 }
-
 // === Symbol-relative encoders (adrp + add + bl placeholders) ==========
 //
 // Symbol references are resolved at link time via Mach-O relocs,
@@ -459,7 +499,6 @@ pub fn onbEncodeMovImm32Word(dst: String, imm: Int) -> Int? {
 //   adrp Xd, label@PAGE       : 0x90000000 | Rd
 //   add  Xd, Xd, label@PAGEOFF: 0x91000000 | (Rd << 5) | Rd
 //   bl   imm26                : 0x94000000 | (imm26 & 0x3ffffff)
-
 // onbEncodeAdrpPlaceholder produces `adrp Xd, 0` — the high half
 // of an `adrp + add` symbol-address materialisation. Pairs with a
 // PAGE21 reloc on the resulting code offset.
@@ -471,7 +510,6 @@ pub fn onbEncodeAdrpPlaceholder(dst: String) -> Int? {
         Some(0x90000000 | r)
     }
 }
-
 // onbEncodeAddPageOffPlaceholder produces `add Xd, Xd, #0` — the
 // low half of an `adrp + add` pair. The encoder reuses dst as the
 // source register so a single reloc on the offset patches the
@@ -484,11 +522,11 @@ pub fn onbEncodeAddPageOffPlaceholder(dst: String) -> Int? {
         Some(0x91000000 | (r << 5) | r)
     }
 }
-
 // onbEncodeBlPlaceholder produces `bl 0` — the call-into-symbol
 // placeholder. The linker patches the imm26 from a Branch26 reloc.
-pub fn onbEncodeBlPlaceholder() -> Int { 0x94000000 }
-
+pub fn onbEncodeBlPlaceholder() -> Int {
+    0x94000000
+}
 // === Branch family — displacement, placeholder, and patch =============
 //
 // The branch family takes PC-relative immediates. ONB's encoder
@@ -506,14 +544,20 @@ pub fn onbEncodeBlPlaceholder() -> Int { 0x94000000 }
 //   cbnz Xt, imm19   : 0xb5000000 | ((imm19 & 0x7ffff) << 5) | Rt
 //
 // The signed immediate is the byte-displacement divided by 4.
-
 // onbBranchImm26Min / Max are the inclusive lower and exclusive
 // upper bounds of imm26 (scaled by 4 = displacement bytes / 4).
-pub fn onbBranchImm26Min() -> Int { 0 - (1 << 25) }
-pub fn onbBranchImm26Max() -> Int { 1 << 25 }
-pub fn onbBranchImm19Min() -> Int { 0 - (1 << 18) }
-pub fn onbBranchImm19Max() -> Int { 1 << 18 }
-
+pub fn onbBranchImm26Min() -> Int {
+    0 - (1 << 25)
+}
+pub fn onbBranchImm26Max() -> Int {
+    1 << 25
+}
+pub fn onbBranchImm19Min() -> Int {
+    0 - (1 << 18)
+}
+pub fn onbBranchImm19Max() -> Int {
+    1 << 18
+}
 // onbEncodeBranchDisplacement encodes `b imm26` for an already-known
 // 4-aligned byte displacement. Returns None on misalignment or
 // out-of-range. Used by the fixup resolve pass after blocks are
@@ -528,7 +572,6 @@ pub fn onbEncodeBranchDisplacement(displacement: Int) -> Int? {
     }
     Some(0x14000000 | (imm & 0x3ffffff))
 }
-
 // onbEncodeBranchCondDisplacement encodes `b.<cond> imm19`. The
 // condition is the aarch64 4-bit code (use `onbCondCode*()` for
 // well-known conditions).
@@ -545,7 +588,6 @@ pub fn onbEncodeBranchCondDisplacement(cond: Int, displacement: Int) -> Int? {
     }
     Some(0x54000000 | ((imm & 0x7ffff) << 5) | cond)
 }
-
 // onbEncodeCbnzDisplacement encodes `cbnz Xt, imm19`. The src
 // register lives in bits [4:0]; imm19 in bits [23:5].
 pub fn onbEncodeCbnzDisplacement(src: String, displacement: Int) -> Int? {
@@ -562,13 +604,13 @@ pub fn onbEncodeCbnzDisplacement(src: String, displacement: Int) -> Int? {
     }
     Some(0xb5000000 | ((imm & 0x7ffff) << 5) | t)
 }
-
 // onbEncodeBranchPlaceholder produces the displacement-zero `b 0`
 // word the emit-time encoder lays down before fixups resolve.
 // Equivalent to `onbEncodeBranchDisplacement(0)` but kept distinct
 // so the call site documents intent.
-pub fn onbEncodeBranchPlaceholder() -> Int { 0x14000000 }
-
+pub fn onbEncodeBranchPlaceholder() -> Int {
+    0x14000000
+}
 // onbEncodeBranchCondPlaceholder produces `b.cond #0` with the
 // caller-supplied condition baked in. Mirror of
 // `encodeMachOBcondPlaceholder` in `internal/onb/macho.go`.
@@ -578,7 +620,6 @@ pub fn onbEncodeBranchCondPlaceholder(cond: Int) -> Int? {
     }
     Some(0x54000000 | cond)
 }
-
 // onbEncodeCbnzPlaceholder produces `cbnz Xt, #0` with imm19 as
 // zero. The fixup pass overwrites bits [23:5] later; the Rt and
 // header bits stay intact.
@@ -589,13 +630,11 @@ pub fn onbEncodeCbnzPlaceholder(src: String) -> Int? {
     }
     Some(0xb5000000 | t)
 }
-
 // onbPatchBranchUnconditional rewrites a `b 0` placeholder with the
 // final displacement. Returns the patched 32-bit word.
 pub fn onbPatchBranchUnconditional(displacement: Int) -> Int? {
     onbEncodeBranchDisplacement(displacement)
 }
-
 // onbPatchBranchCond rewrites a `b.cond` placeholder with the
 // final displacement. Preserves the cond field (lower 4 bits + bit
 // 4 reserved zero) carried in the placeholder word.
@@ -615,7 +654,6 @@ pub fn onbPatchBranchCond(placeholder: Int, displacement: Int) -> Int? {
     }
     Some(placeholder | ((imm & 0x7ffff) << 5))
 }
-
 // onbPatchCbnz rewrites a `cbnz Xt, #0` placeholder. Same shape as
 // onbPatchBranchCond — only the imm19 bits change; Rt at bits [4:0]
 // is preserved by the input placeholder.
@@ -629,7 +667,6 @@ pub fn onbPatchCbnz(placeholder: Int, displacement: Int) -> Int? {
     }
     Some(placeholder | ((imm & 0x7ffff) << 5))
 }
-
 // onbEncodeAddImm encodes `ADD Xd, Xn, #imm12` for an unshifted
 // immediate (so imm <= 0xfff). Used by `LoadStackAddress`
 // (`add Xd, sp, #N`). Layout: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd.

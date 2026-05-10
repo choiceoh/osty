@@ -3,23 +3,19 @@ pub struct FeatureSpec {
     pub name: String,
     pub deps: List<String>,
 }
-
 /// FeatureValidation summarizes feature graph errors.
 pub struct FeatureValidation {
     pub undefinedDefault: Int,
     pub selfReferences: Int,
 }
-
 /// featureSpec constructs one named feature and its dependencies.
 pub fn featureSpec(name: String, deps: List<String>) -> FeatureSpec {
-    FeatureSpec { name, deps }
+    FeatureSpec {name, deps}
 }
-
 /// emptyFeatureValidation is the identity value for feature diagnostics.
 pub fn emptyFeatureValidation() -> FeatureValidation {
-    FeatureValidation { undefinedDefault: 0, selfReferences: 0 }
+    FeatureValidation {undefinedDefault: 0, selfReferences: 0}
 }
-
 /// featureExists reports whether a feature is declared in the local table.
 pub fn featureExists(name: String, features: List<FeatureSpec>) -> Bool {
     for feature in features {
@@ -29,7 +25,6 @@ pub fn featureExists(name: String, features: List<FeatureSpec>) -> Bool {
     }
     false
 }
-
 /// validateFeatureGraph mirrors the manifest feature checks that are pure data.
 pub fn validateFeatureGraph(defaults: List<String>, features: List<FeatureSpec>) -> FeatureValidation {
     let mut out = emptyFeatureValidation()

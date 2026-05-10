@@ -1,25 +1,19 @@
 use std.testing
-
 // ==== Helpers =======================================================
-
 fn hirPortSpan() -> HirSpan {
     hirNoSpan()
 }
-
 fn hirPortInt(text: String) -> HirExpr {
     hirIntLit(text, hirTInt(), hirPortSpan())
 }
-
 fn hirPortStr(text: String) -> HirExpr {
     hirStringLit([hirStringPartLit(text)], hirPortSpan())
 }
-
 fn hirPortModuleWithExpr(e: HirExpr) -> HirModule {
     let m = hirModule("main")
     m.script.push(hirExprStmt(e, hirPortSpan()))
     m
 }
-
 fn hirPortFindQualified(xs: List<HirQualifiedRef>, qualifier: String, name: String) -> Bool {
     for x in xs {
         if x.qualifier == qualifier && x.name == name {
@@ -28,7 +22,6 @@ fn hirPortFindQualified(xs: List<HirQualifiedRef>, qualifier: String, name: Stri
     }
     false
 }
-
 fn hirPortFindMethod(xs: List<HirMethodRef>, module: String, typeName: String, method: String) -> Bool {
     for x in xs {
         if x.module == module && x.typeName == typeName && x.method == method {
@@ -37,7 +30,6 @@ fn hirPortFindMethod(xs: List<HirMethodRef>, module: String, typeName: String, m
     }
     false
 }
-
 fn hirPortStringContains(haystack: String, needle: String) -> Bool {
     let hLen = haystack.len()
     let nLen = needle.len()
@@ -62,30 +54,24 @@ fn hirPortStringContains(haystack: String, needle: String) -> Bool {
     }
     false
 }
-
 // ==== Printing ======================================================
-
 fn testHirPrintModuleHeaderAndBody() {
     let body = hirBlock(hirPortSpan())
     hirBlockSetResult(body, hirPortInt("1"))
     let fn_ = hirFnDecl("addOne", hirTInt(), hirPortSpan())
     fn_.params.push(hirParam("x", hirTInt(), hirPortSpan()))
     fn_.body = body
-
     let m = hirModule("pkg")
     m.fns.push(fn_)
-
     let rendered = hirPrintModule(m)
     testing.assert(hirPortStringContains(rendered, "(module \"pkg\""))
     testing.assert(hirPortStringContains(rendered, "(fn addOne"))
     testing.assert(hirPortStringContains(rendered, "(result 1)"))
 }
-
 fn testHirPatternStringVariant() {
     let pat = hirVariantPat("Option", "Some", [hirIdentPat("x", hirPortSpan())], hirPortSpan())
     testing.assertEq(hirPatternString(pat), "Option.Some(x)")
 }
-
 fn testHirWalkCollectsPreorderNodes() {
     let body = hirBlock(hirPortSpan())
     let expr = hirBinary(HirBinAdd, hirPortInt("1"), hirPortInt("2"), hirTInt(), hirPortSpan())
@@ -94,7 +80,6 @@ fn testHirWalkCollectsPreorderNodes() {
     fn_.body = body
     let m = hirModule("main")
     m.fns.push(fn_)
-
     let walk = hirWalkModule(m)
     testing.assertEq(walk.fns.len(), 1)
     testing.assertEq(walk.blocks.len(), 1)
@@ -104,58 +89,30 @@ fn testHirWalkCollectsPreorderNodes() {
     testing.assert(walk.exprs[1].kind == HirExprIntLit)
     testing.assert(walk.exprs[2].kind == HirExprIntLit)
 }
-
 // ==== Reach =========================================================
-
 fn testHirReachCollectsQualifiedCall() {
-    let callee = hirFieldExpr(
-        hirIdent("strings", HirIdentUnknown, hirTypeNamed("Strings", []), hirPortSpan()),
-        "compare",
-        hirTypeFn([hirTInt(), hirTInt()], hirTInt()),
-        hirPortSpan(),
-    )
-    let call = hirCall(
-        callee,
-        [hirArg(hirIdent("a", HirIdentLocal, hirTInt(), hirPortSpan()), hirPortSpan()),
-            hirArg(hirIdent("b", HirIdentLocal, hirTInt(), hirPortSpan()), hirPortSpan())],
-        hirTInt(),
-        hirPortSpan(),
-    )
+    let callee = hirFieldExpr(hirIdent("strings", HirIdentUnknown, hirTypeNamed("Strings", []), hirPortSpan()), "compare", hirTypeFn([hirTInt(), hirTInt()], hirTInt()), hirPortSpan())
+    let call = hirCall(callee, [hirArg(hirIdent("a", HirIdentLocal, hirTInt(), hirPortSpan()), hirPortSpan()), hirArg(hirIdent("b", HirIdentLocal, hirTInt(), hirPortSpan()), hirPortSpan())], hirTInt(), hirPortSpan())
     let refs = hirReach(hirPortModuleWithExpr(call))
     testing.assertEq(refs.len(), 1)
     testing.assert(hirPortFindQualified(refs, "strings", "compare"))
 }
-
 fn testHirReachDedupesRepeatedCalls() {
-    let mk = hirCall(
-        hirFieldExpr(
-            hirIdent("strings", HirIdentUnknown, hirTypeNamed("Strings", []), hirPortSpan()),
-            "compare",
-            hirTypeFn([hirTInt(), hirTInt()], hirTInt()),
-            hirPortSpan(),
-        ),
-        [hirArg(hirPortInt("1"), hirPortSpan())],
-        hirTInt(),
-        hirPortSpan(),
-    )
+    let mk = hirCall(hirFieldExpr(hirIdent("strings", HirIdentUnknown, hirTypeNamed("Strings", []), hirPortSpan()), "compare", hirTypeFn([hirTInt(), hirTInt()], hirTInt()), hirPortSpan()), [hirArg(hirPortInt("1"), hirPortSpan())], hirTInt(), hirPortSpan())
     let m = hirModule("main")
     m.script.push(hirExprStmt(mk, hirPortSpan()))
     m.script.push(hirExprStmt(mk, hirPortSpan()))
-
     let refs = hirReach(m)
     testing.assertEq(refs.len(), 1)
 }
-
 fn testHirReachMethodsCollectsStdlibReceiverMethod() {
     let hexT = hirTypeNamedQualified("encoding", "Hex", [])
     let recv = hirIdent("h", HirIdentLocal, hexT, hirPortSpan())
     let call = hirMethodCall(recv, "encode", [hirArg(hirPortStr("data"), hirPortSpan())], hirTString(), hirPortSpan())
-
     let refs = hirReachMethods(hirPortModuleWithExpr(call))
     testing.assertEq(refs.len(), 1)
     testing.assert(hirPortFindMethod(refs, "encoding", "Hex", "encode"))
 }
-
 fn testHirReachMethodsSkipsUserTypes() {
     let userT = hirTypeNamed("MyType", [])
     let recv = hirIdent("v", HirIdentLocal, userT, hirPortSpan())
@@ -163,9 +120,7 @@ fn testHirReachMethodsSkipsUserTypes() {
     let refs = hirReachMethods(hirPortModuleWithExpr(call))
     testing.assertEq(refs.len(), 0)
 }
-
 // ==== Validate ======================================================
-
 fn testHirValidateAcceptsWellFormedModule() {
     let body = hirBlock(hirPortSpan())
     hirBlockSetResult(body, hirPortInt("1"))
@@ -173,11 +128,9 @@ fn testHirValidateAcceptsWellFormedModule() {
     fn_.body = body
     let m = hirModule("main")
     m.fns.push(fn_)
-
     let errs = hirValidateModule(m)
     testing.assertEq(errs.len(), 0)
 }
-
 fn testHirValidateRejectsLetWithoutBinding() {
     let m = hirModule("main")
     let mut bad = hirStmtInvalid()
@@ -186,98 +139,69 @@ fn testHirValidateRejectsLetWithoutBinding() {
     bad.letValue = hirPortInt("1")
     bad.span = hirPortSpan()
     m.script.push(bad)
-
     let errs = hirValidateModule(m)
     testing.assert(errs.len() >= 1)
 }
-
 fn testHirValidateDecisionTreeRejectsOutOfRangeLeaf() {
     let errs = hirValidateDecisionTree(hirDecisionLeaf(99), 2)
     testing.assert(errs.len() >= 1)
 }
-
 // ==== Optimize ======================================================
-
 fn testHirOptimizeFoldsIntArithmetic() {
-    let e = hirBinary(
-        HirBinMul,
-        hirBinary(HirBinAdd, hirPortInt("1"), hirPortInt("2"), hirTInt(), hirPortSpan()),
-        hirPortInt("3"),
-        hirTInt(),
-        hirPortSpan(),
-    )
+    let e = hirBinary(HirBinMul, hirBinary(HirBinAdd, hirPortInt("1"), hirPortInt("2"), hirTInt(), hirPortSpan()), hirPortInt("3"), hirTInt(), hirPortSpan())
     let m = hirPortModuleWithExpr(e)
     hirOptimize(m, hirOptimizeOptions())
-
     let got = m.script[0].exprValue
     testing.assert(got.kind == HirExprIntLit)
     testing.assertEq(got.numText, "9")
 }
-
 fn testHirOptimizeFoldsBoolLogic() {
     let e = hirBinary(HirBinAnd, hirBoolLit(true, hirPortSpan()), hirBoolLit(false, hirPortSpan()), hirTBool(), hirPortSpan())
     let m = hirPortModuleWithExpr(e)
     hirOptimize(m, hirOptimizeOptions())
-
     let got = m.script[0].exprValue
     testing.assert(got.kind == HirExprBoolLit)
     testing.assert(!(got.boolValue))
 }
-
 fn testHirOptimizeSimplifiesIdentity() {
-    let e = hirBinary(
-        HirBinAdd,
-        hirIdent("x", HirIdentLocal, hirTInt(), hirPortSpan()),
-        hirPortInt("0"),
-        hirTInt(),
-        hirPortSpan(),
-    )
+    let e = hirBinary(HirBinAdd, hirIdent("x", HirIdentLocal, hirTInt(), hirPortSpan()), hirPortInt("0"), hirTInt(), hirPortSpan())
     let m = hirPortModuleWithExpr(e)
     hirOptimize(m, hirOptimizeOptions())
-
     let got = m.script[0].exprValue
     testing.assert(got.kind == HirExprIdent)
     testing.assertEq(got.identName, "x")
 }
-
 fn testHirOptimizeDeadCodeAfterReturn() {
     let body = hirBlock(hirPortSpan())
     hirBlockAppend(body, hirReturnStmt(hirPortInt("1"), hirPortSpan()))
     hirBlockAppend(body, hirExprStmt(hirPortInt("2"), hirPortSpan()))
     hirBlockAppend(body, hirExprStmt(hirPortInt("3"), hirPortSpan()))
-
     let fn_ = hirFnDecl("f", hirTInt(), hirPortSpan())
     fn_.body = body
     let m = hirModule("main")
     m.fns.push(fn_)
-
     hirOptimize(m, hirOptimizeOptions())
     testing.assertEq(m.fns[0].body.stmts.len(), 1)
     testing.assert(m.fns[0].body.stmts[0].kind == HirStmtReturn)
 }
-
 fn testHirOptimizeFoldsConstantIfExpr() {
     let thenB = hirBlock(hirPortSpan())
     hirBlockSetResult(thenB, hirPortInt("1"))
     let elseB = hirBlock(hirPortSpan())
     hirBlockSetResult(elseB, hirPortInt("2"))
     let e = hirIfExpr(hirBoolLit(true, hirPortSpan()), thenB, elseB, hirTInt(), hirPortSpan())
-
     let m = hirPortModuleWithExpr(e)
     hirOptimize(m, hirOptimizeOptions())
-
     let got = m.script[0].exprValue
     testing.assert(got.kind == HirExprIntLit)
     testing.assertEq(got.numText, "1")
 }
-
 fn testHirOptimizeRespectsDisableConstFold() {
     let e = hirBinary(HirBinAdd, hirPortInt("1"), hirPortInt("2"), hirTInt(), hirPortSpan())
     let m = hirPortModuleWithExpr(e)
     let opts = hirOptimizeOptions()
     opts.disableConstFold = true
     hirOptimize(m, opts)
-
     let got = m.script[0].exprValue
     testing.assert(got.kind == HirExprBinary)
 }

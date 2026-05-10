@@ -6,76 +6,57 @@ pub enum SemReqOp {
     ReqLE,
     ReqLT,
 }
-
 /// SemReqClause is a single normalized requirement bound.
 pub struct SemReqClause {
     pub op: SemReqOp,
     pub version: SemVersion,
 }
-
 /// SemReq is a conjunction of normalized requirement clauses.
 pub struct SemReq {
     pub allowPre: Bool,
     pub clauses: List<SemReqClause>,
 }
-
 /// SemMaxResult avoids optional struct plumbing in package-manager selections.
 pub struct SemMaxResult {
     pub found: Bool,
     pub version: SemVersion,
 }
-
 /// reqClause constructs one normalized requirement bound.
 pub fn reqClause(op: SemReqOp, version: SemVersion) -> SemReqClause {
-    SemReqClause { op, version }
+    SemReqClause {op, version}
 }
-
 /// semReq constructs a requirement from already-normalized clauses.
 pub fn semReq(allowPre: Bool, clauses: List<SemReqClause>) -> SemReq {
-    SemReq { allowPre, clauses }
+    SemReq {allowPre, clauses}
 }
-
 /// anySemReq is the wildcard requirement. It matches stable versions only.
 pub fn anySemReq() -> SemReq {
     semReq(false, [])
 }
-
 /// exactReq mirrors a bare version or =version requirement.
 pub fn exactReq(version: SemVersion) -> SemReq {
     semReq(isSemPrerelease(version), [reqClause(ReqEQ, version)])
 }
-
 /// atLeastReq mirrors >=version.
 pub fn atLeastReq(version: SemVersion) -> SemReq {
     semReq(isSemPrerelease(version), [reqClause(ReqGE, version)])
 }
-
 /// greaterThanReq mirrors >version.
 pub fn greaterThanReq(version: SemVersion) -> SemReq {
     semReq(isSemPrerelease(version), [reqClause(ReqGT, version)])
 }
-
 /// atMostReq mirrors <=version.
 pub fn atMostReq(version: SemVersion) -> SemReq {
     semReq(isSemPrerelease(version), [reqClause(ReqLE, version)])
 }
-
 /// lessThanReq mirrors <version.
 pub fn lessThanReq(version: SemVersion) -> SemReq {
     semReq(isSemPrerelease(version), [reqClause(ReqLT, version)])
 }
-
 /// boundedReq mirrors a whitespace-conjoined range like >=1.0 <2.0.
 pub fn boundedReq(min: SemVersion, max: SemVersion) -> SemReq {
-    semReq(
-        isSemPrerelease(min) || isSemPrerelease(max),
-        [
-            reqClause(ReqGE, min),
-            reqClause(ReqLT, max),
-        ],
-    )
+    semReq(isSemPrerelease(min) || isSemPrerelease(max), [reqClause(ReqGE, min), reqClause(ReqLT, max)])
 }
-
 /// caretReq expands ^X.Y.Z using the package manager's SemVer rules.
 pub fn caretReq(version: SemVersion) -> SemReq {
     let upper = if version.major > 0 {
@@ -87,22 +68,18 @@ pub fn caretReq(version: SemVersion) -> SemReq {
     }
     boundedReq(version, upper)
 }
-
 /// tildeReq expands ~X.Y.Z to >=X.Y.Z <X.(Y+1).0.
 pub fn tildeReq(version: SemVersion) -> SemReq {
     boundedReq(version, stableVersion(version.major, version.minor + 1, 0))
 }
-
 /// wildcardMajorReq expands X.* to >=X.0.0 <(X+1).0.0.
 pub fn wildcardMajorReq(major: Int) -> SemReq {
     boundedReq(stableVersion(major, 0, 0), stableVersion(major + 1, 0, 0))
 }
-
 /// wildcardMinorReq expands X.Y.* to >=X.Y.0 <X.(Y+1).0.
 pub fn wildcardMinorReq(major: Int, minor: Int) -> SemReq {
     boundedReq(stableVersion(major, minor, 0), stableVersion(major, minor + 1, 0))
 }
-
 /// semReqMatches reports whether a candidate satisfies every clause.
 pub fn semReqMatches(req: SemReq, version: SemVersion) -> Bool {
     if isSemPrerelease(version) && !(req.allowPre) {
@@ -115,19 +92,27 @@ pub fn semReqMatches(req: SemReq, version: SemVersion) -> Bool {
     }
     true
 }
-
 /// semClauseMatches applies one normalized requirement clause.
 pub fn semClauseMatches(clause: SemReqClause, version: SemVersion) -> Bool {
     let cmp = compareSemVersion(version, clause.version)
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if clause.op == ReqEQ { return cmp == 0 }
-    if clause.op == ReqGE { return cmp >= 0 }
-    if clause.op == ReqGT { return cmp > 0 }
-    if clause.op == ReqLE { return cmp <= 0 }
-    if clause.op == ReqLT { return cmp < 0 }
+    if clause.op == ReqEQ {
+        return cmp == 0
+    }
+    if clause.op == ReqGE {
+        return cmp >= 0
+    }
+    if clause.op == ReqGT {
+        return cmp > 0
+    }
+    if clause.op == ReqLE {
+        return cmp <= 0
+    }
+    if clause.op == ReqLT {
+        return cmp < 0
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// maxMatchingVersion selects the highest version satisfying a requirement.
 pub fn maxMatchingVersion(req: SemReq, versions: List<SemVersion>) -> SemMaxResult {
     let mut found = false
@@ -140,5 +125,5 @@ pub fn maxMatchingVersion(req: SemReq, versions: List<SemVersion>) -> SemMaxResu
             }
         }
     }
-    SemMaxResult { found, version: best }
+    SemMaxResult {found, version: best}
 }

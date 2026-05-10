@@ -1,5 +1,4 @@
 use std.strings as strings
-
 /// Pure policy for `osty test`'s native runner. Host glue picks
 /// the test files, compiles them, and executes the binaries; this
 /// module owns the cross-cutting rules:
@@ -12,7 +11,6 @@ use std.strings as strings
 ///     directory name under the layout root (sanitizeNativeTestName)
 ///
 /// Mirrored by `internal/runner/test_runner_policy.go`.
-
 /// resolveTestWorkers picks the worker-pool size for the test
 /// runner.
 ///
@@ -41,7 +39,6 @@ pub fn resolveTestWorkers(serial: Bool, jobs: Int, cpuCount: Int, testCount: Int
     }
     effective
 }
-
 /// matchesTestFilters returns true when `name` should be executed
 /// given the user's positional filter list.
 ///
@@ -64,7 +61,6 @@ pub fn matchesTestFilters(name: String, filters: List<String>) -> Bool {
     }
     false
 }
-
 /// sanitizeNativeTestName turns a `test_*` identifier into a
 /// filesystem-safe directory stem under the per-test layout root.
 /// Letters, digits, and underscores pass through; everything else
@@ -88,7 +84,6 @@ pub fn sanitizeNativeTestName(name: String) -> String {
     }
     out
 }
-
 fn testFiltersEmpty(filters: List<String>) -> Bool {
     for f in filters {
         let _ = f

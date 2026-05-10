@@ -3,213 +3,169 @@
 // counterpart produces (verified by
 // `internal/onb/onb_dwarf_parity_test.go`).
 use std.testing
-
 fn assertBytesEq(actual: List<Int>, expected: List<Int>) {
     testing.assertEq(actual.len(), expected.len())
     for i in 0..expected.len() {
         testing.assertEq(actual[i], expected[i])
     }
 }
-
 // === ULEB128 ========================================================
-
 fn testOnbWriteULEB128SingleByte() {
-    // 0x00 → [0x00]
     let mut want0: List<Int> = []
     want0.push(0x00)
     assertBytesEq(onbWriteULEB128([], 0), want0)
-    // 0x7f → [0x7f] — boundary of single-byte encoding.
     let mut want7f: List<Int> = []
     want7f.push(0x7f)
     assertBytesEq(onbWriteULEB128([], 0x7f), want7f)
 }
-
+// 0x00 → [0x00]
+// 0x7f → [0x7f] — boundary of single-byte encoding.
 fn testOnbWriteULEB128MultiByte() {
-    // 0x80 → [0x80 0x01] — first multi-byte case.
     let mut want80: List<Int> = []
     want80.push(0x80)
     want80.push(0x01)
     assertBytesEq(onbWriteULEB128([], 0x80), want80)
-    // 0x3fff → [0xff 0x7f] — boundary of 2-byte.
     let mut want3fff: List<Int> = []
     want3fff.push(0xff)
     want3fff.push(0x7f)
     assertBytesEq(onbWriteULEB128([], 0x3fff), want3fff)
-    // 0x4000 → [0x80 0x80 0x01] — three bytes.
     let mut want4000: List<Int> = []
     want4000.push(0x80)
     want4000.push(0x80)
     want4000.push(0x01)
     assertBytesEq(onbWriteULEB128([], 0x4000), want4000)
 }
-
+// 0x80 → [0x80 0x01] — first multi-byte case.
+// 0x3fff → [0xff 0x7f] — boundary of 2-byte.
+// 0x4000 → [0x80 0x80 0x01] — three bytes.
 // === SLEB128 ========================================================
-
 fn testOnbWriteSLEB128Positive() {
-    // 0 → [0x00]
     let mut want0: List<Int> = []
     want0.push(0x00)
     assertBytesEq(onbWriteSLEB128([], 0), want0)
-    // 63 → [0x3f] — high bit clear, fits in 1 byte.
     let mut want63: List<Int> = []
     want63.push(0x3f)
     assertBytesEq(onbWriteSLEB128([], 63), want63)
-    // 64 → [0xc0 0x00] — sign-extension forces 2-byte form.
     let mut want64: List<Int> = []
     want64.push(0xc0)
     want64.push(0x00)
     assertBytesEq(onbWriteSLEB128([], 64), want64)
 }
-
+// 0 → [0x00]
+// 63 → [0x3f] — high bit clear, fits in 1 byte.
+// 64 → [0xc0 0x00] — sign-extension forces 2-byte form.
 fn testOnbWriteSLEB128Negative() {
-    // -1 → [0x7f]
     let mut wantM1: List<Int> = []
     wantM1.push(0x7f)
     assertBytesEq(onbWriteSLEB128([], 0 - 1), wantM1)
-    // -64 → [0x40] — boundary of single-byte negative.
     let mut wantM64: List<Int> = []
     wantM64.push(0x40)
     assertBytesEq(onbWriteSLEB128([], 0 - 64), wantM64)
-    // -65 → [0xbf 0x7f] — drops below single-byte range.
     let mut wantM65: List<Int> = []
     wantM65.push(0xbf)
     wantM65.push(0x7f)
     assertBytesEq(onbWriteSLEB128([], 0 - 65), wantM65)
 }
-
+// -1 → [0x7f]
+// -64 → [0x40] — boundary of single-byte negative.
+// -65 → [0xbf 0x7f] — drops below single-byte range.
 // === Abbreviation table =============================================
-
 fn testOnbEmitDwarfAbbrevHeaderShape() {
     let abbrev = onbEmitDwarfAbbrev()
-    // First three bytes: ULEB128(1) ULEB128(0x11) byte(1)
-    //   = [0x01, 0x11, 0x01]
-    // (compile-unit code, tag, has-children=yes)
     testing.assertEq(abbrev[0], 0x01)
     testing.assertEq(abbrev[1], 0x11)
     testing.assertEq(abbrev[2], 0x01)
-    // Last byte before end-of-table is the trailing 0 0 pair of
-    // the member entry, then the table terminator (0). Total
-    // size is encoder-dependent but should be > 70 bytes for the
-    // 7 entries.
     testing.assert(abbrev.len() > 70)
-    // End-of-table marker is the final byte.
     testing.assertEq(abbrev[abbrev.len() - 1], 0x00)
 }
-
+// First three bytes: ULEB128(1) ULEB128(0x11) byte(1)
+//   = [0x01, 0x11, 0x01]
+// (compile-unit code, tag, has-children=yes)
+// Last byte before end-of-table is the trailing 0 0 pair of
+// the member entry, then the table terminator (0). Total
+// size is encoder-dependent but should be > 70 bytes for the
+// 7 entries.
+// End-of-table marker is the final byte.
 // === Line program ==================================================
-
 fn testOnbEmitDwarfLineRequiresFiles() {
-    let prog = OnbDwarfLineProgram {
-        includeDirs: [],
-        files: [],
-        rows: [],
-        textSize: 0,
-    }
+    let prog = OnbDwarfLineProgram {includeDirs: [], files: [], rows: [], textSize: 0}
     let encoded = onbEmitDwarfLine(prog)
     testing.assert(!encoded.ok)
 }
-
 fn testOnbEmitDwarfLineEmptyRows() {
-    // Empty function — header + 1 set_address(0) + 1 end_sequence.
-    // The encoder still produces a well-formed unit so dsymutil
-    // doesn't bail.
     let mut files: List<OnbDwarfLineFile> = []
     files.push(onbDwarfLineFile("main.osty", 0))
     let mut dirs: List<String> = []
     dirs.push("/tmp")
-    let prog = OnbDwarfLineProgram {
-        includeDirs: dirs,
-        files: files,
-        rows: [],
-        textSize: 0,
-    }
+    let prog = OnbDwarfLineProgram {includeDirs: dirs, files: files, rows: [], textSize: 0}
     let encoded = onbEmitDwarfLine(prog)
     testing.assert(encoded.ok)
-    // Section starts with unit_length (4 bytes LE), version (2),
-    // header_length (4). Version is 4.
     let version = encoded.bytes[4] | (encoded.bytes[5] << 8)
     testing.assertEq(version, onbDwarfVersion())
 }
-
+// Empty function — header + 1 set_address(0) + 1 end_sequence.
+// The encoder still produces a well-formed unit so dsymutil
+// doesn't bail.
+// Section starts with unit_length (4 bytes LE), version (2),
+// header_length (4). Version is 4.
 fn testOnbEmitDwarfLineHeaderLayoutBytes() {
     let mut files: List<OnbDwarfLineFile> = []
     files.push(onbDwarfLineFile("main.osty", 0))
-    let prog = OnbDwarfLineProgram {
-        includeDirs: [],
-        files: files,
-        rows: [],
-        textSize: 0,
-    }
+    let prog = OnbDwarfLineProgram {includeDirs: [], files: files, rows: [], textSize: 0}
     let header = onbEncodeDwarfLineHeader(prog)
-    // First 6 bytes are the metadata block: minInstLen,
-    // maxOpsPerInst, defaultIsStmt, lineBaseByte, lineRange,
-    // opcodeBase.
     testing.assertEq(header[0], onbDwarfMinInstLength())
     testing.assertEq(header[1], onbDwarfMaxOpsPerInst())
     testing.assertEq(header[2], onbDwarfDefaultIsStmt())
     testing.assertEq(header[3], onbDwarfLineBaseByte())
     testing.assertEq(header[4], onbDwarfLineRange())
     testing.assertEq(header[5], onbDwarfOpcodeBase())
-    // Bytes 6..18 are the std opcode length table (12 bytes).
-    // Spot-check: opcode 0x02 (advance_pc) takes 1 operand.
     testing.assertEq(header[7], 1)
 }
-
+// First 6 bytes are the metadata block: minInstLen,
+// maxOpsPerInst, defaultIsStmt, lineBaseByte, lineRange,
+// opcodeBase.
+// Bytes 6..18 are the std opcode length table (12 bytes).
+// Spot-check: opcode 0x02 (advance_pc) takes 1 operand.
 // === String table ===================================================
-
 fn testOnbDwarfStringTableSeed() {
     let table = onbNewDwarfStringTable()
     testing.assertEq(table.bytes.len(), 1)
     testing.assertEq(table.bytes[0], 0)
     testing.assertEq(onbDwarfStringTableLookupOrZero(table, ""), 0)
 }
-
 fn testOnbDwarfStringTableInsertion() {
     let table = onbNewDwarfStringTable()
     let off1 = onbDwarfStringTableAdd(table, "Int")
     testing.assertEq(off1, 1)
-    // Buffer now: [0, 'I', 'n', 't', 0]
     testing.assertEq(table.bytes.len(), 5)
-    testing.assertEq(table.bytes[1], 0x49)  // 'I'
+    testing.assertEq(table.bytes[1], 0x49)
     testing.assertEq(table.bytes[4], 0)
-
     let off2 = onbDwarfStringTableAdd(table, "Bool")
     testing.assertEq(off2, 5)
     testing.assertEq(table.bytes.len(), 10)
-
-    // Re-adding "Int" returns the same offset; no buffer growth.
     let off1Again = onbDwarfStringTableAdd(table, "Int")
     testing.assertEq(off1Again, 1)
     testing.assertEq(table.bytes.len(), 10)
 }
-
+// Buffer now: [0, 'I', 'n', 't', 0]
+// 'I'
+// Re-adding "Int" returns the same offset; no buffer growth.
 // === Info section ===================================================
-
 fn testOnbEmitDwarfInfoBareCU() {
     let strings = onbNewDwarfStringTable()
     let nameOff = onbDwarfStringTableAdd(strings, "main.osty")
     let compDirOff = onbDwarfStringTableAdd(strings, "/tmp")
     let producerOff = onbDwarfStringTableAdd(strings, "osty (onb)")
-    let cu = OnbDwarfCompileUnitInputs {
-        nameStrOffset: nameOff,
-        compDirStrOffset: compDirOff,
-        producerStrOffset: producerOff,
-        lowPC: 0,
-        highPCSize: 0x40,
-        stmtListOffset: 0,
-        language: onbDwarfLangC99(),
-        strings: strings,
-    }
+    let cu = OnbDwarfCompileUnitInputs {nameStrOffset: nameOff, compDirStrOffset: compDirOff, producerStrOffset: producerOff, lowPC: 0, highPCSize: 0x40, stmtListOffset: 0, language: onbDwarfLangC99(), strings: strings}
     let encoded = onbEmitDwarfInfo(cu, [], [])
     testing.assert(encoded.bytes.len() > 11)
     let version = encoded.bytes[4] | (encoded.bytes[5] << 8)
     testing.assertEq(version, onbDwarfVersion())
     testing.assertEq(encoded.bytes[10], onbDwarfAddressSize())
-    // CU's own low_pc is the only reloc anchor when no subprograms
-    // are present.
     testing.assertEq(encoded.lowPCOffsets.len(), 1)
 }
-
+// CU's own low_pc is the only reloc anchor when no subprograms
+// are present.
 fn testOnbEmitDwarfInfoWithSubprograms() {
     let strings = onbNewDwarfStringTable()
     let nameOff = onbDwarfStringTableAdd(strings, "main.osty")
@@ -217,27 +173,15 @@ fn testOnbEmitDwarfInfoWithSubprograms() {
     let producerOff = onbDwarfStringTableAdd(strings, "osty (onb)")
     let mainOff = onbDwarfStringTableAdd(strings, "main")
     let helperOff = onbDwarfStringTableAdd(strings, "helper")
-    let cu = OnbDwarfCompileUnitInputs {
-        nameStrOffset: nameOff,
-        compDirStrOffset: compDirOff,
-        producerStrOffset: producerOff,
-        lowPC: 0,
-        highPCSize: 0x80,
-        stmtListOffset: 0,
-        language: onbDwarfLangC99(),
-        strings: strings,
-    }
+    let cu = OnbDwarfCompileUnitInputs {nameStrOffset: nameOff, compDirStrOffset: compDirOff, producerStrOffset: producerOff, lowPC: 0, highPCSize: 0x80, stmtListOffset: 0, language: onbDwarfLangC99(), strings: strings}
     let mut subs: List<OnbDwarfSubprogramInput> = []
     subs.push(onbDwarfSubprogramInput(mainOff, 0, 0x40))
     subs.push(onbDwarfSubprogramInput(helperOff, 0x40, 0x40))
     let encoded = onbEmitDwarfInfo(cu, subs, [])
-    // CU low_pc + 2 subprogram low_pcs.
     testing.assertEq(encoded.lowPCOffsets.len(), 3)
 }
-
+// CU low_pc + 2 subprogram low_pcs.
 fn testOnbEmitDwarfAbbrevContainsAllSevenCodes() {
-    // The abbrev table emits codes 1..7 in order. Each code
-    // appears exactly once at the start of its entry.
     let abbrev = onbEmitDwarfAbbrev()
     let mut seen: List<Bool> = []
     for i in 0..8 {
@@ -249,13 +193,8 @@ fn testOnbEmitDwarfAbbrevContainsAllSevenCodes() {
         if atStart && byte >= 1 && byte <= 7 {
             seen[byte] = true
         }
-        // Crude but sufficient: between attribute pairs the
-        // bytes are tag/form/zeros, not the small 1..7 codes
-        // (tag 0x11 = 17, etc.). The test is a smoke check, not
-        // a full parser.
         i = i + 1
         atStart = false
     }
-    // Just verify the first byte (code=1) makes it into seen.
     testing.assert(seen[1])
 }

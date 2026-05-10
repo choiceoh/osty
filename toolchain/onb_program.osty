@@ -13,9 +13,7 @@
 // per-field constructors. Sum types (e.g. enum payloads) would
 // add zero descriptive value here — the "kind" of a Function is
 // always "Function" — and would slow the dispatch chain.
-
 // === Source-line metadata ============================================
-
 // OnbLineSpan binds an instruction to a source position. Zero
 // `line` means "no source info" — the DWARF line emitter treats
 // the row as unchanged-from-previous, preserving the previous
@@ -24,17 +22,13 @@ pub struct OnbLineSpan {
     pub line: Int,
     pub column: Int,
 }
-
 pub fn onbLineSpan(line: Int, column: Int) -> OnbLineSpan {
-    OnbLineSpan { line: line, column: column }
+    OnbLineSpan {line: line, column: column}
 }
-
 pub fn onbLineSpanZero() -> OnbLineSpan {
-    OnbLineSpan { line: 0, column: 0 }
+    OnbLineSpan {line: 0, column: 0}
 }
-
 // === Debug variable metadata ========================================
-
 // OnbDebugStructField is one entry inside a `DebugTypeStruct`
 // local's field list. Every field's primitive `OnbDebugTypeKind`
 // resolves to a base-type DIE the encoder emits at the CU level;
@@ -44,11 +38,9 @@ pub struct OnbDebugStructField {
     pub name: String,
     pub fieldKind: OnbDebugTypeKind,
 }
-
 pub fn onbDebugStructField(name: String, fieldKind: OnbDebugTypeKind) -> OnbDebugStructField {
-    OnbDebugStructField { name: name, fieldKind: fieldKind }
+    OnbDebugStructField {name: name, fieldKind: fieldKind}
 }
-
 // OnbDebugLocal binds a user-readable variable name to its stack
 // slot offset and primitive kind. Anonymous compiler temps stay
 // out of this list — they would clutter `frame variable` output
@@ -63,29 +55,13 @@ pub struct OnbDebugLocal {
     pub structName: String,
     pub structFields: List<OnbDebugStructField>,
 }
-
 pub fn onbDebugLocal(name: String, slotOffset: Int, typeKind: OnbDebugTypeKind) -> OnbDebugLocal {
-    OnbDebugLocal {
-        name: name,
-        slotOffset: slotOffset,
-        typeKind: typeKind,
-        structName: "",
-        structFields: [],
-    }
+    OnbDebugLocal {name: name, slotOffset: slotOffset, typeKind: typeKind, structName: "", structFields: []}
 }
-
 pub fn onbDebugLocalStruct(name: String, slotOffset: Int, structName: String, fields: List<OnbDebugStructField>) -> OnbDebugLocal {
-    OnbDebugLocal {
-        name: name,
-        slotOffset: slotOffset,
-        typeKind: OnbDebugTypeKind.OnbDebugTypeStruct,
-        structName: structName,
-        structFields: fields,
-    }
+    OnbDebugLocal {name: name, slotOffset: slotOffset, typeKind: OnbDebugTypeKind.OnbDebugTypeStruct, structName: structName, structFields: fields}
 }
-
 // === Block / Function / Program =====================================
-
 // OnbBlock is one linear basic block. `originalIndex` is the MIR
 // block ID the LIR was lowered from — branches reference targets
 // by this index, and the encoder maps it to a byte offset during
@@ -99,11 +75,9 @@ pub struct OnbBlock {
     pub instrs: List<OnbInstr>,
     pub lineSpans: List<OnbLineSpan>,
 }
-
 pub fn onbBlock(label: String, originalIndex: Int, instrs: List<OnbInstr>, lineSpans: List<OnbLineSpan>) -> OnbBlock {
-    OnbBlock { label: label, originalIndex: originalIndex, instrs: instrs, lineSpans: lineSpans }
+    OnbBlock {label: label, originalIndex: originalIndex, instrs: instrs, lineSpans: lineSpans}
 }
-
 // OnbFunction is one lowered function. `frameSize` is the total
 // stack frame size in bytes (multiple of 16); 0 means leaf
 // function with no locals and no calls. `debugLocals` carries
@@ -114,11 +88,9 @@ pub struct OnbFunction {
     pub frameSize: Int,
     pub debugLocals: List<OnbDebugLocal>,
 }
-
 pub fn onbFunction(name: String, blocks: List<OnbBlock>, frameSize: Int, debugLocals: List<OnbDebugLocal>) -> OnbFunction {
-    OnbFunction { name: name, blocks: blocks, frameSize: frameSize, debugLocals: debugLocals }
+    OnbFunction {name: name, blocks: blocks, frameSize: frameSize, debugLocals: debugLocals}
 }
-
 // OnbCStringLiteral is one entry in the `__cstring` literal pool.
 // `label` is the Mach-O symbol name (e.g. "str0", "str1"); the
 // encoder wires `LoadCStringAddress` reloc targets to these labels.
@@ -126,11 +98,9 @@ pub struct OnbCStringLiteral {
     pub label: String,
     pub value: String,
 }
-
 pub fn onbCStringLiteral(label: String, value: String) -> OnbCStringLiteral {
-    OnbCStringLiteral { label: label, value: value }
+    OnbCStringLiteral {label: label, value: value}
 }
-
 // OnbProgram is the full compilation unit. `target` is the LLVM
 // triple (e.g. "aarch64-apple-darwin"); `sourcePath` and `package`
 // feed the DWARF line-program file table and the compile-unit DIE.
@@ -141,17 +111,9 @@ pub struct OnbProgram {
     pub sourcePath: String,
     pub packageName: String,
 }
-
 pub fn onbProgram(target: String) -> OnbProgram {
-    OnbProgram {
-        target: target,
-        functions: [],
-        cstrings: [],
-        sourcePath: "",
-        packageName: "",
-    }
+    OnbProgram {target: target, functions: [], cstrings: [], sourcePath: "", packageName: ""}
 }
-
 // === Function emitter ==============================================
 //
 // `onbEmitFunction` walks every block of a function, threading
@@ -169,7 +131,6 @@ pub fn onbProgram(target: String) -> OnbProgram {
 // the lowering layer (Phase 4-5) is responsible for prepending
 // them as instructions in the entry block. This keeps
 // `onbEmitFunction` purely mechanical.
-
 pub struct OnbEmittedFunction {
     pub words: List<Int>,
     pub fixups: List<OnbBranchFixup>,
@@ -177,7 +138,6 @@ pub struct OnbEmittedFunction {
     pub blockOffsets: List<Int>,
     pub blockLineSpans: List<List<OnbLineSpan>>,
 }
-
 pub fn onbEmitFunction(func: OnbFunction) -> OnbEmittedFunction {
     let mut words: List<Int> = []
     let mut fixups: List<OnbBranchFixup> = []
@@ -200,9 +160,6 @@ pub fn onbEmitFunction(func: OnbFunction) -> OnbEmittedFunction {
             for rl in emit.relocs {
                 relocs.push(rl)
             }
-            // Replicate the instruction's source span across every
-            // emitted word — multi-word ops (MovImm64) all share
-            // the source line of the originating instruction.
             let span = if idx < blk.lineSpans.len() {
                 blk.lineSpans[idx]
             } else {
@@ -215,15 +172,11 @@ pub fn onbEmitFunction(func: OnbFunction) -> OnbEmittedFunction {
         }
         blockLineSpans.push(spans)
     }
-    OnbEmittedFunction {
-        words: words,
-        fixups: fixups,
-        relocs: relocs,
-        blockOffsets: blockOffsets,
-        blockLineSpans: blockLineSpans,
-    }
+    OnbEmittedFunction {words: words, fixups: fixups, relocs: relocs, blockOffsets: blockOffsets, blockLineSpans: blockLineSpans}
 }
-
+// Replicate the instruction's source span across every
+// emitted word — multi-word ops (MovImm64) all share
+// the source line of the originating instruction.
 // onbEmitFunctionWithFixups walks the function once via
 // `onbEmitFunction` and immediately applies the branch fixup
 // pass. Returns the patched word stream + the relocs/blockOffsets
@@ -236,15 +189,8 @@ pub struct OnbResolvedFunction {
     pub blockLineSpans: List<List<OnbLineSpan>>,
     pub ok: Bool,
 }
-
 pub fn onbEmitFunctionResolved(func: OnbFunction) -> OnbResolvedFunction {
     let emitted = onbEmitFunction(func)
     let outcome = onbResolveBranchFixups(emitted.words, emitted.fixups, emitted.blockOffsets)
-    OnbResolvedFunction {
-        words: outcome.words,
-        relocs: emitted.relocs,
-        blockOffsets: emitted.blockOffsets,
-        blockLineSpans: emitted.blockLineSpans,
-        ok: outcome.ok,
-    }
+    OnbResolvedFunction {words: outcome.words, relocs: emitted.relocs, blockOffsets: emitted.blockOffsets, blockLineSpans: emitted.blockLineSpans, ok: outcome.ok}
 }

@@ -1,16 +1,13 @@
 use std.testing
-
 fn assertPackageEntryKind(path: String, want: String) {
     testing.assertEq(packageEntryKindName(packageEntryKind(path)), want)
 }
-
 fn testPackageEntryExamplesClassifyRootFiles() {
     assertPackageEntryKind("osty.toml", "manifest")
     assertPackageEntryKind("osty.lock", "lockfile")
     assertPackageEntryKind("lib.osty", "source")
     assertPackageEntryKind("README.md", "support")
 }
-
 fn testPackageEntryExamplesClassifyNestedFilesByBaseName() {
     assertPackageEntryKind("src/main.osty", "source")
     assertPackageEntryKind("tests/parser_test.osty", "source")
@@ -18,7 +15,6 @@ fn testPackageEntryExamplesClassifyNestedFilesByBaseName() {
     assertPackageEntryKind("fixtures/osty.lock", "lockfile")
     assertPackageEntryKind("docs/tutorial.txt", "support")
 }
-
 fn testPackageEntryExamplesIgnoreLocalMetadataDirs() {
     assertPackageEntryKind(".osty", "ignored")
     assertPackageEntryKind(".git", "ignored")
@@ -26,16 +22,8 @@ fn testPackageEntryExamplesIgnoreLocalMetadataDirs() {
     assertPackageEntryKind(".svn", "ignored")
     assertPackageEntryKind("src/.DS_Store", "ignored")
 }
-
 fn testPackageEntryExamplesHashPolicy() {
-    let paths = [
-        "osty.toml",
-        "osty.lock",
-        "src/lib.osty",
-        "README.md",
-        ".osty",
-        ".git",
-    ]
+    let paths = ["osty.toml", "osty.lock", "src/lib.osty", "README.md", ".osty", ".git"]
     let mut hashed = 0
     let mut ignored = 0
     for path in paths {
@@ -45,11 +33,9 @@ fn testPackageEntryExamplesHashPolicy() {
             ignored = ignored + 1
         }
     }
-
     testing.assertEq(hashed, 4)
     testing.assertEq(ignored, 2)
 }
-
 fn testPackageEntryExamplesSourceDetection() {
     testing.assert(isOstySourceEntry("src/lib.osty"))
     testing.assert(isOstySourceEntry("lib_test.osty"))

@@ -42,11 +42,9 @@
 //
 // `mirOptimize` is idempotent: a second call on the same module is a
 // no-op modulo the fixed-point iteration cost.
-
 // ====================================================================
 // Public entry point
 // ====================================================================
-
 /// mirOptimize runs the cleanup passes on every function and global
 /// initialiser of `m` and returns the same module. Mutates `m` in
 /// place; the return value is for fluent chaining.
@@ -54,11 +52,6 @@ pub fn mirOptimize(m: MirModule) -> MirModule {
     for f in m.functions {
         mirOptimizeFunction(f)
     }
-    // Self-host MIR stores global initialisers by symbol instead of a
-    // direct function pointer. Follow those edges explicitly too so the
-    // module entry point stays in parity with Go's `Module.Globals[i].Init`
-    // walk, even if an init body later stops being treated as an ordinary
-    // function by callers.
     for g in m.globals {
         if !(g.hasInit) || g.initSymbol == "" {
             continue
@@ -71,7 +64,11 @@ pub fn mirOptimize(m: MirModule) -> MirModule {
     }
     m
 }
-
+// Self-host MIR stores global initialisers by symbol instead of a
+// direct function pointer. Follow those edges explicitly too so the
+// module entry point stays in parity with Go's `Module.Globals[i].Init`
+// walk, even if an init body later stops being treated as an ordinary
+// function by callers.
 /// mirOptimizeFunction runs every pass to fixed point on a single
 /// function. External / intrinsic functions are skipped: they have no
 /// body.
@@ -96,11 +93,9 @@ pub fn mirOptimizeFunction(func: MirFunction) {
         }
     }
 }
-
 // ====================================================================
 // Pass 1 — per-block const propagation + terminator folding
 // ====================================================================
-
 /// MirConstState is one dataflow fact for a basic block entry/exit:
 /// `live` says whether the block has been reached, and `known` stores
 /// the current per-local const binding table.
@@ -108,7 +103,6 @@ struct MirConstState {
     live: Bool,
     known: List<MirConst>,
 }
-
 /// mirCopyPropagateFn computes block-entry const states with a forward
 /// predecessor meet, then rewrites bare reads of const-bound locals to
 /// the constants themselves. Returns true when at least one operand or
@@ -134,7 +128,6 @@ fn mirCopyPropagateFn(func: MirFunction) -> Bool {
     }
     changed
 }
-
 /// mirFreshKnowns allocates a per-local constant-binding table
 /// initialised to `MirConstInvalid` everywhere. Indexed by LocalID.
 fn mirFreshKnowns(nLocals: Int) -> List<MirConst> {
@@ -144,7 +137,6 @@ fn mirFreshKnowns(nLocals: Int) -> List<MirConst> {
     }
     out
 }
-
 fn mirCopyKnowns(xs: List<MirConst>) -> List<MirConst> {
     let mut out: List<MirConst> = []
     for x in xs {
@@ -152,19 +144,15 @@ fn mirCopyKnowns(xs: List<MirConst>) -> List<MirConst> {
     }
     out
 }
-
 fn mirDeadConstState(nLocals: Int) -> MirConstState {
-    MirConstState { live: false, known: mirFreshKnowns(nLocals) }
+    MirConstState {live: false, known: mirFreshKnowns(nLocals)}
 }
-
 fn mirLiveConstState(known: List<MirConst>) -> MirConstState {
-    MirConstState { live: true, known }
+    MirConstState {live: true, known}
 }
-
 fn mirCloneConstState(st: MirConstState) -> MirConstState {
-    MirConstState { live: st.live, known: mirCopyKnowns(st.known) }
+    MirConstState {live: st.live, known: mirCopyKnowns(st.known)}
 }
-
 fn mirConstEqual(a: MirConst, b: MirConst) -> Bool {
     if a.kind != b.kind || a.typ != b.typ {
         return false
@@ -183,7 +171,6 @@ fn mirConstEqual(a: MirConst, b: MirConst) -> Bool {
         MirConstFn -> a.fnSymbol == b.fnSymbol,
     }
 }
-
 fn mirKnownsEqual(a: List<MirConst>, b: List<MirConst>) -> Bool {
     if a.len() != b.len() {
         return false
@@ -198,7 +185,6 @@ fn mirKnownsEqual(a: List<MirConst>, b: List<MirConst>) -> Bool {
     }
     true
 }
-
 fn mirConstStatesEqual(a: MirConstState, b: MirConstState) -> Bool {
     if a.live != b.live {
         return false
@@ -208,7 +194,6 @@ fn mirConstStatesEqual(a: MirConstState, b: MirConstState) -> Bool {
     }
     mirKnownsEqual(a.known, b.known)
 }
-
 fn mirBuildPredecessors(func: MirFunction) -> List<List<Int>> {
     let mut preds: List<List<Int>> = []
     let n = func.blocks.len()
@@ -228,7 +213,6 @@ fn mirBuildPredecessors(func: MirFunction) -> List<List<Int>> {
     }
     preds
 }
-
 fn mirTransferBlock(bb: MirBasicBlock, seed: MirConstState) -> MirConstState {
     if !(seed.live) {
         return seed
@@ -242,8 +226,7 @@ fn mirTransferBlock(bb: MirBasicBlock, seed: MirConstState) -> MirConstState {
             MirInstrAssign -> {
                 if mirPlaceHasProjections(bb.instrs[i].dest) {
                     mirClearKnown(known, bb.instrs[i].dest.local)
-                } else if bb.instrs[i].src.kind == MirRVUse &&
-                    bb.instrs[i].src.arg.kind == MirOpConst {
+                } else if bb.instrs[i].src.kind == MirRVUse && bb.instrs[i].src.arg.kind == MirOpConst {
                     mirSetKnown(known, bb.instrs[i].dest.local, bb.instrs[i].src.arg.const)
                 } else {
                     mirClearKnown(known, bb.instrs[i].dest.local)
@@ -259,13 +242,13 @@ fn mirTransferBlock(bb: MirBasicBlock, seed: MirConstState) -> MirConstState {
                     mirClearKnown(known, bb.instrs[i].dest.local)
                 }
             },
-            _ -> {},
+            _ -> {
+            },
         }
         i = i + 1
     }
     mirLiveConstState(known)
 }
-
 fn mirMeetKnowns(a: List<MirConst>, b: List<MirConst>) -> List<MirConst> {
     let mut out: List<MirConst> = []
     let n = a.len()
@@ -280,15 +263,7 @@ fn mirMeetKnowns(a: List<MirConst>, b: List<MirConst>) -> List<MirConst> {
     }
     out
 }
-
-fn mirMeetPredecessorStates(
-    succ: Int,
-    predList: List<Int>,
-    exitStates: List<MirConstState>,
-    entryBlock: Int,
-    curEntry: MirConstState,
-    nLocals: Int,
-) -> MirConstState {
+fn mirMeetPredecessorStates(succ: Int, predList: List<Int>, exitStates: List<MirConstState>, entryBlock: Int, curEntry: MirConstState, nLocals: Int) -> MirConstState {
     let mut result = mirDeadConstState(nLocals)
     let mut havePred = false
     for pred in predList {
@@ -314,7 +289,6 @@ fn mirMeetPredecessorStates(
     }
     result
 }
-
 fn mirComputeBlockStates(func: MirFunction) -> List<MirConstState> {
     let n = func.blocks.len()
     let nLocals = func.locals.len()
@@ -358,14 +332,7 @@ fn mirComputeBlockStates(func: MirFunction) -> List<MirConstState> {
             if succ < 0 || succ >= n {
                 continue
             }
-            let nextIn = mirMeetPredecessorStates(
-                succ,
-                preds[succ],
-                exitStates,
-                func.entry,
-                entryStates[succ],
-                nLocals,
-            )
+            let nextIn = mirMeetPredecessorStates(succ, preds[succ], exitStates, func.entry, entryStates[succ], nLocals)
             if mirConstStatesEqual(entryStates[succ], nextIn) {
                 continue
             }
@@ -378,7 +345,6 @@ fn mirComputeBlockStates(func: MirFunction) -> List<MirConstState> {
     }
     entryStates
 }
-
 /// mirPropagateBlock walks one basic block. The initial `known` table
 /// is mutated in place as bindings are established and invalidated.
 /// Returns true when any operand or terminator was rewritten. Uses
@@ -392,20 +358,15 @@ fn mirPropagateBlock(bb: MirBasicBlock, known: List<MirConst>) -> Bool {
         let kind = bb.instrs[i].kind
         match kind {
             MirInstrAssign -> {
-                // Reads in the RHS see bindings established so far.
                 if mirRewritePlaceProjections(bb.instrs[i].dest, known) {
                     changed = true
                 }
                 if mirRewriteRValueOperands(bb.instrs[i].src, known) {
                     changed = true
                 }
-                // Track or invalidate the destination binding.
                 if mirPlaceHasProjections(bb.instrs[i].dest) {
-                    // Projection write: the whole local's known-const
-                    // binding is no longer safe.
                     mirClearKnown(known, bb.instrs[i].dest.local)
-                } else if bb.instrs[i].src.kind == MirRVUse &&
-                    bb.instrs[i].src.arg.kind == MirOpConst {
+                } else if bb.instrs[i].src.kind == MirRVUse && bb.instrs[i].src.arg.kind == MirOpConst {
                     mirSetKnown(known, bb.instrs[i].dest.local, bb.instrs[i].src.arg.const)
                 } else {
                     mirClearKnown(known, bb.instrs[i].dest.local)
@@ -438,12 +399,11 @@ fn mirPropagateBlock(bb: MirBasicBlock, known: List<MirConst>) -> Bool {
                     mirClearKnown(known, bb.instrs[i].dest.local)
                 }
             },
-            _ -> {},
+            _ -> {
+            },
         }
         i = i + 1
     }
-
-    // Terminator operand substitutions + folding.
     if bb.hasTerm {
         if mirRewriteTerminatorCond(bb.term, known) {
             changed = true
@@ -454,7 +414,11 @@ fn mirPropagateBlock(bb: MirBasicBlock, known: List<MirConst>) -> Bool {
     }
     changed
 }
-
+// Reads in the RHS see bindings established so far.
+// Track or invalidate the destination binding.
+// Projection write: the whole local's known-const
+// binding is no longer safe.
+// Terminator operand substitutions + folding.
 /// mirRewriteOperandList walks a list of operands and rewrites each
 /// one in place when it is a bare read of a const-bound local. Uses
 /// index-based access so the helper sees addressable `ops[idx]`
@@ -471,7 +435,6 @@ fn mirRewriteOperandList(ops: List<MirOperand>, known: List<MirConst>) -> Bool {
     }
     changed
 }
-
 /// mirRewriteRValueOperands applies const-substitution to every
 /// operand-carrying field of an RValue. Place-carrying RValues walk
 /// their projections for embedded IndexProj operands.
@@ -526,11 +489,11 @@ fn mirRewriteRValueOperands(rv: MirRValue, known: List<MirConst>) -> Bool {
                 changed = true
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
     changed
 }
-
 /// mirProjFoldIndexToConst rewrites one IndexProj from a local-indexed
 /// form to a constant-indexed form. `proj` is a function parameter, so
 /// field assignments here lower through the parameter path rather
@@ -538,7 +501,6 @@ fn mirRewriteRValueOperands(rv: MirRValue, known: List<MirConst>) -> Bool {
 fn mirProjFoldIndexToConst(target: MirProjection, constIndex: Int) -> MirProjection {
     mirIndexProjConst(constIndex, target.typ)
 }
-
 /// mirRewritePlaceProjections rewrites IndexProj operands in a place's
 /// projection chain. Other projection kinds carry no operands.
 fn mirRewritePlaceProjections(p: MirPlace, known: List<MirConst>) -> Bool {
@@ -560,17 +522,19 @@ fn mirRewritePlaceProjections(p: MirPlace, known: List<MirConst>) -> Bool {
     }
     changed
 }
-
 /// mirRewriteTerminatorCond substitutes a const into a Branch's `cond`
 /// or a SwitchInt's scrutinee when possible. Returns true on
 /// substitution.
 fn mirRewriteTerminatorCond(t: MirTerm, known: List<MirConst>) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if t.kind == MirTermBranch { return mirSubstituteOperandInPlace(t.cond, known) }
-    if t.kind == MirTermSwitchInt { return mirSubstituteOperandInPlace(t.cond, known) }
+    if t.kind == MirTermBranch {
+        return mirSubstituteOperandInPlace(t.cond, known)
+    }
+    if t.kind == MirTermSwitchInt {
+        return mirSubstituteOperandInPlace(t.cond, known)
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// mirSubstituteOperandInPlace checks whether `op` is a bare
 /// Copy/Move (no projections) on a const-bound local; if so, flips
 /// `op` to a ConstOp carrying the bound value. Returns true on
@@ -593,26 +557,23 @@ fn mirSubstituteOperandInPlace(op: MirOperand, known: List<MirConst>) -> Bool {
     op.kind = MirOpConst
     op.const = bound
     op.typ = bound.typ
-    // Clear the now-stale place so later passes / printers don't read
-    // a misleading local reference.
     op.place = mirPlace(-1)
     true
 }
-
+// Clear the now-stale place so later passes / printers don't read
+// a misleading local reference.
 fn mirSetKnown(known: List<MirConst>, id: Int, c: MirConst) {
     if id < 0 || id >= known.len() {
         return
     }
     known[id] = c
 }
-
 fn mirClearKnown(known: List<MirConst>, id: Int) {
     if id < 0 || id >= known.len() {
         return
     }
     known[id] = mirConstInvalid()
 }
-
 /// mirFoldTerminator collapses a Branch with a literal bool cond or a
 /// SwitchInt with a literal int scrutinee into an unconditional goto.
 /// Returns true on rewrite. Preserves span for diagnostics.
@@ -654,11 +615,9 @@ fn mirFoldTerminator(bb: MirBasicBlock) -> Bool {
         _ -> false,
     }
 }
-
 // ====================================================================
 // Pass 2 — empty-goto collapse
 // ====================================================================
-
 /// mirCollapseEmptyGotos retargets every CFG edge whose target is an
 /// empty `GotoTerm{C}` block to `C` directly. Runs iteratively on each
 /// edge; a cycle of empty-goto blocks (never emitted by the lowerer)
@@ -674,7 +633,6 @@ fn mirCollapseEmptyGotos(func: MirFunction) -> Bool {
         }
         bi = bi + 1
     }
-    // The function's advertised entry itself may be an empty-goto.
     let newEntry = mirResolveEmptyGoto(func, func.entry)
     if newEntry != func.entry {
         func.entry = newEntry
@@ -682,7 +640,7 @@ fn mirCollapseEmptyGotos(func: MirFunction) -> Bool {
     }
     changed
 }
-
+// The function's advertised entry itself may be an empty-goto.
 /// mirSwitchCaseSetTarget rewrites one case arm's jump target.
 /// Factored into a helper for the same reason as `mirInstrClearDest`:
 /// LLVM codegen rejects field assignments whose base is a chained
@@ -690,7 +648,6 @@ fn mirCollapseEmptyGotos(func: MirFunction) -> Bool {
 fn mirSwitchCaseSetTarget(c: MirSwitchCase, tgt: Int) -> MirSwitchCase {
     mirSwitchCase(c.value, tgt, c.label)
 }
-
 /// mirCollapseBlockEdges rewrites one block's outgoing edges so they
 /// skip through empty-goto chains. `bb` is a function parameter so
 /// terminator field writes go through a single-level indexed path
@@ -744,11 +701,11 @@ fn mirCollapseBlockEdges(bb: MirBasicBlock, func: MirFunction) -> Bool {
                 changed = true
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
     changed
 }
-
 /// mirResolveEmptyGoto walks the empty-goto chain starting at `target`
 /// and returns the first block that has instructions, a non-goto
 /// terminator, or is already seen (cycle). Bounded by `func.blocks.len()`
@@ -782,11 +739,9 @@ fn mirResolveEmptyGoto(func: MirFunction, target: Int) -> Int {
     }
     cur
 }
-
 // ====================================================================
 // Pass 3 — dead-assign elimination
 // ====================================================================
-
 /// mirDeadAssignElim drops AssignInstrs whose bare destination local
 /// is never read anywhere in the function, strips dead destinations
 /// from Call / Intrinsic instructions (keeping the call), and drops
@@ -810,7 +765,6 @@ fn mirDeadAssignElim(func: MirFunction) -> Bool {
     }
     changed
 }
-
 /// mirInstrClearDest flips an instruction's `hasDest` to false and
 /// resets `dest`. Factored into a helper because the LLVM codegen does
 /// not yet lower field assignments whose base is an IndexExpr (e.g.
@@ -822,7 +776,6 @@ fn mirInstrClearDest(instr: MirInstr) -> MirInstr {
     out.dest = mirPlace(-1)
     out
 }
-
 /// mirDeadAssignElimBlock runs the dead-assign pass on one block. `bb`
 /// is a function parameter (addressable) so `bb.instrs = next` (single
 /// field assign on a parameter) compiles cleanly.
@@ -872,7 +825,8 @@ fn mirDeadAssignElimBlock(bb: MirBasicBlock, func: MirFunction, reads: List<Int>
                     drop = true
                 }
             },
-            _ -> {},
+            _ -> {
+            },
         }
         if drop {
             changed = true
@@ -884,7 +838,6 @@ fn mirDeadAssignElimBlock(bb: MirBasicBlock, func: MirFunction, reads: List<Int>
     bb.instrs = next
     changed
 }
-
 /// mirLocalIsDead reports whether a local can be safely dropped: in
 /// range, not a parameter, not the return slot, and read zero times.
 fn mirLocalIsDead(func: MirFunction, id: Int, reads: List<Int>) -> Bool {
@@ -900,7 +853,6 @@ fn mirLocalIsDead(func: MirFunction, id: Int, reads: List<Int>) -> Bool {
     }
     reads[id] == 0
 }
-
 /// mirCollectLocalReads returns a parallel List<Int> (indexed by
 /// LocalID) giving the read count for each local. Counted reads:
 ///   - any operand resolving to Copy/Move on a place whose root local
@@ -940,7 +892,8 @@ fn mirCollectLocalReads(func: MirFunction) -> List<Int> {
                         mirCountOperandReads(op, reads)
                     }
                 },
-                _ -> {},
+                _ -> {
+                },
             }
         }
         if bb.hasTerm {
@@ -956,13 +909,13 @@ fn mirCollectLocalReads(func: MirFunction) -> List<Int> {
                         reads[func.returnLocal] = reads[func.returnLocal] + 1
                     }
                 },
-                _ -> {},
+                _ -> {
+                },
             }
         }
     }
     reads
 }
-
 fn mirCountOperandReads(op: MirOperand, reads: List<Int>) {
     match op.kind {
         MirOpCopy -> {
@@ -971,10 +924,10 @@ fn mirCountOperandReads(op: MirOperand, reads: List<Int>) {
         MirOpMove -> {
             mirCountReadPlace(op.place, reads)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 /// mirCountPlaceReads bumps the read counter for the base local and
 /// every IndexProj.indexLocal in the projection chain. When `isDest`
 /// is true and the place is bare (no projections), the base local is
@@ -994,7 +947,6 @@ fn mirCountPlaceReads(p: MirPlace, isDest: Bool, reads: List<Int>) {
         }
     }
 }
-
 fn mirCountReadPlace(p: MirPlace, reads: List<Int>) {
     if p.local >= 0 && p.local < reads.len() {
         reads[p.local] = reads[p.local] + 1
@@ -1007,7 +959,6 @@ fn mirCountReadPlace(p: MirPlace, reads: List<Int>) {
         }
     }
 }
-
 fn mirCountRValueReads(rv: MirRValue, reads: List<Int>) {
     match rv.kind {
         MirRVUse -> {
@@ -1040,6 +991,7 @@ fn mirCountRValueReads(rv: MirRValue, reads: List<Int>) {
         MirRVAddressOf -> {
             mirCountReadPlace(rv.place, reads)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }

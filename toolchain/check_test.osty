@@ -1,8 +1,6 @@
 use std.testing
-
 fn testSelfCheckerAcceptsAstTypeFlow() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             interface Show {
                 fn show(self) -> String
             }
@@ -34,17 +32,13 @@ fn testSelfCheckerAcceptsAstTypeFlow() {
                 let ok: Option<Int> = outcome.ok()
                 let got: Int = ok.unwrapOr(0)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
     testing.assert(checked.assignments >= 8)
     testing.assert(checked.accepted >= 8)
 }
-
 fn testSelfCheckerEmitsStructuredResult() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Box<T> {
                 value: T
             }
@@ -60,9 +54,7 @@ fn testSelfCheckerEmitsStructuredResult() {
             fn main() {
                 let boxed: Box<Int> = Box { value: id::<Int>(1) }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assert(frontCheckResultTypedNodeCount(checked) > 0)
     testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
@@ -73,10 +65,8 @@ fn testSelfCheckerEmitsStructuredResult() {
     testing.assertEq(checkResultSymbolType(checked, "fn", "unused", ""), "fn() -> Int")
     testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
 }
-
 fn testSelfCheckerCollectsGoUseAliasTypesAndFields() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             use go "example.com/host" as host {
                 fn Make() -> Item
 
@@ -89,27 +79,20 @@ fn testSelfCheckerCollectsGoUseAliasTypesAndFields() {
                 let item: host.Item = host.Make()
                 let name: String = item.Name
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerCollectsUppercaseTopLevelLets() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             pub type CheckName = String
             pub let CheckFormat: CheckName = "format"
 
             fn main() {
                 let name: String = CheckFormat
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, owner: String) -> String {
     let mut found = ""
     for symbol in result.symbols {
@@ -119,39 +102,29 @@ fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, o
     }
     found
 }
-
 fn testSelfCheckerSuggestsSimilarNameForTypoIdent() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn main() {
                 let length: Int = 10
                 let n: Int = lenght
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.summary.errors > 0)
     testing.assert(sawDiagnosticWithNote(checked, "E0745", "hint: did you mean `length`?"))
 }
-
 fn testSelfCheckerSuggestsSimilarNameForTypoField() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct User { name: String, age: Int }
 
             fn labelOf(user: User) -> String {
                 user.nmae
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.summary.errors > 0)
     testing.assert(sawDiagnosticWithNote(checked, "E0702", "hint: did you mean `name`?"))
 }
-
 fn testSelfCheckerSuggestsSimilarNameForTypoMethod() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Counter {
                 value: Int
 
@@ -161,16 +134,12 @@ fn testSelfCheckerSuggestsSimilarNameForTypoMethod() {
             fn bump(counter: Counter) -> Int {
                 counter.incremnt()
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.summary.errors > 0)
     testing.assert(sawDiagnosticWithNote(checked, "E0703", "hint: did you mean `increment`?"))
 }
-
 fn testSelfCheckerSuggestsSimilarNameForTypoVariant() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             enum Color { Red, Green, Blue }
 
             fn code(color: Color) -> Int {
@@ -180,13 +149,10 @@ fn testSelfCheckerSuggestsSimilarNameForTypoVariant() {
                     Blue -> 3,
                 }
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.summary.errors > 0)
     testing.assert(sawDiagnosticWithNote(checked, "E0728", "hint: did you mean `Green`?"))
 }
-
 fn sawDiagnosticWithNote(result: FrontCheckResult, code: String, note: String) -> Bool {
     for d in result.diagnostics {
         if d.code == code {
@@ -199,7 +165,6 @@ fn sawDiagnosticWithNote(result: FrontCheckResult, code: String, note: String) -
     }
     false
 }
-
 fn sawDiagnosticCode(result: FrontCheckResult, code: String) -> Bool {
     for d in result.diagnostics {
         if d.code == code {
@@ -208,10 +173,8 @@ fn sawDiagnosticCode(result: FrontCheckResult, code: String) -> Bool {
     }
     false
 }
-
 fn testSelfCheckerRejectsImpurePureFunctionBodies() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn impure() -> Int { 1 }
 
             #[pure]
@@ -219,16 +182,12 @@ fn testSelfCheckerRejectsImpurePureFunctionBodies() {
                 let xs = [1]
                 impure()
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.summary.errors > 0)
     testing.assert(sawDiagnosticCode(checked, "E0775"))
 }
-
 fn testSelfCheckerAllowsPureCallsAndLocalMutationInPureFunction() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             #[pure]
             fn mix(a: Int, b: Int) -> Int { a * 31 + b }
 
@@ -238,15 +197,11 @@ fn testSelfCheckerAllowsPureCallsAndLocalMutationInPureFunction() {
                 acc = acc + mix(a, b)
                 acc
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn takesInt(value: Int) -> Int {
                 value
             }
@@ -256,44 +211,32 @@ fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
                 let call: Bool = takesInt("bad")
                 return flag
             }
-            """,
-    )
-
+            """)
     testing.assert(checked.errors >= 3)
     testing.assert(checked.assignments >= 3)
 }
-
 fn testSelfCheckerBindsTuplePatternsInLets() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn main() {
                 let (id, name) = (1, "Ada")
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "id"), "Int")
     testing.assertEq(frontCheckResultBindingType(checked, "name"), "String")
 }
-
 fn testSelfCheckerAcceptsFieldAssignmentThroughStructValues() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             struct Counter { value: Int }
 
             fn bump(counter: Counter) {
                 counter.value = counter.value + 1
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn choose<T>(left: T, right: T) -> T {
                 right
             }
@@ -302,15 +245,11 @@ fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
                 let n: Int = 1
                 let got: Int = choose(0, n)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerBindsForInIdentifierPatterns() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn sum(xs: List<Int>) -> Int {
                 let mut total = 0
                 for x in xs {
@@ -318,30 +257,22 @@ fn testSelfCheckerBindsForInIdentifierPatterns() {
                 }
                 total
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "x"), "Int")
 }
-
 fn testSelfCheckerAllowsParameterAccumulators() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn appendLine(lines: List<String>) -> List<String> {
                 lines.push("next")
                 lines = lines.map(|line| line)
                 lines
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerAcceptsConcurrencyPreludeSurface() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn summarize(xs: List<Int>) -> Int {
                 let ch = thread.chan::<Int>(0)
                 let h = spawn(|| {
@@ -361,15 +292,11 @@ fn testSelfCheckerAcceptsConcurrencyPreludeSurface() {
             fn batch() -> List<Int> {
                 parallel(|| 1, || 2, || 3)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {
-    let nonExhaustive = frontendCheckSource(
-        r"""
+    let nonExhaustive = frontendCheckSource(r"""
             enum Color { Red, Green }
 
             fn code(color: Color) -> Int {
@@ -377,27 +304,20 @@ fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {
                     Red -> 1,
                 }
             }
-            """,
-    )
-
-    let badPattern = frontendCheckSource(
-        r"""
+            """)
+    let badPattern = frontendCheckSource(r"""
             enum Maybe { Some(Int), None }
 
             fn main() {
                 let Some(value) = Some(1)
                 let f = |Some(value)| value
             }
-            """,
-    )
-
+            """)
     testing.assert(nonExhaustive.errors > 0)
     testing.assert(badPattern.errors >= 2)
 }
-
 fn testSelfCheckerChecksInterfaceSatisfaction() {
-    let good = frontendCheckSource(
-        r"""
+    let good = frontendCheckSource(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -418,11 +338,8 @@ fn testSelfCheckerChecksInterfaceSatisfaction() {
                 let user: User = User { name: "Ada" }
                 let label: String = display(user)
             }
-            """,
-    )
-
-    let bad = frontendCheckSource(
-        r"""
+            """)
+    let bad = frontendCheckSource(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -437,16 +354,12 @@ fn testSelfCheckerChecksInterfaceSatisfaction() {
                 let user: User = User { age: 37 }
                 let label: String = display(user)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(good.errors, 0)
     testing.assert(bad.errors > 0)
 }
-
 fn testSelfCheckerAcceptsCollectionMethodSurfaceUsedByGcModel() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn snapshot(objects: Map<Int, String>, roots: Set<Int>) -> List<Int> {
                 let rootList: List<Int> = roots.toList()
                 let sortedIds: List<Int> = objects.keys().sorted()
@@ -461,15 +374,11 @@ fn testSelfCheckerAcceptsCollectionMethodSurfaceUsedByGcModel() {
                 }
                 sortedIds
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testSelfCheckerBindsTuplePatternsWhenIteratingMaps() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Obj {
                 generation: Int,
             }
@@ -483,9 +392,7 @@ fn testSelfCheckerBindsTuplePatternsWhenIteratingMaps() {
                 }
                 sum
             }
-            """,
-    )
-
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "id"), "Int")
     testing.assertEq(frontCheckResultBindingType(checked, "obj"), "Obj")

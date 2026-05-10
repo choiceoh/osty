@@ -29,13 +29,10 @@
 // All four structured variants now carry the `diagnostics` list
 // populated by `check_diag.osty`; the summary counters are derived
 // values kept in sync for bridge stability.
-
 use std.strings as strings
-
 // ---------------------------------------------------------------------
 // Bridge record types (preserved for Go host compatibility).
 // ---------------------------------------------------------------------
-
 /// FrontTypeRepr is a structured type representation that crosses the
 /// selfhost boundary without string round-tripping. Each field mirrors
 /// the discriminated TyNode shape but is serializable.
@@ -46,68 +43,53 @@ pub struct FrontTypeRepr {
     pub args: List<FrontTypeRepr>,
     pub ret: Option<FrontTypeRepr>,
 }
-
 /// tyToRepr converts a TyArena index into a structured FrontTypeRepr,
 /// eliminating the string-based round-trip on the Go ↔ Osty boundary.
 pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
     if idx < 0 {
-        return FrontTypeRepr { kind: "error", name: "Invalid", path: "", args: [], ret: None }
+        return FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None}
     }
     let node = tyGet(arena, idx)
     match node.kind {
-        TkErr -> FrontTypeRepr { kind: "error", name: "Invalid", path: "", args: [], ret: None },
-        TkPoison -> FrontTypeRepr { kind: "poison", name: "Poison", path: "", args: [], ret: None },
-        TkPrim -> FrontTypeRepr { kind: "primitive", name: primKindName(node.prim), path: "", args: [], ret: None },
+        TkErr -> FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None},
+        TkPoison -> FrontTypeRepr {kind: "poison", name: "Poison", path: "", args: [], ret: None},
+        TkPrim -> FrontTypeRepr {kind: "primitive", name: primKindName(node.prim), path: "", args: [], ret: None},
         TkNamed -> {
             let mut reprArgs: List<FrontTypeRepr> = []
             for arg in node.args {
                 reprArgs.push(tyToRepr(arena, arg))
             }
-            FrontTypeRepr { kind: "named", name: node.head, path: "", args: reprArgs, ret: None }
+            FrontTypeRepr {kind: "named", name: node.head, path: "", args: reprArgs, ret: None}
         },
-        TkOptional -> FrontTypeRepr {
-            kind: "optional",
-            name: "",
-            path: "",
-            args: [],
-            ret: Some(tyToRepr(arena, node.ret)),
-        },
+        TkOptional -> FrontTypeRepr {kind: "optional", name: "", path: "", args: [], ret: Some(tyToRepr(arena, node.ret))},
         TkTuple -> {
             let mut elems: List<FrontTypeRepr> = []
             for e in node.args {
                 elems.push(tyToRepr(arena, e))
             }
-            FrontTypeRepr { kind: "tuple", name: "", path: "", args: elems, ret: None }
+            FrontTypeRepr {kind: "tuple", name: "", path: "", args: elems, ret: None}
         },
         TkFn -> {
             let mut paramReprs: List<FrontTypeRepr> = []
             for p in node.args {
                 paramReprs.push(tyToRepr(arena, p))
             }
-            FrontTypeRepr {
-                kind: "fn",
-                name: "",
-                path: "",
-                args: paramReprs,
-                ret: Some(tyToRepr(arena, node.ret)),
-            }
+            FrontTypeRepr {kind: "fn", name: "", path: "", args: paramReprs, ret: Some(tyToRepr(arena, node.ret))}
         },
         TkVar -> {
             let vName = node.varName
             if vName == "" {
-                FrontTypeRepr { kind: "typevar", name: "?{node.varId}", path: "", args: [], ret: None }
+                FrontTypeRepr {kind: "typevar", name: "?{node.varId}", path: "", args: [], ret: None}
             } else {
-                FrontTypeRepr { kind: "typevar", name: vName, path: "", args: [], ret: None }
+                FrontTypeRepr {kind: "typevar", name: vName, path: "", args: [], ret: None}
             }
         },
-        TkSelf -> FrontTypeRepr { kind: "self", name: "Self", path: "", args: [], ret: None },
+        TkSelf -> FrontTypeRepr {kind: "self", name: "Self", path: "", args: [], ret: None},
     }
 }
-
 pub fn frontInvalidTypeRepr() -> FrontTypeRepr {
-    FrontTypeRepr { kind: "error", name: "Invalid", path: "", args: [], ret: None }
+    FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None}
 }
-
 /// frontTypeReprToString converts a structured FrontTypeRepr back into
 /// a human-readable string for legacy callers that still expect String
 /// output (hover, query helpers).
@@ -149,7 +131,6 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
         repr.name
     }
 }
-
 pub struct FrontCheckedNode {
     pub node: Int,
     pub nodeId: Int,
@@ -159,7 +140,6 @@ pub struct FrontCheckedNode {
     pub start: Int,
     pub end: Int,
 }
-
 pub struct FrontCheckedBinding {
     pub node: Int,
     pub nodeId: Int,
@@ -171,7 +151,6 @@ pub struct FrontCheckedBinding {
     pub start: Int,
     pub end: Int,
 }
-
 pub struct FrontCheckedSymbol {
     pub node: Int,
     pub nodeId: Int,
@@ -184,7 +163,6 @@ pub struct FrontCheckedSymbol {
     pub start: Int,
     pub end: Int,
 }
-
 pub struct FrontCheckInstantiation {
     pub node: Int,
     pub nodeId: Int,
@@ -197,7 +175,6 @@ pub struct FrontCheckInstantiation {
     pub start: Int,
     pub end: Int,
 }
-
 pub struct FrontCheckResult {
     pub summary: FrontCheckSummary,
     pub typedNodes: List<FrontCheckedNode>,
@@ -206,40 +183,32 @@ pub struct FrontCheckResult {
     pub instantiations: List<FrontCheckInstantiation>,
     pub diagnostics: List<CheckDiagnostic>,
 }
-
 // ---------------------------------------------------------------------
 // Public entry points.
 // ---------------------------------------------------------------------
-
 pub fn frontendCheckSource(source: String) -> FrontCheckSummary {
     frontendCheckSourceStructured(source).summary
 }
-
 pub fn frontendCheckSourceStructured(source: String) -> FrontCheckResult {
     let lexed = ostyLexSource(source)
     frontendCheckLexedSourceStructured(lexed)
 }
-
 pub fn frontendCheckLexedSource(lexed: OstyLexedSource) -> FrontCheckSummary {
     frontendCheckLexedSourceStructured(lexed).summary
 }
-
 pub fn frontendCheckLexedSourceStructured(lexed: OstyLexedSource) -> FrontCheckResult {
     let parsed = astParseLexedSource(lexed)
     frontendCheckAstStructured(parsed)
 }
-
 pub fn frontendCheckAst(file: AstFile) -> FrontCheckSummary {
     frontendCheckAstStructured(file).summary
 }
-
 pub fn frontendCheckAstStructured(file: AstFile) -> FrontCheckResult {
     let tys = emptyTyArena()
     let cx = newElabCx(file, tys)
     elabFile(cx)
     serializeCheckResult(cx)
 }
-
 // ---------------------------------------------------------------------
 // File driver.
 //
@@ -253,13 +222,11 @@ pub fn frontendCheckAstStructured(file: AstFile) -> FrontCheckResult {
 //      propagating types. `let` decls at the top level run in script
 //      order; everything else is order-independent.
 // ---------------------------------------------------------------------
-
 pub fn elabFile(cx: ElabCx) {
     collectDecls(cx)
     elaborateDecls(cx)
     runCheckGates(cx)
 }
-
 fn collectDecls(cx: ElabCx) {
     for declIdx in cx.ast.arena.decls {
         let node = astArenaNodeAt(cx.ast.arena, declIdx)
@@ -284,7 +251,6 @@ fn collectDecls(cx: ElabCx) {
         }
     }
 }
-
 /// collectUseDecl handles `use` declarations — both the Go FFI form
 /// with an inline body and the plain `use path as X` aliases.
 /// Registers the alias as a module-like binding and every fn member
@@ -305,12 +271,9 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         let _ = alias
     } else {
         let env = cx.env
-        // Register a binding so bare `X` in expression position has a
-        // type; the head name is what `checkLookupMethod` keys off.
         let moduleTy = tyNamed(env.tys, alias, [])
         checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
         checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
-
         for bodyIdx in node.children {
             let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
             if body.kind == AstNFnDecl {
@@ -327,18 +290,11 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 let _ = bodyIdx
             }
         }
-
-        // `use std.strings as X` (no body) — pull the std.strings surface
-        // under the alias only when the package input did not already install
-        // an import surface for it. Toolchain code routinely spells this as
-        // `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
         if checkHasImportAlias(env, alias) {
             let _ = env
         } else if node.text == "std.strings" {
             registerStdStringsAliasFns(env, alias)
         } else if node.text == "std.testing" {
-            // `use std.testing` (examples use this without an explicit alias,
-            // so the alias defaults to "testing" via useDeclAliasName).
             registerStdTestingAliasFns(env, alias)
         } else if node.text == "std.testing.gen" {
             registerStdTestingGenAliasFns(env, alias)
@@ -359,7 +315,14 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         }
     }
 }
-
+// Register a binding so bare `X` in expression position has a
+// type; the head name is what `checkLookupMethod` keys off.
+// `use std.strings as X` (no body) — pull the std.strings surface
+// under the alias only when the package input did not already install
+// an import surface for it. Toolchain code routinely spells this as
+// `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
+// `use std.testing` (examples use this without an explicit alias,
+// so the alias defaults to "testing" via useDeclAliasName).
 fn collectUseDeclTypeBody(cx: ElabCx, declIdx: Int, node: AstNode, alias: String) {
     let generics = collectGenericNames(cx, node.children2)
     if node.kind == AstNStructDecl {
@@ -375,20 +338,14 @@ fn collectUseDeclTypeBody(cx: ElabCx, declIdx: Int, node: AstNode, alias: String
     }
     registerUseDeclQualifiedTypeAlias(cx, alias, node.text, generics)
 }
-
 fn registerUseDeclQualifiedTypeAlias(cx: ElabCx, alias: String, name: String, generics: List<String>) {
     let qualified = useDeclQualifiedTypeName(alias, name)
     if qualified == "" || qualified == name {
         let _ = qualified
     } else {
-        checkRegisterAlias(cx.env, CheckAliasSig {
-            name: qualified,
-            ty: tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics)),
-            generics,
-        })
+        checkRegisterAlias(cx.env, CheckAliasSig {name: qualified, ty: tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics)), generics})
     }
 }
-
 fn useDeclQualifiedTypeName(alias: String, name: String) -> String {
     if alias == "" || name == "" {
         ""
@@ -396,7 +353,6 @@ fn useDeclQualifiedTypeName(alias: String, name: String) -> String {
         "{alias}.{name}"
     }
 }
-
 /// registerStdStringsAliasFns registers the hot subset of std.strings
 /// exports under `alias` so `alias.fn(...)` resolves. Scope mirrors
 /// the top E0703 names from the `osty check toolchain` histogram so
@@ -412,169 +368,42 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
     let tListChar_ = tyNamed(tys, "List", [tChar(tys)])
     let tListByte_ = tyNamed(tys, "List", [tByte(tys)])
     let tOptInt = tyOptional(tys, tInt_)
-
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
-
-    checkRegisterFn(env, CheckFnSig {
-        name: "len", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "isEmpty", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "concat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["a", "b"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "chars", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListChar_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "bytes", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListByte_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "split", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
-        paramNames: ["s", "sep"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "splitN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
-        paramNames: ["s", "sep", "n"], paramTys: [tString_, tString_, tInt_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "lines", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "join", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["parts", "sep"], paramTys: [tListString, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    // Go-style capitalized aliases used by `toolchain/mir_generator.osty`'s
-    // `llvmStrings.*` prelude.
-    checkRegisterFn(env, CheckFnSig {
-        name: "Contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "indexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "Index", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "lastIndexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "count", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
-        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "startsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "hasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "HasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "endsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "hasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "HasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "trim", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "trimSpace", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "trimPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "trimSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "toUpper", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "toLower", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "compare", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
-        paramNames: ["a", "b"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "repeat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s", "count"], paramTys: [tString_, tInt_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "replaceAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s", "old", "new"], paramTys: [tString_, tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "slice", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: ["s", "start", "end"], paramTys: [tString_, tInt_, tInt_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
+    checkRegisterFn(env, CheckFnSig {name: "len", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "isEmpty", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "concat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["a", "b"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "chars", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListChar_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "bytes", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListByte_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "split", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString, paramNames: ["s", "sep"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "splitN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString, paramNames: ["s", "sep", "n"], paramTys: [tString_, tString_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "lines", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "join", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["parts", "sep"], paramTys: [tListString, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "Contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "indexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "Index", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "lastIndexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "count", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_, paramNames: ["s", "substr"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "startsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "prefix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "hasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "prefix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "HasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "prefix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "endsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "suffix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "hasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "suffix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "HasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["s", "suffix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "trim", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "trimSpace", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "trimPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s", "prefix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "trimSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s", "suffix"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "toUpper", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "toLower", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "compare", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_, paramNames: ["a", "b"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "repeat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s", "count"], paramTys: [tString_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "replaceAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s", "old", "new"], paramTys: [tString_, tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "slice", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: ["s", "start", "end"], paramTys: [tString_, tInt_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
 }
-
+// Go-style capitalized aliases used by `toolchain/mir_generator.osty`'s
+// `llvmStrings.*` prelude.
 /// registerStdTestingAliasFns registers the hot subset of std.testing
 /// exports under `alias` so `testing.assertEq(...)` etc. resolve in
 /// `examples/**/*_test.osty` files. The bounds-bearing generics
@@ -596,88 +425,26 @@ fn registerStdTestingAliasFns(env: CheckEnv, alias: String) {
     let tFnUnit = tyFn(tys, [], tUnit_)
     let tFnResUnit = tyFn(tys, [], tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])]))
     let tFnTBool = tyFn(tys, [tT], tBool_)
-
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
     let gT: List<String> = ["T"]
     let gTE: List<String> = ["T", "E"]
-
-    checkRegisterType(env, CheckTypeSig {
-        name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct",
-    })
-
-    checkRegisterFn(env, CheckFnSig {
-        name: "assert", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["cond"], paramTys: [tBool_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "assertTrue", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["cond"], paramTys: [tBool_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "assertFalse", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["cond"], paramTys: [tBool_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "assertEq", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["actual", "expected"], paramTys: [tT, tT],
-        generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "assertNe", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["actual", "expected"], paramTys: [tT, tT],
-        generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "expectOk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
-        paramNames: ["result"], paramTys: [tResultTE],
-        generics: gTE, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "expectError", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tE,
-        paramNames: ["result"], paramTys: [tResultTE],
-        generics: gTE, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "fail", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tNever(tys),
-        paramNames: ["msg"], paramTys: [tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "context", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["msg", "body"], paramTys: [tString_, tFnUnit],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "benchmark", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["iterations", "body"], paramTys: [tInt_, tFnResUnit],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "snapshot", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["name", "output"], paramTys: [tString_, tString_],
-        generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "property", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["name", "g", "pred"], paramTys: [tString_, tGenT, tFnTBool],
-        generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "propertyN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["name", "g", "iterations", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool],
-        generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "propertySeeded", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: ["name", "g", "seed", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool],
-        generics: gT, genericBounds: emptyBounds,
-    })
+    checkRegisterType(env, CheckTypeSig {name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct"})
+    checkRegisterFn(env, CheckFnSig {name: "assert", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["cond"], paramTys: [tBool_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "assertTrue", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["cond"], paramTys: [tBool_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "assertFalse", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["cond"], paramTys: [tBool_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "assertEq", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["actual", "expected"], paramTys: [tT, tT], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "assertNe", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["actual", "expected"], paramTys: [tT, tT], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "expectOk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT, paramNames: ["result"], paramTys: [tResultTE], generics: gTE, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "expectError", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tE, paramNames: ["result"], paramTys: [tResultTE], generics: gTE, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "fail", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tNever(tys), paramNames: ["msg"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "context", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["msg", "body"], paramTys: [tString_, tFnUnit], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "benchmark", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["iterations", "body"], paramTys: [tInt_, tFnResUnit], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "snapshot", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["name", "output"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "property", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["name", "g", "pred"], paramTys: [tString_, tGenT, tFnTBool], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "propertyN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["name", "g", "iterations", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "propertySeeded", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["name", "g", "seed", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool], generics: gT, genericBounds: emptyBounds})
 }
-
 fn registerStdTestingGenAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tInt_ = tInt(tys)
@@ -698,90 +465,26 @@ fn registerStdTestingGenAliasFns(env: CheckEnv, alias: String) {
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
     let gT: List<String> = ["T"]
-
-    checkRegisterType(env, CheckTypeSig {
-        name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct",
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "int", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]),
-        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "intRange", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]),
-        paramNames: ["lo", "hi"], paramTys: [tInt_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "bool", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tBool_]),
-        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "float", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tFloat64(tys)]),
-        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "char", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tChar(tys)]),
-        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "byte", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tByte(tys)]),
-        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "asciiString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tString_]),
-        paramNames: ["maxLen"], paramTys: [tInt_], generics: emptyGenerics, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "oneOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
-        paramNames: ["choices"], paramTys: [tyNamed(tys, "List", [tT])], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "map", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenU,
-        paramNames: ["g", "f"], paramTys: [tGenT, tyFn(tys, [tT], tU)], generics: ["T", "U"], genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "filter", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
-        paramNames: ["g", "pred"], paramTys: [tGenT, tyFn(tys, [tT], tBool_)], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "pair", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB])]),
-        paramNames: ["a", "b"], paramTys: [tGenA, tGenB], generics: ["A", "B"], genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "triple", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB, tC])]),
-        paramNames: ["a", "b", "c"], paramTys: [tGenA, tGenB, tGenC], generics: ["A", "B", "C"], genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "list", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]),
-        paramNames: ["item", "maxLen"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "listOfSize", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]),
-        paramNames: ["item", "size"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "option", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyOptional(tys, tT)]),
-        paramNames: ["item"], paramTys: [tGenT], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "result", owner: alias, receiverTy: -1, hasReceiver: false,
-        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "Result", [tT, tE])]),
-        paramNames: ["ok", "err"], paramTys: [tGenT, tGenE], generics: ["T", "E"], genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "constant", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
-        paramNames: ["value"], paramTys: [tT], generics: gT, genericBounds: emptyBounds,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "oneOfGens", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
-        paramNames: ["gens"], paramTys: [tyNamed(tys, "List", [tGenT])], generics: gT, genericBounds: emptyBounds,
-    })
+    checkRegisterType(env, CheckTypeSig {name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct"})
+    checkRegisterFn(env, CheckFnSig {name: "int", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]), paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "intRange", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]), paramNames: ["lo", "hi"], paramTys: [tInt_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "bool", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tBool_]), paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "float", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tFloat64(tys)]), paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "char", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tChar(tys)]), paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "byte", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tByte(tys)]), paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "asciiString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tString_]), paramNames: ["maxLen"], paramTys: [tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "oneOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT, paramNames: ["choices"], paramTys: [tyNamed(tys, "List", [tT])], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "map", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenU, paramNames: ["g", "f"], paramTys: [tGenT, tyFn(tys, [tT], tU)], generics: ["T", "U"], genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "filter", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT, paramNames: ["g", "pred"], paramTys: [tGenT, tyFn(tys, [tT], tBool_)], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "pair", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB])]), paramNames: ["a", "b"], paramTys: [tGenA, tGenB], generics: ["A", "B"], genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "triple", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB, tC])]), paramNames: ["a", "b", "c"], paramTys: [tGenA, tGenB, tGenC], generics: ["A", "B", "C"], genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "list", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]), paramNames: ["item", "maxLen"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "listOfSize", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]), paramNames: ["item", "size"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "option", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyOptional(tys, tT)]), paramNames: ["item"], paramTys: [tGenT], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "result", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tyNamed(tys, "Result", [tT, tE])]), paramNames: ["ok", "err"], paramTys: [tGenT, tGenE], generics: ["T", "E"], genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "constant", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT, paramNames: ["value"], paramTys: [tT], generics: gT, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "oneOfGens", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT, paramNames: ["gens"], paramTys: [tyNamed(tys, "List", [tGenT])], generics: gT, genericBounds: emptyBounds})
 }
-
 /// useDeclAliasName returns the declared alias (`as X`) if present,
 /// otherwise falls back to the last path segment (`use std.testing`
 /// → "testing"), matching the Go-side resolver's default.
@@ -802,7 +505,6 @@ fn useDeclAliasName(cx: ElabCx, node: AstNode) -> String {
         useDeclLastSegment(node.text)
     }
 }
-
 /// registerStdFsAliasFns — tool-facing std.fs surface.
 fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
@@ -818,64 +520,17 @@ fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
     let tResListString = tyNamed(tys, "Result", [tListString, tError_])
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
-    let add = [
-        CheckFnSig { name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "read", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResBytes,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "walk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
-            paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "glob", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
-            paramNames: ["pattern"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "watch", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
-            paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "write", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "rename", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "copy", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "copyDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "mkdir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "mkdirAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "atomicWrite", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "atomicWriteString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "lockFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "hashFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "diffFiles", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
-            paramNames: ["left", "right"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-    ]
+    let add = [CheckFnSig {name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "read", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResBytes, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "walk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "glob", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: ["pattern"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "watch", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "write", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "rename", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "copy", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "copyDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "mkdir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "mkdirAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "atomicWrite", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "atomicWriteString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "lockFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "hashFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "diffFiles", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: ["left", "right"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}]
     for sig in add {
         checkRegisterFn(env, sig)
     }
 }
-
 /// registerStdDebugAliasFns — dbg.
 fn registerStdDebugAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tT = tyNamed(tys, "T", [])
-    checkRegisterFn(env, CheckFnSig {
-        name: "dbg", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
-        paramNames: ["value"], paramTys: [tT],
-        generics: ["T"], genericBounds: [],
-    })
+    checkRegisterFn(env, CheckFnSig {name: "dbg", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT, paramNames: ["value"], paramTys: [tT], generics: ["T"], genericBounds: []})
 }
-
 /// registerStdThreadAliasFns — subset of std.thread.
 fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
@@ -887,120 +542,46 @@ fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
     let tUnit_ = tUnit(tys)
     let tResUnit = tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])])
     let gT: List<String> = ["T"]
-    checkRegisterFn(env, CheckFnSig {
-        name: "spawn", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tHandleT,
-        paramNames: ["body"], paramTys: [tyFn(tys, [], tT)],
-        generics: gT, genericBounds: [],
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "chan", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tChanT,
-        paramNames: ["capacity"], paramTys: [tInt_],
-        generics: gT, genericBounds: [],
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "sleep", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-        paramNames: ["duration"], paramTys: [tyNamed(tys, "Duration", [])],
-        generics: [], genericBounds: [],
-    })
-    // Bridge `<alias>.Duration` (parser-concatenated qualified head) to
-    // the bare `Duration` builtin, parallel to registerStdTimeAliasFns.
-    checkRegisterAlias(env, CheckAliasSig {
-        name: "{alias}.Duration",
-        ty: tyNamed(tys, "Duration", []),
-        generics: [],
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "yield", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-        paramNames: [], paramTys: [],
-        generics: [], genericBounds: [],
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "isCancelled", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
-        paramNames: [], paramTys: [],
-        generics: [], genericBounds: [],
-    })
-    // thread.select(body: fn(SelectBuilder) -> T) -> T — spec §B.6
-    // canonical form. SelectBuilder takes care of recv/send/timeout/
-    // default branches; here we only need the outer signature to
-    // satisfy the checker. The builder type name is registered
-    // inside checkInstallChannelIntrinsics so `s.recv(...)` dispatches.
+    checkRegisterFn(env, CheckFnSig {name: "spawn", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tHandleT, paramNames: ["body"], paramTys: [tyFn(tys, [], tT)], generics: gT, genericBounds: []})
+    checkRegisterFn(env, CheckFnSig {name: "chan", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tChanT, paramNames: ["capacity"], paramTys: [tInt_], generics: gT, genericBounds: []})
+    checkRegisterFn(env, CheckFnSig {name: "sleep", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["duration"], paramTys: [tyNamed(tys, "Duration", [])], generics: [], genericBounds: []})
+    checkRegisterAlias(env, CheckAliasSig {name: "{alias}.Duration", ty: tyNamed(tys, "Duration", []), generics: []})
+    checkRegisterFn(env, CheckFnSig {name: "yield", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: [], paramTys: [], generics: [], genericBounds: []})
+    checkRegisterFn(env, CheckFnSig {name: "isCancelled", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: [], paramTys: [], generics: [], genericBounds: []})
     let tSelectBuilder = tyNamed(tys, "SelectBuilder", [])
-    checkRegisterFn(env, CheckFnSig {
-        name: "select", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
-        paramNames: ["body"], paramTys: [tyFn(tys, [tSelectBuilder], tT)],
-        generics: gT, genericBounds: [],
-    })
+    checkRegisterFn(env, CheckFnSig {name: "select", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT, paramNames: ["body"], paramTys: [tyFn(tys, [tSelectBuilder], tT)], generics: gT, genericBounds: []})
 }
-
+// Bridge `<alias>.Duration` (parser-concatenated qualified head) to
+// the bare `Duration` builtin, parallel to registerStdTimeAliasFns.
+// thread.select(body: fn(SelectBuilder) -> T) -> T — spec §B.6
+// canonical form. SelectBuilder takes care of recv/send/timeout/
+// default branches; here we only need the outer signature to
+// satisfy the checker. The builder type name is registered
+// inside checkInstallChannelIntrinsics so `s.recv(...)` dispatches.
 /// registerStdIoAliasFns — print helpers when imported via alias.
 fn registerStdIoAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tString_ = tString(tys)
     let tUnit_ = tUnit(tys)
     for n in ["print", "println", "eprint", "eprintln"] {
-        checkRegisterFn(env, CheckFnSig {
-            name: n, owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
-            paramNames: ["s"], paramTys: [tString_],
-            generics: [], genericBounds: [],
-        })
+        checkRegisterFn(env, CheckFnSig {name: n, owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: ["s"], paramTys: [tString_], generics: [], genericBounds: []})
     }
-    checkRegisterFn(env, CheckFnSig {
-        name: "readLine", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
-        paramNames: [], paramTys: [],
-        generics: [], genericBounds: [],
-    })
+    checkRegisterFn(env, CheckFnSig {name: "readLine", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: [], paramTys: [], generics: [], genericBounds: []})
 }
-
 fn registerStdCompressAliasFields(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tGzip = tyNamed(tys, "Gzip", [])
     let tBytes_ = tBytes(tys)
     let tResultBytesError = tyNamed(tys, "Result", [tBytes_, tyNamed(tys, "Error", [])])
-    checkRegisterField(env, CheckFieldSig {
-        owner: alias,
-        name: "gzip",
-        ty: tGzip,
-        exported: true,
-        hasDefault: false,
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "encode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true,
-        retTy: tBytes_,
-        paramNames: ["data"], paramTys: [tBytes_],
-        generics: [], genericBounds: [],
-    })
-    checkRegisterFn(env, CheckFnSig {
-        name: "decode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true,
-        retTy: tResultBytesError,
-        paramNames: ["data"], paramTys: [tBytes_],
-        generics: [], genericBounds: [],
-    })
+    checkRegisterField(env, CheckFieldSig {owner: alias, name: "gzip", ty: tGzip, exported: true, hasDefault: false})
+    checkRegisterFn(env, CheckFnSig {name: "encode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true, retTy: tBytes_, paramNames: ["data"], paramTys: [tBytes_], generics: [], genericBounds: []})
+    checkRegisterFn(env, CheckFnSig {name: "decode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true, retTy: tResultBytesError, paramNames: ["data"], paramTys: [tBytes_], generics: [], genericBounds: []})
 }
-
 fn registerStdEncodingAliasFields(env: CheckEnv, alias: String) {
-    checkRegisterField(env, CheckFieldSig {
-        owner: alias,
-        name: "base64",
-        ty: tyNamed(env.tys, "Base64", []),
-        exported: true,
-        hasDefault: false,
-    })
-    checkRegisterField(env, CheckFieldSig {
-        owner: alias,
-        name: "hex",
-        ty: tyNamed(env.tys, "Hex", []),
-        exported: true,
-        hasDefault: false,
-    })
-    checkRegisterField(env, CheckFieldSig {
-        owner: alias,
-        name: "url",
-        ty: tyNamed(env.tys, "UrlEncoding", []),
-        exported: true,
-        hasDefault: false,
-    })
+    checkRegisterField(env, CheckFieldSig {owner: alias, name: "base64", ty: tyNamed(env.tys, "Base64", []), exported: true, hasDefault: false})
+    checkRegisterField(env, CheckFieldSig {owner: alias, name: "hex", ty: tyNamed(env.tys, "Hex", []), exported: true, hasDefault: false})
+    checkRegisterField(env, CheckFieldSig {owner: alias, name: "url", ty: tyNamed(env.tys, "UrlEncoding", []), exported: true, hasDefault: false})
 }
-
 /// useDeclLastSegment returns the last `.`/`/`-delimited segment of a
 /// use path. `std.testing` → "testing"; `github.com/x/y` → "y";
 /// bare `core` → "core"; empty → empty.
@@ -1008,16 +589,14 @@ fn useDeclLastSegment(path: String) -> String {
     if path == "" {
         ""
     } else {
-        // Walk the bytes manually so this helper stays free of the
-        // `std.strings` import tax (check.osty would need one otherwise).
         let afterSlash = useDeclTailAfter(path, "/")
         useDeclTailAfter(afterSlash, ".")
     }
 }
-
+// Walk the bytes manually so this helper stays free of the
+// `std.strings` import tax (check.osty would need one otherwise).
 fn useDeclTailAfter(s: String, sep: String) -> String {
     let mut out = s
-    // Scan from end to find last occurrence of `sep` (single char).
     let mut idx = -1
     let mut j = 0
     for unit in strings.split(s, "") {
@@ -1031,7 +610,6 @@ fn useDeclTailAfter(s: String, sep: String) -> String {
     if idx < 0 {
         out
     } else {
-        // Collect units after idx.
         out = ""
         let mut k = 0
         for unit in strings.split(s, "") {
@@ -1045,22 +623,13 @@ fn useDeclTailAfter(s: String, sep: String) -> String {
         out
     }
 }
-
-
-fn collectFnDecl(
-    cx: ElabCx,
-    declIdx: Int,
-    node: AstNode,
-    owner: String,
-    ownerGenerics: List<String>,
-    ownerBounds: List<CheckGenericBound>,
-) {
+// Scan from end to find last occurrence of `sep` (single char).
+// Collect units after idx.
+fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGenerics: List<String>, ownerBounds: List<CheckGenericBound>) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
     let combinedGenerics = appendStringLists(ownerGenerics, generics)
     let combinedBounds = appendGenericBounds(ownerBounds, collectGenericBounds(cx, node.children2))
-
-    // Build paramTys / paramNames from node.children (AstNParam entries).
     let mut paramNames: List<String> = []
     let mut paramTys: List<Int> = []
     let mut hasReceiver = false
@@ -1071,111 +640,94 @@ fn collectFnDecl(
         } else if paramNode.text == "self" {
             hasReceiver = true
         } else {
-            // Prefix default-carrying params with "?" so the arity check
-            // (see paramDefaultCount in elab.osty) can count trailing
-            // defaults without threading a parallel List<Bool> through
-            // every CheckFnSig constructor.
             let hasDefault = paramNode.left >= 0
             let rawName = paramNode.text
-            let storedName = if hasDefault { "?" + rawName } else { rawName }
+            let storedName = if hasDefault {
+                "?" + rawName
+            } else {
+                rawName
+            }
             paramNames.push(storedName)
             let declared = astTypeToTyInCollect(cx, paramNode.right)
-            paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
+            paramTys.push(if declared >= 0 {
+                declared
+            } else {
+                tErr(cx.env.tys)
+            })
         }
     }
-
     let retTy = astTypeToTyInCollect(cx, node.left)
-    let retEffective = if retTy >= 0 { retTy } else { tUnit(cx.env.tys) }
-
-    // §8.1 G13 / E0743: Handle<_> and Group/TaskGroup are non-escaping
-    // capabilities — banned from function return positions. Report at
-    // the return-type node span when present, otherwise the fn header.
+    let retEffective = if retTy >= 0 {
+        retTy
+    } else {
+        tUnit(cx.env.tys)
+    }
     if tyEscapingCapabilityHead(cx.env.tys, retEffective) != "" {
         let retNode = if node.left >= 0 {
             astArenaNodeAt(cx.ast.arena, node.left)
         } else {
             node
         }
-        cx.env.local.diagnostics.push(diagNonEscapingEscape(
-            tyToString(cx.env.tys, retEffective),
-            "function return",
-            retNode.start,
-            retNode.end,
-        ))
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, retEffective), "function return", retNode.start, retNode.end))
     }
-
     let receiverTy = if owner == "" {
         -1
     } else {
         tyNamed(cx.env.tys, owner, genericListToTyArgs(cx, ownerGenerics))
     }
-
-    let sig = CheckFnSig {
-        name,
-        owner,
-        receiverTy,
-        hasReceiver,
-        retTy: retEffective,
-        paramNames,
-        paramTys,
-        generics: combinedGenerics,
-        genericBounds: combinedBounds,
-    }
+    let sig = CheckFnSig {name, owner, receiverTy, hasReceiver, retTy: retEffective, paramNames, paramTys, generics: combinedGenerics, genericBounds: combinedBounds}
     checkRegisterFn(cx.env, sig)
     if node.right >= 0 {
         checkMarkFnHasBody(cx.env, name, owner)
     } else {
         let _ = node
     }
-
-    // Record a symbol for the Go-bridge summary.
     let fnTy = tyFn(cx.env.tys, sig.paramTys, sig.retTy)
     checkRecordSymbol(cx.env, declIdx, "fn", name, owner, fnTy, node.start, node.end)
 }
-
+// Build paramTys / paramNames from node.children (AstNParam entries).
+// Prefix default-carrying params with "?" so the arity check
+// (see paramDefaultCount in elab.osty) can count trailing
+// defaults without threading a parallel List<Bool> through
+// every CheckFnSig constructor.
+// §8.1 G13 / E0743: Handle<_> and Group/TaskGroup are non-escaping
+// capabilities — banned from function return positions. Report at
+// the return-type node span when present, otherwise the fn header.
+// Record a symbol for the Go-bridge summary.
 fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
     let genericBounds = collectGenericBounds(cx, node.children2)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "struct" })
+    checkRegisterType(cx.env, CheckTypeSig {name, generics, genericBounds, kind: "struct"})
     let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
     checkRecordSymbol(cx.env, declIdx, "struct", name, "", ownerTy, node.start, node.end)
-
     for memberIdx in node.children {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         match member.kind {
             AstNField_ -> {
                 let fieldTy = astTypeToTyInCollect(cx, member.right)
-                let effectiveTy = if fieldTy >= 0 { fieldTy } else { tErr(cx.env.tys) }
+                let effectiveTy = if fieldTy >= 0 {
+                    fieldTy
+                } else {
+                    tErr(cx.env.tys)
+                }
                 let hasDefault = member.left >= 0
-                // §8.1 G13 / E0743: struct fields can outlive the group
-                // that produced the capability, so banned here.
                 if tyEscapingCapabilityHead(cx.env.tys, effectiveTy) != "" {
-                    cx.env.local.diagnostics.push(diagNonEscapingEscape(
-                        tyToString(cx.env.tys, effectiveTy),
-                        "struct field",
-                        member.start,
-                        member.end,
-                    ))
+                    cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, effectiveTy), "struct field", member.start, member.end))
                 }
-                let field = CheckFieldSig {
-                    owner: name,
-                    name: member.text,
-                    ty: effectiveTy,
-                    exported: member.flags == 1,
-                    hasDefault,
-                }
+                let field = CheckFieldSig {owner: name, name: member.text, ty: effectiveTy, exported: member.flags == 1, hasDefault}
                 checkRegisterField(cx.env, field)
                 checkRecordSymbol(cx.env, memberIdx, "field", member.text, name, effectiveTy, member.start, member.end)
             },
             AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics, genericBounds),
-            _ -> {},
+            _ -> {
+            },
         }
     }
-
     collectIntrinsicMethods(cx, node)
 }
-
+// §8.1 G13 / E0743: struct fields can outlive the group
+// that produced the capability, so banned here.
 /// collectIntrinsicMethods fans out each fn-decl member of a
 /// #[intrinsic_methods(Int, Int8, …)]-annotated struct to the named
 /// primitive types so checker method lookup resolves `42.abs()` etc.
@@ -1206,7 +758,6 @@ fn collectIntrinsicMethods(cx: ElabCx, node: AstNode) {
         }
     }
 }
-
 /// registerIntrinsicMethodOn builds a CheckFnSig for one method and
 /// registers it on `targetName`. The signature keeps its original Self
 /// references — checkSpecializeMethodSelf resolves them against the
@@ -1215,7 +766,6 @@ fn registerIntrinsicMethodOn(cx: ElabCx, method: AstNode, targetName: String, ta
     let fnName = method.text
     let generics = collectGenericNames(cx, method.children2)
     let bounds = collectGenericBounds(cx, method.children2)
-
     let mut paramNames: List<String> = []
     let mut paramTys: List<Int> = []
     let mut hasReceiver = false
@@ -1229,37 +779,35 @@ fn registerIntrinsicMethodOn(cx: ElabCx, method: AstNode, targetName: String, ta
         } else {
             let hasDefault = paramNode.left >= 0
             let rawName = paramNode.text
-            let storedName = if hasDefault { "?" + rawName } else { rawName }
+            let storedName = if hasDefault {
+                "?" + rawName
+            } else {
+                rawName
+            }
             paramNames.push(storedName)
             let declared = astTypeToTyInCollect(cx, paramNode.right)
-            paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
+            paramTys.push(if declared >= 0 {
+                declared
+            } else {
+                tErr(cx.env.tys)
+            })
         }
     }
-
     let retTy = astTypeToTyInCollect(cx, method.left)
-    let retEffective = if retTy >= 0 { retTy } else { tUnit(cx.env.tys) }
-
-    checkRegisterFn(cx.env, CheckFnSig {
-        name: fnName,
-        owner: targetName,
-        receiverTy: targetTy,
-        hasReceiver,
-        retTy: retEffective,
-        paramNames,
-        paramTys,
-        generics,
-        genericBounds: bounds,
-    })
+    let retEffective = if retTy >= 0 {
+        retTy
+    } else {
+        tUnit(cx.env.tys)
+    }
+    checkRegisterFn(cx.env, CheckFnSig {name: fnName, owner: targetName, receiverTy: targetTy, hasReceiver, retTy: retEffective, paramNames, paramTys, generics, genericBounds: bounds})
 }
-
 fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
     let genericBounds = collectGenericBounds(cx, node.children2)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "enum" })
+    checkRegisterType(cx.env, CheckTypeSig {name, generics, genericBounds, kind: "enum"})
     let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
     checkRecordSymbol(cx.env, declIdx, "enum", name, "", ownerTy, node.start, node.end)
-
     for memberIdx in node.children {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         match member.kind {
@@ -1267,10 +815,6 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 let mut fieldTys: List<Int> = []
                 for fIdx in member.children {
                     let f = astArenaNodeAt(cx.ast.arena, fIdx)
-                    // Selfhost parser stores variant payloads as bare
-                    // AstNType nodes (opParseEnumDecl line 1850); the
-                    // Go-side lowerer wraps each as AstNField_ with
-                    // the type on `.right`. Handle both shapes.
                     let ty = if f.kind == AstNType {
                         astTypeToTyInCollect(cx, fIdx)
                     } else if f.kind == AstNField_ {
@@ -1280,40 +824,34 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                     }
                     if ty >= 0 {
                         fieldTys.push(ty)
-                        // §8.1 G13 / E0743: enum variant payloads outlive
-                        // the owning group just as struct fields do.
                         if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
-                            cx.env.local.diagnostics.push(diagNonEscapingEscape(
-                                tyToString(cx.env.tys, ty),
-                                "enum variant payload",
-                                f.start,
-                                f.end,
-                            ))
+                            cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, ty), "enum variant payload", f.start, f.end))
                         }
                     } else {
                         let _ = fIdx
                     }
                 }
-                checkRegisterVariant(cx.env, CheckVariantSig {
-                    owner: name,
-                    name: member.text,
-                    fieldTys,
-                    generics,
-                })
+                checkRegisterVariant(cx.env, CheckVariantSig {owner: name, name: member.text, fieldTys, generics})
                 checkRecordSymbol(cx.env, memberIdx, "variant", member.text, name, ownerTy, member.start, member.end)
             },
             AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics, genericBounds),
-            _ -> {},
+            _ -> {
+            },
         }
     }
 }
-
+// Selfhost parser stores variant payloads as bare
+// AstNType nodes (opParseEnumDecl line 1850); the
+// Go-side lowerer wraps each as AstNField_ with
+// the type on `.right`. Handle both shapes.
+// §8.1 G13 / E0743: enum variant payloads outlive
+// the owning group just as struct fields do.
 fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
     let genericBounds = collectGenericBounds(cx, node.children2)
     checkRegisterInterface(cx.env, name)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "interface" })
+    checkRegisterType(cx.env, CheckTypeSig {name, generics, genericBounds, kind: "interface"})
     let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
     checkRecordSymbol(cx.env, declIdx, "interface", name, "", ownerTy, node.start, node.end)
     for memberIdx in node.children {
@@ -1323,39 +861,36 @@ fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         } else {
             let ifaceTy = astTypeToTyInCollect(cx, memberIdx)
             if ifaceTy >= 0 {
-                checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt { owner: name, ifaceTy })
+                checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt {owner: name, ifaceTy})
             } else {
                 let _ = memberIdx
             }
         }
     }
 }
-
 fn collectTypeAlias(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children)
     let target = astTypeToTyInCollect(cx, node.left)
-    let ty = if target >= 0 { target } else { tErr(cx.env.tys) }
-    // §8.1 G13 / E0743: a type alias effectively declares a storable
-    // type — banning caps at aliases prevents laundering escape bans
-    // through `type H = Handle<Int>` usage later.
+    let ty = if target >= 0 {
+        target
+    } else {
+        tErr(cx.env.tys)
+    }
     if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
         let targetNode = if node.left >= 0 {
             astArenaNodeAt(cx.ast.arena, node.left)
         } else {
             node
         }
-        cx.env.local.diagnostics.push(diagNonEscapingEscape(
-            tyToString(cx.env.tys, ty),
-            "type alias",
-            targetNode.start,
-            targetNode.end,
-        ))
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, ty), "type alias", targetNode.start, targetNode.end))
     }
-    checkRegisterAlias(cx.env, CheckAliasSig { name, ty, generics })
+    checkRegisterAlias(cx.env, CheckAliasSig {name, ty, generics})
     checkRecordSymbol(cx.env, declIdx, "alias", name, "", ty, node.start, node.end)
 }
-
+// §8.1 G13 / E0743: a type alias effectively declares a storable
+// type — banning caps at aliases prevents laundering escape bans
+// through `type H = Handle<Int>` usage later.
 fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = topLevelLetBindingName(cx, node)
     if name == "" {
@@ -1367,27 +902,24 @@ fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         -1
     }
     let declared = astTypeToTyInCollect(cx, declaredIdx)
-    let ty = if declared >= 0 { declared } else { tErr(cx.env.tys) }
-    // §8.1 G13 / E0743: a module-scope `let` outlives any individual
-    // taskGroup body — banned from storing Handle/Group.
-    if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
-        cx.env.local.diagnostics.push(diagNonEscapingEscape(
-            tyToString(cx.env.tys, ty),
-            "module-level binding",
-            node.start,
-            node.end,
-        ))
+    let ty = if declared >= 0 {
+        declared
+    } else {
+        tErr(cx.env.tys)
     }
-    // Bind the name globally so ident lookups find it during
-    // elaboration of fn bodies.
+    if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, ty), "module-level binding", node.start, node.end))
+    }
     checkBindSpan(cx.env, name, ty, node.flags == 1, node.start, node.end)
     checkRecordSymbol(cx.env, declIdx, "let", name, "", ty, node.start, node.end)
 }
-
+// §8.1 G13 / E0743: a module-scope `let` outlives any individual
+// taskGroup body — banned from storing Handle/Group.
+// Bind the name globally so ident lookups find it during
+// elaboration of fn bodies.
 // ---------------------------------------------------------------------
 // Decl bodies.
 // ---------------------------------------------------------------------
-
 fn elaborateDecls(cx: ElabCx) {
     for declIdx in cx.ast.arena.decls {
         let node = astArenaNodeAt(cx.ast.arena, declIdx)
@@ -1395,14 +927,15 @@ fn elaborateDecls(cx: ElabCx) {
             AstNFnDecl -> elaborateFnBody(cx, node, ""),
             AstNStructDecl -> elaborateStructMethods(cx, node),
             AstNEnumDecl -> elaborateEnumMethods(cx, node),
-            AstNInterfaceDecl -> {},
+            AstNInterfaceDecl -> {
+            },
             AstNLet -> elaborateLetDecl(cx, declIdx, node),
             AstNLetDecl -> elaborateLetDecl(cx, declIdx, node),
-            _ -> {},
+            _ -> {
+            },
         }
     }
 }
-
 fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
     let rawSig = checkLookupFn(cx.env, node.text, owner)
     if rawSig.name == "" {
@@ -1422,39 +955,42 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
     for bound in sig.genericBounds {
         checkAddGenericBound(cx.env, bound)
     }
-
     if sig.receiverTy >= 0 {
         checkBindSpan(cx.env, "self", sig.receiverTy, true, node.start, node.end)
     }
-
-    // Bind parameters. `?`-prefix on `pname` is internal arity-
-    // tracking metadata injected by `collectFnDecl` so
-    // `paramDefaultCount` can count trailing defaults — strip it
-    // before binding so the body can reference the param by its
-    // source name. Without this, `fn fetch(x: String, timeout: Int =
-    // 30) { timeout + 1 }` fires E0745 because the body looks up
-    // `timeout` but only `?timeout` is bound.
     let mut i = 0
     for pname in sig.paramNames {
-        let pty = if i < checkIntListLenLocal(sig.paramTys) { checkIntListAtLocal(sig.paramTys, i) } else { tErr(cx.env.tys) }
-        let bindName = if pname.startsWith("?") { strings.trimPrefix(pname, "?") } else { pname }
+        let pty = if i < checkIntListLenLocal(sig.paramTys) {
+            checkIntListAtLocal(sig.paramTys, i)
+        } else {
+            tErr(cx.env.tys)
+        }
+        let bindName = if pname.startsWith("?") {
+            strings.trimPrefix(pname, "?")
+        } else {
+            pname
+        }
         checkBindSpan(cx.env, bindName, pty, true, node.start, node.end)
         i = i + 1
     }
-
     if node.right >= 0 {
-        // Fn body is stored in node.right as a block (AstNBlock).
         let _ = elabCheck(cx, node.right, sig.retTy)
     } else {
         let _ = sig
     }
-
     cx.env.local.returnTy = prevReturn
     cx.env.local.fnName = prevFnName
     checkClearGenericBoundsAfter(cx.env, boundsMark)
     checkScopeDrop(cx.env, mark)
 }
-
+// Bind parameters. `?`-prefix on `pname` is internal arity-
+// tracking metadata injected by `collectFnDecl` so
+// `paramDefaultCount` can count trailing defaults — strip it
+// before binding so the body can reference the param by its
+// source name. Without this, `fn fetch(x: String, timeout: Int =
+// 30) { timeout + 1 }` fires E0745 because the body looks up
+// `timeout` but only `?timeout` is bound.
+// Fn body is stored in node.right as a block (AstNBlock).
 fn elaborateStructMethods(cx: ElabCx, node: AstNode) {
     let owner = node.text
     for memberIdx in node.children {
@@ -1466,7 +1002,6 @@ fn elaborateStructMethods(cx: ElabCx, node: AstNode) {
         }
     }
 }
-
 fn elaborateEnumMethods(cx: ElabCx, node: AstNode) {
     let owner = node.text
     for memberIdx in node.children {
@@ -1478,7 +1013,6 @@ fn elaborateEnumMethods(cx: ElabCx, node: AstNode) {
         }
     }
 }
-
 fn elaborateLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let _ = declIdx
     if node.right < 0 {
@@ -1486,11 +1020,9 @@ fn elaborateLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     }
     let _ = elabLetStmt(cx, node)
 }
-
 // ---------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------
-
 fn collectGenericNames(cx: ElabCx, idxs: List<Int>) -> List<String> {
     let mut out: List<String> = []
     for idx in idxs {
@@ -1501,7 +1033,6 @@ fn collectGenericNames(cx: ElabCx, idxs: List<Int>) -> List<String> {
     }
     out
 }
-
 fn collectGenericBounds(cx: ElabCx, idxs: List<Int>) -> List<CheckGenericBound> {
     let mut out: List<CheckGenericBound> = []
     for idx in idxs {
@@ -1512,13 +1043,12 @@ fn collectGenericBounds(cx: ElabCx, idxs: List<Int>) -> List<CheckGenericBound> 
         for boundIdx in node.children {
             let ty = astTypeToTyInCollect(cx, boundIdx)
             if ty >= 0 {
-                out.push(CheckGenericBound { tyParam: node.text, iface: ty })
+                out.push(CheckGenericBound {tyParam: node.text, iface: ty})
             }
         }
     }
     out
 }
-
 fn appendStringLists(a: List<String>, b: List<String>) -> List<String> {
     let mut out: List<String> = []
     for x in a {
@@ -1529,7 +1059,6 @@ fn appendStringLists(a: List<String>, b: List<String>) -> List<String> {
     }
     out
 }
-
 fn appendGenericBounds(a: List<CheckGenericBound>, b: List<CheckGenericBound>) -> List<CheckGenericBound> {
     let mut out: List<CheckGenericBound> = []
     for x in a {
@@ -1540,7 +1069,6 @@ fn appendGenericBounds(a: List<CheckGenericBound>, b: List<CheckGenericBound>) -
     }
     out
 }
-
 fn genericListToTyArgs(cx: ElabCx, names: List<String>) -> List<Int> {
     let mut out: List<Int> = []
     for name in names {
@@ -1548,23 +1076,21 @@ fn genericListToTyArgs(cx: ElabCx, names: List<String>) -> List<Int> {
     }
     out
 }
-
 /// astTypeToTyInCollect lowers an AST type node. Thin alias over
 /// `elab.astTypeToTy`; exists as a stable entry point for the collect
 /// pass so callers don't reach across files in diffs.
 fn astTypeToTyInCollect(cx: ElabCx, idx: Int) -> Int {
     astTypeToTy(cx, idx)
 }
-
 fn checkIntListLenLocal(xs: List<Int>) -> Int {
     xs.len()
 }
-
 fn checkIntListAtLocal(xs: List<Int>, idx: Int) -> Int {
-    if idx < 0 || idx >= xs.len() { return -1 }
+    if idx < 0 || idx >= xs.len() {
+        return -1
+    }
     xs[idx]
 }
-
 fn topLevelLetBindingName(cx: ElabCx, node: AstNode) -> String {
     if node.left < 0 {
         return ""
@@ -1578,7 +1104,6 @@ fn topLevelLetBindingName(cx: ElabCx, node: AstNode) -> String {
     }
     ""
 }
-
 fn typedExprKindNameAt(ast: AstFile, idx: Int) -> String {
     if idx < 0 {
         return ""
@@ -1612,18 +1137,11 @@ fn typedExprKindNameAt(ast: AstFile, idx: Int) -> String {
         _ -> "",
     }
 }
-
 // ---------------------------------------------------------------------
 // CoreModule → FrontCheckResult serialization.
 // ---------------------------------------------------------------------
-
 fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
-    let summary = FrontCheckSummary {
-        assignments: cx.env.local.assignments,
-        accepted: cx.env.local.accepted,
-        errors: checkDiagCountErrors(cx.env.local.diagnostics),
-    }
-
+    let summary = FrontCheckSummary {assignments: cx.env.local.assignments, accepted: cx.env.local.accepted, errors: checkDiagCountErrors(cx.env.local.diagnostics)}
     let mut typedNodes: List<FrontCheckedNode> = []
     for node in cx.core.nodes {
         if node.originAst < 0 || tyIsBad(cx.env.tys, node.ty) {
@@ -1634,52 +1152,20 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             continue
         }
         let astNode = astArenaNodeAt(cx.ast.arena, node.originAst)
-        typedNodes.push(FrontCheckedNode {
-            node: node.originAst,
-            nodeId: node.originAst,
-            kind,
-            typeRepr: tyToRepr(cx.env.tys, node.ty),
-            typeId: node.ty,
-            start: astNode.start,
-            end: astNode.end,
-        })
+        typedNodes.push(FrontCheckedNode {node: node.originAst, nodeId: node.originAst, kind, typeRepr: tyToRepr(cx.env.tys, node.ty), typeId: node.ty, start: astNode.start, end: astNode.end})
     }
-
     let mut bindings: List<FrontCheckedBinding> = []
     let mut bindingId = 0
     for b in cx.env.local.bindingRecords {
-        bindings.push(FrontCheckedBinding {
-            node: b.node,
-            nodeId: b.node,
-            bindingId,
-            name: b.name,
-            typeRepr: tyToRepr(cx.env.tys, b.ty),
-            typeId: b.ty,
-            mutable: b.mutable,
-            start: b.start,
-            end: b.end,
-        })
+        bindings.push(FrontCheckedBinding {node: b.node, nodeId: b.node, bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
         bindingId = bindingId + 1
     }
-
     let mut symbols: List<FrontCheckedSymbol> = []
     let mut symbolId = 0
     for s in cx.env.local.symbolRecords {
-        symbols.push(FrontCheckedSymbol {
-            node: s.node,
-            nodeId: s.node,
-            symbolId,
-            kind: s.kind,
-            name: s.name,
-            owner: s.owner,
-            typeRepr: tyToRepr(cx.env.tys, s.ty),
-            typeId: s.ty,
-            start: s.start,
-            end: s.end,
-        })
+        symbols.push(FrontCheckedSymbol {node: s.node, nodeId: s.node, symbolId, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), typeId: s.ty, start: s.start, end: s.end})
         symbolId = symbolId + 1
     }
-
     let mut instantiations: List<FrontCheckInstantiation> = []
     let mut instantiationId = 0
     for inst in cx.env.local.instantiations {
@@ -1689,41 +1175,19 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             typeArgReprs.push(tyToRepr(cx.env.tys, tyArg))
             typeArgIds.push(tyArg)
         }
-        instantiations.push(FrontCheckInstantiation {
-            node: inst.node,
-            nodeId: inst.node,
-            instantiationId,
-            callee: inst.callee,
-            typeArgs: typeArgReprs,
-            typeArgIds,
-            resultType: tyToRepr(cx.env.tys, inst.resultTy),
-            resultTypeId: inst.resultTy,
-            start: inst.start,
-            end: inst.end,
-        })
+        instantiations.push(FrontCheckInstantiation {node: inst.node, nodeId: inst.node, instantiationId, callee: inst.callee, typeArgs: typeArgReprs, typeArgIds, resultType: tyToRepr(cx.env.tys, inst.resultTy), resultTypeId: inst.resultTy, start: inst.start, end: inst.end})
         instantiationId = instantiationId + 1
     }
-
-    FrontCheckResult {
-        summary,
-        typedNodes,
-        bindings,
-        symbols,
-        instantiations,
-        diagnostics: cx.env.local.diagnostics,
-    }
+    FrontCheckResult {summary, typedNodes, bindings, symbols, instantiations, diagnostics: cx.env.local.diagnostics}
 }
-
 // ---------------------------------------------------------------------
 // Legacy public helpers that tests hit directly. Preserve the names
 // and return shapes so `toolchain/check_test.osty` (orphan) still
 // compiles against the new entry point once wired up.
 // ---------------------------------------------------------------------
-
 pub fn frontCheckResultTypedNodeCount(result: FrontCheckResult) -> Int {
     result.typedNodes.len()
 }
-
 pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> String {
     let mut found = ""
     for b in result.bindings {
@@ -1733,7 +1197,6 @@ pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> St
     }
     found
 }
-
 pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> Int {
     let mut n = 0
     for s in result.symbols {
@@ -1743,11 +1206,9 @@ pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> In
     }
     n
 }
-
 pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
     result.instantiations.len()
 }
-
 // ---------------------------------------------------------------------
 // Position-based queries over the structured check result — hover,
 // goto-definition, and LSP inlay-hint sources. Mirrors the Go-side
@@ -1758,7 +1219,6 @@ pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
 // end-exclusive) to match the `start` / `end` slots stamped on every
 // FrontChecked* record.
 // ---------------------------------------------------------------------
-
 /// SelfCheckHoverInfo bundles the three pieces an IDE hover usually
 /// surfaces: the narrowest typed-expression type at the cursor, the
 /// declared binding type if the cursor sits on a let/param ident, and
@@ -1772,7 +1232,6 @@ pub struct SelfCheckHoverInfo {
     pub symbolKind: String,
     pub symbolType: String,
 }
-
 /// selfCheckTypeNameAtOffset returns the type-name of the narrowest
 /// typed expression whose source span covers `offset`. Returns "" when
 /// no typed node contains the offset (whitespace, comment, untyped
@@ -1796,7 +1255,6 @@ pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> Strin
     }
     frontTypeReprToString(result.typedNodes[bestIdx].typeRepr)
 }
-
 /// selfCheckLetTypeNameAtOffset returns the declared type-name of the
 /// let/param binding whose ident span covers `offset`. Returns "" when
 /// the offset isn't on a binding site. Matches the semantics of the
@@ -1809,7 +1267,6 @@ pub fn selfCheckLetTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> St
     }
     ""
 }
-
 /// selfCheckSymbolNameAtOffset returns the name of the narrowest
 /// declared symbol whose span covers `offset`. Returns "" when no
 /// symbol declaration touches the offset. Callers wanting the symbol
@@ -1834,18 +1291,11 @@ pub fn selfCheckSymbolNameAtOffset(result: FrontCheckResult, offset: Int) -> Str
     }
     result.symbols[bestIdx].name
 }
-
 /// selfCheckHoverAtOffset collects every hover-relevant datum in one
 /// walk — expression type, let-binding type, and symbol triple —
 /// mirroring the Go `Result.Hover` combinator.
 pub fn selfCheckHoverAtOffset(result: FrontCheckResult, offset: Int) -> SelfCheckHoverInfo {
-    let mut info = SelfCheckHoverInfo {
-        exprType: selfCheckTypeNameAtOffset(result, offset),
-        letType: selfCheckLetTypeNameAtOffset(result, offset),
-        symbolName: "",
-        symbolKind: "",
-        symbolType: "",
-    }
+    let mut info = SelfCheckHoverInfo {exprType: selfCheckTypeNameAtOffset(result, offset), letType: selfCheckLetTypeNameAtOffset(result, offset), symbolName: "", symbolKind: "", symbolType: ""}
     let mut bestIdx = -1
     let mut bestSize = 0
     let mut i = 0
@@ -1866,7 +1316,6 @@ pub fn selfCheckHoverAtOffset(result: FrontCheckResult, offset: Int) -> SelfChec
     }
     info
 }
-
 /// selfCheckOffsetContains tests whether `offset` lies in the
 /// half-open `[start, end)` span. Positions of zero or negative
 /// length (empty spans) never contain anything, matching the Go-side

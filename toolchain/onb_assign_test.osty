@@ -1,45 +1,36 @@
 // onb_assign_test.osty — assign / binary / aggregate lowering tests.
 use std.testing
-
 // === Layout fixtures ================================================
-
 fn aFieldI64(idx: Int, name: String) -> MirFieldLayout {
-    MirFieldLayout { index: idx, name: name, typ: "Int" }
+    MirFieldLayout {index: idx, name: name, typ: "Int"}
 }
-
 fn aPoint() -> MirStructLayout {
     let mut fields: List<MirFieldLayout> = []
     fields.push(aFieldI64(0, "x"))
     fields.push(aFieldI64(1, "y"))
-    MirStructLayout { name: "Point", mangled: "Point", fields: fields, size: 16, align: 8 }
+    MirStructLayout {name: "Point", mangled: "Point", fields: fields, size: 16, align: 8}
 }
-
 fn aOptionInt() -> MirEnumLayout {
     let mut variants: List<MirVariantLayout> = []
-    variants.push(MirVariantLayout { index: 0, name: "None", payload: [] })
+    variants.push(MirVariantLayout {index: 0, name: "None", payload: []})
     let mut someFields: List<MirFieldLayout> = []
     someFields.push(aFieldI64(0, "value"))
-    variants.push(MirVariantLayout { index: 1, name: "Some", payload: someFields })
-    MirEnumLayout { name: "Option", mangled: "Option", discriminant: "Int", variants: variants }
+    variants.push(MirVariantLayout {index: 1, name: "Some", payload: someFields})
+    MirEnumLayout {name: "Option", mangled: "Option", discriminant: "Int", variants: variants}
 }
-
 fn aLayouts() -> MirLayoutTable {
     let mut t = mirLayoutTable()
     t.structs.push(aPoint())
     t.enums.push(aOptionInt())
     t
 }
-
 fn aFunc(name: String, returnType: String) -> MirFunction {
     mirFunction(name, returnType, mirNoSpan())
 }
-
 fn aState(func: MirFunction) -> OnbLowerState {
     onbNewLowerState(func, aLayouts())
 }
-
 // === lowerInstr dispatch ============================================
-
 fn testOnbLowerInstrStorageNoOp() {
     let s = aState(aFunc("f", "()"))
     let r = onbLowerInstr(s, mirStorageLiveInstr(0, mirNoSpan()))
@@ -49,9 +40,7 @@ fn testOnbLowerInstrStorageNoOp() {
     testing.assert(r2.ok)
     testing.assertEq(r2.instrs.len(), 0)
 }
-
 // === isUnitReturnAssignment =========================================
-
 fn testOnbIsUnitReturnAssignmentMatch() {
     let func = aFunc("f", "()")
     func.returnLocal = mirFunctionNewLocal(func, "_return", "()", true, mirNoSpan())
@@ -59,7 +48,6 @@ fn testOnbIsUnitReturnAssignmentMatch() {
     let instr = mirAssignInstr(mirPlace(func.returnLocal), mirRVUse(unit), mirNoSpan())
     testing.assert(onbIsUnitReturnAssignment(func, instr))
 }
-
 fn testOnbIsUnitReturnAssignmentRejectIntReturn() {
     let func = aFunc("f", "Int")
     func.returnLocal = mirFunctionNewLocal(func, "_return", "Int", true, mirNoSpan())
@@ -67,7 +55,6 @@ fn testOnbIsUnitReturnAssignmentRejectIntReturn() {
     let instr = mirAssignInstr(mirPlace(func.returnLocal), mirRVUse(one), mirNoSpan())
     testing.assert(!onbIsUnitReturnAssignment(func, instr))
 }
-
 fn testOnbLowerAssignUnitReturnIsNoOp() {
     let func = aFunc("f", "()")
     func.returnLocal = mirFunctionNewLocal(func, "_return", "()", true, mirNoSpan())
@@ -78,9 +65,7 @@ fn testOnbLowerAssignUnitReturnIsNoOp() {
     testing.assert(r.ok)
     testing.assertEq(r.instrs.len(), 0)
 }
-
 // === Use rvalue =====================================================
-
 fn testOnbLowerUseAssignIntConst() {
     let func = aFunc("f", "Int")
     let dest = mirFunctionNewLocal(func, "x", "Int", true, mirNoSpan())
@@ -97,7 +82,6 @@ fn testOnbLowerUseAssignIntConst() {
     testing.assertEq(r.instrs[1].src, "x9")
     testing.assertEq(r.instrs[1].offset, 0)
 }
-
 fn testOnbLowerUseAssignFloatLocal() {
     let func = aFunc("f", "Float")
     let src = mirFunctionNewLocal(func, "a", "Float", false, mirNoSpan())
@@ -115,9 +99,7 @@ fn testOnbLowerUseAssignFloatLocal() {
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStoreFloat64Stack)
     testing.assertEq(r.instrs[1].src, "d8")
 }
-
 fn testOnbLowerUseAssignMultiSlot() {
-    // dest: Point ← Copy src — 2 × (ldr x9 + str x9)
     let func = aFunc("f", "Int")
     let src = mirFunctionNewLocal(func, "a", "Point", false, mirNoSpan())
     let dest = mirFunctionNewLocal(func, "b", "Point", true, mirNoSpan())
@@ -136,9 +118,8 @@ fn testOnbLowerUseAssignMultiSlot() {
     testing.assertEq(r.instrs[2].offset, 8)
     testing.assertEq(r.instrs[3].offset, 24)
 }
-
+// dest: Point ← Copy src — 2 × (ldr x9 + str x9)
 // === Binary rvalue ==================================================
-
 fn testOnbLowerBinaryAddInt() {
     let func = aFunc("f", "Int")
     let dest = mirFunctionNewLocal(func, "r", "Int", true, mirNoSpan())
@@ -149,7 +130,6 @@ fn testOnbLowerBinaryAddInt() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // mov x9, #1; mov x10, #2; add x9, x9, x10; str x9, [sp]
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[0].dst, "x9")
     testing.assertEq(r.instrs[0].imm, 1)
@@ -158,7 +138,7 @@ fn testOnbLowerBinaryAddInt() {
     testing.assertEq(r.instrs[2].kind, OnbInstrKind.OnbInstrAddReg)
     testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrStore64Stack)
 }
-
+// mov x9, #1; mov x10, #2; add x9, x9, x10; str x9, [sp]
 fn testOnbLowerBinarySubMulInt() {
     let func = aFunc("f", "Int")
     let dest = mirFunctionNewLocal(func, "r", "Int", true, mirNoSpan())
@@ -174,7 +154,6 @@ fn testOnbLowerBinarySubMulInt() {
     testing.assert(rMul.ok)
     testing.assertEq(rMul.instrs[2].kind, OnbInstrKind.OnbInstrMulReg)
 }
-
 fn testOnbLowerBinaryComparison() {
     let func = aFunc("f", "Bool")
     let dest = mirFunctionNewLocal(func, "r", "Bool", true, mirNoSpan())
@@ -185,13 +164,12 @@ fn testOnbLowerBinaryComparison() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // mov x9, #1; mov x10, #2; cmp x9, x10; cset x9, lt; str x9, [sp]
     testing.assertEq(r.instrs.len(), 5)
     testing.assertEq(r.instrs[2].kind, OnbInstrKind.OnbInstrCmp)
     testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrCset)
     testing.assertEq(r.instrs[3].cond, OnbCond.OnbCondLt)
 }
-
+// mov x9, #1; mov x10, #2; cmp x9, x10; cset x9, lt; str x9, [sp]
 fn testOnbLowerBinaryStringConcat() {
     let func = aFunc("f", "String")
     let dest = mirFunctionNewLocal(func, "r", "String", true, mirNoSpan())
@@ -202,7 +180,6 @@ fn testOnbLowerBinaryStringConcat() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // adrp+add x0; adrp+add x1; bl strconcat; str x0
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoadCStringAddress)
     testing.assertEq(r.instrs[0].dst, "x0")
@@ -211,7 +188,7 @@ fn testOnbLowerBinaryStringConcat() {
     testing.assertEq(r.instrs[2].symbol, "osty_rt_strings_Concat")
     testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrStore64Stack)
 }
-
+// adrp+add x0; adrp+add x1; bl strconcat; str x0
 fn testOnbLowerBinaryFloatAdd() {
     let func = aFunc("f", "Float")
     let a = mirFunctionNewLocal(func, "a", "Float", false, mirNoSpan())
@@ -227,16 +204,14 @@ fn testOnbLowerBinaryFloatAdd() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // ldr d8; ldr d9; fadd d8; str d8
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[0].dst, "d8")
     testing.assertEq(r.instrs[1].dst, "d9")
     testing.assertEq(r.instrs[2].kind, OnbInstrKind.OnbInstrFaddReg)
     testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrStoreFloat64Stack)
 }
-
+// ldr d8; ldr d9; fadd d8; str d8
 // === Aggregate rvalue ===============================================
-
 fn testOnbLowerEmptyListLiteral() {
     let func = aFunc("f", "List<Int>")
     let dest = mirFunctionNewLocal(func, "xs", "List<Int>", true, mirNoSpan())
@@ -250,7 +225,6 @@ fn testOnbLowerEmptyListLiteral() {
     testing.assertEq(r.instrs[0].symbol, "osty_rt_list_new")
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStore64Stack)
 }
-
 fn testOnbLowerStructLiteral() {
     let func = aFunc("f", "Point")
     let dest = mirFunctionNewLocal(func, "p", "Point", true, mirNoSpan())
@@ -262,16 +236,14 @@ fn testOnbLowerStructLiteral() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // mov x9, #3; str x9, [sp]; mov x9, #4; str x9, [sp, #8]
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[0].imm, 3)
     testing.assertEq(r.instrs[1].offset, 0)
     testing.assertEq(r.instrs[2].imm, 4)
     testing.assertEq(r.instrs[3].offset, 8)
 }
-
+// mov x9, #3; str x9, [sp]; mov x9, #4; str x9, [sp, #8]
 fn testOnbLowerEnumVariantNoPayload() {
-    // Option None — write tag 0 to slot+0
     let func = aFunc("f", "Option<Int>")
     let dest = mirFunctionNewLocal(func, "o", "Option<Int>", true, mirNoSpan())
     let s = onbLocalSlotInsert(aState(func), dest, 0)
@@ -285,9 +257,8 @@ fn testOnbLowerEnumVariantNoPayload() {
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStore64Stack)
     testing.assertEq(r.instrs[1].offset, 0)
 }
-
+// Option None — write tag 0 to slot+0
 fn testOnbLowerEnumVariantSome() {
-    // Option Some(42) — tag 1 + payload 42 at offset 8
     let func = aFunc("f", "Option<Int>")
     let dest = mirFunctionNewLocal(func, "o", "Option<Int>", true, mirNoSpan())
     let s = onbLocalSlotInsert(aState(func), dest, 0)
@@ -297,16 +268,15 @@ fn testOnbLowerEnumVariantSome() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // mov x9, #1; str x9, [sp]; mov x9, #42; str x9, [sp, #8]
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[0].imm, 1)
     testing.assertEq(r.instrs[1].offset, 0)
     testing.assertEq(r.instrs[2].imm, 42)
     testing.assertEq(r.instrs[3].offset, 8)
 }
-
+// Option Some(42) — tag 1 + payload 42 at offset 8
+// mov x9, #1; str x9, [sp]; mov x9, #42; str x9, [sp, #8]
 // === Discriminant + Len rvalues =====================================
-
 fn testOnbLowerDiscriminantAssign() {
     let func = aFunc("f", "Int")
     let opt = mirFunctionNewLocal(func, "o", "Option<Int>", false, mirNoSpan())
@@ -324,7 +294,6 @@ fn testOnbLowerDiscriminantAssign() {
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStore64Stack)
     testing.assertEq(r.instrs[1].offset, 16)
 }
-
 fn testOnbLowerLenAssign() {
     let func = aFunc("f", "Int")
     let xs = mirFunctionNewLocal(func, "xs", "List<Int>", false, mirNoSpan())
@@ -336,7 +305,6 @@ fn testOnbLowerLenAssign() {
     let instr = mirAssignInstr(mirPlace(dest), rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // ldr x0, [sp]; bl _osty_rt_list_len; str x0, [sp, #8]
     testing.assertEq(r.instrs.len(), 3)
     testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
     testing.assertEq(r.instrs[0].dst, "x0")
@@ -345,9 +313,8 @@ fn testOnbLowerLenAssign() {
     testing.assertEq(r.instrs[2].src, "x0")
     testing.assertEq(r.instrs[2].offset, 8)
 }
-
+// ldr x0, [sp]; bl _osty_rt_list_len; str x0, [sp, #8]
 // === Nullary rvalue =================================================
-
 fn testOnbLowerNullaryNone() {
     let func = aFunc("f", "Option<Int>")
     let dest = mirFunctionNewLocal(func, "o", "Option<Int>", true, mirNoSpan())
@@ -357,14 +324,12 @@ fn testOnbLowerNullaryNone() {
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
     testing.assertEq(r.instrs.len(), 2)
-    testing.assertEq(r.instrs[0].imm, 0) // None tag
+    testing.assertEq(r.instrs[0].imm, 0)
     testing.assertEq(r.instrs[1].offset, 0)
 }
-
+// None tag
 // === Assign-to-projection ===========================================
-
 fn testOnbLowerAssignToProjectionField() {
-    // p.y = 10 — write x9 = 10 to slot+8
     let func = aFunc("f", "()")
     let p = mirFunctionNewLocal(func, "p", "Point", true, mirNoSpan())
     let s = onbLocalSlotInsert(aState(func), p, 0)
@@ -374,12 +339,12 @@ fn testOnbLowerAssignToProjectionField() {
     let instr = mirAssignInstr(place, rv, mirNoSpan())
     let r = onbLowerInstr(s, instr)
     testing.assert(r.ok)
-    // mov x9, #10; str x9, [sp, #8]
     testing.assertEq(r.instrs.len(), 2)
     testing.assertEq(r.instrs[0].imm, 10)
     testing.assertEq(r.instrs[1].offset, 8)
 }
-
+// p.y = 10 — write x9 = 10 to slot+8
+// mov x9, #10; str x9, [sp, #8]
 fn testOnbProjectionEndType() {
     let mut place = mirPlace(0)
     testing.assertEq(onbProjectionEndType(place), "()")
@@ -388,9 +353,7 @@ fn testOnbProjectionEndType() {
     place = mirPlaceProject(place, mirVariantProj(1, "Some", 0, "Float"))
     testing.assertEq(onbProjectionEndType(place), "Float")
 }
-
 // === Synthetic return slot ==========================================
-
 fn testOnbAllocateReturnSlot() {
     let func = aFunc("f", "Int")
     func.returnLocal = mirFunctionNewLocal(func, "_return", "Int", true, mirNoSpan())
@@ -398,15 +361,13 @@ fn testOnbAllocateReturnSlot() {
     let other = mirFunctionNewLocal(func, "x", "Int", false, mirNoSpan())
     s = onbLocalSlotInsert(s, other, 0)
     let alloc = onbAllocateReturnSlot(s)
-    // Existing slot at 0 → next available is 8.
     testing.assertEq(alloc.offset, 8)
     let lookup = onbLocalSlotLookup(alloc.state, func.returnLocal)
     testing.assert(lookup.found)
     testing.assertEq(lookup.offset, 8)
 }
-
+// Existing slot at 0 → next available is 8.
 // === Comparison cond mapping ========================================
-
 fn testOnbBinaryComparisonCond() {
     testing.assert(onbBinaryComparisonCond(MirBinEq).ok)
     testing.assertEq(onbBinaryComparisonCond(MirBinEq).cond, OnbCond.OnbCondEq)
@@ -417,13 +378,10 @@ fn testOnbBinaryComparisonCond() {
     testing.assertEq(onbBinaryComparisonCond(MirBinGeq).cond, OnbCond.OnbCondGe)
     testing.assert(!onbBinaryComparisonCond(MirBinAdd).ok)
 }
-
 // === Discriminant value =============================================
-
 fn testOnbEnumDiscriminantValue() {
     let layout = aOptionInt()
-    testing.assertEq(onbEnumDiscriminantValue(layout, 0), 0) // None
-    testing.assertEq(onbEnumDiscriminantValue(layout, 1), 1) // Some
-    // Out of range falls through.
+    testing.assertEq(onbEnumDiscriminantValue(layout, 0), 0)
+    testing.assertEq(onbEnumDiscriminantValue(layout, 1), 1)
     testing.assertEq(onbEnumDiscriminantValue(layout, 99), 99)
 }

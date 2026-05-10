@@ -5,7 +5,6 @@
 // exact same rules for:
 //   - whether a struct qualifies for auto-derived builder support
 //   - which `pub` fields are still required at `.build()`
-
 /// CheckBuilderDeriveInfo is the shared result of classifying whether
 /// a struct qualifies for auto-derived builder support (LANG_SPEC
 /// §3.3).
@@ -21,21 +20,14 @@ pub struct CheckBuilderDeriveInfo {
     pub derivable: Bool,
     pub required: List<String>,
 }
-
 /// checkClassifyBuilderDerive is the single source of truth for
 /// builder auto-derive classification used by the selfhost checker,
 /// the Osty HIR lowerer, and the Go-side lowering adapter.
-pub fn checkClassifyBuilderDerive(
-    fieldNames: List<String>,
-    fieldExported: List<Bool>,
-    fieldHasDefaults: List<Bool>,
-    methodNames: List<String>,
-) -> CheckBuilderDeriveInfo {
+pub fn checkClassifyBuilderDerive(fieldNames: List<String>, fieldExported: List<Bool>, fieldHasDefaults: List<Bool>, methodNames: List<String>) -> CheckBuilderDeriveInfo {
     let n = fieldNames.len()
     if n != fieldExported.len() || n != fieldHasDefaults.len() {
-        return CheckBuilderDeriveInfo { derivable: false, required: [] }
+        return CheckBuilderDeriveInfo {derivable: false, required: []}
     }
-
     let mut derivable = true
     let mut required: List<String> = []
     let mut i = 0
@@ -50,12 +42,10 @@ pub fn checkClassifyBuilderDerive(
         }
         i = i + 1
     }
-
     for name in methodNames {
         if name == "builder" {
             derivable = false
         }
     }
-
-    CheckBuilderDeriveInfo { derivable, required }
+    CheckBuilderDeriveInfo {derivable, required}
 }

@@ -1,41 +1,33 @@
 // onb_intrinsic_test.osty — intrinsic dispatch tests.
 use std.testing
-
 // === Layout fixture =================================================
-
-fn iLayouts() -> MirLayoutTable { mirLayoutTable() }
-
+fn iLayouts() -> MirLayoutTable {
+    mirLayoutTable()
+}
 fn iFunc(name: String, returnType: String) -> MirFunction {
     mirFunction(name, returnType, mirNoSpan())
 }
-
 fn iState(func: MirFunction) -> OnbLowerState {
     onbNewLowerState(func, iLayouts())
 }
-
 // === Map<K,V> type extractor ========================================
-
 fn testOnbMapKeyValueTypesScalar() {
     let r = onbMapKeyValueTypes("Map<Int, String>")
     testing.assert(r.ok)
     testing.assertEq(r.key, "Int")
     testing.assertEq(r.value, "String")
 }
-
 fn testOnbMapKeyValueTypesNested() {
     let r = onbMapKeyValueTypes("Map<String, List<Int>>")
     testing.assert(r.ok)
     testing.assertEq(r.key, "String")
     testing.assertEq(r.value, "List<Int>")
 }
-
 fn testOnbMapKeyValueTypesNonMap() {
     testing.assert(!onbMapKeyValueTypes("List<Int>").ok)
     testing.assert(!onbMapKeyValueTypes("Int").ok)
 }
-
 // === Println ========================================================
-
 fn testOnbLowerPrintlnStringConst() {
     let s = iState(iFunc("f", "()"))
     let mut args: List<MirOperand> = []
@@ -50,7 +42,6 @@ fn testOnbLowerPrintlnStringConst() {
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrBranchLink)
     testing.assertEq(r.instrs[1].symbol, "puts")
 }
-
 fn testOnbLowerPrintlnStringLocal() {
     let func = iFunc("f", "()")
     let id = mirFunctionNewLocal(func, "msg", "String", false, mirNoSpan())
@@ -66,9 +57,7 @@ fn testOnbLowerPrintlnStringLocal() {
     testing.assertEq(r.instrs[0].offset, 8)
     testing.assertEq(r.instrs[1].symbol, "puts")
 }
-
 // === ListPush / ListLen / ListIsEmpty ==============================
-
 fn testOnbLowerListPushI64() {
     let func = iFunc("f", "()")
     let lst = mirFunctionNewLocal(func, "xs", "List<Int>", false, mirNoSpan())
@@ -79,14 +68,13 @@ fn testOnbLowerListPushI64() {
     let instr = mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicListPush, args, mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    // ldr x0, [sp]; mov x1, #7; bl _list_push_i64
     testing.assertEq(r.instrs.len(), 3)
     testing.assertEq(r.instrs[0].dst, "x0")
     testing.assertEq(r.instrs[1].dst, "x1")
     testing.assertEq(r.instrs[1].imm, 7)
     testing.assertEq(r.instrs[2].symbol, "osty_rt_list_push_i64")
 }
-
+// ldr x0, [sp]; mov x1, #7; bl _list_push_i64
 fn testOnbLowerListPushFloat() {
     let func = iFunc("f", "()")
     let lst = mirFunctionNewLocal(func, "xs", "List<Float>", false, mirNoSpan())
@@ -101,11 +89,10 @@ fn testOnbLowerListPushFloat() {
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
     testing.assertEq(r.instrs[2].symbol, "osty_rt_list_push_f64")
-    // Float arg lands in d0
     testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrLoadFloat64Stack)
     testing.assertEq(r.instrs[1].dst, "d0")
 }
-
+// Float arg lands in d0
 fn testOnbLowerListLen() {
     let func = iFunc("f", "Int")
     let lst = mirFunctionNewLocal(func, "xs", "List<Int>", false, mirNoSpan())
@@ -118,11 +105,11 @@ fn testOnbLowerListLen() {
     let instr = mirIntrinsicInstr(true, mirPlace(n), MirIntrinsicListLen, args, mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    testing.assertEq(r.instrs.len(), 3) // ldr x0; bl; str x0
+    testing.assertEq(r.instrs.len(), 3)
     testing.assertEq(r.instrs[1].symbol, "osty_rt_list_len")
     testing.assertEq(r.instrs[2].offset, 8)
 }
-
+// ldr x0; bl; str x0
 fn testOnbLowerListIsEmpty() {
     let func = iFunc("f", "Bool")
     let lst = mirFunctionNewLocal(func, "xs", "List<Int>", false, mirNoSpan())
@@ -135,16 +122,14 @@ fn testOnbLowerListIsEmpty() {
     let instr = mirIntrinsicInstr(true, mirPlace(b), MirIntrinsicListIsEmpty, args, mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    // ldr x0; bl _list_len; mov x9, #0; cmp x0, x9; cset x9, eq; str x9, [sp, #8]
     testing.assertEq(r.instrs.len(), 6)
     testing.assertEq(r.instrs[1].symbol, "osty_rt_list_len")
     testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrCmp)
     testing.assertEq(r.instrs[4].kind, OnbInstrKind.OnbInstrCset)
     testing.assertEq(r.instrs[4].cond, OnbCond.OnbCondEq)
 }
-
+// ldr x0; bl _list_len; mov x9, #0; cmp x0, x9; cset x9, eq; str x9, [sp, #8]
 // === StringLen / StringIsEmpty ======================================
-
 fn testOnbLowerStringLen() {
     let func = iFunc("f", "Int")
     let str = mirFunctionNewLocal(func, "s", "String", false, mirNoSpan())
@@ -159,7 +144,6 @@ fn testOnbLowerStringLen() {
     testing.assert(r.ok)
     testing.assertEq(r.instrs[1].symbol, "osty_rt_strings_ByteLen")
 }
-
 fn testOnbLowerStringIsEmpty() {
     let func = iFunc("f", "Bool")
     let str = mirFunctionNewLocal(func, "s", "String", false, mirNoSpan())
@@ -175,9 +159,7 @@ fn testOnbLowerStringIsEmpty() {
     testing.assertEq(r.instrs[1].symbol, "osty_rt_strings_ByteLen")
     testing.assertEq(r.instrs[4].cond, OnbCond.OnbCondEq)
 }
-
 // === Option ========================================================
-
 fn testOnbLowerOptionIsSome() {
     let func = iFunc("f", "Bool")
     let opt = mirFunctionNewLocal(func, "o", "Option<Int>", false, mirNoSpan())
@@ -190,14 +172,13 @@ fn testOnbLowerOptionIsSome() {
     let instr = mirIntrinsicInstr(true, mirPlace(b), MirIntrinsicOptionIsSome, args, mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    // ldr x9, [sp]; mov x10, #1; cmp x9, x10; cset x9, eq; str x9, [sp, #16]
     testing.assertEq(r.instrs.len(), 5)
     testing.assertEq(r.instrs[0].dst, "x9")
     testing.assertEq(r.instrs[1].imm, 1)
     testing.assertEq(r.instrs[3].cond, OnbCond.OnbCondEq)
     testing.assertEq(r.instrs[4].offset, 16)
 }
-
+// ldr x9, [sp]; mov x10, #1; cmp x9, x10; cset x9, eq; str x9, [sp, #16]
 fn testOnbLowerOptionIsNone() {
     let func = iFunc("f", "Bool")
     let opt = mirFunctionNewLocal(func, "o", "Option<Int>", false, mirNoSpan())
@@ -210,9 +191,7 @@ fn testOnbLowerOptionIsNone() {
     testing.assert(r.ok)
     testing.assertEq(r.instrs[3].cond, OnbCond.OnbCondNe)
 }
-
 // === Map ============================================================
-
 fn testOnbLowerMapNew() {
     let func = iFunc("f", "Map<String, Int>")
     let dest = mirFunctionNewLocal(func, "m", "Map<String, Int>", true, mirNoSpan())
@@ -220,18 +199,21 @@ fn testOnbLowerMapNew() {
     let instr = mirIntrinsicInstr(true, mirPlace(dest), MirIntrinsicMapNew, [], mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    // mov x0, #5 (string); mov x1, #1 (i64); mov x2, #8; mov x3, #0;
-    // bl _osty_rt_map_new; str x0, [sp]
     testing.assertEq(r.instrs.len(), 6)
     testing.assertEq(r.instrs[0].dst, "x0")
-    testing.assertEq(r.instrs[0].imm, onbAbiKindString())  // 5
+    testing.assertEq(r.instrs[0].imm, onbAbiKindString())
     testing.assertEq(r.instrs[1].dst, "x1")
-    testing.assertEq(r.instrs[1].imm, onbAbiKindI64())     // 1
-    testing.assertEq(r.instrs[2].imm, 8)                    // value_size
-    testing.assertEq(r.instrs[3].imm, 0)                    // trace=NULL
+    testing.assertEq(r.instrs[1].imm, onbAbiKindI64())
+    testing.assertEq(r.instrs[2].imm, 8)
+    testing.assertEq(r.instrs[3].imm, 0)
     testing.assertEq(r.instrs[4].symbol, "osty_rt_map_new")
 }
-
+// mov x0, #5 (string); mov x1, #1 (i64); mov x2, #8; mov x3, #0;
+// bl _osty_rt_map_new; str x0, [sp]
+// 5
+// 1
+// value_size
+// trace=NULL
 fn testOnbLowerMapLen() {
     let func = iFunc("f", "Int")
     let m = mirFunctionNewLocal(func, "m", "Map<String, Int>", false, mirNoSpan())
@@ -246,7 +228,6 @@ fn testOnbLowerMapLen() {
     testing.assert(r.ok)
     testing.assertEq(r.instrs[1].symbol, "osty_rt_map_len")
 }
-
 fn testOnbLowerMapContainsString() {
     let func = iFunc("f", "Bool")
     let m = mirFunctionNewLocal(func, "m", "Map<String, Int>", false, mirNoSpan())
@@ -260,11 +241,10 @@ fn testOnbLowerMapContainsString() {
     let instr = mirIntrinsicInstr(true, mirPlace(b), MirIntrinsicMapContains, args, mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)
     testing.assert(r.ok)
-    // ldr x0; adrp+add x1; bl _map_contains_string; str x0
     testing.assertEq(r.instrs.len(), 4)
     testing.assertEq(r.instrs[2].symbol, "osty_rt_map_contains_string")
 }
-
+// ldr x0; adrp+add x1; bl _map_contains_string; str x0
 fn testOnbLowerMapRemoveInt() {
     let func = iFunc("f", "Bool")
     let m = mirFunctionNewLocal(func, "m", "Map<Int, Int>", false, mirNoSpan())
@@ -280,11 +260,8 @@ fn testOnbLowerMapRemoveInt() {
     testing.assert(r.ok)
     testing.assertEq(r.instrs[2].symbol, "osty_rt_map_remove_i64")
 }
-
 // === Unsupported intrinsic ==========================================
-
 fn testOnbLowerIntrinsicMapSetNotSupported() {
-    // map_set lives in a future slice (needs scratch reservation).
     let s = iState(iFunc("f", "()"))
     let instr = mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicMapSet, [], mirNoSpan())
     let r = onbLowerIntrinsic(s, instr)

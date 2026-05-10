@@ -13,16 +13,13 @@
 // `abiUsesIndirectStruct`) live in Slice F alongside the layout
 // lookup tables — they need struct/enum layout context that the
 // MirModule view will surface.
-
 // === Direct scalars ================================================
-
 // onbIsFloatAbiType reports whether `typ` is a Float-class type
 // (Float / Float64 — IEEE 754 double, lives in a d-register at
 // the call boundary). Mirror of `isFloatABIType`.
 pub fn onbIsFloatAbiType(typ: String) -> Bool {
     typ == "Float" || typ == "Float64"
 }
-
 // onbIsScalarPrimitive reports whether `typ` is one of the four
 // primary scalar types ONB emits in a single 8-byte slot (Int,
 // Bool, String, or a Float). Internal helper — `onbIsAbiScalarType`
@@ -30,62 +27,45 @@ pub fn onbIsFloatAbiType(typ: String) -> Bool {
 pub fn onbIsScalarPrimitive(typ: String) -> Bool {
     typ == "Int" || typ == "Bool" || typ == "String" || onbIsFloatAbiType(typ)
 }
-
 // === Closure-shaped pointer types =================================
-
 // onbIsClosureEnvType reports whether `typ` is the lifted body's
 // first-arg ClosureEnv builtin. Stable string `"ClosureEnv"`.
 pub fn onbIsClosureEnvType(typ: String) -> Bool {
     typ == "ClosureEnv"
 }
-
 // onbIsFnTypeRepr reports whether `typ` represents a function
 // value (`fn(...) -> R`). The MIR repr starts with `fn(` —
 // generic over the argument signature.
 pub fn onbIsFnTypeRepr(typ: String) -> Bool {
     onbStringStartsWith(typ, "fn(")
 }
-
 // onbIsClosureScalarType bundles FnType + ClosureEnv. Mirror of
 // `isClosureScalarType` in lower.go. Both classes live as 8-byte
 // pointers at the ABI boundary.
 pub fn onbIsClosureScalarType(typ: String) -> Bool {
     onbIsClosureEnvType(typ) || onbIsFnTypeRepr(typ)
 }
-
 // === Builtin generic containers ===================================
 //
 // `List<T>` / `Map<K,V>` / `Set<T>` / `Channel<T>` / `Bytes` /
 // `Handle` are runtime-managed heap pointers regardless of element
 // type. Mirror of `isBuiltinPointerType`.
-
 pub fn onbIsBuiltinPointerType(typ: String) -> Bool {
-    onbStringStartsWith(typ, "List<")
-        || onbStringStartsWith(typ, "Map<")
-        || onbStringStartsWith(typ, "Set<")
-        || onbStringStartsWith(typ, "Channel<")
-        || typ == "Bytes"
-        || typ == "Handle"
+    onbStringStartsWith(typ, "List<") || onbStringStartsWith(typ, "Map<") || onbStringStartsWith(typ, "Set<") || onbStringStartsWith(typ, "Channel<") || typ == "Bytes" || typ == "Handle"
 }
-
 // === ABI-scalar superset =========================================
-
 // onbIsAbiScalarType reports whether `typ` fits cleanly in a
 // single AAPCS64 register slot — covering scalar primitives,
 // closure-shaped pointers, and builtin generic containers.
 // Mirror of `isABIScalarType`.
 pub fn onbIsAbiScalarType(typ: String) -> Bool {
-    onbIsScalarPrimitive(typ)
-        || onbIsClosureScalarType(typ)
-        || onbIsBuiltinPointerType(typ)
+    onbIsScalarPrimitive(typ) || onbIsClosureScalarType(typ) || onbIsBuiltinPointerType(typ)
 }
-
 // === ABI kind tags ===============================================
 //
 // Mirror of `abiKindFor` in lower.go. Maps a MIR type string to
 // the runtime's `OSTY_RT_ABI_*` enum value (used by Map / List /
 // Set runtime calls to dispatch on key/value type).
-
 pub fn onbAbiKindFor(typ: String) -> Int {
     if typ == "String" {
         onbAbiKindString()
@@ -99,9 +79,7 @@ pub fn onbAbiKindFor(typ: String) -> Int {
         onbAbiKindPtr()
     }
 }
-
 // === Word-size predicate =========================================
-
 // onbIsAbiWordType reports whether `typ` consumes exactly one
 // 8-byte register at the ABI boundary. Used by enum-payload and
 // struct-field validation: every "scalar" or pointer-shaped
@@ -115,7 +93,6 @@ pub fn onbAbiKindFor(typ: String) -> Int {
 pub fn onbIsAbiWordType(typ: String) -> Bool {
     onbIsAbiScalarType(typ)
 }
-
 // === String-prefix helper ========================================
 //
 // Osty's `String` API today doesn't expose a `startsWith` directly

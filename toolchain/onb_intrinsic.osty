@@ -19,9 +19,7 @@
 // closure-aware list_get / Map<K, list> shapes need scratch-slot
 // reservation in the frame planner — wired in a follow-up slice
 // alongside the `needsMapScratch` infrastructure.
-
 // === Top-level dispatch =============================================
-
 // onbLowerIntrinsic routes by intrinsic kind. Mirror of
 // `lowerIntrinsic`. Unknown intrinsics return the unsupported
 // sentinel — the caller routes to the LLVM fallback.
@@ -42,9 +40,7 @@ pub fn onbLowerIntrinsic(state: OnbLowerState, instr: MirInstr) -> OnbMaterialis
         _ -> onbMaterialiseErr(state, "intrinsic outside slice I"),
     }
 }
-
 // === Print ==========================================================
-
 // onbLowerPrintln covers the string-literal and string-local cases
 // of `println(s)`. Other operand shapes (Int / Float locals) need
 // printf-format-string staging + the Mach-O vararg shuffle, which
@@ -77,9 +73,7 @@ pub fn onbLowerPrintln(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseR
     }
     onbMaterialiseErr(state, "println of unsupported operand shape in slice I")
 }
-
 // === List ===========================================================
-
 // onbLowerListPush emits the type-dispatched runtime call. The
 // runtime ships type-specific entry points for the four scalar
 // element widths (i64 / i1 / f64 / string-pointer) — we route by
@@ -90,17 +84,25 @@ pub fn onbLowerListPush(state: OnbLowerState, instr: MirInstr) -> OnbMaterialise
         return onbMaterialiseErr(state, "list_push expects 2 args")
     }
     let listR = onbMaterialiseOperand(state, instr.args[0], "x0")
-    if !listR.ok { return listR }
+    if !listR.ok {
+        return listR
+    }
     let value = instr.args[1]
     let valueT = value.typ
     let mut working = listR.state
     let mut out: List<OnbInstr> = []
-    for i in listR.instrs { out.push(i) }
+    for i in listR.instrs {
+        out.push(i)
+    }
     if onbIsFloatAbiType(valueT) {
         let r = onbMaterialiseFloatOperand(working, value, "d0")
-        if !r.ok { return r }
+        if !r.ok {
+            return r
+        }
         working = r.state
-        for i in r.instrs { out.push(i) }
+        for i in r.instrs {
+            out.push(i)
+        }
         out.push(onbInstrBranchLink("osty_rt_list_push_f64"))
         return onbMaterialiseOk(working, out)
     }
@@ -109,53 +111,48 @@ pub fn onbLowerListPush(state: OnbLowerState, instr: MirInstr) -> OnbMaterialise
     match symOpt {
         Some(sym) -> {
             let r = onbMaterialiseOperand(working, value, "x1")
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             out.push(onbInstrBranchLink(sym))
             onbMaterialiseOk(working, out)
         },
         None -> onbMaterialiseErr(working, "list_push value type outside ABI"),
     }
 }
-
 // onbLowerListLen lowers `IntrinsicListLen(list) -> Int` by
 // calling the runtime helper and capturing x0 into the dest slot.
 pub fn onbLowerListLen(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerSimpleIntReturn(state, instr, onbRuntimeSymListLen(), "list_len")
 }
-
 // onbLowerListIsEmpty composes `osty_rt_list_len(xs) == 0` and
 // stores the bool result.
 pub fn onbLowerListIsEmpty(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerEmptyCheck(state, instr, onbRuntimeSymListLen(), "list_is_empty")
 }
-
 // === String =========================================================
-
 // onbLowerStringLen lowers `s.len()` on a String operand.
 pub fn onbLowerStringLen(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerSimpleIntReturn(state, instr, onbRuntimeSymStringByteLen(), "string_len")
 }
-
 // onbLowerStringIsEmpty composes `osty_rt_strings_ByteLen(s) == 0`.
 pub fn onbLowerStringIsEmpty(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerEmptyCheck(state, instr, onbRuntimeSymStringByteLen(), "string_is_empty")
 }
-
 // === Option =========================================================
-
 // onbLowerOptionIsSome reads the option's discriminant and compares
 // against the Some tag (= 1) with `cset eq`.
 pub fn onbLowerOptionIsSome(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerOptionDiscriminantCompare(state, instr, OnbCond.OnbCondEq)
 }
-
 // onbLowerOptionIsNone uses `cset ne`.
 pub fn onbLowerOptionIsNone(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerOptionDiscriminantCompare(state, instr, OnbCond.OnbCondNe)
 }
-
 // onbLowerOptionDiscriminantCompare emits the shared isSome / isNone
 // body: load discriminant byte (option slot + 0) into x9, compare
 // to Some tag (1), `cset` with the caller-chosen condition.
@@ -176,7 +173,7 @@ pub fn onbLowerOptionDiscriminantCompare(state: OnbLowerState, instr: MirInstr, 
     }
     let mut out: List<OnbInstr> = []
     out.push(onbInstrLoad64Stack("x9", srcSlot.offset))
-    out.push(onbInstrMovImm64("x10", 1)) // Some tag
+    out.push(onbInstrMovImm64("x10", 1))
     out.push(onbInstrCmp("x9", "x10"))
     out.push(onbInstrCset("x9", cond))
     if instr.hasDest && !mirPlaceHasProjections(instr.dest) {
@@ -187,9 +184,8 @@ pub fn onbLowerOptionDiscriminantCompare(state: OnbLowerState, instr: MirInstr, 
     }
     onbMaterialiseOk(state, out)
 }
-
+// Some tag
 // === Map ============================================================
-
 // onbLowerMapNew lowers `m = intrinsic map_new()` to a call to the
 // runtime's `osty_rt_map_new(key_kind, value_kind, value_size,
 // trace)` constructor. K/V types come from the destination local's
@@ -210,8 +206,8 @@ pub fn onbLowerMapNew(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseRe
     let mut out: List<OnbInstr> = []
     out.push(onbInstrMovImm64("x0", onbAbiKindFor(kv.key)))
     out.push(onbInstrMovImm64("x1", onbAbiKindFor(kv.value)))
-    out.push(onbInstrMovImm64("x2", 8)) // value_size — every supported value is 8B
-    out.push(onbInstrMovImm64("x3", 0)) // trace fn pointer (NULL)
+    out.push(onbInstrMovImm64("x2", 8))
+    out.push(onbInstrMovImm64("x3", 0))
     out.push(onbInstrBranchLink(onbRuntimeSymMapNew()))
     let dest = onbLocalSlotLookup(state, instr.dest.local)
     if dest.found {
@@ -219,22 +215,20 @@ pub fn onbLowerMapNew(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseRe
     }
     onbMaterialiseOk(state, out)
 }
-
+// value_size — every supported value is 8B
+// trace fn pointer (NULL)
 // onbLowerMapLen — direct runtime call returning count in x0.
 pub fn onbLowerMapLen(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerSimpleIntReturn(state, instr, onbRuntimeSymMapLen(), "map_len")
 }
-
 // onbLowerMapContains lowers `_b = intrinsic map_contains(m, k)`.
 pub fn onbLowerMapContains(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerMapBoolReturn(state, instr, "map_contains", true)
 }
-
 // onbLowerMapRemove lowers `_b = intrinsic map_remove(m, k)`.
 pub fn onbLowerMapRemove(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResult {
     onbLowerMapBoolReturn(state, instr, "map_remove", false)
 }
-
 // onbLowerMapBoolReturn shares the (map, key) → Bool plumbing.
 // The `contains` discriminator picks between contains/remove
 // runtime symbols based on the key kind. Mirror of
@@ -244,7 +238,9 @@ pub fn onbLowerMapBoolReturn(state: OnbLowerState, instr: MirInstr, name: String
         return onbMaterialiseErr(state, "map bool-return expects 2 args")
     }
     let mapR = onbMaterialiseOperand(state, instr.args[0], "x0")
-    if !mapR.ok { return mapR }
+    if !mapR.ok {
+        return mapR
+    }
     let keyKind = onbAbiKindFor(instr.args[1].typ)
     let symOpt = if contains {
         onbMapContainsSymbolForKeyKind(keyKind)
@@ -254,10 +250,16 @@ pub fn onbLowerMapBoolReturn(state: OnbLowerState, instr: MirInstr, name: String
     match symOpt {
         Some(sym) -> {
             let keyR = onbMaterialiseOperand(mapR.state, instr.args[1], "x1")
-            if !keyR.ok { return keyR }
+            if !keyR.ok {
+                return keyR
+            }
             let mut out: List<OnbInstr> = []
-            for i in mapR.instrs { out.push(i) }
-            for i in keyR.instrs { out.push(i) }
+            for i in mapR.instrs {
+                out.push(i)
+            }
+            for i in keyR.instrs {
+                out.push(i)
+            }
             out.push(onbInstrBranchLink(sym))
             if instr.hasDest && !mirPlaceHasProjections(instr.dest) {
                 let dest = onbLocalSlotLookup(keyR.state, instr.dest.local)
@@ -270,9 +272,7 @@ pub fn onbLowerMapBoolReturn(state: OnbLowerState, instr: MirInstr, name: String
         None -> onbMaterialiseErr(mapR.state, "map bool-return key kind outside ABI"),
     }
 }
-
 // === Shared helpers =================================================
-
 // onbLowerSimpleIntReturn covers the `(receiver) -> Int` runtime
 // shape: materialise the receiver into x0, `bl symbol`, capture
 // x0 into the dest slot. Used by list_len, string_len, map_len.
@@ -281,9 +281,13 @@ pub fn onbLowerSimpleIntReturn(state: OnbLowerState, instr: MirInstr, sym: Strin
         return onbMaterialiseErr(state, "intrinsic expects 1 arg")
     }
     let recv = onbMaterialiseOperand(state, instr.args[0], "x0")
-    if !recv.ok { return recv }
+    if !recv.ok {
+        return recv
+    }
     let mut out: List<OnbInstr> = []
-    for i in recv.instrs { out.push(i) }
+    for i in recv.instrs {
+        out.push(i)
+    }
     out.push(onbInstrBranchLink(sym))
     if instr.hasDest && !mirPlaceHasProjections(instr.dest) {
         let dest = onbLocalSlotLookup(recv.state, instr.dest.local)
@@ -293,7 +297,6 @@ pub fn onbLowerSimpleIntReturn(state: OnbLowerState, instr: MirInstr, sym: Strin
     }
     onbMaterialiseOk(recv.state, out)
 }
-
 // onbLowerEmptyCheck covers the `(receiver) -> Bool` "is empty"
 // shape: call the length-returning runtime symbol, then `cmp x0,
 // #0; cset Xd, eq` to materialise the bool. Used by list_is_empty
@@ -303,9 +306,13 @@ pub fn onbLowerEmptyCheck(state: OnbLowerState, instr: MirInstr, sym: String, na
         return onbMaterialiseErr(state, "intrinsic expects 1 arg")
     }
     let recv = onbMaterialiseOperand(state, instr.args[0], "x0")
-    if !recv.ok { return recv }
+    if !recv.ok {
+        return recv
+    }
     let mut out: List<OnbInstr> = []
-    for i in recv.instrs { out.push(i) }
+    for i in recv.instrs {
+        out.push(i)
+    }
     out.push(onbInstrBranchLink(sym))
     out.push(onbInstrMovImm64("x9", 0))
     out.push(onbInstrCmp("x0", "x9"))
@@ -318,9 +325,7 @@ pub fn onbLowerEmptyCheck(state: OnbLowerState, instr: MirInstr, sym: String, na
     }
     onbMaterialiseOk(recv.state, out)
 }
-
 // === Map<K, V> type extractor =======================================
-
 // OnbMapKVResult bundles the extracted K and V type names plus an
 // `ok` flag for non-Map types.
 pub struct OnbMapKVResult {
@@ -328,36 +333,39 @@ pub struct OnbMapKVResult {
     pub value: String,
     pub ok: Bool,
 }
-
 // onbMapKeyValueTypes parses `Map<K, V>` (or `Map<K, list<...>>`)
 // into its K and V type names. Mirror of `mapKeyValueTypes`. The
 // Osty version walks the string char-by-char tracking nesting
 // depth so types like `Map<String, List<Int>>` resolve correctly
 // to ("String", "List<Int>").
 pub fn onbMapKeyValueTypes(typ: String) -> OnbMapKVResult {
-    // Must start with "Map<" and end with ">".
     if !onbMapStartsWithMap(typ) {
-        return OnbMapKVResult { key: "", value: "", ok: false }
+        return OnbMapKVResult {key: "", value: "", ok: false}
     }
-    let inner = onbMapStripPrefix(typ, 4)  // strip "Map<"
+    let inner = onbMapStripPrefix(typ, 4)
     let inner2 = onbMapStripTrailing(inner)
     let parts = onbMapSplitTopLevelComma(inner2)
     if parts.len() != 2 {
-        return OnbMapKVResult { key: "", value: "", ok: false }
+        return OnbMapKVResult {key: "", value: "", ok: false}
     }
-    OnbMapKVResult { key: parts[0], value: parts[1], ok: true }
+    OnbMapKVResult {key: parts[0], value: parts[1], ok: true}
 }
-
+// Must start with "Map<" and end with ">".
+// strip "Map<"
 // onbMapStartsWithMap reports whether the type string starts with
 // "Map<". We don't include `std.strings` in onb sources to keep
 // the dependency graph lean for the future LLVM self-host LLVMgen.
 fn onbMapStartsWithMap(typ: String) -> Bool {
     let mut bytes: List<Int> = []
-    for b in typ.bytes() { bytes.push(b.toInt()) }
-    if bytes.len() < 4 { return false }
-    bytes[0] == 77 && bytes[1] == 97 && bytes[2] == 112 && bytes[3] == 60 // 'M' 'a' 'p' '<'
+    for b in typ.bytes() {
+        bytes.push(b.toInt())
+    }
+    if bytes.len() < 4 {
+        return false
+    }
+    bytes[0] == 77 && bytes[1] == 97 && bytes[2] == 112 && bytes[3] == 60
 }
-
+// 'M' 'a' 'p' '<'
 // onbMapStripPrefix drops the first `n` chars of `s`. The Osty
 // `String` API doesn't expose a slice helper, so we walk the chars
 // and skip the prefix. ASCII-only — fine for type-repr strings.
@@ -365,28 +373,34 @@ fn onbMapStripPrefix(s: String, n: Int) -> String {
     let mut out = ""
     let mut i = 0
     for ch in s.chars() {
-        if i >= n { out = out + "{ch}" }
+        if i >= n {
+            out = out + "{ch}"
+        }
         i = i + 1
     }
     out
 }
-
 // onbMapStripTrailing drops the last char if it is '>'. Used after
 // the "Map<" prefix is gone — the remaining string ends with '>'
 // by construction (caller pre-checks the starts-with).
 fn onbMapStripTrailing(s: String) -> String {
     let mut chars: List<String> = []
-    for ch in s.chars() { chars.push("{ch}") }
-    if chars.len() == 0 { return "" }
+    for ch in s.chars() {
+        chars.push("{ch}")
+    }
+    if chars.len() == 0 {
+        return ""
+    }
     let last = chars[chars.len() - 1]
-    if last != ">" { return s }
+    if last != ">" {
+        return s
+    }
     let mut out = ""
     for i in 0..chars.len() - 1 {
         out = out + chars[i]
     }
     out
 }
-
 // onbMapSplitTopLevelComma splits the string at the first
 // top-level `,` (depth 0 with respect to `<` / `>`). Returns a
 // list of two trimmed parts on success, otherwise an empty list.
@@ -400,18 +414,27 @@ fn onbMapSplitTopLevelComma(s: String) -> List<String> {
         if !splitFound && cs == "," && depth == 0 {
             splitFound = true
         } else {
-            if cs == "<" { depth = depth + 1 }
-            if cs == ">" { depth = depth - 1 }
-            if !splitFound { left = left + cs } else { right = right + cs }
+            if cs == "<" {
+                depth = depth + 1
+            }
+            if cs == ">" {
+                depth = depth - 1
+            }
+            if !splitFound {
+                left = left + cs
+            } else {
+                right = right + cs
+            }
         }
     }
     let mut out: List<String> = []
-    if !splitFound { return out }
+    if !splitFound {
+        return out
+    }
     out.push(onbMapTrim(left))
     out.push(onbMapTrim(right))
     out
 }
-
 // onbMapTrim drops leading/trailing ASCII whitespace from a string.
 fn onbMapTrim(s: String) -> String {
     let mut out = ""
@@ -420,14 +443,17 @@ fn onbMapTrim(s: String) -> String {
     for ch in s.chars() {
         let cs = "{ch}"
         if !started {
-            if cs == " " { continue }
+            if cs == " " {
+                continue
+            }
             started = true
         }
         buf = buf + cs
     }
-    // Trim trailing whitespace.
     let mut chars: List<String> = []
-    for ch in buf.chars() { chars.push("{ch}") }
+    for ch in buf.chars() {
+        chars.push("{ch}")
+    }
     let mut endIdx = chars.len()
     for endIdx > 0 && chars[endIdx - 1] == " " {
         endIdx = endIdx - 1

@@ -7,20 +7,19 @@
 // strict-mode and timing on without recompiling. Osty side
 // reproduces the same names + semantics so a future LLVM
 // self-host LLVMgen can drop the Osty source straight in.
-
 // === Env var names =================================================
-
 // onbEnvStrictName forces ONB to surface its own shape-rejection
 // errors instead of letting the backend layer fall back to LLVM.
 // Cross-validation harnesses and self-host bring-up flip this on.
-pub fn onbEnvStrictName() -> String { "OSTY_ONB_STRICT" }
-
+pub fn onbEnvStrictName() -> String {
+    "OSTY_ONB_STRICT"
+}
 // onbEnvTimingName, when set, causes the backend layer to write a
 // one-line wall-clock summary to stderr after each ONB emit.
-pub fn onbEnvTimingName() -> String { "OSTY_ONB_TIMING" }
-
+pub fn onbEnvTimingName() -> String {
+    "OSTY_ONB_TIMING"
+}
 // === Boolean env parsing ==========================================
-
 // onbEnvTrue reports whether `s` should be treated as "enabled".
 // Mirror of `EnvTrue`. Accepted spellings: "1", "true", "yes",
 // "on" (case-insensitive, whitespace-trimmed). Exported so other
@@ -30,7 +29,6 @@ pub fn onbEnvTrue(s: String) -> Bool {
     let lowered = onbDevToLower(trimmed)
     lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on"
 }
-
 // onbStrictMode evaluates `OSTY_ONB_STRICT` against `onbEnvTrue`.
 // The Go runtime reads `os.Getenv(EnvStrict)` here; the Osty
 // mirror takes the env value as a parameter so it stays pure (the
@@ -39,14 +37,11 @@ pub fn onbEnvTrue(s: String) -> Bool {
 pub fn onbStrictMode(envValue: String) -> Bool {
     onbEnvTrue(envValue)
 }
-
 // onbTimingEnabled mirrors `onbStrictMode` for the timing log.
 pub fn onbTimingEnabled(envValue: String) -> Bool {
     onbEnvTrue(envValue)
 }
-
 // === Timing telemetry ==============================================
-
 // OnbTimingPath names which build path actually ran for one ONB
 // emit attempt. Mirror of `TimingPath`.
 pub enum OnbTimingPath {
@@ -55,16 +50,22 @@ pub enum OnbTimingPath {
     OnbTimingPathError,
     OnbTimingPathOther,
 }
-
 pub fn onbTimingPathName(p: OnbTimingPath) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if p == OnbTimingPath.OnbTimingPathNative { return "native" }
-    if p == OnbTimingPath.OnbTimingPathLlvmFallback { return "llvm-fallback" }
-    if p == OnbTimingPath.OnbTimingPathError { return "error" }
-    if p == OnbTimingPath.OnbTimingPathOther { return "other" }
+    if p == OnbTimingPath.OnbTimingPathNative {
+        return "native"
+    }
+    if p == OnbTimingPath.OnbTimingPathLlvmFallback {
+        return "llvm-fallback"
+    }
+    if p == OnbTimingPath.OnbTimingPathError {
+        return "error"
+    }
+    if p == OnbTimingPath.OnbTimingPathOther {
+        return "other"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // OnbTimingEvent describes one ONB build path so callers can
 // render a stable log line. Mirror of `TimingEvent`. `elapsedMs`
 // is the elapsed wall-clock time in milliseconds (Go side stores
@@ -76,19 +77,10 @@ pub struct OnbTimingEvent {
     pub reason: String,
     pub binaryAt: String,
 }
-
 pub fn onbTimingEvent(path: OnbTimingPath, target: String, elapsedMs: Int) -> OnbTimingEvent {
-    OnbTimingEvent {
-        path: path,
-        target: target,
-        elapsedMs: elapsedMs,
-        reason: "",
-        binaryAt: "",
-    }
+    OnbTimingEvent {path: path, target: target, elapsedMs: elapsedMs, reason: "", binaryAt: ""}
 }
-
 // === LogTiming ====================================================
-
 // onbFormatTiming returns the human-readable line describing the
 // build path. Mirror of `LogTiming` — instead of taking an
 // `io.Writer`, the Osty version returns the string and lets the
@@ -103,26 +95,35 @@ pub fn onbFormatTiming(ev: OnbTimingEvent) -> String {
     let suffix = onbTimingSuffix(ev)
     "onb: emit {elapsed} {suffix}\n"
 }
-
 fn onbTimingSuffix(ev: OnbTimingEvent) -> String {
-    let target = if ev.target == "" { "host" } else { ev.target }
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    let target = if ev.target == "" {
+        "host"
+    } else {
+        ev.target
+    }
     if ev.path == OnbTimingPath.OnbTimingPathNative {
         return "[native: {target}]"
     }
     if ev.path == OnbTimingPath.OnbTimingPathLlvmFallback {
-        let reason = if ev.reason == "" { "shape unsupported" } else { ev.reason }
+        let reason = if ev.reason == "" {
+            "shape unsupported"
+        } else {
+            ev.reason
+        }
         return "[fallback to llvm: {reason}]"
     }
     if ev.path == OnbTimingPath.OnbTimingPathError {
-        let reason = if ev.reason == "" { "rejected" } else { ev.reason }
+        let reason = if ev.reason == "" {
+            "rejected"
+        } else {
+            ev.reason
+        }
         return "[error: {reason}]"
     }
     "[other]"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // === formatElapsed ================================================
-
 // onbFormatElapsed converts an elapsed milliseconds count to a
 // compact human-readable string. Mirror of `formatElapsed` —
 // Go's version takes `time.Duration` and switches on micro / ms
@@ -130,57 +131,75 @@ fn onbTimingSuffix(ev: OnbTimingEvent) -> String {
 // the bridge layer hands over, so the sub-millisecond branch
 // uses the floor at 0ms instead.
 pub fn onbFormatElapsed(ms: Int) -> String {
-    if ms <= 0 { return "0ms" }
-    if ms < 1000 { return "{ms}ms" }
+    if ms <= 0 {
+        return "0ms"
+    }
+    if ms < 1000 {
+        return "{ms}ms"
+    }
     let seconds = ms / 1000
-    let hundredths = (ms % 1000) / 10  // two-decimal precision
-    if hundredths == 0 { return "{seconds}.00s" }
-    if hundredths < 10 { return "{seconds}.0{hundredths}s" }
+    let hundredths = (ms % 1000) / 10
+    if hundredths == 0 {
+        return "{seconds}.00s"
+    }
+    if hundredths < 10 {
+        return "{seconds}.0{hundredths}s"
+    }
     "{seconds}.{hundredths}s"
 }
-
+// two-decimal precision
 // === Sentinel reason extraction ===================================
-
 // onbUnsupportedShapeSentinel is the string prefix
 // `ErrUnsupportedShape` carries on the Go side. Mirror this
 // constant so the unwrap helper stays in lockstep — both sides
 // agree on the textual format.
-pub fn onbUnsupportedShapeSentinel() -> String { "onb: unsupported mir shape" }
-
+pub fn onbUnsupportedShapeSentinel() -> String {
+    "onb: unsupported mir shape"
+}
 // onbUnsupportedShapeReason peels the unsupported-shape sentinel
 // off so callers can quote the specific MIR construct that
 // triggered the fallback without also surfacing the generic
 // sentinel message. Mirror of `UnsupportedShapeReason`. Returns
 // the input verbatim when the sentinel is not present.
 pub fn onbUnsupportedShapeReason(err: String) -> String {
-    if err == "" { return "" }
+    if err == "" {
+        return ""
+    }
     let prefix = onbUnsupportedShapeSentinel() + ": "
-    if !onbDevStartsWith(err, prefix) { return err }
+    if !onbDevStartsWith(err, prefix) {
+        return err
+    }
     let mut prefixLen = 0
-    for _ in prefix.bytes() { prefixLen = prefixLen + 1 }
+    for _ in prefix.bytes() {
+        prefixLen = prefixLen + 1
+    }
     onbDevStripPrefix(err, prefixLen)
 }
-
 // === Lower-level string helpers ===================================
 //
 // Same dependency-graph rationale as `onbStringStartsWith` in
 // `onb_abi.osty`: keep the dev-integration module free of
 // `std.strings` so the future LLVM self-host LLVMgen has a
 // leaner front door.
-
 // onbDevTrim drops leading + trailing ASCII whitespace.
 fn onbDevTrim(s: String) -> String {
     let mut chars: List<String> = []
-    for ch in s.chars() { chars.push("{ch}") }
+    for ch in s.chars() {
+        chars.push("{ch}")
+    }
     let mut start = 0
     let mut endIdx = chars.len()
     for start < endIdx {
-        if chars[start] != " " && chars[start] != "\t" { break }
+        if chars[start] != " " && chars[start] != "\t" {
+            break
+        }
         start = start + 1
     }
     for endIdx > start {
         let last = chars[endIdx - 1]
-        if last != " " && last != "\t" && last != "\n" && last != "\r" { break }
+        if last != " " && last != "\t" && last != "\n" && last != "\r" {
+            break
+        }
         endIdx = endIdx - 1
     }
     let mut out = ""
@@ -189,21 +208,25 @@ fn onbDevTrim(s: String) -> String {
     }
     out
 }
-
 // onbDevToLower lowercases ASCII letters in place — non-ASCII
 // passes through. Sufficient for env-var values like "Yes" /
 // "TRUE".
 fn onbDevToLower(s: String) -> String {
     let mut bytes: List<Int> = []
-    for b in s.bytes() { bytes.push(b.toInt()) }
+    for b in s.bytes() {
+        bytes.push(b.toInt())
+    }
     let mut out = ""
     for b in bytes {
-        let lower = if b >= 65 && b <= 90 { b + 32 } else { b }
+        let lower = if b >= 65 && b <= 90 {
+            b + 32
+        } else {
+            b
+        }
         out = out + onbDevByteToString(lower)
     }
     out
 }
-
 // onbDevByteToString translates one ASCII codepoint back to a
 // 1-char string. Lookup via the printable-ASCII table — same
 // approach as `onbAsmCStringLiteral`. Bytes outside the printable
@@ -212,28 +235,40 @@ fn onbDevToLower(s: String) -> String {
 // effectively impossible).
 fn onbDevByteToString(b: Int) -> String {
     let lookup = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-    if b < 32 || b > 126 { return " " }
+    if b < 32 || b > 126 {
+        return " "
+    }
     let idx = b - 32
     let mut chars: List<String> = []
-    for ch in lookup.chars() { chars.push("{ch}") }
-    if idx < 0 || idx >= chars.len() { return " " }
+    for ch in lookup.chars() {
+        chars.push("{ch}")
+    }
+    if idx < 0 || idx >= chars.len() {
+        return " "
+    }
     chars[idx]
 }
-
 // onbDevStartsWith reports whether `s` starts with `prefix`. ASCII
 // byte comparison.
 fn onbDevStartsWith(s: String, prefix: String) -> Bool {
     let mut sBytes: List<Int> = []
-    for b in s.bytes() { sBytes.push(b.toInt()) }
+    for b in s.bytes() {
+        sBytes.push(b.toInt())
+    }
     let mut pBytes: List<Int> = []
-    for b in prefix.bytes() { pBytes.push(b.toInt()) }
-    if pBytes.len() > sBytes.len() { return false }
+    for b in prefix.bytes() {
+        pBytes.push(b.toInt())
+    }
+    if pBytes.len() > sBytes.len() {
+        return false
+    }
     for i in 0..pBytes.len() {
-        if sBytes[i] != pBytes[i] { return false }
+        if sBytes[i] != pBytes[i] {
+            return false
+        }
     }
     true
 }
-
 // onbDevStripPrefix returns a copy of `s` with the first `n` chars
 // dropped. Walks the chars iterator to honour multi-byte
 // sequences (still ASCII-only on the call sites we use today).
@@ -241,7 +276,9 @@ fn onbDevStripPrefix(s: String, n: Int) -> String {
     let mut out = ""
     let mut i = 0
     for ch in s.chars() {
-        if i >= n { out = out + "{ch}" }
+        if i >= n {
+            out = out + "{ch}"
+        }
         i = i + 1
     }
     out

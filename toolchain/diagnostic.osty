@@ -1,5 +1,4 @@
 use std.strings as strings
-
 /// DiagnosticSeverity is the stable user-facing diagnostic bucket.
 pub enum DiagnosticSeverity {
     SeverityError,
@@ -7,7 +6,6 @@ pub enum DiagnosticSeverity {
     SeverityLint,
     SeverityUnknown,
 }
-
 /// DiagnosticFamily groups codes by compiler phase or tool surface.
 pub enum DiagnosticFamily {
     FamilyLexical,
@@ -25,7 +23,6 @@ pub enum DiagnosticFamily {
     FamilyBackend,
     FamilyUnknown,
 }
-
 /// diagnosticSeverity classifies a stable code by prefix.
 ///
 /// Codes follow a simple range convention: `E0000-E9999` errors,
@@ -54,17 +51,23 @@ pub fn diagnosticSeverity(code: String) -> DiagnosticSeverity {
         SeverityUnknown
     }
 }
-
 /// diagnosticSeverityName returns the stable CLI label for a severity.
 pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if severity == SeverityError { return "error" }
-    if severity == SeverityWarning { return "warning" }
-    if severity == SeverityLint { return "lint" }
-    if severity == SeverityUnknown { return "unknown" }
+    if severity == SeverityError {
+        return "error"
+    }
+    if severity == SeverityWarning {
+        return "warning"
+    }
+    if severity == SeverityLint {
+        return "lint"
+    }
+    if severity == SeverityUnknown {
+        return "unknown"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// diagnosticFamily classifies a stable code into the phase family that
 /// owns it. E/W/L codes delegate to the generated manifest so adding a
 /// new Go-side code in internal/diag/codes.go is a one-file change.
@@ -91,27 +94,53 @@ pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
     }
     diagnosticFamilyForCode(code)
 }
-
 /// diagnosticFamilyName returns a stable label for docs and reports.
 pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if family == FamilyLexical { return "lexical" }
-    if family == FamilyDeclaration { return "declaration" }
-    if family == FamilyExpression { return "expression" }
-    if family == FamilyTypePattern { return "type-pattern" }
-    if family == FamilyAnnotation { return "annotation" }
-    if family == FamilyResolution { return "resolution" }
-    if family == FamilyControlFlow { return "control-flow" }
-    if family == FamilyTypeChecking { return "type-checking" }
-    if family == FamilyManifest { return "manifest" }
-    if family == FamilyScaffold { return "scaffold" }
-    if family == FamilyLint { return "lint" }
-    if family == FamilyWarning { return "warning" }
-    if family == FamilyBackend { return "backend" }
-    if family == FamilyUnknown { return "unknown" }
+    if family == FamilyLexical {
+        return "lexical"
+    }
+    if family == FamilyDeclaration {
+        return "declaration"
+    }
+    if family == FamilyExpression {
+        return "expression"
+    }
+    if family == FamilyTypePattern {
+        return "type-pattern"
+    }
+    if family == FamilyAnnotation {
+        return "annotation"
+    }
+    if family == FamilyResolution {
+        return "resolution"
+    }
+    if family == FamilyControlFlow {
+        return "control-flow"
+    }
+    if family == FamilyTypeChecking {
+        return "type-checking"
+    }
+    if family == FamilyManifest {
+        return "manifest"
+    }
+    if family == FamilyScaffold {
+        return "scaffold"
+    }
+    if family == FamilyLint {
+        return "lint"
+    }
+    if family == FamilyWarning {
+        return "warning"
+    }
+    if family == FamilyBackend {
+        return "backend"
+    }
+    if family == FamilyUnknown {
+        return "unknown"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// diagnosticIsCompilerError reports whether a code blocks compilation.
 ///
 /// Warnings and lints never gate compilation, even at strictest levels.
@@ -125,10 +154,9 @@ pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
 /// testing.assert(!(diagnosticIsCompilerError("")))
 /// ```
 pub fn diagnosticIsCompilerError(code: String) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     diagnosticSeverity(code) == SeverityError
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 /// DiagnosticLocation maps analyzer token spans back to lexer source positions.
 pub struct DiagnosticLocation {
     pub line: Int,
@@ -138,18 +166,9 @@ pub struct DiagnosticLocation {
     pub token: Int,
     pub endToken: Int,
 }
-
-pub fn diagnosticLocation(
-    line: Int,
-    column: Int,
-    endLine: Int,
-    endColumn: Int,
-    token: Int,
-    endToken: Int,
-) -> DiagnosticLocation {
-    DiagnosticLocation { line, column, endLine, endColumn, token, endToken }
+pub fn diagnosticLocation(line: Int, column: Int, endLine: Int, endColumn: Int, token: Int, endToken: Int) -> DiagnosticLocation {
+    DiagnosticLocation {line, column, endLine, endColumn, token, endToken}
 }
-
 fn diagnosticClampTokenIndex(index: Int, count: Int) -> Int {
     if count <= 0 {
         return 0
@@ -162,7 +181,6 @@ fn diagnosticClampTokenIndex(index: Int, count: Int) -> Int {
     }
     index
 }
-
 fn diagnosticLocationFromStream(stream: FrontLexStream, start: Int, end: Int) -> DiagnosticLocation {
     let count = frontLexTokenCount(stream)
     let startToken = diagnosticClampTokenIndex(start, count)
@@ -172,22 +190,13 @@ fn diagnosticLocationFromStream(stream: FrontLexStream, start: Int, end: Int) ->
     }
     let first = frontLexTokenAt(stream, startToken)
     let last = frontLexTokenAt(stream, lastToken)
-    diagnosticLocation(
-        first.start.line,
-        first.start.column,
-        last.end.line,
-        last.end.column,
-        startToken,
-        lastToken,
-    )
+    diagnosticLocation(first.start.line, first.start.column, last.end.line, last.end.column, startToken, lastToken)
 }
-
 /// diagnosticSourceLocation returns the source position for a parser/analyzer
 /// token span.
 pub fn diagnosticSourceLocation(source: String, start: Int, end: Int) -> DiagnosticLocation {
     diagnosticLocationFromStream(frontendLexStream(source), start, end)
 }
-
 fn diagnosticSubject(name: String) -> String {
     if name == "" {
         ""
@@ -195,7 +204,6 @@ fn diagnosticSubject(name: String) -> String {
         " `{name}`"
     }
 }
-
 fn diagnosticHint(hint: String) -> String {
     if hint == "" {
         ""
@@ -203,43 +211,25 @@ fn diagnosticHint(hint: String) -> String {
         " hint=\"{hint}\""
     }
 }
-
-fn diagnosticFormatOne(
-    source: String,
-    code: String,
-    message: String,
-    name: String,
-    start: Int,
-    end: Int,
-) -> String {
+fn diagnosticFormatOne(source: String, code: String, message: String, name: String, start: Int, end: Int) -> String {
     let loc = diagnosticSourceLocation(source, start, end)
     let severity = diagnosticSeverityName(diagnosticSeverity(code))
     let family = diagnosticFamilyName(diagnosticFamily(code))
     "{severity}[{code}] {family} at {loc.line}:{loc.column}: {message}{diagnosticSubject(name)}"
 }
-
-pub fn diagnosticFormatSelfResolveDiagnostic(
-    source: String,
-    diag: SelfResolveDiagnostic,
-) -> String {
+pub fn diagnosticFormatSelfResolveDiagnostic(source: String, diag: SelfResolveDiagnostic) -> String {
     "{diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)}{diagnosticHint(diag.hint)}"
 }
-
-pub fn diagnosticFormatSelfResolveDiagnostics(
-    source: String,
-    result: SelfResolveResult,
-) -> String {
+pub fn diagnosticFormatSelfResolveDiagnostics(source: String, result: SelfResolveResult) -> String {
     let mut lines: List<String> = []
     for diag in result.diagnostics {
         lines.push(diagnosticFormatSelfResolveDiagnostic(source, diag))
     }
     strings.join(lines, "\n")
 }
-
 pub fn diagnosticFormatSelfLintDiagnostic(source: String, diag: SelfLintDiagnostic) -> String {
     diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)
 }
-
 pub fn diagnosticFormatSelfLintDiagnostics(source: String, report: SelfLintReport) -> String {
     let mut lines: List<String> = []
     for diag in report.diagnostics {

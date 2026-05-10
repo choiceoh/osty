@@ -1,5 +1,4 @@
 use std.strings as strings
-
 // inspect.osty — per-node type-inference observations.
 //
 // This module is the reference implementation for inspector records. The Go
@@ -50,7 +49,6 @@ use std.strings as strings
 // The record shape mirrors `internal/check/inspect.go::InspectRecord`.
 // Keep these two definitions in lockstep — the Go bridge adapter lifts
 // Osty records into the same Go-side struct.
-
 pub struct InspectRecord {
     pub start: Int,
     pub end: Int,
@@ -60,14 +58,12 @@ pub struct InspectRecord {
     pub hintName: String,
     pub notes: List<String>,
 }
-
 pub fn inspectSource(source: String) -> List<InspectRecord> {
     let lexed = ostyLexSource(source)
     let parsed = astParseLexedSource(lexed)
     let checked = frontendCheckAstStructured(parsed)
     inspectFromAstAndCheck(parsed, checked)
 }
-
 /// AST-less entry. Convenient for callers that don't have the parser
 /// arena on hand (e.g. pure test fixtures). Pattern bindings from local
 /// `let` statements get the generic `BIND` rule in this path — use
@@ -77,7 +73,6 @@ pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> 
     let empty = emptyAstFile()
     inspectBuildRecords(empty.arena, checked, astLetPatternSet(empty), [])
 }
-
 /// AST-aware entry. Uses the parser arena to:
 ///   - promote binding records from `BIND` to `LET` for let-pattern
 ///     idents (see `astLetPatternSet`),
@@ -102,11 +97,9 @@ pub fn inspectFromAstAndCheck(file: AstFile, checked: FrontCheckResult) -> List<
     inspectThreadHintsThroughContainers(file.arena, checked, hints)
     inspectBuildRecords(file.arena, checked, astLetPatternSet(file), hints)
 }
-
 fn emptyAstFile() -> AstFile {
-    AstFile { arena: emptyAstArena() }
+    AstFile {arena: emptyAstArena()}
 }
-
 /// Collect AstNPattern indices that carry a binding record introduced
 /// by an `AstNLet` statement. Recurses through compound patterns so
 /// destructuring lets (`let (a, b) = ...`, `let Point { x, y } = ...`)
@@ -135,7 +128,6 @@ fn astLetPatternSet(file: AstFile) -> List<Int> {
     }
     out
 }
-
 fn inspectCollectLetPatternIdxs(arena: AstArena, patIdx: Int, out: List<Int>) -> List<Int> {
     let mut acc = out
     if patIdx < 0 || patIdx >= arena.nodes.len() {
@@ -181,10 +173,9 @@ fn inspectCollectLetPatternIdxs(arena: AstArena, patIdx: Int, out: List<Int>) ->
         }
         return acc
     }
-    // wildcard / literal / range / variant / error — no bindings
     acc
 }
-
+// wildcard / literal / range / variant / error — no bindings
 fn inspectIsLetPatternIdx(letPatterns: List<Int>, nodeIdx: Int) -> Bool {
     for idx in letPatterns {
         if idx == nodeIdx {
@@ -193,14 +184,12 @@ fn inspectIsLetPatternIdx(letPatterns: List<Int>, nodeIdx: Int) -> Bool {
     }
     false
 }
-
 fn inspectHintForNode(hintsByNode: List<String>, nodeIdx: Int) -> String {
     if nodeIdx < 0 || nodeIdx >= hintsByNode.len() {
         return ""
     }
     hintsByNode[nodeIdx]
 }
-
 /// Build a dense NodeID-indexed hint table by scanning the arena for
 /// nodes whose recorded type (in `FrontCheckResult.typedNodes`) lets us
 /// derive hints for their children:
@@ -252,17 +241,16 @@ fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<S
                 inspectSpreadCallHints(hints, parent, typeByNode, n)
             }
         } else if parent.kind == AstNFor && parent.text == "forin" {
-            // For loops don't carry a checker-recorded type (they eval
-            // to Unit), so the direct-parent-type gate above would have
-            // skipped them. The iter hint comes from the pattern
-            // binding, not from the ForStmt's own type — fall through
-            // independent of `parentType`.
             inspectSpreadForInHints(hints, arena, parent, bindingTypeByPattern, n)
         }
     }
     hints
 }
-
+// For loops don't carry a checker-recorded type (they eval
+// to Unit), so the direct-parent-type gate above would have
+// skipped them. The iter hint comes from the pattern
+// binding, not from the ForStmt's own type — fall through
+// independent of `parentType`.
 fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
     let n = arena.nodes.len()
     let mut out: List<String> = []
@@ -276,7 +264,6 @@ fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<Str
     }
     out
 }
-
 fn inspectSpreadListHints(hints: List<String>, parent: AstNode, parentType: String, n: Int) {
     let h = hintListElem(parentType)
     if h == "" {
@@ -288,7 +275,6 @@ fn inspectSpreadListHints(hints: List<String>, parent: AstNode, parentType: Stri
         }
     }
 }
-
 fn inspectSpreadTupleHints(hints: List<String>, parent: AstNode, parentType: String, n: Int) {
     let arity = parent.children.len()
     let elems = hintTupleElems(parentType, arity)
@@ -303,19 +289,11 @@ fn inspectSpreadTupleHints(hints: List<String>, parent: AstNode, parentType: Str
         k = k + 1
     }
 }
-
-fn inspectSpreadMapHints(
-    hints: List<String>,
-    arena: AstArena,
-    parent: AstNode,
-    parentType: String,
-    n: Int,
-) {
+fn inspectSpreadMapHints(hints: List<String>, arena: AstArena, parent: AstNode, parentType: String, n: Int) {
     let entry = hintMapEntries(parentType)
     if entry.key == "" && entry.value == "" {
         return
     }
-    // Each child of AstNMap is an entry pair; entry.left = key idx, entry.right = value idx.
     for entryIdx in parent.children {
         if entryIdx < 0 || entryIdx >= n {
             continue
@@ -331,13 +309,8 @@ fn inspectSpreadMapHints(
         }
     }
 }
-
-fn inspectSpreadCallHints(
-    hints: List<String>,
-    parent: AstNode,
-    typeByNode: List<String>,
-    n: Int,
-) {
+// Each child of AstNMap is an entry pair; entry.left = key idx, entry.right = value idx.
+fn inspectSpreadCallHints(hints: List<String>, parent: AstNode, typeByNode: List<String>, n: Int) {
     let calleeIdx = parent.left
     if calleeIdx < 0 || calleeIdx >= n {
         return
@@ -358,7 +331,6 @@ fn inspectSpreadCallHints(
         k = k + 1
     }
 }
-
 /// Back-hint the iter expression of a `for <pat> in <iter>` loop with
 /// `List<T>` when the pattern is a bare ident bound to a known type
 /// `T`. Parser layout (see `opParseForStmt`): children[0] = pattern
@@ -369,13 +341,7 @@ fn inspectSpreadCallHints(
 /// binding table covers the ident case cleanly; the compound cases
 /// would need recursive pattern→type reconstruction that isn't worth
 /// the code for a hint-only signal.
-fn inspectSpreadForInHints(
-    hints: List<String>,
-    arena: AstArena,
-    parent: AstNode,
-    bindingTypeByPattern: List<InspectBindingEntry>,
-    n: Int,
-) {
+fn inspectSpreadForInHints(hints: List<String>, arena: AstArena, parent: AstNode, bindingTypeByPattern: List<InspectBindingEntry>, n: Int) {
     if parent.children.len() < 2 {
         return
     }
@@ -399,7 +365,6 @@ fn inspectSpreadForInHints(
         hints[iterIdx] = "List<" + elemTy + ">"
     }
 }
-
 /// Thread hints top-down through identity-like / nested parent nodes
 /// (Block tail, If arm, Paren inner, Closure body, Match arm body)
 /// starting from two seed sources the self-host checker makes available:
@@ -425,17 +390,12 @@ fn inspectSpreadForInHints(
 /// Structural hints from v1.9 take priority — `inspectThreadHint`
 /// only writes into slots that are still "". A pre-existing hint
 /// (e.g. from a List parent) wins over the chained outer hint.
-fn inspectThreadHintsThroughContainers(
-    arena: AstArena,
-    checked: FrontCheckResult,
-    hints: List<String>,
-) {
+fn inspectThreadHintsThroughContainers(arena: AstArena, checked: FrontCheckResult, hints: List<String>) {
     let n = arena.nodes.len()
     if n == 0 {
         return
     }
     let bindingTypeByPattern = inspectBindingTypeByPattern(checked)
-
     for sym in checked.symbols {
         if sym.node < 0 || sym.node >= n {
             continue
@@ -459,10 +419,6 @@ fn inspectThreadHintsThroughContainers(
             }
         }
     }
-
-    // Seed local lets by matching AstNLet nodes to binding records via
-    // the pattern index. Top-level lets are handled above and re-seeded
-    // here idempotently (the inner walker is "" guarded).
     for i in 0..n {
         let letNode = arena.nodes[i]
         if letNode.kind != AstNLet {
@@ -478,15 +434,16 @@ fn inspectThreadHintsThroughContainers(
         inspectThreadHint(arena, letNode.right, hint, hints)
     }
 }
-
+// Seed local lets by matching AstNLet nodes to binding records via
+// the pattern index. Top-level lets are handled above and re-seeded
+// here idempotently (the inner walker is "" guarded).
 fn inspectBindingTypeByPattern(checked: FrontCheckResult) -> List<InspectBindingEntry> {
     let mut out: List<InspectBindingEntry> = []
     for bnd in checked.bindings {
-        out.push(InspectBindingEntry { node: bnd.node, typeRepr: bnd.typeRepr })
+        out.push(InspectBindingEntry {node: bnd.node, typeRepr: bnd.typeRepr})
     }
     out
 }
-
 fn inspectLookupBindingType(entries: List<InspectBindingEntry>, patternIdx: Int) -> String {
     if patternIdx < 0 {
         return ""
@@ -498,7 +455,6 @@ fn inspectLookupBindingType(entries: List<InspectBindingEntry>, patternIdx: Int)
     }
     ""
 }
-
 /// Recursively thread `hint` through container-style nodes, stopping at
 /// the first non-container or when the target slot is already occupied
 /// by a higher-priority hint (set by v1.9's direct-parent pass).
@@ -524,11 +480,19 @@ fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String
             return
         }
         let tailStmt = arena.nodes[tailStmtIdx]
-        let tailExpr = if tailStmt.kind == AstNExprStmt { tailStmt.left } else { tailStmtIdx }
+        let tailExpr = if tailStmt.kind == AstNExprStmt {
+            tailStmt.left
+        } else {
+            tailStmtIdx
+        }
         inspectThreadHint(arena, tailExpr, hint, hints)
     } else if node.kind == AstNIf {
         inspectThreadHint(arena, node.right, hint, hints)
-        let elseIdx = if node.children.len() > 0 { node.children[0] } else { -1 }
+        let elseIdx = if node.children.len() > 0 {
+            node.children[0]
+        } else {
+            -1
+        }
         if elseIdx >= 0 {
             inspectThreadHint(arena, elseIdx, hint, hints)
         }
@@ -540,8 +504,6 @@ fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String
             inspectThreadHint(arena, node.left, sig.returnType, hints)
         }
     } else if node.kind == AstNMatch {
-        // Each arm's body is evaluated against the outer expected type.
-        // Scrutinee (node.left) stays in synth mode — don't thread.
         for armIdx in node.children {
             if armIdx < 0 || armIdx >= n {
                 continue
@@ -553,18 +515,13 @@ fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String
         }
     }
 }
-
+// Each arm's body is evaluated against the outer expected type.
+// Scrutinee (node.left) stays in synth mode — don't thread.
 struct InspectBindingEntry {
     node: Int,
     typeRepr: FrontTypeRepr,
 }
-
-fn inspectBuildRecords(
-    arena: AstArena,
-    checked: FrontCheckResult,
-    letPatterns: List<Int>,
-    hintsByNode: List<String>,
-) -> List<InspectRecord> {
+fn inspectBuildRecords(arena: AstArena, checked: FrontCheckResult, letPatterns: List<Int>, hintsByNode: List<String>) -> List<InspectRecord> {
     let mut out: List<InspectRecord> = []
     let instNotesByNode = inspectInstantiationNotesByNode(arena, checked)
     let letSpanByPattern = inspectLetSpanByPatternTable(arena)
@@ -576,15 +533,7 @@ fn inspectBuildRecords(
         let hint = inspectHintForNode(hintsByNode, tn.node)
         let span = inspectCoverSpan(arena, tn.node, tn.start, tn.end)
         let notes = inspectNotesForTypedNode(arena, instNotesByNode, tn)
-        out.push(InspectRecord {
-            start: span.start,
-            end: span.end,
-            nodeKind: tn.kind,
-            rule,
-            typeRepr: tn.typeRepr,
-            hintName: hint,
-            notes,
-        })
+        out.push(InspectRecord {start: span.start, end: span.end, nodeKind: tn.kind, rule, typeRepr: tn.typeRepr, hintName: hint, notes})
     }
     for sym in checked.symbols {
         let rule = inspectRuleForSymbolKind(sym.kind)
@@ -598,23 +547,23 @@ fn inspectBuildRecords(
         if sym.owner != "" {
             notes.push("owner: " + sym.owner)
         }
-        out.push(InspectRecord {
-            start: sym.start,
-            end: sym.end,
-            nodeKind: inspectNodeKindForSymbolKind(sym.kind),
-            rule,
-            typeRepr: sym.typeRepr,
-            hintName: "",
-            notes,
-        })
+        out.push(InspectRecord {start: sym.start, end: sym.end, nodeKind: inspectNodeKindForSymbolKind(sym.kind), rule, typeRepr: sym.typeRepr, hintName: "", notes})
     }
     for bnd in checked.bindings {
         if bnd.name == "" || bnd.name == "_" {
             continue
         }
         let isLocalLet = inspectIsLetPatternIdx(letPatterns, bnd.node)
-        let rule = if isLocalLet { "LET" } else { "BIND" }
-        let nodeKind = if isLocalLet { "LetStmt" } else { "Binding" }
+        let rule = if isLocalLet {
+            "LET"
+        } else {
+            "BIND"
+        }
+        let nodeKind = if isLocalLet {
+            "LetStmt"
+        } else {
+            "Binding"
+        }
         let mut notes: List<String> = []
         if isLocalLet {
             notes.push("synth")
@@ -627,17 +576,9 @@ fn inspectBuildRecords(
         let span = if isLocalLet {
             inspectLookupLetSpan(letSpanByPattern, bnd.node, bnd.start, bnd.end)
         } else {
-            InspectSpan { start: bnd.start, end: bnd.end }
+            InspectSpan {start: bnd.start, end: bnd.end}
         }
-        out.push(InspectRecord {
-            start: span.start,
-            end: span.end,
-            nodeKind,
-            rule,
-            typeRepr: bnd.typeRepr,
-            hintName: "",
-            notes,
-        })
+        out.push(InspectRecord {start: span.start, end: span.end, nodeKind, rule, typeRepr: bnd.typeRepr, hintName: "", notes})
     }
     let n = arena.nodes.len()
     for i in 0..n {
@@ -652,19 +593,10 @@ fn inspectBuildRecords(
         let span = inspectCoverSpan(arena, i, node.start, node.end)
         let mut turboNotes: List<String> = []
         turboNotes.push("type args: [" + strings.join(args, ", ") + "]")
-        out.push(InspectRecord {
-            start: span.start,
-            end: span.end,
-            nodeKind: "TurbofishExpr",
-            rule: "TURBOFISH",
-            typeRepr: frontInvalidTypeRepr(),
-            hintName: "",
-            notes: turboNotes,
-        })
+        out.push(InspectRecord {start: span.start, end: span.end, nodeKind: "TurbofishExpr", rule: "TURBOFISH", typeRepr: frontInvalidTypeRepr(), hintName: "", notes: turboNotes})
     }
     inspectSortByOffset(out)
 }
-
 /// Render an AST type-expression node to its source-like string form,
 /// e.g. `List<Int>`, `fn(A) -> B`, `(A, B)`, `T?`. Mirrors the
 /// formatter's `ostyAstType` without depending on OstyAstFormatter —
@@ -696,7 +628,11 @@ fn inspectRenderTypeNode(arena: AstArena, idx: Int) -> String {
         }
         return "(" + strings.join(parts, ", ") + ")"
     }
-    let mut text = if node.text != "" { node.text } else { astNodeKindName(node.kind) }
+    let mut text = if node.text != "" {
+        node.text
+    } else {
+        astNodeKindName(node.kind)
+    }
     if node.children.len() > 0 {
         let mut parts: List<String> = []
         for c in node.children {
@@ -706,7 +642,6 @@ fn inspectRenderTypeNode(arena: AstArena, idx: Int) -> String {
     }
     text
 }
-
 /// Build a dense pattern-idx → enclosing-LetStmt-span table in ONE
 /// arena pass. Prior impl (`inspectLetStmtSpanFor`) did an O(n) scan
 /// per binding, making the whole thing O(bindings × nodes); the dense
@@ -716,7 +651,7 @@ fn inspectLetSpanByPatternTable(arena: AstArena) -> List<InspectSpan> {
     let n = arena.nodes.len()
     let mut table: List<InspectSpan> = []
     for _k in 0..n {
-        table.push(InspectSpan { start: -1, end: -1 })
+        table.push(InspectSpan {start: -1, end: -1})
     }
     for i in 0..n {
         let node = arena.nodes[i]
@@ -727,18 +662,11 @@ fn inspectLetSpanByPatternTable(arena: AstArena) -> List<InspectSpan> {
     }
     table
 }
-
-fn inspectMarkLetPatternSpan(
-    arena: AstArena,
-    patIdx: Int,
-    spanStart: Int,
-    spanEnd: Int,
-    table: List<InspectSpan>,
-) {
+fn inspectMarkLetPatternSpan(arena: AstArena, patIdx: Int, spanStart: Int, spanEnd: Int, table: List<InspectSpan>) {
     if patIdx < 0 || patIdx >= table.len() {
         return
     }
-    table[patIdx] = InspectSpan { start: spanStart, end: spanEnd }
+    table[patIdx] = InspectSpan {start: spanStart, end: spanEnd}
     let node = arena.nodes[patIdx]
     if node.kind != AstNPattern {
         return
@@ -749,86 +677,160 @@ fn inspectMarkLetPatternSpan(
         inspectMarkLetPatternSpan(arena, child, spanStart, spanEnd, table)
     }
 }
-
-fn inspectLookupLetSpan(
-    table: List<InspectSpan>,
-    patternIdx: Int,
-    fallbackStart: Int,
-    fallbackEnd: Int,
-) -> InspectSpan {
+fn inspectLookupLetSpan(table: List<InspectSpan>, patternIdx: Int, fallbackStart: Int, fallbackEnd: Int) -> InspectSpan {
     if patternIdx < 0 || patternIdx >= table.len() {
-        return InspectSpan { start: fallbackStart, end: fallbackEnd }
+        return InspectSpan {start: fallbackStart, end: fallbackEnd}
     }
     let hit = table[patternIdx]
     if hit.start < 0 {
-        return InspectSpan { start: fallbackStart, end: fallbackEnd }
+        return InspectSpan {start: fallbackStart, end: fallbackEnd}
     }
     hit
 }
-
 /// Map an AstNodeKind name (as rendered by `astNodeKindName`, which
 /// strips the `AstN` prefix — see `toolchain/parser.osty`) to the
 /// LANG_SPEC §2a.4 rule label. Returns "" for kinds that don't carry
 /// an inference record (e.g. pattern nodes, declarations).
 fn inspectRuleForKind(kind: String) -> String {
-    if kind == "IntLit" { return "LIT-INT" }
-    if kind == "FloatLit" { return "LIT-FLOAT" }
-    if kind == "StringLit" { return "LIT-STRING" }
-    if kind == "BoolLit" { return "LIT-BOOL" }
-    if kind == "CharLit" { return "LIT-CHAR" }
-    if kind == "ByteLit" { return "LIT-BYTE" }
-    if kind == "Ident" { return "VAR" }
-    if kind == "Paren" { return "PAREN" }
-    if kind == "Block" { return "BLOCK" }
-    if kind == "Unary" { return "UNARY" }
-    if kind == "Binary" { return "BINOP" }
-    if kind == "If" { return "IF" }
-    if kind == "Match" { return "MATCH" }
-    if kind == "Call" { return "CALL" }
-    if kind == "Field" { return "FIELD" }
-    if kind == "Index" { return "INDEX" }
-    if kind == "List" { return "LIST" }
-    if kind == "Map" { return "MAP" }
-    if kind == "Tuple" { return "TUPLE" }
-    if kind == "StructLit" { return "STRUCT-LIT" }
-    if kind == "Range" { return "RANGE" }
-    if kind == "Closure" { return "CLOSURE" }
-    if kind == "Question" { return "QUESTION" }
-    if kind == "Turbofish" { return "TURBOFISH" }
+    if kind == "IntLit" {
+        return "LIT-INT"
+    }
+    if kind == "FloatLit" {
+        return "LIT-FLOAT"
+    }
+    if kind == "StringLit" {
+        return "LIT-STRING"
+    }
+    if kind == "BoolLit" {
+        return "LIT-BOOL"
+    }
+    if kind == "CharLit" {
+        return "LIT-CHAR"
+    }
+    if kind == "ByteLit" {
+        return "LIT-BYTE"
+    }
+    if kind == "Ident" {
+        return "VAR"
+    }
+    if kind == "Paren" {
+        return "PAREN"
+    }
+    if kind == "Block" {
+        return "BLOCK"
+    }
+    if kind == "Unary" {
+        return "UNARY"
+    }
+    if kind == "Binary" {
+        return "BINOP"
+    }
+    if kind == "If" {
+        return "IF"
+    }
+    if kind == "Match" {
+        return "MATCH"
+    }
+    if kind == "Call" {
+        return "CALL"
+    }
+    if kind == "Field" {
+        return "FIELD"
+    }
+    if kind == "Index" {
+        return "INDEX"
+    }
+    if kind == "List" {
+        return "LIST"
+    }
+    if kind == "Map" {
+        return "MAP"
+    }
+    if kind == "Tuple" {
+        return "TUPLE"
+    }
+    if kind == "StructLit" {
+        return "STRUCT-LIT"
+    }
+    if kind == "Range" {
+        return "RANGE"
+    }
+    if kind == "Closure" {
+        return "CLOSURE"
+    }
+    if kind == "Question" {
+        return "QUESTION"
+    }
+    if kind == "Turbofish" {
+        return "TURBOFISH"
+    }
     ""
 }
-
 /// Map a `FrontCheckedSymbol.kind` (e.g. "fn", "let", "struct") to the
 /// inspect rule label. Returns "" for symbol kinds that shouldn't
 /// surface as records (currently none — "use" also gets USE).
 fn inspectRuleForSymbolKind(kind: String) -> String {
-    if kind == "fn" { return "FN-DECL" }
-    if kind == "let" { return "LET" }
-    if kind == "struct" { return "STRUCT-DECL" }
-    if kind == "enum" { return "ENUM-DECL" }
-    if kind == "interface" { return "INTERFACE-DECL" }
-    if kind == "alias" { return "TYPE-ALIAS" }
-    if kind == "use" { return "USE" }
-    if kind == "field" { return "FIELD-DECL" }
-    if kind == "variant" { return "VARIANT-DECL" }
+    if kind == "fn" {
+        return "FN-DECL"
+    }
+    if kind == "let" {
+        return "LET"
+    }
+    if kind == "struct" {
+        return "STRUCT-DECL"
+    }
+    if kind == "enum" {
+        return "ENUM-DECL"
+    }
+    if kind == "interface" {
+        return "INTERFACE-DECL"
+    }
+    if kind == "alias" {
+        return "TYPE-ALIAS"
+    }
+    if kind == "use" {
+        return "USE"
+    }
+    if kind == "field" {
+        return "FIELD-DECL"
+    }
+    if kind == "variant" {
+        return "VARIANT-DECL"
+    }
     ""
 }
-
 /// Map a symbol kind to a nodeKind string suitable for the record's
 /// `nodeKind` field. Parallels `astNodeKindName` for decl-level symbols.
 fn inspectNodeKindForSymbolKind(kind: String) -> String {
-    if kind == "fn" { return "FnDecl" }
-    if kind == "let" { return "LetDecl" }
-    if kind == "struct" { return "StructDecl" }
-    if kind == "enum" { return "EnumDecl" }
-    if kind == "interface" { return "InterfaceDecl" }
-    if kind == "alias" { return "TypeAliasDecl" }
-    if kind == "use" { return "UseDecl" }
-    if kind == "field" { return "StructField" }
-    if kind == "variant" { return "EnumVariant" }
+    if kind == "fn" {
+        return "FnDecl"
+    }
+    if kind == "let" {
+        return "LetDecl"
+    }
+    if kind == "struct" {
+        return "StructDecl"
+    }
+    if kind == "enum" {
+        return "EnumDecl"
+    }
+    if kind == "interface" {
+        return "InterfaceDecl"
+    }
+    if kind == "alias" {
+        return "TypeAliasDecl"
+    }
+    if kind == "use" {
+        return "UseDecl"
+    }
+    if kind == "field" {
+        return "StructField"
+    }
+    if kind == "variant" {
+        return "EnumVariant"
+    }
     "Symbol"
 }
-
 /// Sort records by (start, end) ascending. Stable insertion sort; typed
 /// node lists are short enough (hundreds of entries per file) that the
 /// O(n²) cost is irrelevant and the simplicity is worth more than a
@@ -860,12 +862,10 @@ fn inspectSortByOffset(recs: List<InspectRecord>) -> List<InspectRecord> {
     }
     sorted
 }
-
 struct InspectSpan {
     start: Int,
     end: Int,
 }
-
 /// Widen postfix-expression spans to match Go's `ast.Node.Pos / End`.
 ///
 /// The parser stamps each postfix node's token range over ONLY the
@@ -877,19 +877,14 @@ struct InspectSpan {
 ///
 /// Non-postfix kinds and out-of-range indices fall back to the
 /// checker-supplied `(fallbackStart, fallbackEnd)`.
-fn inspectCoverSpan(
-    arena: AstArena,
-    nodeIdx: Int,
-    fallbackStart: Int,
-    fallbackEnd: Int,
-) -> InspectSpan {
+fn inspectCoverSpan(arena: AstArena, nodeIdx: Int, fallbackStart: Int, fallbackEnd: Int) -> InspectSpan {
     let n = arena.nodes.len()
     if nodeIdx < 0 || nodeIdx >= n {
-        return InspectSpan { start: fallbackStart, end: fallbackEnd }
+        return InspectSpan {start: fallbackStart, end: fallbackEnd}
     }
     let node = arena.nodes[nodeIdx]
     if !inspectIsPostfixKind(node.kind) {
-        return InspectSpan { start: node.start, end: node.end }
+        return InspectSpan {start: node.start, end: node.end}
     }
     let end = node.end
     let mut start = node.start
@@ -905,25 +900,16 @@ fn inspectCoverSpan(
         }
         cur = leftNode.left
     }
-    InspectSpan { start, end }
+    InspectSpan {start, end}
 }
-
 fn inspectIsPostfixKind(kind: AstNodeKind) -> Bool {
-    kind == AstNCall
-        || kind == AstNField
-        || kind == AstNIndex
-        || kind == AstNQuestion
-        || kind == AstNTurbofish
+    kind == AstNCall || kind == AstNField || kind == AstNIndex || kind == AstNQuestion || kind == AstNTurbofish
 }
-
 /// Build a dense NodeID-indexed note table joining
 /// `FrontCheckResult.instantiations` onto its owning AST node.
 /// Entry is `"instantiated [T, U]"` when the instantiation record
 /// carries non-empty type args, else empty.
-fn inspectInstantiationNotesByNode(
-    arena: AstArena,
-    checked: FrontCheckResult,
-) -> List<String> {
+fn inspectInstantiationNotesByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
     let n = arena.nodes.len()
     let mut notes: List<String> = []
     for _k in 0..n {
@@ -944,16 +930,11 @@ fn inspectInstantiationNotesByNode(
     }
     notes
 }
-
 /// Per-call annotation strings, matching Go's `callNotes` in
 /// `internal/check/inspect.go`: the method-call marker and the
 /// instantiation note are pushed as SEPARATE entries so consumers
 /// that split on list length (LSP, tests) see the same shape.
-fn inspectNotesForTypedNode(
-    arena: AstArena,
-    instNotesByNode: List<String>,
-    tn: FrontCheckedNode,
-) -> List<String> {
+fn inspectNotesForTypedNode(arena: AstArena, instNotesByNode: List<String>, tn: FrontCheckedNode) -> List<String> {
     let mut out: List<String> = []
     if tn.kind != "Call" {
         return out
@@ -976,42 +957,33 @@ fn inspectNotesForTypedNode(
     }
     out
 }
-
 // ---------------------------------------------------------------------
 // Bridge helpers (called from internal/selfhost/inspect_adapter.go).
 // ---------------------------------------------------------------------
-
 /// Count records the bridge will receive. The Go adapter uses this to
 /// pre-size its result slice and to sanity-check that the FFI round-
 /// trip didn't drop records.
 pub fn inspectRecordCount(recs: List<InspectRecord>) -> Int {
     recs.len()
 }
-
 /// Accessors used by the Go bridge to pull each record field by index.
 /// Returning primitives one at a time avoids the struct-flatten path
 /// that the selfhost FFI currently does not implement.
-
 pub fn inspectRecordStart(recs: List<InspectRecord>, i: Int) -> Int {
     recs[i].start
 }
-
 pub fn inspectRecordEnd(recs: List<InspectRecord>, i: Int) -> Int {
     recs[i].end
 }
-
 pub fn inspectRecordNodeKind(recs: List<InspectRecord>, i: Int) -> String {
     recs[i].nodeKind
 }
-
 pub fn inspectRecordRule(recs: List<InspectRecord>, i: Int) -> String {
     recs[i].rule
 }
-
 pub fn inspectRecordTypeName(recs: List<InspectRecord>, i: Int) -> String {
     frontTypeReprToString(recs[i].typeRepr)
 }
-
 pub fn inspectRecordHintName(recs: List<InspectRecord>, i: Int) -> String {
     recs[i].hintName
 }

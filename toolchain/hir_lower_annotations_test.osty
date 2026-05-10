@@ -18,26 +18,22 @@
 //   - hirLowerJsonVariantOptions      (-> HirLowerJsonVariantInfo)
 //   - hirLowerParseAnnotationInt      (-> HirLowerIntParse)
 //   - hirLowerAnnotationStringLit     (-> HirLowerStringParse)
-
 use std.testing
-
 // ==== Test fixtures ===================================================
-
-fn sp() -> HirSpan { hirNoSpan() }
-
+fn sp() -> HirSpan {
+    hirNoSpan()
+}
 /// mkFlag builds a bare-flag annotation `#[name]` (e.g. `#[pure]`,
 /// `#[cold]`, `#[parallel]`).
 fn mkFlag(name: String) -> HirAnnotation {
     hirAnnotation(name, sp())
 }
-
 /// mkIntArg constructs a key=IntLit annotation arg (e.g. `width = 4`,
 /// `count = 8`).
 fn mkIntArg(key: String, text: String) -> HirAnnotationArg {
     let lit = hirIntLit(text, hirTInt(), sp())
     hirAnnotationArgKeyValue(key, lit, sp())
 }
-
 /// mkStringArgPositional constructs a positional StringLit arg used
 /// by `#[export("name")]`.
 fn mkStringArgPositional(text: String) -> HirAnnotationArg {
@@ -46,7 +42,6 @@ fn mkStringArgPositional(text: String) -> HirAnnotationArg {
     let lit = hirStringLit(parts, sp())
     hirAnnotationArgPositional(lit, sp())
 }
-
 /// mkStringArgKeyValue constructs a key="str" arg used by
 /// `#[json(key = "user_id")]`.
 fn mkStringArgKeyValue(key: String, text: String) -> HirAnnotationArg {
@@ -55,21 +50,17 @@ fn mkStringArgKeyValue(key: String, text: String) -> HirAnnotationArg {
     let lit = hirStringLit(parts, sp())
     hirAnnotationArgKeyValue(key, lit, sp())
 }
-
 /// mkBareKey constructs a bare-identifier arg (e.g. `scalable`,
 /// `predicate`, `always`, `never`, `skip`, `optional`, or a param
 /// name for `#[noalias(p1, p2)]`).
 fn mkBareKey(key: String) -> HirAnnotationArg {
     hirAnnotationArgFlag(key, sp())
 }
-
 // ==== hirLowerHasNamedAnnotation =====================================
-
 fn testHasNamedAnnotationAbsent() {
     let annots: List<HirAnnotation> = []
     testing.assert(!hirLowerHasNamedAnnotation(annots, "pure"))
 }
-
 fn testHasNamedAnnotationPresent() {
     let mut annots: List<HirAnnotation> = []
     annots.push(mkFlag("pure"))
@@ -78,9 +69,7 @@ fn testHasNamedAnnotationPresent() {
     testing.assert(hirLowerHasNamedAnnotation(annots, "cold"))
     testing.assert(!hirLowerHasNamedAnnotation(annots, "hot"))
 }
-
 // ==== hirLowerExtractVectorizeArgs ===================================
-
 fn testExtractVectorizeAbsent() {
     let annots: List<HirAnnotation> = []
     let v = hirLowerExtractVectorizeArgs(annots)
@@ -89,7 +78,6 @@ fn testExtractVectorizeAbsent() {
     testing.assert(!v.scalable)
     testing.assert(!v.predicate)
 }
-
 fn testExtractVectorizeBareEnables() {
     let mut annots: List<HirAnnotation> = []
     annots.push(mkFlag("vectorize"))
@@ -99,7 +87,6 @@ fn testExtractVectorizeBareEnables() {
     testing.assert(!v.scalable)
     testing.assert(!v.predicate)
 }
-
 fn testExtractVectorizeFullArgs() {
     let mut ann = hirAnnotation("vectorize", sp())
     ann.args.push(mkBareKey("scalable"))
@@ -113,7 +100,6 @@ fn testExtractVectorizeFullArgs() {
     testing.assert(v.predicate)
     testing.assertEq(v.width, 8)
 }
-
 fn testExtractVectorizeWidthUnderscoreAndHex() {
     let mut ann = hirAnnotation("vectorize", sp())
     ann.args.push(mkIntArg("width", "0x10_0"))
@@ -122,7 +108,6 @@ fn testExtractVectorizeWidthUnderscoreAndHex() {
     let v = hirLowerExtractVectorizeArgs(annots)
     testing.assertEq(v.width, 256)
 }
-
 fn testExtractVectorizeIgnoresUnknownKeys() {
     let mut ann = hirAnnotation("vectorize", sp())
     ann.args.push(mkBareKey("bogus"))
@@ -132,9 +117,7 @@ fn testExtractVectorizeIgnoresUnknownKeys() {
     testing.assert(v.enable)
     testing.assertEq(v.width, 0)
 }
-
 // ==== hirLowerExtractUnrollArgs ======================================
-
 fn testExtractUnrollBare() {
     let mut annots: List<HirAnnotation> = []
     annots.push(mkFlag("unroll"))
@@ -142,7 +125,6 @@ fn testExtractUnrollBare() {
     testing.assert(u.enable)
     testing.assertEq(u.count, 0)
 }
-
 fn testExtractUnrollCount() {
     let mut ann = hirAnnotation("unroll", sp())
     ann.args.push(mkIntArg("count", "4"))
@@ -152,27 +134,22 @@ fn testExtractUnrollCount() {
     testing.assert(u.enable)
     testing.assertEq(u.count, 4)
 }
-
 fn testExtractUnrollAbsent() {
     let annots: List<HirAnnotation> = []
     let u = hirLowerExtractUnrollArgs(annots)
     testing.assert(!u.enable)
     testing.assertEq(u.count, 0)
 }
-
 // ==== hirLowerExtractInlineMode ======================================
-
 fn testExtractInlineNone() {
     let annots: List<HirAnnotation> = []
     testing.assert(hirLowerExtractInlineMode(annots) == HirInlineNone)
 }
-
 fn testExtractInlineSoft() {
     let mut annots: List<HirAnnotation> = []
     annots.push(mkFlag("inline"))
     testing.assert(hirLowerExtractInlineMode(annots) == HirInlineSoft)
 }
-
 fn testExtractInlineAlways() {
     let mut ann = hirAnnotation("inline", sp())
     ann.args.push(mkBareKey("always"))
@@ -180,7 +157,6 @@ fn testExtractInlineAlways() {
     annots.push(ann)
     testing.assert(hirLowerExtractInlineMode(annots) == HirInlineAlways)
 }
-
 fn testExtractInlineNever() {
     let mut ann = hirAnnotation("inline", sp())
     ann.args.push(mkBareKey("never"))
@@ -188,16 +164,13 @@ fn testExtractInlineNever() {
     annots.push(ann)
     testing.assert(hirLowerExtractInlineMode(annots) == HirInlineNever)
 }
-
 // ==== hirLowerExtractNoaliasArgs =====================================
-
 fn testExtractNoaliasAbsent() {
     let annots: List<HirAnnotation> = []
     let n = hirLowerExtractNoaliasArgs(annots)
     testing.assert(!n.all)
     testing.assertEq(n.names.len(), 0)
 }
-
 fn testExtractNoaliasBare() {
     let mut annots: List<HirAnnotation> = []
     annots.push(mkFlag("noalias"))
@@ -205,7 +178,6 @@ fn testExtractNoaliasBare() {
     testing.assert(n.all)
     testing.assertEq(n.names.len(), 0)
 }
-
 fn testExtractNoaliasParams() {
     let mut ann = hirAnnotation("noalias", sp())
     ann.args.push(mkBareKey("p1"))
@@ -218,15 +190,12 @@ fn testExtractNoaliasParams() {
     testing.assertEq(n.names[0], "p1")
     testing.assertEq(n.names[1], "p2")
 }
-
 // ==== hirLowerExtractTargetFeatures ==================================
-
 fn testExtractTargetFeaturesEmpty() {
     let annots: List<HirAnnotation> = []
     let f = hirLowerExtractTargetFeatures(annots)
     testing.assertEq(f.len(), 0)
 }
-
 fn testExtractTargetFeaturesOrderPreserved() {
     let mut ann = hirAnnotation("target_feature", sp())
     ann.args.push(mkBareKey("avx512f"))
@@ -238,14 +207,11 @@ fn testExtractTargetFeaturesOrderPreserved() {
     testing.assertEq(f[0], "avx512f")
     testing.assertEq(f[1], "avx512bw")
 }
-
 // ==== hirLowerExtractExportSymbol ====================================
-
 fn testExtractExportSymbolAbsent() {
     let annots: List<HirAnnotation> = []
     testing.assertEq(hirLowerExtractExportSymbol(annots), "")
 }
-
 fn testExtractExportSymbolLiteral() {
     let mut ann = hirAnnotation("export", sp())
     ann.args.push(mkStringArgPositional("osty_sum"))
@@ -253,19 +219,16 @@ fn testExtractExportSymbolLiteral() {
     annots.push(ann)
     testing.assertEq(hirLowerExtractExportSymbol(annots), "osty_sum")
 }
-
 fn testExtractExportSymbolRejectsKeyArg() {
-    // Keyed `#[export(name = "x")]` is malformed (resolver rejects),
-    // but guard the extractor anyway — `key != ""` must disqualify.
     let mut ann = hirAnnotation("export", sp())
     ann.args.push(mkStringArgKeyValue("name", "x"))
     let mut annots: List<HirAnnotation> = []
     annots.push(ann)
     testing.assertEq(hirLowerExtractExportSymbol(annots), "")
 }
-
+// Keyed `#[export(name = "x")]` is malformed (resolver rejects),
+// but guard the extractor anyway — `key != ""` must disqualify.
 // ==== hirLowerJsonFieldOptions =======================================
-
 fn testJsonFieldOptionsAbsent() {
     let annots: List<HirAnnotation> = []
     let opts = hirLowerJsonFieldOptions(annots)
@@ -273,7 +236,6 @@ fn testJsonFieldOptionsAbsent() {
     testing.assert(!opts.skip)
     testing.assert(!opts.optional)
 }
-
 fn testJsonFieldOptionsKeyAndSkip() {
     let mut ann = hirAnnotation("json", sp())
     ann.args.push(mkStringArgKeyValue("key", "user_id"))
@@ -285,7 +247,6 @@ fn testJsonFieldOptionsKeyAndSkip() {
     testing.assert(opts.skip)
     testing.assert(!opts.optional)
 }
-
 fn testJsonFieldOptionsOptional() {
     let mut ann = hirAnnotation("json", sp())
     ann.args.push(mkBareKey("optional"))
@@ -294,16 +255,13 @@ fn testJsonFieldOptionsOptional() {
     let opts = hirLowerJsonFieldOptions(annots)
     testing.assert(opts.optional)
 }
-
 // ==== hirLowerJsonVariantOptions =====================================
-
 fn testJsonVariantOptionsAbsent() {
     let annots: List<HirAnnotation> = []
     let opts = hirLowerJsonVariantOptions(annots)
     testing.assertEq(opts.tag, "")
     testing.assert(!opts.skip)
 }
-
 fn testJsonVariantOptionsKeyAndSkip() {
     let mut ann = hirAnnotation("json", sp())
     ann.args.push(mkStringArgKeyValue("key", "click"))
@@ -314,26 +272,21 @@ fn testJsonVariantOptionsKeyAndSkip() {
     testing.assertEq(opts.tag, "click")
     testing.assert(opts.skip)
 }
-
 // ==== hirLowerParseAnnotationInt =====================================
-
 fn parseIntFromText(text: String) -> HirLowerIntParse {
     let lit = hirIntLit(text, hirTInt(), sp())
     hirLowerParseAnnotationInt(lit)
 }
-
 fn testParseIntDecimal() {
     let r = parseIntFromText("42")
     testing.assert(r.ok)
     testing.assertEq(r.value, 42)
 }
-
 fn testParseIntUnderscore() {
     let r = parseIntFromText("1_000_000")
     testing.assert(r.ok)
     testing.assertEq(r.value, 1000000)
 }
-
 fn testParseIntHex() {
     let r = parseIntFromText("0xFF")
     testing.assert(r.ok)
@@ -342,31 +295,26 @@ fn testParseIntHex() {
     testing.assert(r2.ok)
     testing.assertEq(r2.value, 65535)
 }
-
 fn testParseIntOctal() {
     let r = parseIntFromText("0o777")
     testing.assert(r.ok)
     testing.assertEq(r.value, 511)
 }
-
 fn testParseIntBinary() {
     let r = parseIntFromText("0b1010_0101")
     testing.assert(r.ok)
     testing.assertEq(r.value, 165)
 }
-
 fn testParseIntZero() {
     let r = parseIntFromText("0")
     testing.assert(r.ok)
     testing.assertEq(r.value, 0)
 }
-
 fn testParseIntEmptyAfterPrefixRejected() {
-    // "0x" alone (no digits) is invalid.
     let r = parseIntFromText("0x")
     testing.assert(!r.ok)
 }
-
+// "0x" alone (no digits) is invalid.
 fn testParseIntDigitOutOfBaseRejected() {
     let r = parseIntFromText("0b102")
     testing.assert(!r.ok)
@@ -375,7 +323,6 @@ fn testParseIntDigitOutOfBaseRejected() {
     let r3 = parseIntFromText("0xGG")
     testing.assert(!r3.ok)
 }
-
 fn testParseIntRejectsNonIntExpr() {
     let mut parts: List<HirStringPart> = []
     parts.push(hirStringPartLit("42"))
@@ -383,9 +330,7 @@ fn testParseIntRejectsNonIntExpr() {
     let r = hirLowerParseAnnotationInt(e)
     testing.assert(!r.ok)
 }
-
 // ==== hirLowerAnnotationStringLit ====================================
-
 fn testAnnotationStringLitPlain() {
     let mut parts: List<HirStringPart> = []
     parts.push(hirStringPartLit("hello"))
@@ -394,7 +339,6 @@ fn testAnnotationStringLitPlain() {
     testing.assert(r.ok)
     testing.assertEq(r.value, "hello")
 }
-
 fn testAnnotationStringLitMultiPart() {
     let mut parts: List<HirStringPart> = []
     parts.push(hirStringPartLit("osty_"))
@@ -404,7 +348,6 @@ fn testAnnotationStringLitMultiPart() {
     testing.assert(r.ok)
     testing.assertEq(r.value, "osty_sum")
 }
-
 fn testAnnotationStringLitRejectsInterpolated() {
     let mut parts: List<HirStringPart> = []
     parts.push(hirStringPartLit("prefix_"))
@@ -413,7 +356,6 @@ fn testAnnotationStringLitRejectsInterpolated() {
     let r = hirLowerAnnotationStringLit(e)
     testing.assert(!r.ok)
 }
-
 fn testAnnotationStringLitRejectsNonString() {
     let e = hirIntLit("42", hirTInt(), sp())
     let r = hirLowerAnnotationStringLit(e)

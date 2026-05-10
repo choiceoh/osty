@@ -13,9 +13,7 @@
 // the Go-side JSON bridge (`cmd/osty-native-checker`) gets its
 // `diagnostics` payload. Until then, `CheckDiagnostic.code` is a plain
 // `String` that round-trips through the bridge as-is.
-
 use std.strings as strings
-
 /// CheckDiagnostic is the structured record every check-time error or
 /// warning becomes. `start` and `end` are byte offsets into the parsed
 /// source, matching the existing convention used by `FrontCheckedNode`
@@ -29,95 +27,136 @@ pub struct CheckDiagnostic {
     pub end: Int,
     pub notes: List<String>,
 }
-
 // ---------------------------------------------------------------------
 // Reserved type-checking codes. Keeping them as `pub fn` constants
 // (rather than a dedicated enum) so call sites read as
 // `diagMismatch(...)` rather than threading a code enum everywhere.
 // ---------------------------------------------------------------------
-
 // Codes return the canonical E07xx numbers defined in
 // internal/diag/codes.go (the source that ERROR_CODES.md is generated
 // from). Do not renumber individually; either update both tables, or
 // add a new constant to codes.go first and reference it here.
-pub fn checkCodeTypeMismatch() -> String { "E0700" }
-pub fn checkCodeArgCount() -> String { "E0701" }
-pub fn checkCodeUnknownField() -> String { "E0702" }
-pub fn checkCodeUnknownMethod() -> String { "E0703" }
-pub fn checkCodeNotCallable() -> String { "E0704" }
-pub fn checkCodeMissingField() -> String { "E0708" }
-pub fn checkCodeQuestionNotOptional() -> String { "E0717" }
-pub fn checkCodeOptionalChainOnNon() -> String { "E0719" }
-pub fn checkCodeInvalidAssignTarget() -> String { "E0724" }
-pub fn checkCodeImmutableAssign() -> String { "E0725" }
-pub fn checkCodeReturnMismatch() -> String { "E0726" }
-pub fn checkCodeGenericArgCount() -> String { "E0727" }
-pub fn checkCodeUnknownVariant() -> String { "E0728" }
-pub fn checkCodeNonExhaustiveMatch() -> String { "E0731" }
-pub fn checkCodeUnreachablePattern() -> String { "E0740" }
-pub fn checkCodeRefutablePattern() -> String { "E0741" }
-pub fn checkCodeGenericCallableReference() -> String { "E0742" }
-pub fn checkCodeNonEscapingEscape() -> String { "E0743" }
-pub fn checkCodeOperandType() -> String { "E0744" }
-pub fn checkCodeUnknownName() -> String { "E0745" }
-pub fn checkCodeDuplicateField() -> String { "E0746" }
-pub fn checkCodeDuplicateMethod() -> String { "E0747" }
-pub fn checkCodeCannotInferTyParam() -> String { "E0748" }
-pub fn checkCodeGenericBoundViolation() -> String { "E0749" }
-pub fn checkCodeInterfaceNotSatisfied() -> String { "E0751" }
-pub fn checkCodeAsQuestionBadType() -> String { "E0757" }
-pub fn checkCodeUndefinedLabel() -> String { "E0763" }
-pub fn checkCodeLabelShadow() -> String { "E0764" }
-pub fn checkCodeClosureAnnotationRequired() -> String { "E0752" }
-pub fn checkCodePatternShapeMismatch() -> String { "E0753" }
-pub fn checkCodeRuntimePrivilegeViolation() -> String { "E0770" }
-pub fn checkCodePodShapeViolation() -> String { "E0771" }
-pub fn checkCodeNoAllocViolation() -> String { "E0772" }
-pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
-pub fn checkCodeBuilderMissingRequiredField() -> String { "E0774" }
-pub fn checkCodePureViolation() -> String { "E0775" }
-
+pub fn checkCodeTypeMismatch() -> String {
+    "E0700"
+}
+pub fn checkCodeArgCount() -> String {
+    "E0701"
+}
+pub fn checkCodeUnknownField() -> String {
+    "E0702"
+}
+pub fn checkCodeUnknownMethod() -> String {
+    "E0703"
+}
+pub fn checkCodeNotCallable() -> String {
+    "E0704"
+}
+pub fn checkCodeMissingField() -> String {
+    "E0708"
+}
+pub fn checkCodeQuestionNotOptional() -> String {
+    "E0717"
+}
+pub fn checkCodeOptionalChainOnNon() -> String {
+    "E0719"
+}
+pub fn checkCodeInvalidAssignTarget() -> String {
+    "E0724"
+}
+pub fn checkCodeImmutableAssign() -> String {
+    "E0725"
+}
+pub fn checkCodeReturnMismatch() -> String {
+    "E0726"
+}
+pub fn checkCodeGenericArgCount() -> String {
+    "E0727"
+}
+pub fn checkCodeUnknownVariant() -> String {
+    "E0728"
+}
+pub fn checkCodeNonExhaustiveMatch() -> String {
+    "E0731"
+}
+pub fn checkCodeUnreachablePattern() -> String {
+    "E0740"
+}
+pub fn checkCodeRefutablePattern() -> String {
+    "E0741"
+}
+pub fn checkCodeGenericCallableReference() -> String {
+    "E0742"
+}
+pub fn checkCodeNonEscapingEscape() -> String {
+    "E0743"
+}
+pub fn checkCodeOperandType() -> String {
+    "E0744"
+}
+pub fn checkCodeUnknownName() -> String {
+    "E0745"
+}
+pub fn checkCodeDuplicateField() -> String {
+    "E0746"
+}
+pub fn checkCodeDuplicateMethod() -> String {
+    "E0747"
+}
+pub fn checkCodeCannotInferTyParam() -> String {
+    "E0748"
+}
+pub fn checkCodeGenericBoundViolation() -> String {
+    "E0749"
+}
+pub fn checkCodeInterfaceNotSatisfied() -> String {
+    "E0751"
+}
+pub fn checkCodeAsQuestionBadType() -> String {
+    "E0757"
+}
+pub fn checkCodeUndefinedLabel() -> String {
+    "E0763"
+}
+pub fn checkCodeLabelShadow() -> String {
+    "E0764"
+}
+pub fn checkCodeClosureAnnotationRequired() -> String {
+    "E0752"
+}
+pub fn checkCodePatternShapeMismatch() -> String {
+    "E0753"
+}
+pub fn checkCodeRuntimePrivilegeViolation() -> String {
+    "E0770"
+}
+pub fn checkCodePodShapeViolation() -> String {
+    "E0771"
+}
+pub fn checkCodeNoAllocViolation() -> String {
+    "E0772"
+}
+pub fn checkCodeIntrinsicNonEmptyBody() -> String {
+    "E0773"
+}
+pub fn checkCodeBuilderMissingRequiredField() -> String {
+    "E0774"
+}
+pub fn checkCodePureViolation() -> String {
+    "E0775"
+}
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
 // sites stay readable.
 // ---------------------------------------------------------------------
-
-pub fn checkDiag(
-    code: String,
-    message: String,
-    start: Int,
-    end: Int,
-) -> CheckDiagnostic {
-    CheckDiagnostic {
-        code,
-        severity: diagnosticSeverity(code),
-        message,
-        start,
-        end,
-        notes: [],
-    }
+pub fn checkDiag(code: String, message: String, start: Int, end: Int) -> CheckDiagnostic {
+    CheckDiagnostic {code, severity: diagnosticSeverity(code), message, start, end, notes: []}
 }
-
 /// checkDiagWithNotes attaches optional notes to a freshly built
 /// diagnostic. Notes are rendered underneath the primary span by the
 /// host-side renderer, mirroring the `internal/diag` surface.
-pub fn checkDiagWithNotes(
-    code: String,
-    message: String,
-    start: Int,
-    end: Int,
-    notes: List<String>,
-) -> CheckDiagnostic {
-    CheckDiagnostic {
-        code,
-        severity: diagnosticSeverity(code),
-        message,
-        start,
-        end,
-        notes,
-    }
+pub fn checkDiagWithNotes(code: String, message: String, start: Int, end: Int, notes: List<String>) -> CheckDiagnostic {
+    CheckDiagnostic {code, severity: diagnosticSeverity(code), message, start, end, notes}
 }
-
 // ---------------------------------------------------------------------
 // Domain-specific constructors. Each one fills in the stable message
 // template; the elaborator passes the `start`/`end` span of the node
@@ -125,28 +164,15 @@ pub fn checkDiagWithNotes(
 // types (via `tyToString`) so the diagnostic stays stable across
 // arena-internal index churn.
 // ---------------------------------------------------------------------
-
 /// diagMismatch reports a type-assignment failure. `expected` and `got`
 /// are the rendered forms from `tyToString` — the elaborator pretty-
 /// prints once and hands them here.
 pub fn diagMismatch(expected: String, got: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeTypeMismatch(),
-        "type mismatch: expected `{expected}`, found `{got}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeTypeMismatch(), "type mismatch: expected `{expected}`, found `{got}`", start, end)
 }
-
 pub fn diagReturnMismatch(expected: String, got: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeReturnMismatch(),
-        "return type mismatch: expected `{expected}`, found `{got}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeReturnMismatch(), "return type mismatch: expected `{expected}`, found `{got}`", start, end)
 }
-
 pub fn diagArgCount(fnName: String, want: Int, got: Int, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if fnName == "" {
         "this call takes {want} argument(s) but {got} were supplied"
@@ -155,7 +181,6 @@ pub fn diagArgCount(fnName: String, want: Int, got: Int, start: Int, end: Int) -
     }
     checkDiag(checkCodeArgCount(), msg, start, end)
 }
-
 pub fn diagGenericArgCount(name: String, want: Int, got: Int, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if name == "" {
         "this generic requires {want} type argument(s) but {got} were supplied"
@@ -164,64 +189,27 @@ pub fn diagGenericArgCount(name: String, want: Int, got: Int, start: Int, end: I
     }
     checkDiag(checkCodeGenericArgCount(), msg, start, end)
 }
-
 pub fn diagOperandType(op: String, ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeOperandType(),
-        "operator `{op}` cannot be applied to `{ty}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeOperandType(), "operator `{op}` cannot be applied to `{ty}`", start, end)
 }
-
 pub fn diagUnknownName(name: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeUnknownName(),
-        "cannot find `{name}` in this scope",
-        start,
-        end,
-    )
+    checkDiag(checkCodeUnknownName(), "cannot find `{name}` in this scope", start, end)
 }
-
 pub fn diagUnknownField(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeUnknownField(),
-        "no field `{name}` on type `{owner}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeUnknownField(), "no field `{name}` on type `{owner}`", start, end)
 }
-
 pub fn diagOptionalChainOnNon(owner: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeOptionalChainOnNon(),
-        "`?.` operator applied to non-optional type `{owner}`; use `.` for direct field access",
-        start,
-        end,
-    )
+    checkDiag(checkCodeOptionalChainOnNon(), "`?.` operator applied to non-optional type `{owner}`; use `.` for direct field access", start, end)
 }
-
 pub fn diagWildcardInExpr(start: Int, end: Int) -> CheckDiagnostic {
-    // Mirrors `srWildcardInExprAtNode` in toolchain/resolve.osty so the
-    // elab and resolve pipelines emit the same E0604 payload for a `_`
-    // used as a value.
-    checkDiag(
-        "E0604",
-        "`_` is only valid as a pattern wildcard, not as an expression",
-        start,
-        end,
-    )
+    checkDiag("E0604", "`_` is only valid as a pattern wildcard, not as an expression", start, end)
 }
-
+// Mirrors `srWildcardInExprAtNode` in toolchain/resolve.osty so the
+// elab and resolve pipelines emit the same E0604 payload for a `_`
+// used as a value.
 pub fn diagUnknownMethod(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeUnknownMethod(),
-        "no method `{name}` on type `{owner}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeUnknownMethod(), "no method `{name}` on type `{owner}`", start, end)
 }
-
 pub fn diagUnknownVariant(enumName: String, variantName: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if enumName == "" {
         "unknown variant `{variantName}`"
@@ -230,53 +218,33 @@ pub fn diagUnknownVariant(enumName: String, variantName: String, start: Int, end
     }
     checkDiag(checkCodeUnknownVariant(), msg, start, end)
 }
-
 pub fn diagMissingField(owner: String, fieldName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeMissingField(),
-        "missing field `{fieldName}` in initializer for `{owner}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeMissingField(), "missing field `{fieldName}` in initializer for `{owner}`", start, end)
 }
-
 pub fn diagBuilderMissingRequiredField(owner: String, missing: List<String>, start: Int, end: Int) -> CheckDiagnostic {
-    let plural = if missing.len() == 1 { "field" } else { "fields" }
-    let first = if missing.len() > 0 { missing[0] } else { "" }
+    let plural = if missing.len() == 1 {
+        "field"
+    } else {
+        "fields"
+    }
+    let first = if missing.len() > 0 {
+        missing[0]
+    } else {
+        ""
+    }
     let joined = strings.join(missing, ", ")
-    let mut notes: List<String> = [
-        "LANG_SPEC §3.3 (G9): builder rejects `.build()` until every `pub` field without a default is set",
-    ]
+    let mut notes: List<String> = ["LANG_SPEC §3.3 (G9): builder rejects `.build()` until every `pub` field without a default is set"]
     if first != "" {
         notes.push("hint: set with `.{first}(<value>)` before `.build()`")
     }
-    checkDiagWithNotes(
-        checkCodeBuilderMissingRequiredField(),
-        "builder for `{owner}` cannot call `.build()`: required {plural} not set: {joined}",
-        start,
-        end,
-        notes,
-    )
+    checkDiagWithNotes(checkCodeBuilderMissingRequiredField(), "builder for `{owner}` cannot call `.build()`: required {plural} not set: {joined}", start, end, notes)
 }
-
 pub fn diagDuplicateField(owner: String, fieldName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeDuplicateField(),
-        "duplicate field `{fieldName}` in initializer for `{owner}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeDuplicateField(), "duplicate field `{fieldName}` in initializer for `{owner}`", start, end)
 }
-
 pub fn diagDuplicateMethod(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeDuplicateMethod(),
-        "duplicate method `{name}` on `{owner}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeDuplicateMethod(), "duplicate method `{name}` on `{owner}`", start, end)
 }
-
 pub fn diagNonExhaustiveMatch(witness: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if witness == "" {
         "match is not exhaustive"
@@ -285,25 +253,12 @@ pub fn diagNonExhaustiveMatch(witness: String, start: Int, end: Int) -> CheckDia
     }
     checkDiag(checkCodeNonExhaustiveMatch(), msg, start, end)
 }
-
 pub fn diagUnreachablePattern(start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeUnreachablePattern(),
-        "unreachable pattern: earlier arm already covers this case",
-        start,
-        end,
-    )
+    checkDiag(checkCodeUnreachablePattern(), "unreachable pattern: earlier arm already covers this case", start, end)
 }
-
 pub fn diagInvalidAssignTarget(start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeInvalidAssignTarget(),
-        "expression is not an assignable place",
-        start,
-        end,
-    )
+    checkDiag(checkCodeInvalidAssignTarget(), "expression is not an assignable place", start, end)
 }
-
 pub fn diagImmutableAssign(name: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if name == "" {
         "cannot assign through an immutable binding"
@@ -312,16 +267,9 @@ pub fn diagImmutableAssign(name: String, start: Int, end: Int) -> CheckDiagnosti
     }
     checkDiag(checkCodeImmutableAssign(), msg, start, end)
 }
-
 pub fn diagNotCallable(ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeNotCallable(),
-        "value of type `{ty}` is not callable",
-        start,
-        end,
-    )
+    checkDiag(checkCodeNotCallable(), "value of type `{ty}` is not callable", start, end)
 }
-
 pub fn diagCannotInferTyParam(name: String, fnName: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if fnName == "" {
         "cannot infer type parameter `{name}`"
@@ -330,88 +278,33 @@ pub fn diagCannotInferTyParam(name: String, fnName: String, start: Int, end: Int
     }
     checkDiag(checkCodeCannotInferTyParam(), msg, start, end)
 }
-
 pub fn diagBoundViolation(tyParam: String, bound: String, concrete: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeGenericBoundViolation(),
-        "type parameter `{tyParam}` requires bound `{bound}`, but `{concrete}` does not satisfy it",
-        start,
-        end,
-    )
+    checkDiag(checkCodeGenericBoundViolation(), "type parameter `{tyParam}` requires bound `{bound}`, but `{concrete}` does not satisfy it", start, end)
 }
-
 pub fn diagInterfaceNotSatisfied(concrete: String, iface: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeInterfaceNotSatisfied(),
-        "`{concrete}` does not satisfy interface `{iface}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeInterfaceNotSatisfied(), "`{concrete}` does not satisfy interface `{iface}`", start, end)
 }
-
 pub fn diagAsQuestionBadOperand(ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeAsQuestionBadType(),
-        "`as?` requires an `Error` operand, found `{ty}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeAsQuestionBadType(), "`as?` requires an `Error` operand, found `{ty}`", start, end)
 }
-
 pub fn diagAsQuestionBadType(ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeAsQuestionBadType(),
-        "`as?` target type `{ty}` must implement `Error`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeAsQuestionBadType(), "`as?` target type `{ty}` must implement `Error`", start, end)
 }
-
 pub fn diagUndefinedLabel(label: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeUndefinedLabel(),
-        "label `'{label}` is not in scope; no enclosing loop carries this name",
-        start,
-        end,
-    )
+    checkDiag(checkCodeUndefinedLabel(), "label `'{label}` is not in scope; no enclosing loop carries this name", start, end)
 }
-
 pub fn diagLabelShadow(label: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeLabelShadow(),
-        "label `'{label}` shadows an outer label of the same name",
-        start,
-        end,
-    )
+    checkDiag(checkCodeLabelShadow(), "label `'{label}` shadows an outer label of the same name", start, end)
 }
-
 pub fn diagQuestionNotOptional(ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeQuestionNotOptional(),
-        "`?` operator requires `Option<T>` or `Result<T, E>`, found `{ty}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodeQuestionNotOptional(), "`?` operator requires `Option<T>` or `Result<T, E>`, found `{ty}`", start, end)
 }
-
 pub fn diagClosureAnnotationRequired(start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodeClosureAnnotationRequired(),
-        "closure parameter types cannot be inferred here; add a type annotation",
-        start,
-        end,
-    )
+    checkDiag(checkCodeClosureAnnotationRequired(), "closure parameter types cannot be inferred here; add a type annotation", start, end)
 }
-
 pub fn diagPatternShapeMismatch(ty: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiag(
-        checkCodePatternShapeMismatch(),
-        "pattern does not match scrutinee of type `{ty}`",
-        start,
-        end,
-    )
+    checkDiag(checkCodePatternShapeMismatch(), "pattern does not match scrutinee of type `{ty}`", start, end)
 }
-
 pub fn diagNonEscapingEscape(ty: String, context: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if context == "" {
         "`{ty}` cannot escape its defining scope"
@@ -420,7 +313,6 @@ pub fn diagNonEscapingEscape(ty: String, context: String, start: Int, end: Int) 
     }
     checkDiag(checkCodeNonEscapingEscape(), msg, start, end)
 }
-
 pub fn diagGenericCallableReference(name: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if name == "" {
         "generic callable cannot be referenced as a value; wrap it in a closure that fixes the type arguments"
@@ -429,7 +321,6 @@ pub fn diagGenericCallableReference(name: String, start: Int, end: Int) -> Check
     }
     checkDiag(checkCodeGenericCallableReference(), msg, start, end)
 }
-
 pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagnostic {
     let msg = if context == "" {
         "pattern must be irrefutable here"
@@ -438,99 +329,58 @@ pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagn
     }
     checkDiag(checkCodeRefutablePattern(), msg, start, end)
 }
-
 /// diagNoAllocViolation reports a managed-allocation site inside a
 /// `#[no_alloc]` function body. `fnName` names the enclosing function;
 /// `what` describes the offending construct (e.g. "construct a list
 /// literal"); `fixHint` carries the hint note.
 pub fn diagNoAllocViolation(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
-    let mut notes: List<String> = [
-        "LANG_SPEC §19.6.1: a `#[no_alloc]` body must not reach the managed allocator",
-    ]
+    let mut notes: List<String> = ["LANG_SPEC §19.6.1: a `#[no_alloc]` body must not reach the managed allocator"]
     if fixHint != "" {
         notes.push("hint: {fixHint}")
     }
-    checkDiagWithNotes(
-        checkCodeNoAllocViolation(),
-        "`#[no_alloc]` function `{fnName}` cannot {what}",
-        start,
-        end,
-        notes,
-    )
+    checkDiagWithNotes(checkCodeNoAllocViolation(), "`#[no_alloc]` function `{fnName}` cannot {what}", start, end, notes)
 }
-
 /// diagRuntimePrivilege reports a use of the runtime sublanguage
 /// surface outside a privileged package (LANG_SPEC §19.2). `what`
 /// describes the specific surface element (e.g. "`#[intrinsic]` is
 /// a runtime-only annotation"); the note anchors the user to the
 /// spec + capability opt-in path.
 pub fn diagRuntimePrivilege(what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
-    let mut notes: List<String> = [
-        "LANG_SPEC §19.2: the runtime sublanguage is only reachable from `std.runtime.*` or from toolchain-workspace packages that opt in via `[capabilities] runtime = true` in `osty.toml`",
-    ]
+    let mut notes: List<String> = ["LANG_SPEC §19.2: the runtime sublanguage is only reachable from `std.runtime.*` or from toolchain-workspace packages that opt in via `[capabilities] runtime = true` in `osty.toml`"]
     if fixHint != "" {
         notes.push("hint: {fixHint}")
     }
-    checkDiagWithNotes(
-        checkCodeRuntimePrivilegeViolation(),
-        "runtime sublanguage surface used outside a privileged package: {what}",
-        start,
-        end,
-        notes,
-    )
+    checkDiagWithNotes(checkCodeRuntimePrivilegeViolation(), "runtime sublanguage surface used outside a privileged package: {what}", start, end, notes)
 }
-
 /// diagPodShapeViolation reports a `#[pod]` struct that violates the
 /// §19.4 derivation. The single message carries both the structural
 /// hint (missing `#[repr(c)]`, non-Pod field, unbounded generic) and
 /// the canonical §19.4 reference.
 pub fn diagPodShapeViolation(message: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
-    let mut notes: List<String> = [
-        "LANG_SPEC §19.4: `#[pod]` requires C ABI layout, no managed references, and `T: Pod` bounds on every generic parameter",
-    ]
+    let mut notes: List<String> = ["LANG_SPEC §19.4: `#[pod]` requires C ABI layout, no managed references, and `T: Pod` bounds on every generic parameter"]
     if fixHint != "" {
         notes.push("hint: {fixHint}")
     }
     checkDiagWithNotes(checkCodePodShapeViolation(), message, start, end, notes)
 }
-
 /// diagIntrinsicNonEmptyBody reports an `#[intrinsic]` function whose
 /// body carries statements. LANG_SPEC §19.6 requires the body-less
 /// signature form (or the explicit empty block `{}`); the lowering
 /// layer supplies the implementation and silently ignores any source.
 pub fn diagIntrinsicNonEmptyBody(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeIntrinsicNonEmptyBody(),
-        "`#[intrinsic]` function `{fnName}` must have an empty body",
-        start,
-        end,
-        [
-            "LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored",
-            "hint: keep the signature and drop the body, or use an empty block",
-        ],
-    )
+    checkDiagWithNotes(checkCodeIntrinsicNonEmptyBody(), "`#[intrinsic]` function `{fnName}` must have an empty body", start, end, ["LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored", "hint: keep the signature and drop the body, or use an empty block"])
 }
-
 /// diagPureViolation reports a side-effectful operation inside a
 /// `#[pure]` function body. `what` names the rejected operation; the
 /// hint points at either removing `#[pure]` or making the callee/body
 /// obey the readnone contract that LLVM receives.
 pub fn diagPureViolation(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
-    let mut notes: List<String> = [
-        "LANG_SPEC A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions",
-    ]
+    let mut notes: List<String> = ["LANG_SPEC A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions"]
     if fixHint != "" {
         notes.push("hint: {fixHint}")
     }
-    checkDiagWithNotes(
-        checkCodePureViolation(),
-        "`#[pure]` function `{fnName}` cannot {what}",
-        start,
-        end,
-        notes,
-    )
+    checkDiagWithNotes(checkCodePureViolation(), "`#[pure]` function `{fnName}` cannot {what}", start, end, notes)
 }
-
 // ---------------------------------------------------------------------
 // Suggestion helpers — used to attach "did you mean `foo`?" hints to
 // diagnostics whose primary message is of the form "cannot find
@@ -538,7 +388,6 @@ pub fn diagPureViolation(fnName: String, what: String, fixHint: String, start: I
 // struct fields, enum variants, ...) and hand it off here; the
 // suggestion picks the nearest neighbour by bounded edit distance.
 // ---------------------------------------------------------------------
-
 /// checkSuggestSimilar returns the closest match from `candidates` for
 /// `name` using bounded Levenshtein distance, or `""` when no
 /// candidate is within edit distance 2. The early-exit logic keeps
@@ -571,7 +420,6 @@ pub fn checkSuggestSimilar(candidates: List<String>, name: String) -> String {
     }
     best
 }
-
 /// diagDidYouMean formats `suggestion` as the canonical "did you mean
 /// `x`?" hint, or returns `""` when `suggestion` is empty. Keeping the
 /// formatting here means every diagnostic site phrases the hint
@@ -582,7 +430,6 @@ pub fn diagDidYouMean(suggestion: String) -> String {
     }
     "did you mean `{suggestion}`?"
 }
-
 /// checkDiagAttachHint returns a copy of `d` with an extra
 /// "hint: {text}" note appended. When `text` is empty the diagnostic
 /// is returned unchanged so callers can funnel optional suggestions
@@ -596,16 +443,8 @@ pub fn checkDiagAttachHint(d: CheckDiagnostic, text: String) -> CheckDiagnostic 
         notes.push(existing)
     }
     notes.push("hint: {text}")
-    CheckDiagnostic {
-        code: d.code,
-        severity: d.severity,
-        message: d.message,
-        start: d.start,
-        end: d.end,
-        notes,
-    }
+    CheckDiagnostic {code: d.code, severity: d.severity, message: d.message, start: d.start, end: d.end, notes}
 }
-
 fn checkDiagStringUnitCount(text: String) -> Int {
     let mut count = 0
     for unit in strings.split(text, "") {
@@ -615,7 +454,6 @@ fn checkDiagStringUnitCount(text: String) -> Int {
     }
     count
 }
-
 fn checkDiagLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
     if left == right {
         return 0
@@ -675,18 +513,17 @@ fn checkDiagLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
     }
     prev[rightLen]
 }
-
 fn checkDiagStringListAt(items: List<String>, target: Int) -> String {
-    if target < 0 || target >= items.len() { return "" }
+    if target < 0 || target >= items.len() {
+        return ""
+    }
     items[target]
 }
-
 // ---------------------------------------------------------------------
 // Store helpers — the elaborator keeps a `List<CheckDiagnostic>` on
 // its context. These helpers append without forgetting to stamp the
 // severity, and they count errors for the legacy summary contract.
 // ---------------------------------------------------------------------
-
 /// checkDiagPush appends a diagnostic to `xs` in place and returns the
 /// updated list. The return value lets callers chain without binding a
 /// temporary; the underlying List is mutated.
@@ -694,7 +531,6 @@ pub fn checkDiagPush(xs: List<CheckDiagnostic>, d: CheckDiagnostic) -> List<Chec
     xs.push(d)
     xs
 }
-
 /// checkDiagCountErrors scans for diagnostics that block compilation
 /// (Severity=Error). Used to derive the legacy `errors` counter that
 /// the Go bridge in `internal/selfhost/check_adapter.go:86` reads.
@@ -707,11 +543,9 @@ pub fn checkDiagCountErrors(xs: List<CheckDiagnostic>) -> Int {
     }
     n
 }
-
 pub fn checkDiagCount(xs: List<CheckDiagnostic>) -> Int {
     xs.len()
 }
-
 /// checkDiagRender produces a single-line preview of a diagnostic
 /// suitable for test snapshots or quick debug prints.
 pub fn checkDiagRender(d: CheckDiagnostic) -> String {
@@ -721,7 +555,6 @@ pub fn checkDiagRender(d: CheckDiagnostic) -> String {
     }
     "{prefix}[{d.code}]: {d.message}"
 }
-
 /// checkDiagRenderAll joins rendered previews with newlines.
 pub fn checkDiagRenderAll(xs: List<CheckDiagnostic>) -> String {
     let mut parts: List<String> = []

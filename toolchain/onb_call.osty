@@ -26,9 +26,7 @@
 // materialises each operand into the right argReg, optionally
 // stages x8 = &dest_slot for sret returns, emits `bl symbol`, and
 // captures the return into the dest local's slot.
-
 // === Param shuffle ==================================================
-
 // onbParamShuffle emits the function prologue's argReg → slot
 // sweep. Iterates params in declaration order; each param consumes
 // 0, 1, 2, or N register slots depending on its type:
@@ -89,9 +87,7 @@ pub fn onbParamShuffle(state: OnbLowerState) -> List<OnbInstr> {
     }
     out
 }
-
 // === Epilogue =======================================================
-
 // onbEpilogue emits the function-exit sequence. main returns
 // process exit 0 in w0; user functions load their `_return` slot
 // into x0 (and x1 for 2-reg returns) or d0 (Float) before falling
@@ -111,9 +107,6 @@ pub fn onbEpilogue(state: OnbLowerState) -> List<OnbInstr> {
     }
     let slot = onbLocalSlotLookup(state, state.func.returnLocal)
     if !slot.found {
-        // The _return slot was never allocated. The front end usually
-        // allocates one (`Assign _return := <expr>; ReturnTerm`),
-        // but we keep a safe default for malformed MIR.
         out.push(onbInstrMovImm64("x0", 0))
         out.push(onbInstrRet())
         return out
@@ -124,10 +117,6 @@ pub fn onbEpilogue(state: OnbLowerState) -> List<OnbInstr> {
         return out
     }
     if onbAbiUsesIndirectStruct(state.layouts, state.func.returnType) {
-        // The body wrote $ret into its local slot; copy each 8B
-        // half through the caller's buffer pointer in x8. The MVP
-        // assumes x8 wasn't clobbered by the body — a follow-up
-        // saves/restores at the prologue.
         let size = onbAbiIndirectStructByteSize(state.layouts, state.func.returnType)
         let scratch = onbScratchReg()
         let x8 = onbIndirectResultReg()
@@ -147,7 +136,11 @@ pub fn onbEpilogue(state: OnbLowerState) -> List<OnbInstr> {
     }
     let retRegs = onbReturnRegs()
     let mut i = 0
-    let limit = if slots > retRegs.len() { retRegs.len() } else { slots }
+    let limit = if slots > retRegs.len() {
+        retRegs.len()
+    } else {
+        slots
+    }
     for _ in 0..limit {
         out.push(onbInstrLoad64Stack(retRegs[i], slot.offset + i * 8))
         i = i + 1
@@ -155,9 +148,14 @@ pub fn onbEpilogue(state: OnbLowerState) -> List<OnbInstr> {
     out.push(onbInstrRet())
     out
 }
-
+// The _return slot was never allocated. The front end usually
+// allocates one (`Assign _return := <expr>; ReturnTerm`),
+// but we keep a safe default for malformed MIR.
+// The body wrote $ret into its local slot; copy each 8B
+// half through the caller's buffer pointer in x8. The MVP
+// assumes x8 wasn't clobbered by the body — a follow-up
+// saves/restores at the prologue.
 // === Indirect struct address ========================================
-
 // onbIndirectArgAddress lands `&local_slot` in `dst`. Indirect
 // args are always Copy/Move of a stack-allocated local — struct
 // literals as args would need a pre-materialise pass we don't
@@ -177,9 +175,7 @@ pub fn onbIndirectArgAddress(state: OnbLowerState, arg: MirOperand, dst: String)
     out.push(onbInstrLoadStackAddress(dst, slot.offset))
     onbMaterialiseOk(state, out)
 }
-
 // === Multi-register struct operand ==================================
-
 // onbMaterialiseStructOperand loads a whole-struct operand into N
 // consecutive arg registers. Slot+0 lands in regs[0], slot+8 in
 // regs[1], etc. Only Copy/Move of a non-projected stack-slot
@@ -204,23 +200,28 @@ pub fn onbMaterialiseStructOperand(state: OnbLowerState, op: MirOperand, regs: L
     }
     onbMaterialiseOk(state, out)
 }
-
 // === Direct call lowering ===========================================
-
 // onbDetectSretDestSlot returns the dest local's stack slot if
 // the call's return uses sret (indirect struct return), or -1
 // otherwise. The caller stages `add x8, sp, #slot` before the bl
 // when this returns ≥ 0 and skips the post-call return capture.
 fn onbDetectSretDestSlot(state: OnbLowerState, instr: MirInstr) -> Int {
-    if !instr.hasDest { return -1 }
-    if mirPlaceHasProjections(instr.dest) { return -1 }
+    if !instr.hasDest {
+        return -1
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return -1
+    }
     let destType = onbDestType(state, instr.dest.local)
-    if !onbAbiUsesIndirectStruct(state.layouts, destType) { return -1 }
+    if !onbAbiUsesIndirectStruct(state.layouts, destType) {
+        return -1
+    }
     let slot = onbLocalSlotLookup(state, instr.dest.local)
-    if !slot.found { return -1 }
+    if !slot.found {
+        return -1
+    }
     slot.offset
 }
-
 // onbLowerCall lowers a direct call (`bl symbol`) — the most
 // common shape. Walks instr.args, materialises each into the
 // right arg register, optionally stages x8 = &dest_slot for sret,
@@ -239,7 +240,6 @@ pub fn onbLowerCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResu
     let argRegs = onbArgRegs()
     let fpArgRegs = onbFpArgRegs()
     let sretSlot = onbDetectSretDestSlot(state, instr)
-
     for arg in instr.args {
         let argType = arg.typ
         if onbIsFloatAbiType(argType) {
@@ -247,9 +247,13 @@ pub fn onbLowerCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResu
                 return onbMaterialiseErr(working, "call needs more than 8 FP arg regs")
             }
             let r = onbMaterialiseFloatOperand(working, arg, fpArgRegs[fpCursor])
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             fpCursor = fpCursor + 1
             continue
         }
@@ -258,9 +262,13 @@ pub fn onbLowerCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResu
                 return onbMaterialiseErr(working, "indirect arg exhausted argRegs")
             }
             let r = onbIndirectArgAddress(working, arg, argRegs[regCursor])
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             regCursor = regCursor + 1
             continue
         }
@@ -277,29 +285,29 @@ pub fn onbLowerCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResu
                 targetRegs.push(argRegs[regCursor + i])
             }
             let r = onbMaterialiseStructOperand(working, arg, targetRegs)
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
         } else {
             let r = onbMaterialiseOperand(working, arg, argRegs[regCursor])
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
         }
         regCursor = regCursor + slots.slots
     }
-
-    // Stage x8 = &destSlot last so the address materialisation
-    // happens after every other arg-reg setup. Matches the AAPCS64
-    // convention and avoids accidentally clobbering x8 with a
-    // future arg materialiser that uses it as scratch.
     if sretSlot >= 0 {
         out.push(onbInstrLoadStackAddress(onbIndirectResultReg(), sretSlot))
     }
-
     out.push(onbInstrBranchLink(instr.calleeSymbol))
-
-    // Post-call return capture for non-sret returns.
     if instr.hasDest && !mirPlaceHasProjections(instr.dest) && sretSlot < 0 {
         let destSlot = onbLocalSlotLookup(working, instr.dest.local)
         if destSlot.found {
@@ -309,21 +317,29 @@ pub fn onbLowerCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseResu
             } else {
                 let retSlots = onbAbiRegSlots(working.layouts, destType)
                 let mut count = retSlots.slots
-                if count == 0 { count = 1 }
+                if count == 0 {
+                    count = 1
+                }
                 let retRegs = onbReturnRegs()
-                let limit = if count > retRegs.len() { retRegs.len() } else { count }
+                let limit = if count > retRegs.len() {
+                    retRegs.len()
+                } else {
+                    count
+                }
                 for i in 0..limit {
                     out.push(onbInstrStore64Stack(retRegs[i], destSlot.offset + i * 8))
                 }
             }
         }
     }
-
     onbMaterialiseOk(working, out)
 }
-
+// Stage x8 = &destSlot last so the address materialisation
+// happens after every other arg-reg setup. Matches the AAPCS64
+// convention and avoids accidentally clobbering x8 with a
+// future arg materialiser that uses it as scratch.
+// Post-call return capture for non-sret returns.
 // === Indirect call lowering =========================================
-
 // onbLowerIndirectCall lowers `call *<closure_local>(args...)`. The
 // closure value is an env-pointer; per the Phase A4 fn-value
 // runtime contract, the lifted body's signature is `(env, args...)`,
@@ -345,12 +361,14 @@ pub fn onbLowerIndirectCall(state: OnbLowerState, instr: MirInstr) -> OnbMateria
     }
     let mut working = state
     let mut out: List<OnbInstr> = []
-    // Env pointer → x0.
     let envR = onbMaterialiseOperand(working, instr.calleeOperand, "x0")
-    if !envR.ok { return envR }
+    if !envR.ok {
+        return envR
+    }
     working = envR.state
-    for i in envR.instrs { out.push(i) }
-
+    for i in envR.instrs {
+        out.push(i)
+    }
     let mut regCursor = 1
     let mut fpCursor = 0
     for arg in instr.args {
@@ -360,9 +378,13 @@ pub fn onbLowerIndirectCall(state: OnbLowerState, instr: MirInstr) -> OnbMateria
                 return onbMaterialiseErr(working, "indirect call needs more than 8 FP arg regs")
             }
             let r = onbMaterialiseFloatOperand(working, arg, fpArgRegs[fpCursor])
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             working = r.state
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             fpCursor = fpCursor + 1
             continue
         }
@@ -374,19 +396,18 @@ pub fn onbLowerIndirectCall(state: OnbLowerState, instr: MirInstr) -> OnbMateria
             return onbMaterialiseErr(working, "indirect call arg type not supported")
         }
         let r = onbMaterialiseOperand(working, arg, argRegs[regCursor])
-        if !r.ok { return r }
+        if !r.ok {
+            return r
+        }
         working = r.state
-        for i in r.instrs { out.push(i) }
+        for i in r.instrs {
+            out.push(i)
+        }
         regCursor = regCursor + 1
     }
-
-    // Load fn pointer from env+0 into x9 then blr x9. The env
-    // pointer is already in x0 from the materialise above and stays
-    // there through the branch.
     let scratch = onbScratchReg()
     out.push(onbInstrLoadFromReg(scratch, "x0", 0))
     out.push(onbInstrBranchLinkReg(scratch))
-
     if instr.hasDest && !mirPlaceHasProjections(instr.dest) {
         let destSlot = onbLocalSlotLookup(working, instr.dest.local)
         if destSlot.found {
@@ -398,6 +419,5 @@ pub fn onbLowerIndirectCall(state: OnbLowerState, instr: MirInstr) -> OnbMateria
             }
         }
     }
-
     onbMaterialiseOk(working, out)
 }

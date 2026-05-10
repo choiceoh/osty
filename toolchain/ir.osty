@@ -44,7 +44,6 @@ pub enum IrNodeKind {
     IrNodeRecovery,
     IrNodeError,
 }
-
 pub enum IrDiagnosticKind {
     IrDiagUnexpectedToken,
     IrDiagMissingName,
@@ -54,7 +53,6 @@ pub enum IrDiagnosticKind {
     IrDiagTrailingSelector,
     IrDiagLexerError,
 }
-
 pub enum IrSymbolKind {
     IrSymNone,
     IrSymPackage,
@@ -66,7 +64,6 @@ pub enum IrSymbolKind {
     IrSymLocal,
     IrSymGeneric,
 }
-
 pub enum IrValueKind {
     IrValueNone,
     IrValueType,
@@ -75,7 +72,6 @@ pub enum IrValueKind {
     IrValueRValue,
     IrValuePattern,
 }
-
 pub enum IrFlowKind {
     IrFlowFallthrough,
     IrFlowReturns,
@@ -84,7 +80,6 @@ pub enum IrFlowKind {
     IrFlowDiverges,
     IrFlowMixed,
 }
-
 pub struct IrNode {
     pub kind: IrNodeKind,
     pub start: Int,
@@ -103,7 +98,6 @@ pub struct IrNode {
     pub flow: IrFlowKind,
     pub effects: Int,
 }
-
 pub struct IrDiagnostic {
     pub kind: IrDiagnosticKind,
     pub start: Int,
@@ -111,11 +105,9 @@ pub struct IrDiagnostic {
     pub expected: String,
     pub found: String,
 }
-
 pub struct IrArena {
     pub nodes: List<IrNode>,
 }
-
 pub struct IrScope {
     pub id: Int,
     pub parent: Int,
@@ -123,7 +115,6 @@ pub struct IrScope {
     pub depth: Int,
     pub symbols: List<Int>,
 }
-
 pub struct IrSymbol {
     pub id: Int,
     pub name: String,
@@ -135,7 +126,6 @@ pub struct IrSymbol {
     pub public: Bool,
     pub mutable: Bool,
 }
-
 pub struct IrSemantic {
     pub scopes: List<IrScope>,
     pub symbols: List<IrSymbol>,
@@ -145,7 +135,6 @@ pub struct IrSemantic {
     pub invalidScopes: Int,
     pub unresolvedRefs: Int,
 }
-
 pub struct IrModule {
     pub packageName: String,
     pub arena: IrArena,
@@ -159,7 +148,6 @@ pub struct IrModule {
     pub maxDepth: Int,
     pub recovered: Int,
 }
-
 pub struct IrSummary {
     pub nodes: Int,
     pub decls: Int,
@@ -185,105 +173,35 @@ pub struct IrSummary {
     pub unresolvedRefs: Int,
     pub maxDepth: Int,
 }
-
 pub fn emptyIrNode(kind: IrNodeKind) -> IrNode {
-    IrNode {
-        kind,
-        start: 0,
-        end: 0,
-        depth: 0,
-        flags: 0,
-        noAlloc: false,
-        pod: false,
-        reprC: false,
-        parent: -1,
-        children: [],
-        scope: -1,
-        symbol: -1,
-        typeName: "",
-        value: IrValueNone,
-        flow: IrFlowFallthrough,
-        effects: 0,
-    }
+    IrNode {kind, start: 0, end: 0, depth: 0, flags: 0, noAlloc: false, pod: false, reprC: false, parent: -1, children: [], scope: -1, symbol: -1, typeName: "", value: IrValueNone, flow: IrFlowFallthrough, effects: 0}
 }
-
 pub fn emptyIrArena() -> IrArena {
-    IrArena { nodes: [] }
+    IrArena {nodes: []}
 }
-
 pub fn emptyIrSemantic() -> IrSemantic {
-    IrSemantic {
-        scopes: [],
-        symbols: [],
-        typedNodes: 0,
-        effectfulNodes: 0,
-        terminalNodes: 0,
-        invalidScopes: 0,
-        unresolvedRefs: 0,
-    }
+    IrSemantic {scopes: [], symbols: [], typedNodes: 0, effectfulNodes: 0, terminalNodes: 0, invalidScopes: 0, unresolvedRefs: 0}
 }
-
 pub fn emptyIrModule(packageName: String) -> IrModule {
-    IrModule {
-        packageName,
-        arena: emptyIrArena(),
-        root: -1,
-        decls: [],
-        script: [],
-        diagnostics: [],
-        semantic: emptyIrSemantic(),
-        sourceTokens: 0,
-        coveredTokens: 0,
-        maxDepth: 0,
-        recovered: 0,
-    }
+    IrModule {packageName, arena: emptyIrArena(), root: -1, decls: [], script: [], diagnostics: [], semantic: emptyIrSemantic(), sourceTokens: 0, coveredTokens: 0, maxDepth: 0, recovered: 0}
 }
-
 pub fn emptyIrSummary() -> IrSummary {
-    IrSummary {
-        nodes: 0,
-        decls: 0,
-        funcs: 0,
-        structs: 0,
-        enums: 0,
-        interfaces: 0,
-        aliases: 0,
-        uses: 0,
-        lets: 0,
-        stmts: 0,
-        exprs: 0,
-        patterns: 0,
-        types: 0,
-        diagnostics: 0,
-        invalidParents: 0,
-        scopes: 0,
-        symbols: 0,
-        typedNodes: 0,
-        effectfulNodes: 0,
-        terminalNodes: 0,
-        invalidScopes: 0,
-        unresolvedRefs: 0,
-        maxDepth: 0,
-    }
+    IrSummary {nodes: 0, decls: 0, funcs: 0, structs: 0, enums: 0, interfaces: 0, aliases: 0, uses: 0, lets: 0, stmts: 0, exprs: 0, patterns: 0, types: 0, diagnostics: 0, invalidParents: 0, scopes: 0, symbols: 0, typedNodes: 0, effectfulNodes: 0, terminalNodes: 0, invalidScopes: 0, unresolvedRefs: 0, maxDepth: 0}
 }
-
 pub fn irArenaAdd(arena: IrArena, node: IrNode) -> Int {
     let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
-
 pub fn irArenaNodeCount(arena: IrArena) -> Int {
     arena.nodes.len()
 }
-
 pub fn irArenaNodeAt(arena: IrArena, idx: Int) -> IrNode {
     if idx < 0 || idx >= arena.nodes.len() {
         return emptyIrNode(IrNodeError)
     }
     arena.nodes[idx]
 }
-
 pub fn irLowerSource(packageName: String, source: String) -> IrModule {
     let stream = frontendLexStream(source)
     let tokens = frontTokensFromSource(source, stream)
@@ -293,27 +211,23 @@ pub fn irLowerSource(packageName: String, source: String) -> IrModule {
     irFinalizeSemanticGraph(module, tokens)
     module
 }
-
 pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
     let mut module = emptyIrModule(packageName)
     module.sourceTokens = tree.tokens
     module.coveredTokens = tree.coveredTokens
     module.maxDepth = tree.maxDepth
     module.recovered = tree.recovered
-
     let mut stack: List<Int> = []
     for frontNode in tree.nodes {
         for irStackCount(stack) > frontNode.depth {
             stack.pop()
         }
-
         let mut node = emptyIrNode(irKindFromFront(frontNode.kind))
         node.start = frontNode.start
         node.end = frontNode.end
         node.depth = frontNode.depth
         node.flags = frontNode.flags
         node.parent = irParentForDepth(stack, frontNode.depth)
-
         let idx = irArenaAdd(module.arena, node)
         if node.parent >= 0 {
             irAttachChild(module.arena, node.parent, idx)
@@ -329,24 +243,13 @@ pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
         }
         stack.push(idx)
     }
-
     for diag in tree.diagnostics {
-        module.diagnostics.push(
-            IrDiagnostic {
-                kind: irDiagnosticKindFromFront(diag.kind),
-                start: diag.start,
-                end: diag.end,
-                expected: frontTokenKindName(diag.expected),
-                found: frontTokenKindName(diag.found),
-            },
-        )
+        module.diagnostics.push(IrDiagnostic {kind: irDiagnosticKindFromFront(diag.kind), start: diag.start, end: diag.end, expected: frontTokenKindName(diag.expected), found: frontTokenKindName(diag.found)})
     }
-
     let emptyTokens: List<FrontToken> = []
     irFinalizeSemanticGraph(module, emptyTokens)
     module
 }
-
 pub fn irLowerAstFile(packageName: String, file: AstFile) -> IrModule {
     let mut module = emptyIrModule(packageName)
     let mut root = emptyIrNode(IrNodeModule)
@@ -355,35 +258,18 @@ pub fn irLowerAstFile(packageName: String, file: AstFile) -> IrModule {
     module.root = irArenaAdd(module.arena, root)
     module.sourceTokens = astFileNodeCount(file)
     module.coveredTokens = astFileNodeCount(file)
-
     for decl in file.arena.decls {
         let _ = irLowerAstNodeInto(module, file.arena, decl, module.root, 1)
     }
     for err in file.arena.errors {
-        module.diagnostics.push(
-            IrDiagnostic {
-                kind: IrDiagUnexpectedToken,
-                start: err.tokenIndex,
-                end: err.tokenIndex + 1,
-                expected: "",
-                found: err.code,
-            },
-        )
+        module.diagnostics.push(IrDiagnostic {kind: IrDiagUnexpectedToken, start: err.tokenIndex, end: err.tokenIndex + 1, expected: "", found: err.code})
     }
-
     let emptyTokens: List<FrontToken> = []
     irFinalizeSemanticGraph(module, emptyTokens)
     irFinalizeAstSemanticNames(module, file.arena)
     module
 }
-
-fn irLowerAstNodeInto(
-    module: IrModule,
-    arena: AstArena,
-    astIdx: Int,
-    parent: Int,
-    depth: Int,
-) -> Int {
+fn irLowerAstNodeInto(module: IrModule, arena: AstArena, astIdx: Int, parent: Int, depth: Int) -> Int {
     if astIdx < 0 {
         return -1
     }
@@ -397,7 +283,6 @@ fn irLowerAstNodeInto(
     node.pod = irAstHasRuntimeAnnotation(arena, astNode, "pod")
     node.reprC = irAstHasRuntimeAnnotation(arena, astNode, "repr")
     node.parent = parent
-
     let idx = irArenaAdd(module.arena, node)
     irAttachChild(module.arena, parent, idx)
     if depth == 1 && irKindIsDecl(node.kind) {
@@ -409,33 +294,22 @@ fn irLowerAstNodeInto(
     if depth > module.maxDepth {
         module.maxDepth = depth
     }
-
     irLowerAstChildList(module, arena, idx, depth + 1, astNode.children2)
     irLowerAstChildList(module, arena, idx, depth + 1, astNode.children)
     irLowerAstChild(module, arena, idx, depth + 1, astNode.left)
     irLowerAstChild(module, arena, idx, depth + 1, astNode.right)
-
     idx
 }
-
 fn irLowerAstChild(module: IrModule, arena: AstArena, parent: Int, depth: Int, child: Int) {
     if child >= 0 {
         let _ = irLowerAstNodeInto(module, arena, child, parent, depth)
     }
 }
-
-fn irLowerAstChildList(
-    module: IrModule,
-    arena: AstArena,
-    parent: Int,
-    depth: Int,
-    children: List<Int>,
-) {
+fn irLowerAstChildList(module: IrModule, arena: AstArena, parent: Int, depth: Int, children: List<Int>) {
     for child in children {
         let _ = irLowerAstNodeInto(module, arena, child, parent, depth)
     }
 }
-
 fn irFinalizeAstSemanticNames(module: IrModule, arena: AstArena) {
     let mut idx = 0
     for symbol in module.semantic.symbols {
@@ -449,7 +323,6 @@ fn irFinalizeAstSemanticNames(module: IrModule, arena: AstArena) {
         idx = idx + 1
     }
 }
-
 fn irApplyFrontRuntimeAnnotations(module: IrModule, tokens: List<FrontToken>) {
     let mut idx = 0
     for node in module.arena.nodes {
@@ -462,22 +335,15 @@ fn irApplyFrontRuntimeAnnotations(module: IrModule, tokens: List<FrontToken>) {
         idx = idx + 1
     }
 }
-
 pub struct IrRuntimeAnnotations {
     pub noAlloc: Bool,
     pub pod: Bool,
     pub reprC: Bool,
 }
-
 pub fn emptyIrRuntimeAnnotations() -> IrRuntimeAnnotations {
-    IrRuntimeAnnotations { noAlloc: false, pod: false, reprC: false }
+    IrRuntimeAnnotations {noAlloc: false, pod: false, reprC: false}
 }
-
-fn irFrontRuntimeAnnotationsForNode(
-    module: IrModule,
-    tokens: List<FrontToken>,
-    nodeIdx: Int,
-) -> IrRuntimeAnnotations {
+fn irFrontRuntimeAnnotationsForNode(module: IrModule, tokens: List<FrontToken>, nodeIdx: Int) -> IrRuntimeAnnotations {
     let node = irArenaNodeAt(module.arena, nodeIdx)
     if node.kind != IrNodeFnDecl && node.kind != IrNodeStructDecl {
         return emptyIrRuntimeAnnotations()
@@ -497,10 +363,7 @@ fn irFrontRuntimeAnnotationsForNode(
         let siblingIdx = parent.children[i]
         let sibling = irArenaNodeAt(module.arena, siblingIdx)
         if sibling.kind == IrNodeAnnotation {
-            out = irMergeRuntimeAnnotations(
-                out,
-                irRuntimeAnnotationsFromTokenSpan(tokens, sibling.start, sibling.end),
-            )
+            out = irMergeRuntimeAnnotations(out, irRuntimeAnnotationsFromTokenSpan(tokens, sibling.start, sibling.end))
             if i == 0 {
                 keepGoing = false
             } else {
@@ -512,7 +375,6 @@ fn irFrontRuntimeAnnotationsForNode(
     }
     out
 }
-
 fn irIndexOfChild(children: List<Int>, target: Int) -> Int {
     let mut idx = 0
     for child in children {
@@ -523,26 +385,17 @@ fn irIndexOfChild(children: List<Int>, target: Int) -> Int {
     }
     -1
 }
-
-fn irMergeRuntimeAnnotations(
-    left: IrRuntimeAnnotations,
-    right: IrRuntimeAnnotations,
-) -> IrRuntimeAnnotations {
-    IrRuntimeAnnotations {
-        noAlloc: left.noAlloc || right.noAlloc,
-        pod: left.pod || right.pod,
-        reprC: left.reprC || right.reprC,
-    }
+fn irMergeRuntimeAnnotations(left: IrRuntimeAnnotations, right: IrRuntimeAnnotations) -> IrRuntimeAnnotations {
+    IrRuntimeAnnotations {noAlloc: left.noAlloc || right.noAlloc, pod: left.pod || right.pod, reprC: left.reprC || right.reprC}
 }
-
-fn irRuntimeAnnotationsFromTokenSpan(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-) -> IrRuntimeAnnotations {
+fn irRuntimeAnnotationsFromTokenSpan(tokens: List<FrontToken>, start: Int, end: Int) -> IrRuntimeAnnotations {
     let mut out = emptyIrRuntimeAnnotations()
     let mut idx = start
-    let stop = if end < frontTokenListCount(tokens) { end } else { frontTokenListCount(tokens) }
+    let stop = if end < frontTokenListCount(tokens) {
+        end
+    } else {
+        frontTokenListCount(tokens)
+    }
     for idx < stop {
         let tok = frontTokenAtList(tokens, idx)
         if tok.kind == FrontIdent {
@@ -558,7 +411,6 @@ fn irRuntimeAnnotationsFromTokenSpan(
     }
     out
 }
-
 fn irAstHasRuntimeAnnotation(arena: AstArena, node: AstNode, name: String) -> Bool {
     let extra = irAstAnnotationRoot(node)
     if extra < 0 {
@@ -566,23 +418,13 @@ fn irAstHasRuntimeAnnotation(arena: AstArena, node: AstNode, name: String) -> Bo
     }
     irAstAnnotationTreeContains(arena, extra, name)
 }
-
 fn irAstAnnotationRoot(node: AstNode) -> Int {
-    if node.kind == AstNFnDecl
-        || node.kind == AstNStructDecl
-        || node.kind == AstNEnumDecl
-        || node.kind == AstNInterfaceDecl
-        || node.kind == AstNTypeAlias
-        || node.kind == AstNLetDecl
-        || node.kind == AstNLet
-        || node.kind == AstNField_
-        || node.kind == AstNVariant {
+    if node.kind == AstNFnDecl || node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias || node.kind == AstNLetDecl || node.kind == AstNLet || node.kind == AstNField_ || node.kind == AstNVariant {
         node.extra
     } else {
         -1
     }
 }
-
 fn irAstAnnotationTreeContains(arena: AstArena, idx: Int, name: String) -> Bool {
     if idx < 0 {
         return false
@@ -604,7 +446,6 @@ fn irAstAnnotationTreeContains(arena: AstArena, idx: Int, name: String) -> Bool 
     }
     false
 }
-
 fn irAstNameForIrNode(arena: AstArena, node: IrNode) -> String {
     for astNode in arena.nodes {
         if astNode.start == node.start && astNode.end == node.end && irKindFromAst(astNode.kind, node.depth) == node.kind {
@@ -615,7 +456,6 @@ fn irAstNameForIrNode(arena: AstArena, node: IrNode) -> String {
     }
     ""
 }
-
 pub fn irFinalizeSemanticGraph(module: IrModule, tokens: List<FrontToken>) {
     module.semantic = emptyIrSemantic()
     let rootScope = irSemanticAddScope(module.semantic, -1, module.root, 0)
@@ -641,27 +481,12 @@ pub fn irFinalizeSemanticGraph(module: IrModule, tokens: List<FrontToken>) {
         node.flow = irFlowKindForNode(node.kind)
         node.effects = irEffectsForNode(node.kind)
         node.typeName = irSemanticTypeName(tokens, node)
-
         let symKind = irSymbolKindForNode(node.kind, node.depth)
         if symKind != IrSymNone {
-            let symID = irSemanticAddSymbol(
-                module.semantic,
-                IrSymbol {
-                    id: -1,
-                    name: irSemanticName(tokens, node, idx),
-                    kind: symKind,
-                    typeName: node.typeName,
-                    scope: node.scope,
-                    node: idx,
-                    parent: -1,
-                    public: node.flags > 0,
-                    mutable: node.kind == IrNodeLetStmt && node.flags > 0,
-                },
-            )
+            let symID = irSemanticAddSymbol(module.semantic, IrSymbol {id: -1, name: irSemanticName(tokens, node, idx), kind: symKind, typeName: node.typeName, scope: node.scope, node: idx, parent: -1, public: node.flags > 0, mutable: node.kind == IrNodeLetStmt && node.flags > 0})
             node.symbol = symID
             irSemanticScopeAddSymbol(module.semantic, node.scope, symID)
         }
-
         module.arena.nodes[idx] = node
         idx = idx + 1
     }
@@ -669,13 +494,11 @@ pub fn irFinalizeSemanticGraph(module: IrModule, tokens: List<FrontToken>) {
     module.semantic.unresolvedRefs = irUnresolvedReferenceCount(module)
     irRefreshSemanticCounters(module)
 }
-
 fn irSemanticAddScope(semantic: IrSemantic, parent: Int, owner: Int, depth: Int) -> Int {
     let id = irScopeCount(semantic)
-    semantic.scopes.push(IrScope { id, parent, owner, depth, symbols: [] })
+    semantic.scopes.push(IrScope {id, parent, owner, depth, symbols: []})
     id
 }
-
 fn irSemanticAddSymbol(semantic: IrSemantic, symbol: IrSymbol) -> Int {
     let id = irSymbolCount(semantic)
     let mut s = symbol
@@ -683,7 +506,6 @@ fn irSemanticAddSymbol(semantic: IrSemantic, symbol: IrSymbol) -> Int {
     semantic.symbols.push(s)
     id
 }
-
 fn irSemanticScopeAddSymbol(semantic: IrSemantic, scopeID: Int, symbolID: Int) {
     let mut idx = 0
     for scope in semantic.scopes {
@@ -696,7 +518,6 @@ fn irSemanticScopeAddSymbol(semantic: IrSemantic, scopeID: Int, symbolID: Int) {
         idx = idx + 1
     }
 }
-
 fn irRefreshSemanticCounters(module: IrModule) {
     let mut typed = 0
     let mut effectful = 0
@@ -716,43 +537,28 @@ fn irRefreshSemanticCounters(module: IrModule) {
     module.semantic.effectfulNodes = effectful
     module.semantic.terminalNodes = terminal
 }
-
 pub fn irScopeCount(semantic: IrSemantic) -> Int {
     semantic.scopes.len()
 }
-
 pub fn irSymbolCount(semantic: IrSemantic) -> Int {
     semantic.symbols.len()
 }
-
 pub fn irSymbolAt(semantic: IrSemantic, id: Int) -> IrSymbol {
     for symbol in semantic.symbols {
         if symbol.id == id {
             return symbol
         }
     }
-    IrSymbol {
-        id: -1,
-        name: "",
-        kind: IrSymNone,
-        typeName: "",
-        scope: -1,
-        node: -1,
-        parent: -1,
-        public: false,
-        mutable: false,
-    }
+    IrSymbol {id: -1, name: "", kind: IrSymNone, typeName: "", scope: -1, node: -1, parent: -1, public: false, mutable: false}
 }
-
 pub fn irScopeAt(semantic: IrSemantic, id: Int) -> IrScope {
     for scope in semantic.scopes {
         if scope.id == id {
             return scope
         }
     }
-    IrScope { id: -1, parent: -1, owner: -1, depth: 0, symbols: [] }
+    IrScope {id: -1, parent: -1, owner: -1, depth: 0, symbols: []}
 }
-
 pub fn irSemanticName(tokens: List<FrontToken>, node: IrNode, fallback: Int) -> String {
     let count = frontTokenListCount(tokens)
     if count == 0 {
@@ -770,7 +576,6 @@ pub fn irSemanticName(tokens: List<FrontToken>, node: IrNode, fallback: Int) -> 
     }
     "{irNodeKindName(node.kind)}#{fallback}"
 }
-
 fn irSemanticTypeName(tokens: List<FrontToken>, node: IrNode) -> String {
     if node.kind == IrNodeType {
         let name = irFirstIdentText(tokens, node.start, node.end)
@@ -799,10 +604,13 @@ fn irSemanticTypeName(tokens: List<FrontToken>, node: IrNode) -> String {
     }
     ""
 }
-
 fn irFirstIdentText(tokens: List<FrontToken>, start: Int, end: Int) -> String {
     let count = frontTokenListCount(tokens)
-    let stop = if end < count { end } else { count }
+    let stop = if end < count {
+        end
+    } else {
+        count
+    }
     let mut idx = start
     for idx < stop {
         let tok = frontTokenAtList(tokens, idx)
@@ -813,10 +621,13 @@ fn irFirstIdentText(tokens: List<FrontToken>, start: Int, end: Int) -> String {
     }
     ""
 }
-
 fn irUseAliasFromTokens(tokens: List<FrontToken>, start: Int, end: Int) -> String {
     let count = frontTokenListCount(tokens)
-    let stop = if end < count { end } else { count }
+    let stop = if end < count {
+        end
+    } else {
+        count
+    }
     let mut idx = start
     let mut last = ""
     let mut afterAs = false
@@ -836,11 +647,9 @@ fn irUseAliasFromTokens(tokens: List<FrontToken>, start: Int, end: Int) -> Strin
     }
     last
 }
-
 fn irKindCreatesScope(kind: IrNodeKind) -> Bool {
     kind == IrNodeFnDecl || kind == IrNodeBlock || kind == IrNodeClosureExpr || kind == IrNodeMatchArm
 }
-
 fn irSymbolKindForNode(kind: IrNodeKind, depth: Int) -> IrSymbolKind {
     if kind == IrNodeUseDecl || kind == IrNodeGoUseDecl {
         return IrSymPackage
@@ -871,7 +680,6 @@ fn irSymbolKindForNode(kind: IrNodeKind, depth: Int) -> IrSymbolKind {
     }
     IrSymNone
 }
-
 fn irValueKindForNode(kind: IrNodeKind) -> IrValueKind {
     if kind == IrNodeFnDecl {
         return IrValueFunction
@@ -890,7 +698,6 @@ fn irValueKindForNode(kind: IrNodeKind) -> IrValueKind {
     }
     IrValueNone
 }
-
 fn irFlowKindForNode(kind: IrNodeKind) -> IrFlowKind {
     if kind == IrNodeReturnStmt {
         return IrFlowReturns
@@ -906,7 +713,6 @@ fn irFlowKindForNode(kind: IrNodeKind) -> IrFlowKind {
     }
     IrFlowFallthrough
 }
-
 fn irEffectsForNode(kind: IrNodeKind) -> Int {
     if kind == IrNodeCallExpr {
         return 1
@@ -925,7 +731,6 @@ fn irEffectsForNode(kind: IrNodeKind) -> Int {
     }
     0
 }
-
 fn irAttachChild(arena: IrArena, parent: Int, child: Int) {
     if parent < 0 {
         return
@@ -934,7 +739,6 @@ fn irAttachChild(arena: IrArena, parent: Int, child: Int) {
     node.children.push(child)
     arena.nodes[parent] = node
 }
-
 fn irParentForDepth(stack: List<Int>, depth: Int) -> Int {
     if depth <= 0 {
         return -1
@@ -944,7 +748,6 @@ fn irParentForDepth(stack: List<Int>, depth: Int) -> Int {
     }
     stack[depth - 1]
 }
-
 fn irStackCount(stack: List<Int>) -> Int {
     let mut count = 0
     for item in stack {
@@ -953,7 +756,6 @@ fn irStackCount(stack: List<Int>) -> Int {
     }
     count
 }
-
 pub fn irSummarize(module: IrModule) -> IrSummary {
     let mut summary = emptyIrSummary()
     summary.nodes = irArenaNodeCount(module.arena)
@@ -968,7 +770,6 @@ pub fn irSummarize(module: IrModule) -> IrSummary {
     summary.terminalNodes = module.semantic.terminalNodes
     summary.invalidScopes = module.semantic.invalidScopes
     summary.unresolvedRefs = module.semantic.unresolvedRefs
-
     for node in module.arena.nodes {
         if node.kind == IrNodeFnDecl {
             summary.funcs = summary.funcs + 1
@@ -998,26 +799,20 @@ pub fn irSummarize(module: IrModule) -> IrSummary {
             summary.types = summary.types + 1
         }
     }
-
     summary
 }
-
 pub fn irDiagnosticCount(module: IrModule) -> Int {
     module.diagnostics.len()
 }
-
 pub fn irChildCount(module: IrModule, idx: Int) -> Int {
     irListCount(irArenaNodeAt(module.arena, idx).children)
 }
-
 pub fn irDeclCount(module: IrModule) -> Int {
     irListCount(module.decls)
 }
-
 pub fn irListCount(items: List<Int>) -> Int {
     items.len()
 }
-
 pub fn irInvalidParentCount(module: IrModule) -> Int {
     let mut count = 0
     let total = irArenaNodeCount(module.arena)
@@ -1034,7 +829,6 @@ pub fn irInvalidParentCount(module: IrModule) -> Int {
     }
     count
 }
-
 pub fn irInvalidScopeCount(module: IrModule) -> Int {
     let mut count = 0
     let totalScopes = irScopeCount(module.semantic)
@@ -1071,7 +865,6 @@ pub fn irInvalidScopeCount(module: IrModule) -> Int {
     }
     count
 }
-
 pub fn irUnresolvedReferenceCount(module: IrModule) -> Int {
     let mut count = 0
     let totalSymbols = irSymbolCount(module.semantic)
@@ -1084,32 +877,43 @@ pub fn irUnresolvedReferenceCount(module: IrModule) -> Int {
     }
     count
 }
-
 fn irKindDeclaresSymbol(kind: IrNodeKind) -> Bool {
     irSymbolKindForNode(kind, 0) != IrSymNone
 }
-
 pub fn irKindIsDecl(kind: IrNodeKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrNodeUseDecl { return true }
-    if kind == IrNodeGoUseDecl { return true }
-    if kind == IrNodeFnDecl { return true }
-    if kind == IrNodeStructDecl { return true }
-    if kind == IrNodeEnumDecl { return true }
-    if kind == IrNodeInterfaceDecl { return true }
-    if kind == IrNodeTypeAliasDecl { return true }
-    if kind == IrNodeLetDecl { return true }
+    if kind == IrNodeUseDecl {
+        return true
+    }
+    if kind == IrNodeGoUseDecl {
+        return true
+    }
+    if kind == IrNodeFnDecl {
+        return true
+    }
+    if kind == IrNodeStructDecl {
+        return true
+    }
+    if kind == IrNodeEnumDecl {
+        return true
+    }
+    if kind == IrNodeInterfaceDecl {
+        return true
+    }
+    if kind == IrNodeTypeAliasDecl {
+        return true
+    }
+    if kind == IrNodeLetDecl {
+        return true
+    }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irKindIsStmt(kind: IrNodeKind) -> Bool {
     kind == IrNodeLetStmt || kind == IrNodeReturnStmt || kind == IrNodeBreakStmt || kind == IrNodeContinueStmt || kind == IrNodeForStmt || kind == IrNodeDeferStmt || kind == IrNodeAssignStmt || kind == IrNodeChannelSendStmt
 }
-
 pub fn irKindIsExpr(kind: IrNodeKind) -> Bool {
     kind == IrNodeCallExpr || kind == IrNodeIndexExpr || kind == IrNodeSelectorExpr || kind == IrNodeTurbofishExpr || kind == IrNodeClosureExpr || kind == IrNodeListExpr || kind == IrNodeMapExpr || kind == IrNodeTupleExpr || kind == IrNodeStructExpr || kind == IrNodeRangeExpr || kind == IrNodeBinaryExpr || kind == IrNodeUnaryExpr || kind == IrNodeQuestionExpr || kind == IrNodeIfExpr || kind == IrNodeMatchExpr
 }
-
 pub fn irKindFromFront(kind: FrontNodeKind) -> IrNodeKind {
     if kind == frontNodeKindByName("file") {
         IrNodeModule
@@ -1199,7 +1003,6 @@ pub fn irKindFromFront(kind: FrontNodeKind) -> IrNodeKind {
         IrNodeRecovery
     }
 }
-
 pub fn irDiagnosticKindFromFront(kind: FrontParseDiagnosticKind) -> IrDiagnosticKind {
     if kind == frontParseDiagnosticKindByName("unexpected") {
         IrDiagUnexpectedToken
@@ -1217,153 +1020,372 @@ pub fn irDiagnosticKindFromFront(kind: FrontParseDiagnosticKind) -> IrDiagnostic
         IrDiagLexerError
     }
 }
-
 pub fn irKindFromAst(kind: AstNodeKind, depth: Int) -> IrNodeKind {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == AstNBinary { return IrNodeBinaryExpr }
-    if kind == AstNUnary { return IrNodeUnaryExpr }
-    if kind == AstNCall { return IrNodeCallExpr }
-    if kind == AstNField { return IrNodeSelectorExpr }
-    if kind == AstNIndex { return IrNodeIndexExpr }
-    if kind == AstNRange { return IrNodeRangeExpr }
-    if kind == AstNIf { return IrNodeIfExpr }
-    if kind == AstNMatch { return IrNodeMatchExpr }
-    if kind == AstNClosure { return IrNodeClosureExpr }
-    if kind == AstNList { return IrNodeListExpr }
-    if kind == AstNTuple { return IrNodeTupleExpr }
-    if kind == AstNMap { return IrNodeMapExpr }
-    if kind == AstNStructLit { return IrNodeStructExpr }
-    if kind == AstNBlock { return IrNodeBlock }
-    if kind == AstNQuestion { return IrNodeQuestionExpr }
-    if kind == AstNTurbofish { return IrNodeTurbofishExpr }
+    if kind == AstNBinary {
+        return IrNodeBinaryExpr
+    }
+    if kind == AstNUnary {
+        return IrNodeUnaryExpr
+    }
+    if kind == AstNCall {
+        return IrNodeCallExpr
+    }
+    if kind == AstNField {
+        return IrNodeSelectorExpr
+    }
+    if kind == AstNIndex {
+        return IrNodeIndexExpr
+    }
+    if kind == AstNRange {
+        return IrNodeRangeExpr
+    }
+    if kind == AstNIf {
+        return IrNodeIfExpr
+    }
+    if kind == AstNMatch {
+        return IrNodeMatchExpr
+    }
+    if kind == AstNClosure {
+        return IrNodeClosureExpr
+    }
+    if kind == AstNList {
+        return IrNodeListExpr
+    }
+    if kind == AstNTuple {
+        return IrNodeTupleExpr
+    }
+    if kind == AstNMap {
+        return IrNodeMapExpr
+    }
+    if kind == AstNStructLit {
+        return IrNodeStructExpr
+    }
+    if kind == AstNBlock {
+        return IrNodeBlock
+    }
+    if kind == AstNQuestion {
+        return IrNodeQuestionExpr
+    }
+    if kind == AstNTurbofish {
+        return IrNodeTurbofishExpr
+    }
     if kind == AstNLet {
-        if depth == 1 { return IrNodeLetDecl }
+        if depth == 1 {
+            return IrNodeLetDecl
+        }
         return IrNodeLetStmt
     }
-    if kind == AstNReturn { return IrNodeReturnStmt }
-    if kind == AstNBreak { return IrNodeBreakStmt }
-    if kind == AstNContinue { return IrNodeContinueStmt }
-    if kind == AstNDefer { return IrNodeDeferStmt }
-    if kind == AstNFor { return IrNodeForStmt }
-    if kind == AstNAssign { return IrNodeAssignStmt }
-    if kind == AstNChanSend { return IrNodeChannelSendStmt }
-    if kind == AstNFnDecl { return IrNodeFnDecl }
-    if kind == AstNStructDecl { return IrNodeStructDecl }
-    if kind == AstNEnumDecl { return IrNodeEnumDecl }
-    if kind == AstNInterfaceDecl { return IrNodeInterfaceDecl }
-    if kind == AstNTypeAlias { return IrNodeTypeAliasDecl }
-    if kind == AstNUseDecl { return IrNodeUseDecl }
-    if kind == AstNLetDecl { return IrNodeLetDecl }
-    if kind == AstNFile { return IrNodeModule }
-    if kind == AstNParam { return IrNodeParam }
-    if kind == AstNField_ { return IrNodeField }
-    if kind == AstNVariant { return IrNodeVariant }
-    if kind == AstNMatchArm { return IrNodeMatchArm }
-    if kind == AstNType { return IrNodeType }
-    if kind == AstNPattern { return IrNodePattern }
-    if kind == AstNAnnotation { return IrNodeAnnotation }
-    if kind == AstNGenericParam { return IrNodeGenericParams }
-    if kind == AstNError { return IrNodeError }
+    if kind == AstNReturn {
+        return IrNodeReturnStmt
+    }
+    if kind == AstNBreak {
+        return IrNodeBreakStmt
+    }
+    if kind == AstNContinue {
+        return IrNodeContinueStmt
+    }
+    if kind == AstNDefer {
+        return IrNodeDeferStmt
+    }
+    if kind == AstNFor {
+        return IrNodeForStmt
+    }
+    if kind == AstNAssign {
+        return IrNodeAssignStmt
+    }
+    if kind == AstNChanSend {
+        return IrNodeChannelSendStmt
+    }
+    if kind == AstNFnDecl {
+        return IrNodeFnDecl
+    }
+    if kind == AstNStructDecl {
+        return IrNodeStructDecl
+    }
+    if kind == AstNEnumDecl {
+        return IrNodeEnumDecl
+    }
+    if kind == AstNInterfaceDecl {
+        return IrNodeInterfaceDecl
+    }
+    if kind == AstNTypeAlias {
+        return IrNodeTypeAliasDecl
+    }
+    if kind == AstNUseDecl {
+        return IrNodeUseDecl
+    }
+    if kind == AstNLetDecl {
+        return IrNodeLetDecl
+    }
+    if kind == AstNFile {
+        return IrNodeModule
+    }
+    if kind == AstNParam {
+        return IrNodeParam
+    }
+    if kind == AstNField_ {
+        return IrNodeField
+    }
+    if kind == AstNVariant {
+        return IrNodeVariant
+    }
+    if kind == AstNMatchArm {
+        return IrNodeMatchArm
+    }
+    if kind == AstNType {
+        return IrNodeType
+    }
+    if kind == AstNPattern {
+        return IrNodePattern
+    }
+    if kind == AstNAnnotation {
+        return IrNodeAnnotation
+    }
+    if kind == AstNGenericParam {
+        return IrNodeGenericParams
+    }
+    if kind == AstNError {
+        return IrNodeError
+    }
     IrNodeRecovery
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irNodeKindName(kind: IrNodeKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrNodeModule { return "module" }
-    if kind == IrNodeAnnotation { return "annotation" }
-    if kind == IrNodeUseDecl { return "use" }
-    if kind == IrNodeGoUseDecl { return "goUse" }
-    if kind == IrNodeFnDecl { return "fn" }
-    if kind == IrNodeStructDecl { return "struct" }
-    if kind == IrNodeEnumDecl { return "enum" }
-    if kind == IrNodeInterfaceDecl { return "interface" }
-    if kind == IrNodeTypeAliasDecl { return "typeAlias" }
-    if kind == IrNodeLetDecl { return "letDecl" }
-    if kind == IrNodeGenericParams { return "genericParams" }
-    if kind == IrNodeParamList { return "paramList" }
-    if kind == IrNodeParam { return "param" }
-    if kind == IrNodeType { return "type" }
-    if kind == IrNodeBlock { return "block" }
-    if kind == IrNodeLetStmt { return "letStmt" }
-    if kind == IrNodeReturnStmt { return "return" }
-    if kind == IrNodeBreakStmt { return "break" }
-    if kind == IrNodeContinueStmt { return "continue" }
-    if kind == IrNodeForStmt { return "for" }
-    if kind == IrNodeDeferStmt { return "defer" }
-    if kind == IrNodeAssignStmt { return "assign" }
-    if kind == IrNodeChannelSendStmt { return "channelSend" }
-    if kind == IrNodeIfExpr { return "if" }
-    if kind == IrNodeMatchExpr { return "match" }
-    if kind == IrNodeMatchArm { return "matchArm" }
-    if kind == IrNodeCallExpr { return "call" }
-    if kind == IrNodeIndexExpr { return "index" }
-    if kind == IrNodeSelectorExpr { return "selector" }
-    if kind == IrNodeTurbofishExpr { return "turbofish" }
-    if kind == IrNodeClosureExpr { return "closure" }
-    if kind == IrNodeListExpr { return "list" }
-    if kind == IrNodeMapExpr { return "map" }
-    if kind == IrNodeTupleExpr { return "tuple" }
-    if kind == IrNodeStructExpr { return "structExpr" }
-    if kind == IrNodeRangeExpr { return "range" }
-    if kind == IrNodeBinaryExpr { return "binary" }
-    if kind == IrNodeUnaryExpr { return "unary" }
-    if kind == IrNodeQuestionExpr { return "question" }
-    if kind == IrNodePattern { return "pattern" }
-    if kind == IrNodeField { return "field" }
-    if kind == IrNodeVariant { return "variant" }
-    if kind == IrNodeRecovery { return "recovery" }
-    if kind == IrNodeError { return "error" }
+    if kind == IrNodeModule {
+        return "module"
+    }
+    if kind == IrNodeAnnotation {
+        return "annotation"
+    }
+    if kind == IrNodeUseDecl {
+        return "use"
+    }
+    if kind == IrNodeGoUseDecl {
+        return "goUse"
+    }
+    if kind == IrNodeFnDecl {
+        return "fn"
+    }
+    if kind == IrNodeStructDecl {
+        return "struct"
+    }
+    if kind == IrNodeEnumDecl {
+        return "enum"
+    }
+    if kind == IrNodeInterfaceDecl {
+        return "interface"
+    }
+    if kind == IrNodeTypeAliasDecl {
+        return "typeAlias"
+    }
+    if kind == IrNodeLetDecl {
+        return "letDecl"
+    }
+    if kind == IrNodeGenericParams {
+        return "genericParams"
+    }
+    if kind == IrNodeParamList {
+        return "paramList"
+    }
+    if kind == IrNodeParam {
+        return "param"
+    }
+    if kind == IrNodeType {
+        return "type"
+    }
+    if kind == IrNodeBlock {
+        return "block"
+    }
+    if kind == IrNodeLetStmt {
+        return "letStmt"
+    }
+    if kind == IrNodeReturnStmt {
+        return "return"
+    }
+    if kind == IrNodeBreakStmt {
+        return "break"
+    }
+    if kind == IrNodeContinueStmt {
+        return "continue"
+    }
+    if kind == IrNodeForStmt {
+        return "for"
+    }
+    if kind == IrNodeDeferStmt {
+        return "defer"
+    }
+    if kind == IrNodeAssignStmt {
+        return "assign"
+    }
+    if kind == IrNodeChannelSendStmt {
+        return "channelSend"
+    }
+    if kind == IrNodeIfExpr {
+        return "if"
+    }
+    if kind == IrNodeMatchExpr {
+        return "match"
+    }
+    if kind == IrNodeMatchArm {
+        return "matchArm"
+    }
+    if kind == IrNodeCallExpr {
+        return "call"
+    }
+    if kind == IrNodeIndexExpr {
+        return "index"
+    }
+    if kind == IrNodeSelectorExpr {
+        return "selector"
+    }
+    if kind == IrNodeTurbofishExpr {
+        return "turbofish"
+    }
+    if kind == IrNodeClosureExpr {
+        return "closure"
+    }
+    if kind == IrNodeListExpr {
+        return "list"
+    }
+    if kind == IrNodeMapExpr {
+        return "map"
+    }
+    if kind == IrNodeTupleExpr {
+        return "tuple"
+    }
+    if kind == IrNodeStructExpr {
+        return "structExpr"
+    }
+    if kind == IrNodeRangeExpr {
+        return "range"
+    }
+    if kind == IrNodeBinaryExpr {
+        return "binary"
+    }
+    if kind == IrNodeUnaryExpr {
+        return "unary"
+    }
+    if kind == IrNodeQuestionExpr {
+        return "question"
+    }
+    if kind == IrNodePattern {
+        return "pattern"
+    }
+    if kind == IrNodeField {
+        return "field"
+    }
+    if kind == IrNodeVariant {
+        return "variant"
+    }
+    if kind == IrNodeRecovery {
+        return "recovery"
+    }
+    if kind == IrNodeError {
+        return "error"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irDiagnosticKindName(kind: IrDiagnosticKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrDiagUnexpectedToken { return "unexpectedToken" }
-    if kind == IrDiagMissingName { return "missingName" }
-    if kind == IrDiagMissingDelimiter { return "missingDelimiter" }
-    if kind == IrDiagUnmatchedDelimiter { return "unmatchedDelimiter" }
-    if kind == IrDiagNonAssociativeOperator { return "nonAssociativeOperator" }
-    if kind == IrDiagTrailingSelector { return "trailingSelector" }
-    if kind == IrDiagLexerError { return "lexerError" }
+    if kind == IrDiagUnexpectedToken {
+        return "unexpectedToken"
+    }
+    if kind == IrDiagMissingName {
+        return "missingName"
+    }
+    if kind == IrDiagMissingDelimiter {
+        return "missingDelimiter"
+    }
+    if kind == IrDiagUnmatchedDelimiter {
+        return "unmatchedDelimiter"
+    }
+    if kind == IrDiagNonAssociativeOperator {
+        return "nonAssociativeOperator"
+    }
+    if kind == IrDiagTrailingSelector {
+        return "trailingSelector"
+    }
+    if kind == IrDiagLexerError {
+        return "lexerError"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irSymbolKindName(kind: IrSymbolKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrSymNone { return "none" }
-    if kind == IrSymPackage { return "package" }
-    if kind == IrSymFunction { return "function" }
-    if kind == IrSymType { return "type" }
-    if kind == IrSymVariant { return "variant" }
-    if kind == IrSymField { return "field" }
-    if kind == IrSymParameter { return "parameter" }
-    if kind == IrSymLocal { return "local" }
-    if kind == IrSymGeneric { return "generic" }
+    if kind == IrSymNone {
+        return "none"
+    }
+    if kind == IrSymPackage {
+        return "package"
+    }
+    if kind == IrSymFunction {
+        return "function"
+    }
+    if kind == IrSymType {
+        return "type"
+    }
+    if kind == IrSymVariant {
+        return "variant"
+    }
+    if kind == IrSymField {
+        return "field"
+    }
+    if kind == IrSymParameter {
+        return "parameter"
+    }
+    if kind == IrSymLocal {
+        return "local"
+    }
+    if kind == IrSymGeneric {
+        return "generic"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irValueKindName(kind: IrValueKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrValueNone { return "none" }
-    if kind == IrValueType { return "type" }
-    if kind == IrValueFunction { return "function" }
-    if kind == IrValuePlace { return "place" }
-    if kind == IrValueRValue { return "rvalue" }
-    if kind == IrValuePattern { return "pattern" }
+    if kind == IrValueNone {
+        return "none"
+    }
+    if kind == IrValueType {
+        return "type"
+    }
+    if kind == IrValueFunction {
+        return "function"
+    }
+    if kind == IrValuePlace {
+        return "place"
+    }
+    if kind == IrValueRValue {
+        return "rvalue"
+    }
+    if kind == IrValuePattern {
+        return "pattern"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irFlowKindName(kind: IrFlowKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IrFlowFallthrough { return "fallthrough" }
-    if kind == IrFlowReturns { return "returns" }
-    if kind == IrFlowBreaks { return "breaks" }
-    if kind == IrFlowContinues { return "continues" }
-    if kind == IrFlowDiverges { return "diverges" }
-    if kind == IrFlowMixed { return "mixed" }
+    if kind == IrFlowFallthrough {
+        return "fallthrough"
+    }
+    if kind == IrFlowReturns {
+        return "returns"
+    }
+    if kind == IrFlowBreaks {
+        return "breaks"
+    }
+    if kind == IrFlowContinues {
+        return "continues"
+    }
+    if kind == IrFlowDiverges {
+        return "diverges"
+    }
+    if kind == IrFlowMixed {
+        return "mixed"
+    }
     "unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn irFnDeclKind() -> IrNodeKind {
     IrNodeFnDecl
 }

@@ -30,18 +30,15 @@
 // contain ASCII characters, so `String[a..b]` byte-space slicing is
 // safe here. `.chars()` detour is intentionally avoided to keep the
 // parser allocation-light.
-
 pub struct HintPair {
     pub key: String,
     pub value: String,
 }
-
 pub struct HintFnSig {
     pub ok: Bool,
     pub params: List<String>,
     pub returnType: String,
 }
-
 /// Return the element type of a `List<T>` hint. Empty string when the
 /// hint isn't a List.
 pub fn hintListElem(hint: String) -> String {
@@ -57,7 +54,6 @@ pub fn hintListElem(hint: String) -> String {
     }
     hint[5..n - 1].trim()
 }
-
 /// Return the element types of a tuple hint `(T1, T2, ...)`. Empty list
 /// when the hint isn't a tuple or when arity doesn't match.
 pub fn hintTupleElems(hint: String, arity: Int) -> List<String> {
@@ -75,36 +71,34 @@ pub fn hintTupleElems(hint: String, arity: Int) -> List<String> {
     }
     trimmed
 }
-
 /// Return the (key, value) types of a `Map<K, V>` hint. Empty strings
 /// when the hint isn't a Map or arity mismatches.
 pub fn hintMapEntries(hint: String) -> HintPair {
     if !hint.startsWith("Map<") || !hint.endsWith(">") {
-        return HintPair { key: "", value: "" }
+        return HintPair {key: "", value: ""}
     }
     let n = hint.len()
     if n <= 5 {
-        return HintPair { key: "", value: "" }
+        return HintPair {key: "", value: ""}
     }
     let inner = hint[4..n - 1]
     let parts = hintSplitTopLevelComma(inner)
     if parts.len() != 2 {
-        return HintPair { key: "", value: "" }
+        return HintPair {key: "", value: ""}
     }
-    HintPair { key: parts[0].trim(), value: parts[1].trim() }
+    HintPair {key: parts[0].trim(), value: parts[1].trim()}
 }
-
 /// Return the parameter list + return type of a `fn(Ps...) -> R` hint.
 /// Returns `ok: false` when the hint isn't an fn type. When the hint
 /// has no return annotation (bare `fn(Ps)`), `returnType` is empty but
 /// `ok` is still `true`.
 pub fn hintFnSignature(hint: String) -> HintFnSig {
     if !hint.startsWith("fn(") {
-        return HintFnSig { ok: false, params: [], returnType: "" }
+        return HintFnSig {ok: false, params: [], returnType: ""}
     }
     let close = hintFindMatchingParen(hint, 3)
     if close < 0 {
-        return HintFnSig { ok: false, params: [], returnType: "" }
+        return HintFnSig {ok: false, params: [], returnType: ""}
     }
     let paramStr = hint[3..close].trim()
     let mut params: List<String> = []
@@ -116,16 +110,14 @@ pub fn hintFnSignature(hint: String) -> HintFnSig {
     let restRaw = hint[close + 1..hint.len()]
     let rest = restRaw.trim()
     if !rest.startsWith("->") {
-        return HintFnSig { ok: true, params, returnType: "" }
+        return HintFnSig {ok: true, params, returnType: ""}
     }
     let ret = rest[2..rest.len()].trim()
-    HintFnSig { ok: true, params, returnType: ret }
+    HintFnSig {ok: true, params, returnType: ret}
 }
-
 // ---------------------------------------------------------------------
 // Primitives.
 // ---------------------------------------------------------------------
-
 /// Split `s` on top-level `,` tokens, ignoring commas inside `<...>`,
 /// `(...)`, or `[...]`. Bracket-depth scan; no real parse. Always
 /// returns at least one element (possibly empty) for a non-empty input.
@@ -152,7 +144,6 @@ pub fn hintSplitTopLevelComma(s: String) -> List<String> {
     }
     parts
 }
-
 /// Strip a leading `open` and trailing `close` from `s`. Returns ""
 /// when either bracket is missing. Does not verify bracket balance
 /// inside — call only on simple tuple-shaped strings.
@@ -169,7 +160,6 @@ pub fn hintStripOuter(s: String, open: String, close: String) -> String {
     let n = s.len()
     s[open.len()..n - close.len()]
 }
-
 /// Scan from `startIdx` looking for the `)` that closes the `(` just
 /// before it. Tracks paren depth (so nested parens balance). Returns
 /// the index of the matching close, or -1 if none is found.

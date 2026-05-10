@@ -19,9 +19,7 @@
 //     adrp/add for the lifted-fn address).
 //   - Map literal — out of scope for the ONB dev backend; falls
 //     back to LLVM.
-
 // === Top-level dispatch =============================================
-
 // onbLowerAggregateAssign routes by aggregate kind. Mirror of
 // `lowerAggregateAssign`.
 pub fn onbLowerAggregateAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
@@ -32,9 +30,7 @@ pub fn onbLowerAggregateAssign(state: OnbLowerState, rv: MirRValue, destSlot: In
         _ -> onbMaterialiseErr(state, "aggregate kind outside slice H"),
     }
 }
-
 // === Empty list literal =============================================
-
 // onbLowerListLiteralAssign covers `dest = []` — runtime
 // `osty_rt_list_new` returns a fresh empty list pointer in x0
 // which we store into the dest slot. Non-empty list literals
@@ -49,9 +45,7 @@ pub fn onbLowerListLiteralAssign(state: OnbLowerState, rv: MirRValue, destSlot: 
     out.push(onbInstrStore64Stack("x0", destSlot))
     onbMaterialiseOk(state, out)
 }
-
 // === Struct literal =================================================
-
 // onbLowerStructLiteralAssign writes each scalar field of a struct
 // literal into its slot offset. Phase B.5 v1 only supports
 // all-scalar structs; the slot allocator already sized the
@@ -74,9 +68,13 @@ pub fn onbLowerStructLiteralAssign(state: OnbLowerState, rv: MirRValue, destSlot
                     return onbMaterialiseErr(working, "struct field has non-scalar type")
                 }
                 let r = onbMaterialiseOperand(working, field, "x9")
-                if !r.ok { return r }
+                if !r.ok {
+                    return r
+                }
                 working = r.state
-                for instr in r.instrs { out.push(instr) }
+                for instr in r.instrs {
+                    out.push(instr)
+                }
                 out.push(onbInstrStore64Stack("x9", destSlot + i * 8))
                 i = i + 1
             }
@@ -85,9 +83,7 @@ pub fn onbLowerStructLiteralAssign(state: OnbLowerState, rv: MirRValue, destSlot
         None -> onbMaterialiseErr(state, "unknown struct layout"),
     }
 }
-
 // === Enum variant ===================================================
-
 // onbLowerEnumVariantAssign writes the discriminant tag at offset 0
 // then each payload field at `8 + i*8`. Mirror of
 // `lowerEnumVariantAssign`. Variants with non-scalar payload fall
@@ -115,9 +111,13 @@ pub fn onbLowerEnumVariantAssign(state: OnbLowerState, rv: MirRValue, destSlot: 
             let mut i = 0
             for field in rv.aggFields {
                 let r = onbMaterialiseOperand(working, field, "x9")
-                if !r.ok { return r }
+                if !r.ok {
+                    return r
+                }
                 working = r.state
-                for instr in r.instrs { out.push(instr) }
+                for instr in r.instrs {
+                    out.push(instr)
+                }
                 out.push(onbInstrStore64Stack("x9", destSlot + onbEnumPayloadOffset(i)))
                 i = i + 1
             }
