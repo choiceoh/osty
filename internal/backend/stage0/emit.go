@@ -2251,6 +2251,7 @@ func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 		prelude:    prelude.String(),
 		callSymbol: spec.symbol,
 		callArgs:   args,
+		resultType: destType,
 	}, destID, destType, true
 }
 
@@ -2399,7 +2400,7 @@ func classifyMapContainsIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, dest
 	}
 	args := []callArg{{expr: mapExpr, ty: "ptr"}, {expr: keyExpr, ty: keyTy.llvm()}}
 	declareRuntimePrototype(mctx, symbol, scalarBool, args)
-	return pendingInstr{kind: instrCall, prelude: mapPrelude + keyPrelude, callSymbol: symbol, callArgs: args}, destID, scalarBool, true
+	return pendingInstr{kind: instrCall, prelude: mapPrelude + keyPrelude, callSymbol: symbol, callArgs: args, resultType: scalarBool}, destID, scalarBool, true
 }
 
 func classifyMapNewIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -2427,7 +2428,7 @@ func classifyMapNewIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mi
 		{expr: "null", ty: "ptr"},
 	}
 	declareRuntimePrototype(mctx, "osty_rt_map_new", scalarOpaquePtr, args)
-	return pendingInstr{kind: instrCall, callSymbol: "osty_rt_map_new", callArgs: args}, destID, scalarOpaquePtr, true
+	return pendingInstr{kind: instrCall, callSymbol: "osty_rt_map_new", callArgs: args, resultType: scalarOpaquePtr}, destID, scalarOpaquePtr, true
 }
 
 func classifyMapKeysSortedIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -2445,7 +2446,7 @@ func classifyMapKeysSortedIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, de
 	}
 	symbol := "osty_rt_map_keys_sorted_" + suffix
 	declareRuntimePrototype(mctx, symbol, scalarOpaquePtr, []callArg{{ty: "ptr"}})
-	return pendingInstr{kind: instrCall, prelude: prelude, callSymbol: symbol, callArgs: []callArg{{expr: expr, ty: "ptr"}}}, destID, scalarOpaquePtr, true
+	return pendingInstr{kind: instrCall, prelude: prelude, callSymbol: symbol, callArgs: []callArg{{expr: expr, ty: "ptr"}}, resultType: scalarOpaquePtr}, destID, scalarOpaquePtr, true
 }
 
 func classifyMapIncrIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -2471,7 +2472,7 @@ func classifyMapIncrIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID m
 	symbol := "osty_rt_map_incr_i64_" + suffix
 	args := []callArg{{expr: mapExpr, ty: "ptr"}, {expr: keyExpr, ty: keyTy.llvm()}, {expr: deltaExpr, ty: "i64"}}
 	declareRuntimePrototype(mctx, symbol, scalarInt, args)
-	return pendingInstr{kind: instrCall, prelude: mapPrelude + keyPrelude + deltaPrelude, callSymbol: symbol, callArgs: args}, destID, scalarInt, true
+	return pendingInstr{kind: instrCall, prelude: mapPrelude + keyPrelude + deltaPrelude, callSymbol: symbol, callArgs: args, resultType: scalarInt}, destID, scalarInt, true
 }
 
 func classifySetContainsIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -2492,7 +2493,7 @@ func classifySetContainsIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, dest
 	}
 	args := []callArg{{expr: setExpr, ty: "ptr"}, {expr: elemExpr, ty: elemTy.llvm()}}
 	declareRuntimePrototype(mctx, symbol, scalarBool, args)
-	return pendingInstr{kind: instrCall, prelude: setPrelude + elemPrelude, callSymbol: symbol, callArgs: args}, destID, scalarBool, true
+	return pendingInstr{kind: instrCall, prelude: setPrelude + elemPrelude, callSymbol: symbol, callArgs: args, resultType: scalarBool}, destID, scalarBool, true
 }
 
 func classifySetNewIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -2506,7 +2507,7 @@ func classifySetNewIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mi
 	}
 	args := []callArg{{expr: fmt.Sprintf("%d", elemKind), ty: "i64"}}
 	declareRuntimePrototype(mctx, "osty_rt_set_new", scalarOpaquePtr, args)
-	return pendingInstr{kind: instrCall, callSymbol: "osty_rt_set_new", callArgs: args}, destID, scalarOpaquePtr, true
+	return pendingInstr{kind: instrCall, callSymbol: "osty_rt_set_new", callArgs: args, resultType: scalarOpaquePtr}, destID, scalarOpaquePtr, true
 }
 
 func classifyRawNullIntrinsic(ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) (pendingInstr, mir.LocalID, scalarType, bool) {
