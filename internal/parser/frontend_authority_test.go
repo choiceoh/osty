@@ -265,6 +265,20 @@ func fixtureFollowOnBMatchAssignTopLevelDecl(fnName string) []byte {
 		"    }\n")
 }
 
+func fixtureFollowOnBHelperTail(fnHead string, brokenBody string, helperName string) []byte {
+	return []byte("fn " + fnHead + " {\n" +
+		brokenBody +
+		"}\n" +
+		"fn " + helperName + "() {}\n")
+}
+
+func fixtureFollowOnBMatchAssignHelperTail(fnName string, helperName string) []byte {
+	return fixtureFollowOnBHelperTail(fnName+"(x: Int)", "    match x {\n"+
+		"        0 -> out.path =\n"+
+		"        _ -> 1,\n"+
+		"    }\n", helperName)
+}
+
 func fixtureIfThenMissingRhs(condName string) []byte {
 	return []byte("fn " + condName + "() -> Bool { false }\n\n" +
 		"fn f() {\n" +
@@ -382,6 +396,19 @@ func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
 	}
 }
 
+func TestParseFollowOnRecoveryA2ElseNewlineTopLevelDecl(t *testing.T) {
+	src := fixtureFollowOnAElseNewline("rfA2ElseNewlineTopLevelDecl", "rfA2Cond")
+
+	result := ParseDetailed(src)
+	fn, _ := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 1, "rfA2Cond", "E0105", "E0204", "E0100")
+	requireParseDiagnosticCodePresent(t, result, "E0100")
+	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
+	ifExpr, ok := stmt.X.(*ast.IfExpr)
+	if !ok || ifExpr.Else != nil {
+		t.Fatalf("stmt[0].X = %#v, want if expr with nil else after follow-on recovery", stmt.X)
+	}
+}
+
 // Axis B — declaration-layer fallout after expression recovery.
 
 func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
@@ -398,6 +425,27 @@ func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
 	}
 	if match.Arms[0].Body != nil || match.Arms[1].Body != nil {
 		t.Fatalf("match arms = %#v, want both arm bodies nil after declaration-layer drift", match.Arms)
+	}
+}
+
+func TestParseFollowOnRecoveryB2MatchAssignHelperTail(t *testing.T) {
+	src := fixtureFollowOnBMatchAssignHelperTail("rfB2MatchAssignHelperTail", "rfB2Tail")
+
+	result := ParseDetailed(src)
+	requireParseDiagnosticCount(t, result, 5, "follow-on diagnostics")
+	requireParseDiagnosticCodePresent(t, result, "E0100")
+	requireParseDiagnosticWithCodeAndMessage(t, result, "E0204", "expected match arm body before `->`")
+	fn, helper := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 0, "rfB2Tail")
+	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
+	match, ok := stmt.X.(*ast.MatchExpr)
+	if !ok || len(match.Arms) != 2 {
+		t.Fatalf("stmt[0].X = %#v, want recovered match with two damaged arms", stmt.X)
+	}
+	if match.Arms[0].Body != nil || match.Arms[1].Body != nil {
+		t.Fatalf("match arms = %#v, want both arm bodies nil after declaration-layer drift", match.Arms)
+	}
+	if helper.Name != "rfB2Tail" {
+		t.Fatalf("helper = %#v, want preserved helper fn rfB2Tail", helper)
 	}
 }
 
