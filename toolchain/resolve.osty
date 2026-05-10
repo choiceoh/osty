@@ -2185,15 +2185,23 @@ fn srCheckCfgArg(file: AstFile, argIdx: Int, result: SelfResolveResult) -> SelfR
     let arg = srAstNode(file, argIdx)
     if arg.kind == AstNCall && arg.left >= 0 {
         let callee = srAstNode(file, arg.left)
-        if callee.kind == AstNIdent && (callee.text == "all" || callee.text == "any" || callee.text == "not") {
+        if callee.kind == AstNIdent {
             let mut out = result
-            if callee.text == "not" && arg.children.len() != 1 {
-                out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "`not(...)` requires exactly one argument", "cfg", arg.start, arg.end, -1, "v0.5 §5 / G29: `not` takes exactly one cfg predicate"))
+            if callee.text == "all" || callee.text == "any" || callee.text == "not" {
+                if callee.text == "not" && arg.children.len() != 1 {
+                    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "`not(...)` requires exactly one argument", "cfg", arg.start, arg.end, -1, "v0.5 §5 / G29: `not` takes exactly one cfg predicate"))
+                    return out
+                }
+                for childIdx in arg.children {
+                    out = srCheckCfgArg(file, childIdx, out)
+                }
                 return out
             }
-            for childIdx in arg.children {
-                out = srCheckCfgArg(file, childIdx, out)
+            let mut hint = srDidYouMeanHint(callee.text, srCfgComposeNames())
+            if hint == "" {
+                hint = "v0.5 §5 / G29: use `all`, `any`, or `not`"
             }
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", "unknown cfg composition `" + callee.text + "`", "cfg", arg.start, arg.end, -1, hint))
             return out
         }
     }
@@ -2802,6 +2810,9 @@ fn srDeprecatedArgKeys() -> List<String> {
 }
 fn srCfgKeys() -> List<String> {
     ["os", "target", "arch", "feature"]
+}
+fn srCfgComposeNames() -> List<String> {
+    ["all", "any", "not"]
 }
 /// srSuggestFromList finds the closest candidate (Levenshtein distance
 /// < 3) from a fixed list. Returns "" if nothing is within reach. This

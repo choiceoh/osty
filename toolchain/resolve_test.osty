@@ -700,6 +700,23 @@ fn testSelfResolverCfgUnknownKeySuggestsNearestSupportedKey() {
     }
     testing.assert(sawHint)
 }
+fn testSelfResolverCfgUnknownCompositionSuggestsNearestSupportedName() {
+    let source = r"""
+            #[cfg(al(os = "linux"))]
+            fn bad() -> Int { 1 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+    let mut sawHint = false
+    for diag in result.diagnostics {
+        if diag.code == "E0739" && diag.hint == "did you mean `all`?" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+    testing.assert(!selfResolveHasSymbol(result, "bad", "fn"))
+}
 // Unknown key evaluates to false — decl drops. Matches Go cfg.go.
 fn testSelfResolverCfgTargetMismatchDrops() {
     let source = r"""
