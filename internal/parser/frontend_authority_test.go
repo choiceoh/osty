@@ -75,7 +75,7 @@ fn update(value: String?) {
 	}
 }
 
-func TestParseBlockRecoveryResetsSyncThresholdPerStatement(t *testing.T) {
+func TestParseRecoveryA1IfThenPreservesElseAndTrailingStmt(t *testing.T) {
 	src := []byte(`fn cond() -> Bool { false }
 
 fn f() {
@@ -127,7 +127,7 @@ fn f() {
 	}
 }
 
-func TestParseMatchRecoveryPreservesNextArmAndTrailingStmt(t *testing.T) {
+func TestParseRecoveryA2MatchArmPreservesNextArmAndTrailingStmt(t *testing.T) {
 	src := []byte(`fn f(x: Int) {
     match x {
         0 ->
@@ -175,7 +175,7 @@ func TestParseMatchRecoveryPreservesNextArmAndTrailingStmt(t *testing.T) {
 	}
 }
 
-func TestParseLetMissingRhsPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     let x =
     let z = 2
@@ -207,7 +207,7 @@ func TestParseLetMissingRhsPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseAssignMissingRhsPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryB3AssignMissingRhsPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     x =
     let z = 2
@@ -239,7 +239,7 @@ func TestParseAssignMissingRhsPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseReturnMalformedExprPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryB6ReturnMalformedExprPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     return +
     let z = 2
@@ -271,7 +271,7 @@ func TestParseReturnMalformedExprPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryB7ChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     ch <-
     let z = 2
@@ -303,7 +303,7 @@ func TestParseChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseDeferMissingExprPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     defer
     let z = 2
@@ -335,7 +335,7 @@ func TestParseDeferMissingExprPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseBreakMalformedValuePreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     for i in 0..10 {
         break +
@@ -373,7 +373,7 @@ func TestParseBreakMalformedValuePreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryC3ContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     for i in 0..10 {
         continue +
@@ -411,7 +411,7 @@ func TestParseContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseLabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
 	src := []byte("fn f() {\n    'outer: for i in 0..10 {\n        continue 'outer +\n        let z = 2\n    }\n}\n")
 
 	result := ParseDetailed(src)
@@ -443,7 +443,7 @@ func TestParseLabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T)
 	}
 }
 
-func TestParseDeferBlockRecoveryPreservesFollowingStmt(t *testing.T) {
+func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     defer {
         let x =
@@ -485,7 +485,7 @@ func TestParseDeferBlockRecoveryPreservesFollowingStmt(t *testing.T) {
 	}
 }
 
-func TestParseIfLetMalformedExprPreservesElseAndFollowingStmt(t *testing.T) {
+func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *testing.T) {
 	src := []byte(`fn f() {
     if let value = + {
         1
