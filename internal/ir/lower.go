@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -666,6 +667,17 @@ func (l *lowerer) lowerType(t ast.Type) Type {
 	}
 	l.note("unsupported type node %T", t)
 	return ErrTypeVal
+}
+
+// lowerStdlibType lowers a type AST that originated from a stdlib stub.
+// Stub node IDs collide with the current file's resolver mappings, so
+// we temporarily disable resolver lookup and fall back to pure AST
+// shape-based lowering.
+func (l *lowerer) lowerStdlibType(t ast.Type) Type {
+	saved := l.res
+	l.res = nil
+	defer func() { l.res = saved }()
+	return l.lowerType(t)
 }
 
 // lowerNamedType resolves a NamedType to either a primitive, an IR
@@ -2801,6 +2813,25 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 				if (t == ErrTypeVal || t == nil) && sym.Package != nil {
 					if ret := l.lookupPackageFnReturn(sym.Package, fx.Name); ret != nil {
 						t = ret
+					}
+				}
+				// stdlib registry fallback: when sym.Package is nil (common for
+				// bare `use std.X` in single-file test contexts), query the
+				// loaded stdlib registry directly via the module key derived
+				// from the UseDecl path segments after "std".
+				if (t == ErrTypeVal || t == nil) && stdlib.LoadCached() != nil {
+					if ud, ok := sym.Decl.(*ast.UseDecl); ok && ud != nil && len(ud.Path) >= 2 && ud.Path[0] == "std" {
+						modKey := strings.Join(ud.Path[1:], ".")
+						if fn := stdlib.LoadCached().LookupFnDecl(modKey, fx.Name); fn != nil {
+							if fn.ReturnType == nil {
+								t = TUnit
+							} else {
+								// Stdlib stub AST node IDs collide with the
+								// current file's resolver mappings, so bypass
+								// l.res entirely when lowering the return type.
+								t = l.lowerStdlibType(fn.ReturnType)
+							}
+						}
 					}
 				}
 			}
