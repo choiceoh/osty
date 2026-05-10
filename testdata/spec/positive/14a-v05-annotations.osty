@@ -1,8 +1,8 @@
 // v0.5 annotation reservation — `#[cfg]`, `#[op]`, `#[test]` names
-// are in the allowed annotation set. This fixture exercises only the
-// *name* registration; argument-shape parsing for composite cfg
-// expressions (`all(...)` / `any(...)` / `not(...)`) and operator
-// symbols in `#[op(...)]` is delivered in later Phase-2 parser work.
+// are in the allowed annotation set. This fixture covers both simple
+// key/value cfg predicates and composite cfg expressions
+// (`all(...)` / `any(...)` / `not(...)`). Operator-symbol parsing for
+// `#[op(...)]` still lands in later parser work.
 
 // ---- #[cfg(...)] simple key/value form ----
 
@@ -19,6 +19,21 @@ fn wasmOnly() -> Int {
 #[cfg(feature = "ssl")]
 fn withSsl() -> Int {
     44
+}
+
+#[cfg(all(os = "linux", arch = "amd64"))]
+fn linuxAmd64() -> Int {
+    45
+}
+
+#[cfg(any(feature = "ssl", feature = "tls"))]
+fn anyTransport() -> Int {
+    46
+}
+
+#[cfg(not(target = "wasm"))]
+fn nativeOnly() -> Int {
+    47
 }
 
 // ---- #[test] ----

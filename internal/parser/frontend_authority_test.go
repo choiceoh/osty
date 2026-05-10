@@ -74,3 +74,55 @@ fn update(value: String?) {
 		t.Fatalf("assignment target = %#v, want .path field assignment", assign.Targets[0])
 	}
 }
+
+func TestParseBlockRecoveryResetsSyncThresholdPerStatement(t *testing.T) {
+	src := []byte(`fn cond() -> Bool { false }
+
+fn f() {
+    if cond() {
+        let x =
+    } else {
+        let y = 1
+    }
+    let z = 2
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	if result.File == nil || len(result.File.Decls) < 2 {
+		t.Fatalf("parsed file = %#v, want cond and f declarations", result.File)
+	}
+	fn, ok := result.File.Decls[1].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
+		t.Fatalf("decl[1] = %#v, want function with if expr and trailing let", result.File.Decls[1])
+	}
+	stmt, ok := fn.Body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want expression statement", fn.Body.Stmts[0])
+	}
+	ifExpr, ok := stmt.X.(*ast.IfExpr)
+	if !ok {
+		t.Fatalf("stmt[0].X = %#v, want if expression", stmt.X)
+	}
+	if ifExpr.Else == nil {
+		t.Fatalf("ifExpr.Else = nil, want else block preserved after recovery")
+	}
+	elseBlock, ok := ifExpr.Else.(*ast.Block)
+	if !ok || len(elseBlock.Stmts) != 1 {
+		t.Fatalf("ifExpr.Else = %#v, want one-statement else block", ifExpr.Else)
+	}
+	letStmt, ok := fn.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("stmt[1] = %#v, want trailing let statement", fn.Body.Stmts[1])
+	}
+	pat, ok := letStmt.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", letStmt.Pattern)
+	}
+}

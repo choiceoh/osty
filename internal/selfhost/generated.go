@@ -20557,12 +20557,11 @@ func opParseBlock(p *OstyParser) int {
 	_ = stmts
 	// Osty: /tmp/selfhost_merged.osty:7700:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7701:5
-	errsBefore := opErrorCount(p)
-	_ = errsBefore
 	// Osty: /tmp/selfhost_merged.osty:7702:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
 		// Osty: toolchain/parser.osty: canonical statement expansion hand-port.
+		errsBefore := opErrorCount(p)
+		_ = errsBefore
 		stmt := opParseStmt(p)
 		_ = stmt
 		stmts = opAppendCanonicalStmt(p, stmts, stmt)
@@ -22200,8 +22199,15 @@ func opParseLetStmt(p *OstyParser, anns []int) int {
 	_ = valueIdx
 	// Osty: /tmp/selfhost_merged.osty:8295:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:8295:32
-		valueIdx = opParseExpr(p)
+		next := opPeek(p)
+		_ = next
+		if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
+			errKindName := frontTokenKindName(next.kind)
+			_ = errKindName
+			opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
+		} else {
+			valueIdx = opParseExpr(p)
+		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:8296:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))

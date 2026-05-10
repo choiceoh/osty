@@ -1029,8 +1029,8 @@ fn opParseBlock(p: OstyParser) -> Int {
     opExpect(p, FrontLBrace)
     let mut stmts: List<Int> = []
     opSkipNewlines(p)
-    let errsBefore = opErrorCount(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        let errsBefore = opErrorCount(p)
         let stmt = opParseStmt(p)
         stmts = opAppendCanonicalStmt(p, stmts, stmt)
         if opErrorCount(p) > errsBefore {
@@ -2000,7 +2000,13 @@ fn opParseLetStmt(p: OstyParser, anns: List<Int>) -> Int {
     }
     let mut valueIdx = -1
     if opEat(p, FrontAssign) {
-        valueIdx = opParseExpr(p)
+        let next = opPeek(p)
+        if next.kind == FrontNewline || next.kind == FrontEOF || next.kind == FrontRBrace {
+            let errKindName = frontTokenKindName(next.kind)
+            opErrorFull(p, "unexpected {errKindName} in expression", "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
+        } else {
+            valueIdx = opParseExpr(p)
+        }
     }
     let mut n = emptyAstNode(AstNLet)
     n.left = pat
