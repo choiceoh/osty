@@ -3776,7 +3776,18 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 				}
 			}
 		}
-		arg := bs.lowerExprAsOperand(x.X)
+		// Lower the operand exactly once. The earlier shape eagerly
+		// lowered `x.X` via `lowerExprAsOperand` and then re-lowered it
+		// via `lowerExprAsOperandHint` for the typed default branch,
+		// emitting any side-effecting leaf (e.g. `!usesFrontEndAIRepair(cmd)`)
+		// as TWO MIR `CallInstr`s — once with `Dest=nil` (the recovered-
+		// Unit-typed temp from `lowerExprAsOperand`) and once with the
+		// real Bool-typed dest. Stage0's emit then surfaced both calls
+		// with mismatched return types: `declare void @sym` from the
+		// first call's discard path collided with `define i1 @sym` from
+		// the actual function body. Same shape as the BinaryRV fix
+		// just below: lower leaves exactly once.
+		var arg Operand
 		if !isPoisonType(t) && !irHasPoisonedTypeArg(t) {
 			switch lit := x.X.(type) {
 			case *ir.IntLit:
@@ -3788,6 +3799,8 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			default:
 				arg = bs.lowerExprAsOperandHint(x.X, t)
 			}
+		} else {
+			arg = bs.lowerExprAsOperand(x.X)
 		}
 		return &UnaryRV{
 			Op:  mapUnaryOp(x.Op),

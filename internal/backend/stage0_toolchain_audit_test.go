@@ -913,7 +913,13 @@ func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string
 		t.Logf("exec-verify: TempDir failed: %v", err)
 		return
 	}
-	defer os.RemoveAll(tmp)
+	defer func() {
+		if os.Getenv("OSTY_STAGE0_AUDIT_KEEP_TMP") == "" {
+			os.RemoveAll(tmp)
+		} else {
+			t.Logf("exec-verify: keeping temp dir %s", tmp)
+		}
+	}()
 	llPath := filepath.Join(tmp, "module.ll")
 	if err := os.WriteFile(llPath, irBytes, 0o600); err != nil {
 		t.Logf("exec-verify: write IR file: %v", err)

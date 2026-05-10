@@ -29247,3 +29247,149 @@ void *runtime_cihost_CheckPolicyFileSizes(void *root, void *files, int64_t maxFi
 }
 
 #endif /* defined(__GNUC__) || defined(__clang__) */
+
+/* ============================================================
+ * Stage0-fallback runtime stubs.
+ *
+ * Stage0 emit declares these prototypes for IR it produces from
+ * specific intrinsic shapes (`String→Char` subscript, `Result.unwrapOr
+ * (default)`, `String.toInt()`, `List<String>.contains()`). The
+ * production LIR Proto path implements these inline; stage0 routes
+ * through dedicated runtime helpers instead, so the runtime needs to
+ * export the symbols even if the produced binary may never exercise
+ * the corresponding code paths during a smoke run.
+ *
+ * These stubs are correctness-minimal — they implement the obvious
+ * semantics so a binary that DOES hit them returns sensible values
+ * (rather than aborting on missing symbols or on-fault behaviour).
+ * They are NOT performance-tuned; production code goes through the
+ * LIR Proto path which has hand-tuned variants.
+ *
+ * Placed at the end of the translation unit so they can call any
+ * helper defined elsewhere in this file without forward declarations
+ * (osty_rt_string_len, osty_rt_list_len, osty_rt_list_get_string,
+ * osty_rt_strings_Equal, osty_rt_string_decode_to_buf_if_inline,
+ * osty_rt_stage0_alloc).
+ * ============================================================ */
+
+/* osty_rt_stage0_string_char_at — decode the codepoint at byte index
+ * `index` into `s`. Stage0 declares this as `i32 (ptr, i64)`; the
+ * scalar return type is `scalarChar` (i32) per #1624. Returns 0
+ * (NUL codepoint) when the index is out of range, on UTF-8 decode
+ * failure, or on a NULL string. The function intentionally does NOT
+ * abort — codepoint decoding is best-effort in stage0 lowering.
+ */
+int32_t osty_rt_stage0_string_char_at(const char *s, int64_t index);
+int32_t osty_rt_stage0_string_char_at(const char *s, int64_t index) {
+    char buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    if (s == NULL || index < 0) {
+        return 0;
+    }
+    osty_rt_string_decode_to_buf_if_inline(&s, buf);
+    int64_t len = (int64_t)osty_rt_string_len(s);
+    if (index >= len) {
+        return 0;
+    }
+    /* Byte-level access keeps the stub deterministic for ASCII; full
+     * UTF-8 codepoint decoding is the LIR Proto path's job. The
+     * stage0 emit site is reached only for ASCII probe loops in the
+     * toolchain (e.g. `mirLLVMBuiltinAggregatePart` codepoint
+     * inspection) so byte-truncation matches expected semantics. */
+    return (int32_t)(unsigned char)s[index];
+}
+
+/* osty_rt_strings_to_int — parse a decimal integer from `s`. Stage0
+ * declares this as `ptr (ptr)`, returning `scalarOpaquePtr` — an
+ * Option<Int> box. Concretely: a heap-allocated 16-byte aggregate
+ * { tag: i64 (0=None, 1=Some), value: i64 }. NULL or unparseable
+ * input yields None.
+ */
+void *osty_rt_strings_to_int(const char *s);
+void *osty_rt_strings_to_int(const char *s) {
+    char buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    int64_t *box;
+    /* Allocate the 16-byte Option<Int> first so the rest of the
+     * function operates on `box` directly. Tag defaults to None. */
+    box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
+    if (box == NULL) {
+        return NULL;
+    }
+    box[0] = 0; /* None */
+    box[1] = 0;
+    if (s == NULL) {
+        return box;
+    }
+    osty_rt_string_decode_to_buf_if_inline(&s, buf);
+    /* Skip leading whitespace, then parse signed decimal. Reject empty
+     * or trailing non-digit content — full Osty semantics demand
+     * strict parsing. */
+    const char *p = s;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    int sign = 1;
+    if (*p == '+' || *p == '-') {
+        if (*p == '-') {
+            sign = -1;
+        }
+        p++;
+    }
+    if (*p < '0' || *p > '9') {
+        return box; /* None */
+    }
+    int64_t value = 0;
+    while (*p >= '0' && *p <= '9') {
+        /* Overflow protection: bail on out-of-range. */
+        if (value > (INT64_MAX - (*p - '0')) / 10) {
+            return box; /* None on overflow */
+        }
+        value = value * 10 + (*p - '0');
+        p++;
+    }
+    if (*p != '\0') {
+        return box; /* trailing garbage → None */
+    }
+    box[0] = 1; /* Some */
+    box[1] = sign * value;
+    return box;
+}
+
+/* osty_rt_list_contains_str — linear search the List<String> for an
+ * element equal to `needle`. Stage0 declares as `i1 (ptr, ptr)`.
+ * Returns false on NULL inputs.
+ */
+bool osty_rt_list_contains_str(void *raw_list, const char *needle);
+bool osty_rt_list_contains_str(void *raw_list, const char *needle) {
+    if (raw_list == NULL || needle == NULL) {
+        return false;
+    }
+    int64_t len = osty_rt_list_len(raw_list);
+    for (int64_t i = 0; i < len; i++) {
+        const char *element = osty_rt_list_get_string(raw_list, i);
+        if (element != NULL && osty_rt_strings_Equal(element, needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* osty_rt_result_unwrap_or_string — unwrap a Result<String, Error>;
+ * return the Ok value if Ok, else `fallback`. Stage0 declares as
+ * `ptr (ptr, ptr)`, returning the inner string. The Result ABI
+ * mirrors `osty_rt_strings_to_int`'s Option<Int> layout: 16 bytes,
+ * { tag: i64 (0=Err, 1=Ok), payload: ptr or i64 }.
+ */
+const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback);
+const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback) {
+    if (result == NULL) {
+        return fallback;
+    }
+    int64_t *box = (int64_t *)result;
+    if (box[0] != 1) {
+        /* Err or unknown variant. */
+        return fallback;
+    }
+    const char *value;
+    memcpy(&value, &box[1], sizeof(value));
+    return value != NULL ? value : fallback;
+}
