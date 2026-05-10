@@ -6972,6 +6972,10 @@ func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, typeName string,
 	if mctx == nil || symbol == "" || typeName == "" {
 		return
 	}
+	if mctx.definedFnSyms[symbol] {
+		// See declareFunctionPrototype — skip declares for in-module defines.
+		return
+	}
 	key := "__stage0.fn_decl." + symbol
 	if mctx.emittedStructs == nil {
 		mctx.emittedStructs = map[string]bool{}
@@ -11254,6 +11258,7 @@ type forInListEarlyExitPattern struct {
 	bodyBody       string
 	innerCondExpr  string // i1 expr for the inner branch in body
 	falsePrepBody  string // optional work in false path
+	earlyExitBody  string // instructions in the early-exit block (loads, etc.) before the ret
 	postBody       string
 	loopExitBody   string
 	earlyRetExpr   string // what `ret retType` in the early-exit arm
@@ -11454,6 +11459,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 		return pat, false
 	}
 	earlyRetExpr := earlyBinding.expr
+	pat.earlyExitBody = earlyBuf.String()
 	pat.earlyExitLabel = blockLabelName(earlyExit.ID, "early")
 
 	// Render false-prep block (connects body-false → post).
@@ -11522,6 +11528,12 @@ func emitForInListEarlyExit(out *strings.Builder, fn *mir.Function, pat forInLis
 
 	out.WriteString("\n")
 	fmt.Fprintf(out, "%s:\n", pat.earlyExitLabel)
+	// Emit any pre-ret instructions (loads, projections, etc.) the
+	// early-exit block accumulated. Without this, the ret references
+	// SSA registers (`%9`, `%10`, …) that were intended to be defined
+	// here but never made it to the output, surfacing as `error: use
+	// of undefined value '%X'` in clang.
+	out.WriteString(pat.earlyExitBody)
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.earlyRetExpr)
 
 	out.WriteString("\n")
