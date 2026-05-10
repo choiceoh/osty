@@ -372,3 +372,159 @@ func TestParseBreakMalformedValuePreservesFollowingStmt(t *testing.T) {
 		t.Fatalf("for body stmt[1] pattern = %#v, want let z = 2", second.Pattern)
 	}
 }
+
+func TestParseContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
+	src := []byte(`fn f() {
+    for i in 0..10 {
+        continue +
+        let z = 2
+    }
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("decl[0] = %#v, want single for statement", result.File.Decls[0])
+	}
+	forStmt, ok := fn.Body.Stmts[0].(*ast.ForStmt)
+	if !ok || forStmt.Body == nil || len(forStmt.Body.Stmts) != 2 {
+		t.Fatalf("stmt[0] = %#v, want for body with continue plus trailing let", fn.Body.Stmts[0])
+	}
+	cont, ok := forStmt.Body.Stmts[0].(*ast.ContinueStmt)
+	if !ok || cont.Label != "" {
+		t.Fatalf("for body stmt[0] = %#v, want unlabeled continue", forStmt.Body.Stmts[0])
+	}
+	second, ok := forStmt.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("for body stmt[1] = %#v, want trailing let statement", forStmt.Body.Stmts[1])
+	}
+	pat, ok := second.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("for body stmt[1] pattern = %#v, want let z = 2", second.Pattern)
+	}
+}
+
+func TestParseLabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
+	src := []byte("fn f() {\n    'outer: for i in 0..10 {\n        continue 'outer +\n        let z = 2\n    }\n}\n")
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("decl[0] = %#v, want single labeled for statement", result.File.Decls[0])
+	}
+	forStmt, ok := fn.Body.Stmts[0].(*ast.ForStmt)
+	if !ok || forStmt.Body == nil || len(forStmt.Body.Stmts) != 2 {
+		t.Fatalf("stmt[0] = %#v, want for body with continue plus trailing let", fn.Body.Stmts[0])
+	}
+	cont, ok := forStmt.Body.Stmts[0].(*ast.ContinueStmt)
+	if !ok || cont.Label != "outer" {
+		t.Fatalf("for body stmt[0] = %#v, want labeled continue 'outer", forStmt.Body.Stmts[0])
+	}
+	second, ok := forStmt.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("for body stmt[1] = %#v, want trailing let statement", forStmt.Body.Stmts[1])
+	}
+	pat, ok := second.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("for body stmt[1] pattern = %#v, want let z = 2", second.Pattern)
+	}
+}
+
+func TestParseDeferBlockRecoveryPreservesFollowingStmt(t *testing.T) {
+	src := []byte(`fn f() {
+    defer {
+        let x =
+    }
+    let z = 2
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
+		t.Fatalf("decl[0] = %#v, want defer plus trailing let", result.File.Decls[0])
+	}
+	deferStmt, ok := fn.Body.Stmts[0].(*ast.DeferStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want defer statement", fn.Body.Stmts[0])
+	}
+	block, ok := deferStmt.X.(*ast.Block)
+	if !ok || len(block.Stmts) != 1 {
+		t.Fatalf("deferStmt.X = %#v, want deferred block with one stmt", deferStmt.X)
+	}
+	inner, ok := block.Stmts[0].(*ast.LetStmt)
+	if !ok || inner.Value != nil {
+		t.Fatalf("defer block stmt[0] = %#v, want let with nil initializer", block.Stmts[0])
+	}
+	second, ok := fn.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("stmt[1] = %#v, want trailing let statement", fn.Body.Stmts[1])
+	}
+	pat, ok := second.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", second.Pattern)
+	}
+}
+
+func TestParseIfLetMalformedExprPreservesElseAndFollowingStmt(t *testing.T) {
+	src := []byte(`fn f() {
+    if let value = + {
+        1
+    } else {
+        2
+    }
+    let z = 2
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
+		t.Fatalf("decl[0] = %#v, want if-let plus trailing let", result.File.Decls[0])
+	}
+	stmt, ok := fn.Body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want expression statement", fn.Body.Stmts[0])
+	}
+	ifExpr, ok := stmt.X.(*ast.IfExpr)
+	if !ok || !ifExpr.IsIfLet || ifExpr.Cond != nil {
+		t.Fatalf("stmt[0].X = %#v, want if-let with nil recovered condition", stmt.X)
+	}
+	elseBlock, ok := ifExpr.Else.(*ast.Block)
+	if !ok || len(elseBlock.Stmts) != 1 {
+		t.Fatalf("ifExpr.Else = %#v, want preserved else block", ifExpr.Else)
+	}
+	second, ok := fn.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("stmt[1] = %#v, want trailing let statement", fn.Body.Stmts[1])
+	}
+	pat, ok := second.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", second.Pattern)
+	}
+}
