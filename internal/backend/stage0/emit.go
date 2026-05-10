@@ -11033,6 +11033,59 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		if !ok {
 			return false
 		}
+		// Pure-rename intrinsic shape: the classifier returns
+		// `instrIntrinsic` with `binDestReg` already pointing at the
+		// existing SSA register holding the value, and no
+		// `intrinsicLine` to emit. The single-arg `StringConcat`
+		// short-circuit takes this shape — there's nothing to render,
+		// the destination just aliases its sole argument. Without this
+		// guard we'd allocate a fresh `%N` via `freshReg`, overwrite
+		// `pending.binDestReg` with it, then emit nothing — leaving
+		// the binding pointing at an SSA name that was never defined.
+		if pending.kind == instrIntrinsic && pending.intrinsicLine == "" && pending.binDestReg != "" {
+			out.WriteString(pending.prelude)
+			if _, isStack := ctx.stack[destID]; isStack {
+				fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), pending.binDestReg, ctx.stack[destID].name)
+				return true
+			}
+			if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+				return false
+			}
+			ctx.bindings[destID] = localBinding{expr: pending.binDestReg, ty: destType, defined: true}
+			return true
+		}
+		// Call-chain shape: the classifier returns `instrCallChain`
+		// with N callArgs but no chainRegs yet. The sequential emit
+		// path (line ~1542) allocates `len(callArgs)-1` chain registers
+		// here. The for-in-list version was missing this branch — it
+		// allocated a single freshReg, then `emitPendingInstr` →
+		// `emitCallChain` bailed silently because `chainRegs` was
+		// empty (its `len(pi.chainRegs) != len(pi.callArgs)-1` guard
+		// fails). Result: nothing emitted, but the binding pointed
+		// at the lone freshReg — surfaces as `error: use of
+		// undefined value '%N'` on later refs. The 3-arg
+		// `StringConcat(prefix, name, suffix)` lowering of toolchain
+		// `corePrintList`'s exit block hit this directly.
+		if pending.kind == instrCallChain && len(pending.callArgs) >= 2 {
+			regs := make([]string, len(pending.callArgs)-1)
+			for i := range regs {
+				regs[i] = freshReg(ctx)
+			}
+			pending.chainRegs = regs
+			finalReg := regs[len(regs)-1]
+			var buf strings.Builder
+			emitPendingInstr(&buf, pending)
+			out.WriteString(buf.String())
+			if _, isStack := ctx.stack[destID]; isStack {
+				fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), finalReg, ctx.stack[destID].name)
+				return true
+			}
+			if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+				return false
+			}
+			ctx.bindings[destID] = localBinding{expr: finalReg, ty: destType, defined: true}
+			return true
+		}
 		reg := freshReg(ctx)
 		pending.binDestReg = reg
 		var buf strings.Builder
