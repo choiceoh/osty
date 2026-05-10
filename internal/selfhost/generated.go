@@ -19526,6 +19526,20 @@ func opSyncStmt(p *OstyParser) {
 	}
 }
 
+func opParseRequiredExpr(p *OstyParser) int {
+	next := opPeek(p)
+	_ = next
+	startsExpr := astStartsExpr(next.kind) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
+	_ = startsExpr
+	if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || !startsExpr {
+		errKindName := frontTokenKindName(next.kind)
+		_ = errKindName
+		opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
+		return -1
+	}
+	return opParseExpr(p)
+}
+
 // Osty: /tmp/selfhost_merged.osty:7245:1
 func opErrorCount(p *OstyParser) int {
 	return len(p.arena.errors)
@@ -21076,7 +21090,7 @@ func opParseMatchArmBody(p *OstyParser) int {
 		return body
 	}
 	_ = opAdvance(p)
-	value := opParseExpr(p)
+	value := opParseRequiredExpr(p)
 	bodyNode := astArenaNodeAt(p.arena, body)
 	var stmtIdx int = -1
 	if _, ok := next.kind.(*FrontTokenKind_FrontAssign); ok {
@@ -22111,7 +22125,7 @@ func opParseStmt(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:8258:5
 		_ = opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:8259:5
-		v := opParseExpr(p)
+		v := opParseRequiredExpr(p)
 		_ = v
 		// Osty: /tmp/selfhost_merged.osty:8260:5
 		leftNode := astArenaNodeAt(p.arena, expr)
@@ -22135,7 +22149,7 @@ func opParseStmt(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:8268:5
 		_ = opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:8269:5
-		v := opParseExpr(p)
+		v := opParseRequiredExpr(p)
 		_ = v
 		// Osty: /tmp/selfhost_merged.osty:8270:5
 		leftNode := astArenaNodeAt(p.arena, expr)
@@ -22216,15 +22230,7 @@ func opParseLetStmt(p *OstyParser, anns []int) int {
 	_ = valueIdx
 	// Osty: /tmp/selfhost_merged.osty:8295:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		next := opPeek(p)
-		_ = next
-		if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) || ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			errKindName := frontTokenKindName(next.kind)
-			_ = errKindName
-			opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
-		} else {
-			valueIdx = opParseExpr(p)
-		}
+		valueIdx = opParseRequiredExpr(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8296:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))
@@ -22262,7 +22268,7 @@ func opParseReturnStmt(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8311:5
 	if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontNewline{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) {
 		// Osty: /tmp/selfhost_merged.osty:8311:86
-		valueIdx = opParseExpr(p)
+		valueIdx = opParseRequiredExpr(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8312:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNReturn{}))

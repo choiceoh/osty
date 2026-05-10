@@ -459,6 +459,16 @@ fn opSyncStmt(p: OstyParser) {
         let _ = opAdvance(p)
     }
 }
+fn opParseRequiredExpr(p: OstyParser) -> Int {
+    let next = opPeek(p)
+    let startsExpr = astStartsExpr(next.kind) || next.kind == FrontDotDot || next.kind == FrontDotDotEq
+    if next.kind == FrontNewline || next.kind == FrontEOF || next.kind == FrontRBrace || !startsExpr {
+        let errKindName = frontTokenKindName(next.kind)
+        opErrorFull(p, "unexpected {errKindName} in expression", "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
+        return -1
+    }
+    opParseExpr(p)
+}
 fn opErrorCount(p: OstyParser) -> Int {
     p.arena.errors.len()
 }
@@ -1418,7 +1428,7 @@ fn opParseMatchArmBody(p: OstyParser) -> Int {
         return body
     }
     let _ = opAdvance(p)
-    let value = opParseExpr(p)
+    let value = opParseRequiredExpr(p)
     let bodyNode = astArenaNodeAt(p.arena, body)
     let mut stmtIdx = -1
     if next.kind == FrontAssign {
@@ -1958,7 +1968,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     let next = opPeek(p)
     if next.kind == FrontChanArrow {
         let _ = opAdvance(p)
-        let v = opParseExpr(p)
+        let v = opParseRequiredExpr(p)
         let leftNode = astArenaNodeAt(p.arena, expr)
         let mut n = emptyAstNode(AstNChanSend)
         n.left = expr
@@ -1969,7 +1979,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     }
     if frontIsAssignOp(next.kind) {
         let _ = opAdvance(p)
-        let v = opParseExpr(p)
+        let v = opParseRequiredExpr(p)
         let leftNode = astArenaNodeAt(p.arena, expr)
         if next.kind == FrontAssign {
             let lowered = opLowerAppendAssignmentStmt(p, expr, v, leftNode.start, p.pos)
@@ -2014,13 +2024,7 @@ fn opParseLetStmt(p: OstyParser, anns: List<Int>) -> Int {
     }
     let mut valueIdx = -1
     if opEat(p, FrontAssign) {
-        let next = opPeek(p)
-        if next.kind == FrontNewline || next.kind == FrontEOF || next.kind == FrontRBrace {
-            let errKindName = frontTokenKindName(next.kind)
-            opErrorFull(p, "unexpected {errKindName} in expression", "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
-        } else {
-            valueIdx = opParseExpr(p)
-        }
+        valueIdx = opParseRequiredExpr(p)
     }
     let mut n = emptyAstNode(AstNLet)
     n.left = pat
@@ -2039,7 +2043,7 @@ fn opParseReturnStmt(p: OstyParser) -> Int {
     let _ = opAdvance(p)
     let mut valueIdx = -1
     if !(opAt(p, FrontNewline)) && !(opAt(p, FrontEOF)) && !(opAt(p, FrontRBrace)) {
-        valueIdx = opParseExpr(p)
+        valueIdx = opParseRequiredExpr(p)
     }
     let mut n = emptyAstNode(AstNReturn)
     n.left = valueIdx

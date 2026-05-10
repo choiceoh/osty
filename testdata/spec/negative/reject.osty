@@ -332,6 +332,27 @@ fn recoverMatchArm(x: Int) {
 }
 // === END
 
+// === CASE: E0204 === missing let initializer recovers to the next statement
+fn recoverLetRhs() {
+    let x =
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === missing assignment rhs recovers to the next statement
+fn recoverAssignRhs() {
+    x =
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === malformed return expression recovers to the next statement
+fn recoverReturnExpr() {
+    return +
+    let z = 2
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
