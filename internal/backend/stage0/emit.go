@@ -3,6 +3,7 @@ package stage0
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -2042,9 +2043,29 @@ func isErrType(t mir.Type) bool {
 	return ok
 }
 
+// formatFloatConst renders a Go float64 as an LLVM IR floating-point
+// constant for the `double` type. LLVM's IR parser requires a decimal
+// point in textual fp constants — e.g. `0e+00`, `1e+02`, and `5e-01`
+// are all rejected as `integer constant must have integer type` even
+// when the surrounding context is `fcmp oeq double …`. To stay
+// human-readable while remaining LLVM-valid, we use the canonical hex
+// form (0x + 16 hex digits) for non-finite values and force a decimal
+// point ahead of the exponent for finite ones.
 func formatFloatConst(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Sprintf("0x%016X", math.Float64bits(v))
+	}
 	s := strconv.FormatFloat(v, 'e', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
+	// FormatFloat with precision -1 uses the shortest round-trip form;
+	// for whole-number mantissas it produces output without `.` such as
+	// `0e+00` or `1e-10`. LLVM requires a `.` to disambiguate float vs
+	// integer literals, so insert `.0` immediately before the exponent
+	// when the mantissa lacks a fractional part.
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		if !strings.ContainsRune(s[:i], '.') {
+			s = s[:i] + ".0" + s[i:]
+		}
+	} else if !strings.ContainsRune(s, '.') {
 		s += ".0"
 	}
 	return s
