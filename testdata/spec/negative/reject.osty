@@ -45,10 +45,13 @@ use go "net/http" { fn Get(u: String) -> String { "x" } }
 use a/b.c
 // === END
 
-// ---- follow-on recovery diagnostics (E0105 / E0100) ----
-// These cases pin diagnostics that commonly appear after the parser
-// has already taken one recovery step, so the corpus tracks both the
-// primary syntax complaint and the shape of the follow-on fallout.
+// ---- follow-on recovery diagnostics matrix (E0105 / E0100) ----
+// Standard template:
+//   1. include one primary malformed construct that triggers recovery
+//   2. pin the *second-order* parser fallout we care about
+//   3. keep the tail minimal so declaration/script drift stays obvious
+//
+// Axis A — newline-else fallout.
 
 // === CASE: E0105 === `} else` across newline
 fn f() -> Int {
@@ -73,6 +76,8 @@ fn followOnDeclAfterElseNewline() -> Int {
 }
 fn condFollowOn() -> Bool { false }
 // === END
+
+// Axis B — declaration-layer fallout after expression recovery.
 
 // === CASE: E0100 === top-level `}` follow-on after broken match-arm assignment body
 fn followOnDeclAfterMatchAssign(x: Int) {
@@ -337,10 +342,15 @@ fn ch() {
 }
 // === END
 
-// ---- recovery matrix (E0204) ----
-// These cases intentionally stress parser recovery boundaries while
-// keeping a simple trailing `let z = 2` sentinel so snapshots show
-// whether the following statement survives.
+// ---- primary recovery matrix (E0204) ----
+// Standard template:
+//   1. exactly one intentionally malformed site per CASE
+//   2. preserve the nearest structural neighbour (`else`, next arm,
+//      enclosing block, loop body, etc.)
+//   3. end with `let z = 2` when a tail sentinel makes recovery drift
+//      easy to spot in snapshots
+//
+// Axis A — branch / arm continuity.
 
 // === CASE: E0204 === malformed then-branch expression recovers before `else`
 fn condRecover() -> Bool { false }
@@ -363,6 +373,8 @@ fn recoverMatchArm(x: Int) {
     let z = 2
 }
 // === END
+
+// Axis B — required-rhs / next-statement boundary.
 
 // === CASE: E0204 === missing let initializer recovers to the next statement
 fn recoverLetRhs() {
@@ -434,6 +446,8 @@ fn recoverDeferExprSameLine() {
 }
 // === END
 
+// Axis C — control-flow tail recovery.
+
 // === CASE: E0204 === malformed break value recovers to the next statement
 fn recoverBreakValue() {
     for i in 0..10 {
@@ -470,6 +484,8 @@ fn recoverLabeledContinueSuffix() {
 }
 // === END
 
+// Axis D — scoped / nested body recovery.
+
 // === CASE: E0204 === malformed deferred block body recovers to the next statement
 fn recoverDeferBlock() {
     defer {
@@ -478,6 +494,8 @@ fn recoverDeferBlock() {
     let z = 2
 }
 // === END
+
+// Axis E — conditional pattern recovery.
 
 // === CASE: E0204 === malformed if-let scrutinee recovers before `else`
 fn recoverIfLetElse() {
