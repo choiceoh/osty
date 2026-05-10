@@ -1,5 +1,4 @@
 use std.strings as strings
-
 // check_gates.osty — post-elaboration policy gates for the front-end.
 //
 // These gates enforce LANG_SPEC §19 privilege + shape rules that live
@@ -52,11 +51,9 @@ use std.strings as strings
 //     Inside the body of a `#[pure]` function, reject operations that
 //     would make the LLVM `readnone` promise unsound: non-local writes,
 //     I/O/impure calls, managed allocation, and closures.
-
 // ---------------------------------------------------------------------
 // Entry point — called from check.osty:elabFile after elaborateDecls.
 // ---------------------------------------------------------------------
-
 pub fn runCheckGates(cx: ElabCx) {
     runIntrinsicBodyGate(cx)
     runPodShapeGate(cx)
@@ -64,11 +61,9 @@ pub fn runCheckGates(cx: ElabCx) {
     runNoAllocGate(cx)
     runPureGate(cx)
 }
-
 // ---------------------------------------------------------------------
 // E0773 — `#[intrinsic]` body-shape gate.
 // ---------------------------------------------------------------------
-
 fn runIntrinsicBodyGate(cx: ElabCx) {
     let arena = cx.ast.arena
     for declIdx in arena.decls {
@@ -78,11 +73,11 @@ fn runIntrinsicBodyGate(cx: ElabCx) {
             AstNStructDecl -> checkIntrinsicBodyMethods(cx, arena, node),
             AstNEnumDecl -> checkIntrinsicBodyMethods(cx, arena, node),
             AstNUseDecl -> checkIntrinsicBodyMethods(cx, arena, node),
-            _ -> {},
+            _ -> {
+            },
         }
     }
 }
-
 fn checkIntrinsicBodyMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
     for memberIdx in parent.children {
         let m = astArenaNodeAt(arena, memberIdx)
@@ -91,7 +86,6 @@ fn checkIntrinsicBodyMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
         }
     }
 }
-
 fn checkIntrinsicBodyFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
     if fn_.extra < 0 {
         return
@@ -99,7 +93,6 @@ fn checkIntrinsicBodyFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
     if !checkGateAnnotationContains(arena, fn_.extra, "intrinsic") {
         return
     }
-    // Body is node.right; -1 means signature-only (canonical form).
     if fn_.right < 0 {
         return
     }
@@ -113,7 +106,7 @@ fn checkIntrinsicBodyFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
     let name = fn_.text
     cx.env.local.diagnostics.push(diagIntrinsicNonEmptyBody(name, body.start, body.end))
 }
-
+// Body is node.right; -1 means signature-only (canonical form).
 // ---------------------------------------------------------------------
 // Annotation tree walker — mirrors the `__group` packing done by the
 // parser (toolchain/parser.osty:1681). The packer stores either:
@@ -122,7 +115,6 @@ fn checkIntrinsicBodyFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
 //   - group idx      : AstNAnnotation with text == "__group" whose
 //                      children are the individual annotation indices
 // ---------------------------------------------------------------------
-
 fn checkGateAnnotationContains(arena: AstArena, idx: Int, name: String) -> Bool {
     if idx < 0 {
         return false
@@ -144,7 +136,6 @@ fn checkGateAnnotationContains(arena: AstArena, idx: Int, name: String) -> Bool 
     }
     false
 }
-
 // ---------------------------------------------------------------------
 // E0771 — `#[pod]` struct shape gate (LANG_SPEC §19.4).
 //
@@ -158,7 +149,6 @@ fn checkGateAnnotationContains(arena: AstArena, idx: Int, name: String) -> Bool 
 // That matches the Go spike's behaviour (internal/check/podshape.go)
 // and is sufficient for the privileged runtime sublanguage's use.
 // ---------------------------------------------------------------------
-
 fn runPodShapeGate(cx: ElabCx) {
     let arena = cx.ast.arena
     let podStructs = collectPodStructNames(arena)
@@ -173,7 +163,6 @@ fn runPodShapeGate(cx: ElabCx) {
         checkPodStructShape(cx, arena, node, podStructs)
     }
 }
-
 fn collectPodStructNames(arena: AstArena) -> List<String> {
     let mut out: List<String> = []
     for declIdx in arena.decls {
@@ -187,27 +176,12 @@ fn collectPodStructNames(arena: AstArena) -> List<String> {
     }
     out
 }
-
 fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStructs: List<String>) {
     let structName = structNode.text
-
-    // Rule 1: must carry #[repr(c)] too. We only check for the
-    // annotation name; the argument `(c)` is parsed into the
-    // annotation's children, and the default repr convention the Go
-    // gate uses is "any `#[repr(...)]` satisfies rule 1".
     if !checkGateAnnotationContains(arena, structNode.extra, "repr") {
-        cx.env.local.diagnostics.push(diagPodShapeViolation(
-            "`#[pod]` struct `{structName}` is missing `#[repr(c)]`",
-            "add `#[repr(c)]` so the field layout is C ABI-stable",
-            structNode.start,
-            structNode.end,
-        ))
+        cx.env.local.diagnostics.push(diagPodShapeViolation("`#[pod]` struct `{structName}` is missing `#[repr(c)]`", "add `#[repr(c)]` so the field layout is C ABI-stable", structNode.start, structNode.end))
         return
     }
-
-    // Rule 3: build the set of Pod-bounded generic parameter names.
-    // Unbounded params fail the gate immediately, mirroring the Go
-    // spike: per-instantiation `Pod` is out of scope for v0.4.
     let mut podGenericParams: List<String> = []
     for gpIdx in structNode.children2 {
         let gp = astArenaNodeAt(arena, gpIdx)
@@ -217,16 +191,9 @@ fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStru
         if genericParamHasPodBound(arena, gp) {
             podGenericParams.push(gp.text)
         } else {
-            cx.env.local.diagnostics.push(diagPodShapeViolation(
-                "`#[pod]` struct `{structName}` has unbounded generic parameter `{gp.text}`",
-                "add `: Pod` to the parameter — per-instantiation `Pod` is not supported in v0.4 (§19.4)",
-                gp.start,
-                gp.end,
-            ))
+            cx.env.local.diagnostics.push(diagPodShapeViolation("`#[pod]` struct `{structName}` has unbounded generic parameter `{gp.text}`", "add `: Pod` to the parameter — per-instantiation `Pod` is not supported in v0.4 (§19.4)", gp.start, gp.end))
         }
     }
-
-    // Rule 2: every field's type must be Pod-derivable.
     for memberIdx in structNode.children {
         let member = astArenaNodeAt(arena, memberIdx)
         if member.kind != AstNField_ {
@@ -239,16 +206,18 @@ fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStru
         if !isPodType(arena, typeIdx, podStructs, podGenericParams) {
             let typeStr = formatTypeForDiag(arena, typeIdx)
             let fieldName = member.text
-            cx.env.local.diagnostics.push(diagPodShapeViolation(
-                "field `{structName}.{fieldName}` has non-Pod type `{typeStr}`",
-                "replace with a primitive, `RawPtr`, `Option<T: Pod>`, a tuple of Pod, or another `#[pod] #[repr(c)]` struct",
-                member.start,
-                member.end,
-            ))
+            cx.env.local.diagnostics.push(diagPodShapeViolation("field `{structName}.{fieldName}` has non-Pod type `{typeStr}`", "replace with a primitive, `RawPtr`, `Option<T: Pod>`, a tuple of Pod, or another `#[pod] #[repr(c)]` struct", member.start, member.end))
         }
     }
 }
-
+// Rule 1: must carry #[repr(c)] too. We only check for the
+// annotation name; the argument `(c)` is parsed into the
+// annotation's children, and the default repr convention the Go
+// gate uses is "any `#[repr(...)]` satisfies rule 1".
+// Rule 3: build the set of Pod-bounded generic parameter names.
+// Unbounded params fail the gate immediately, mirroring the Go
+// spike: per-instantiation `Pod` is out of scope for v0.4.
+// Rule 2: every field's type must be Pod-derivable.
 fn genericParamHasPodBound(arena: AstArena, gp: AstNode) -> Bool {
     for boundIdx in gp.children {
         let bound = astArenaNodeAt(arena, boundIdx)
@@ -258,26 +227,9 @@ fn genericParamHasPodBound(arena: AstArena, gp: AstNode) -> Bool {
     }
     false
 }
-
 fn isPodPrimitiveName(name: String) -> Bool {
-    name == "Bool"
-        || name == "Char"
-        || name == "Byte"
-        || name == "Int"
-        || name == "Int8"
-        || name == "Int16"
-        || name == "Int32"
-        || name == "Int64"
-        || name == "UInt8"
-        || name == "UInt16"
-        || name == "UInt32"
-        || name == "UInt64"
-        || name == "Float"
-        || name == "Float32"
-        || name == "Float64"
-        || name == "RawPtr"
+    name == "Bool" || name == "Char" || name == "Byte" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "RawPtr"
 }
-
 fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGenerics: List<String>) -> Bool {
     if typeIdx < 0 {
         return false
@@ -287,7 +239,6 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
         return false
     }
     if node.text == "optional" {
-        // `T?` sugar — treat as Option<T> for Pod purposes.
         return isPodType(arena, node.left, podStructs, podGenerics)
     }
     if node.text == "tuple" {
@@ -301,7 +252,6 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
     if node.text == "fn" {
         return false
     }
-    // Named type.
     let name = node.text
     if isPodPrimitiveName(name) {
         return node.children.len() == 0
@@ -310,8 +260,6 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
         return node.children.len() == 0
     }
     if listContainsString(podStructs, name) {
-        // Local #[pod] struct reference — accept without re-checking
-        // the referenced struct (it owns its own diagnostics).
         return true
     }
     if name == "Option" && node.children.len() == 1 {
@@ -319,15 +267,11 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
     }
     false
 }
-
+// `T?` sugar — treat as Option<T> for Pod purposes.
+// Named type.
+// Local #[pod] struct reference — accept without re-checking
+// the referenced struct (it owns its own diagnostics).
 fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
-    // Every recursive `formatTypeForDiag(...)` result is hoisted into a
-    // typed `String` local before being spliced into the enclosing
-    // interpolation. Inlining the call directly inside `"{...}"`
-    // leaves a synthetic interp temp at `<error>` type under MIR
-    // lowering, tripping `unsupported local type <error> in
-    // formatTypeForDiag` — same workaround shape as
-    // `checkSubstCacheKey` / `checkIntKey`.
     if typeIdx < 0 {
         return "?"
     }
@@ -389,7 +333,13 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
     }
     "{out}>"
 }
-
+// Every recursive `formatTypeForDiag(...)` result is hoisted into a
+// typed `String` local before being spliced into the enclosing
+// interpolation. Inlining the call directly inside `"{...}"`
+// leaves a synthetic interp temp at `<error>` type under MIR
+// lowering, tripping `unsupported local type <error> in
+// formatTypeForDiag` — same workaround shape as
+// `checkSubstCacheKey` / `checkIntKey`.
 // ---------------------------------------------------------------------
 // E0770 — runtime sublanguage privilege gate (LANG_SPEC §19.2).
 //
@@ -407,14 +357,12 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
 // behaviour. This keeps the Osty side context-free: no privilege flag
 // threads through the native-checker JSON boundary.
 // ---------------------------------------------------------------------
-
 fn runPrivilegeGate(cx: ElabCx) {
     let arena = cx.ast.arena
     for declIdx in arena.decls {
         privilegeWalkDecl(cx, arena, declIdx)
     }
 }
-
 fn privilegeWalkDecl(cx: ElabCx, arena: AstArena, declIdx: Int) {
     if declIdx < 0 {
         return
@@ -429,41 +377,33 @@ fn privilegeWalkDecl(cx: ElabCx, arena: AstArena, declIdx: Int) {
         AstNTypeAlias -> privilegeWalkTypeAlias(cx, arena, node),
         AstNLet -> privilegeWalkLetDecl(cx, arena, node),
         AstNLetDecl -> privilegeWalkLetDecl(cx, arena, node),
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn privilegeCheckUse(cx: ElabCx, arena: AstArena, node: AstNode) {
     let raw = node.text
     if isPrivilegedUsePath(raw) {
-        cx.env.local.diagnostics.push(diagRuntimePrivilege(
-            "`use {raw}` imports a privileged namespace",
-            "only `std.runtime.*` packages and toolchain-workspace packages with `[capabilities] runtime = true` may import this namespace",
-            node.start,
-            node.end,
-        ))
+        cx.env.local.diagnostics.push(diagRuntimePrivilege("`use {raw}` imports a privileged namespace", "only `std.runtime.*` packages and toolchain-workspace packages with `[capabilities] runtime = true` may import this namespace", node.start, node.end))
     }
-    // `use go "..." { ... }` bodies (inline Go FFI decls) also carry
-    // potential runtime annotations on their inner fn/struct members.
     for childIdx in node.children {
         privilegeWalkDecl(cx, arena, childIdx)
     }
 }
-
+// `use go "..." { ... }` bodies (inline Go FFI decls) also carry
+// potential runtime annotations on their inner fn/struct members.
 fn isPrivilegedUsePath(raw: String) -> Bool {
     if raw == "std.runtime" {
         return true
     }
-    // `std.runtime.<anything>`.
     strings.hasPrefix(raw, "std.runtime.")
 }
-
+// `std.runtime.<anything>`.
 fn privilegeWalkFnDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
     for gpIdx in node.children2 {
         privilegeWalkGenericParam(cx, arena, gpIdx)
     }
-    // Return type (node.left) + parameter types.
     privilegeWalkType(cx, arena, node.left)
     for paramIdx in node.children {
         let param = astArenaNodeAt(arena, paramIdx)
@@ -471,10 +411,10 @@ fn privilegeWalkFnDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
             privilegeWalkType(cx, arena, param.right)
         }
     }
-    // Body.
     privilegeWalkExpr(cx, arena, node.right)
 }
-
+// Return type (node.left) + parameter types.
+// Body.
 fn privilegeWalkStructDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
     for gpIdx in node.children2 {
@@ -491,7 +431,6 @@ fn privilegeWalkStructDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
         }
     }
 }
-
 fn privilegeWalkEnumDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
     for gpIdx in node.children2 {
@@ -503,14 +442,13 @@ fn privilegeWalkEnumDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
             privilegeWalkFnDecl(cx, arena, member)
         } else if member.kind == AstNVariant {
             privilegeCheckAnnotationsOn(cx, arena, member)
-            // Variant payload types live in the variant's children.
             for payloadIdx in member.children {
                 privilegeWalkType(cx, arena, payloadIdx)
             }
         }
     }
 }
-
+// Variant payload types live in the variant's children.
 fn privilegeWalkInterfaceDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
     for gpIdx in node.children2 {
@@ -523,33 +461,30 @@ fn privilegeWalkInterfaceDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
         }
     }
 }
-
 fn privilegeWalkTypeAlias(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
-    // TypeAlias stores generics on `children` (NOT children2 as
-    // Fn/Struct/Enum/Interface do) — see opParseTypeAliasDecl in
-    // toolchain/parser.osty:2240. Walking `children2` here silently
-    // misses `pub type PodList<T: Pod> = List<T>` and lets the user
-    // escape the §19.4 Pod-bound gate.
     for gpIdx in node.children {
         privilegeWalkGenericParam(cx, arena, gpIdx)
     }
-    // Alias target: parsers vary across struct/enum/typealias on which
-    // field carries the target. For `AstNTypeAlias` specifically the
-    // RHS type is on `node.left` in the current parser.
     privilegeWalkType(cx, arena, node.left)
 }
-
+// TypeAlias stores generics on `children` (NOT children2 as
+// Fn/Struct/Enum/Interface do) — see opParseTypeAliasDecl in
+// toolchain/parser.osty:2240. Walking `children2` here silently
+// misses `pub type PodList<T: Pod> = List<T>` and lets the user
+// escape the §19.4 Pod-bound gate.
+// Alias target: parsers vary across struct/enum/typealias on which
+// field carries the target. For `AstNTypeAlias` specifically the
+// RHS type is on `node.left` in the current parser.
 fn privilegeWalkLetDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
-    // Type annotation is at children[0] (emptyAstNode preserves -1 for
-    // omitted types; the walker skips them at the typeIdx guard).
     if node.children.len() > 0 {
         privilegeWalkType(cx, arena, node.children[0])
     }
     privilegeWalkExpr(cx, arena, node.right)
 }
-
+// Type annotation is at children[0] (emptyAstNode preserves -1 for
+// omitted types; the walker skips them at the typeIdx guard).
 fn privilegeWalkGenericParam(cx: ElabCx, arena: AstArena, gpIdx: Int) {
     if gpIdx < 0 {
         return
@@ -562,14 +497,12 @@ fn privilegeWalkGenericParam(cx: ElabCx, arena: AstArena, gpIdx: Int) {
         privilegeWalkType(cx, arena, boundIdx)
     }
 }
-
 fn privilegeCheckAnnotationsOn(cx: ElabCx, arena: AstArena, node: AstNode) {
     if node.extra < 0 {
         return
     }
     privilegeCheckAnnotationTree(cx, arena, node.extra)
 }
-
 fn privilegeCheckAnnotationTree(cx: ElabCx, arena: AstArena, idx: Int) {
     if idx < 0 {
         return
@@ -585,28 +518,15 @@ fn privilegeCheckAnnotationTree(cx: ElabCx, arena: AstArena, idx: Int) {
         return
     }
     if isPrivilegedAnnotationName(node.text) {
-        cx.env.local.diagnostics.push(diagRuntimePrivilege(
-            "`#[{node.text}]` is a runtime-only annotation",
-            "",
-            node.start,
-            node.end,
-        ))
+        cx.env.local.diagnostics.push(diagRuntimePrivilege("`#[{node.text}]` is a runtime-only annotation", "", node.start, node.end))
     }
 }
-
 fn isPrivilegedAnnotationName(name: String) -> Bool {
-    name == "intrinsic"
-        || name == "c_abi"
-        || name == "export"
-        || name == "no_alloc"
-        || name == "pod"
-        || name == "repr"
+    name == "intrinsic" || name == "c_abi" || name == "export" || name == "no_alloc" || name == "pod" || name == "repr"
 }
-
 fn isPrivilegedTypeName(name: String) -> Bool {
     name == "RawPtr" || name == "Pod"
 }
-
 fn privilegeWalkType(cx: ElabCx, arena: AstArena, typeIdx: Int) {
     if typeIdx < 0 {
         return
@@ -632,23 +552,17 @@ fn privilegeWalkType(cx: ElabCx, arena: AstArena, typeIdx: Int) {
         privilegeWalkType(cx, arena, node.right)
         return
     }
-    // Named type — only flag bare (unqualified, no-dot) names in the
-    // gated set. Qualified `runtime.RawPtr` is caught by the use-import
-    // gate above when the import itself is privileged.
     let name = node.text
     if isPrivilegedTypeName(name) {
-        cx.env.local.diagnostics.push(diagRuntimePrivilege(
-            "`{name}` is a runtime-only type",
-            "",
-            node.start,
-            node.end,
-        ))
+        cx.env.local.diagnostics.push(diagRuntimePrivilege("`{name}` is a runtime-only type", "", node.start, node.end))
     }
     for argIdx in node.children {
         privilegeWalkType(cx, arena, argIdx)
     }
 }
-
+// Named type — only flag bare (unqualified, no-dot) names in the
+// gated set. Qualified `runtime.RawPtr` is caught by the use-import
+// gate above when the import itself is privileged.
 // privilegeWalkExpr descends through expressions + statements to catch
 // nested type surface: turbofish type arguments, closure parameter
 // types, let-binding types, struct-literal names used as types, etc.
@@ -757,7 +671,6 @@ fn privilegeWalkExpr(cx: ElabCx, arena: AstArena, idx: Int) {
         AstNMap -> {
             for entryIdx in node.children {
                 let entry = astArenaNodeAt(arena, entryIdx)
-                // Map entries encode key/value on left/right.
                 privilegeWalkExpr(cx, arena, entry.left)
                 privilegeWalkExpr(cx, arena, entry.right)
             }
@@ -769,10 +682,11 @@ fn privilegeWalkExpr(cx: ElabCx, arena: AstArena, idx: Int) {
             }
             privilegeWalkExpr(cx, arena, node.right)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
+// Map entries encode key/value on left/right.
 // ---------------------------------------------------------------------
 // E0772 — `#[no_alloc]` body discipline (LANG_SPEC §19.6.1).
 //
@@ -791,7 +705,6 @@ fn privilegeWalkExpr(cx: ElabCx, arena: AstArena, idx: Int) {
 // File-local: cross-file `#[no_alloc]` closure is not chased. Matches
 // `internal/check/noalloc.go` v0.4 scope.
 // ---------------------------------------------------------------------
-
 fn runNoAllocGate(cx: ElabCx) {
     let arena = cx.ast.arena
     let noAllocNames = collectNoAllocFnNames(arena)
@@ -804,11 +717,11 @@ fn runNoAllocGate(cx: ElabCx) {
             AstNFnDecl -> noAllocCheckFn(cx, arena, node, noAllocNames),
             AstNStructDecl -> noAllocCheckMethods(cx, arena, node, noAllocNames),
             AstNEnumDecl -> noAllocCheckMethods(cx, arena, node, noAllocNames),
-            _ -> {},
+            _ -> {
+            },
         }
     }
 }
-
 fn collectNoAllocFnNames(arena: AstArena) -> List<String> {
     let mut out: List<String> = []
     for declIdx in arena.decls {
@@ -828,21 +741,18 @@ fn collectNoAllocFnNames(arena: AstArena) -> List<String> {
     }
     out
 }
-
 fn fnHasNoAllocAnnotationAndBody(arena: AstArena, fn_: AstNode) -> Bool {
     if fn_.right < 0 {
         return false
     }
     checkGateAnnotationContains(arena, fn_.extra, "no_alloc")
 }
-
 fn noAllocCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, noAllocNames: List<String>) {
     if !fnHasNoAllocAnnotationAndBody(arena, fn_) {
         return
     }
     noAllocWalkBlock(cx, arena, fn_.right, fn_.text, noAllocNames)
 }
-
 fn noAllocCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, noAllocNames: List<String>) {
     for memberIdx in parent.children {
         let member = astArenaNodeAt(arena, memberIdx)
@@ -851,15 +761,12 @@ fn noAllocCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, noAllocName
         }
     }
 }
-
 fn noAllocWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, noAllocNames: List<String>) {
     if blockIdx < 0 {
         return
     }
     let node = astArenaNodeAt(arena, blockIdx)
     if node.kind != AstNBlock {
-        // Expression-bodied block (shouldn't happen at the fn level,
-        // but harmless to recurse).
         noAllocWalkExpr(cx, arena, blockIdx, fnName, noAllocNames)
         return
     }
@@ -867,11 +774,11 @@ fn noAllocWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, 
         noAllocWalkExpr(cx, arena, stmtIdx, fnName, noAllocNames)
     }
 }
-
+// Expression-bodied block (shouldn't happen at the fn level,
+// but harmless to recurse).
 fn noAllocEmit(cx: ElabCx, fnName: String, what: String, fixHint: String, start: Int, end: Int) {
     cx.env.local.diagnostics.push(diagNoAllocViolation(fnName, what, fixHint, start, end))
 }
-
 fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllocNames: List<String>) {
     if idx < 0 {
         return
@@ -879,27 +786,13 @@ fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllo
     let node = astArenaNodeAt(arena, idx)
     match node.kind {
         AstNList -> {
-            noAllocEmit(
-                cx,
-                fnName,
-                "construct a list literal",
-                "pre-allocate the backing storage with `raw.alloc` and write through `raw.write`",
-                node.start,
-                node.end,
-            )
+            noAllocEmit(cx, fnName, "construct a list literal", "pre-allocate the backing storage with `raw.alloc` and write through `raw.write`", node.start, node.end)
             for elIdx in node.children {
                 noAllocWalkExpr(cx, arena, elIdx, fnName, noAllocNames)
             }
         },
         AstNMap -> {
-            noAllocEmit(
-                cx,
-                fnName,
-                "construct a map literal",
-                "maps require a managed allocator; runtime code uses `raw.alloc`-backed open-addressing tables",
-                node.start,
-                node.end,
-            )
+            noAllocEmit(cx, fnName, "construct a map literal", "maps require a managed allocator; runtime code uses `raw.alloc`-backed open-addressing tables", node.start, node.end)
             for entryIdx in node.children {
                 let entry = astArenaNodeAt(arena, entryIdx)
                 noAllocWalkExpr(cx, arena, entry.left, fnName, noAllocNames)
@@ -907,14 +800,7 @@ fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllo
             }
         },
         AstNStructLit -> {
-            noAllocEmit(
-                cx,
-                fnName,
-                "construct a struct literal",
-                "until the `#[pod]` checker lands, runtime code uses `raw.alloc` + field offsets instead of struct literals",
-                node.start,
-                node.end,
-            )
+            noAllocEmit(cx, fnName, "construct a struct literal", "until the `#[pod]` checker lands, runtime code uses `raw.alloc` + field offsets instead of struct literals", node.start, node.end)
             for fieldIdx in node.children {
                 let field = astArenaNodeAt(arena, fieldIdx)
                 noAllocWalkExpr(cx, arena, field.left, fnName, noAllocNames)
@@ -922,40 +808,17 @@ fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllo
             noAllocWalkExpr(cx, arena, node.right, fnName, noAllocNames)
         },
         AstNClosure -> {
-            // Closures capture an environment — that's a managed
-            // allocation regardless of what the body does.
-            noAllocEmit(
-                cx,
-                fnName,
-                "construct a closure",
-                "closures carry a captured environment and require managed allocation",
-                node.start,
-                node.end,
-            )
+            noAllocEmit(cx, fnName, "construct a closure", "closures carry a captured environment and require managed allocation", node.start, node.end)
         },
         AstNStringLit -> {
             if isAllocatingStringText(node.text) {
                 let what = classifyAllocatingString(node.text)
-                noAllocEmit(
-                    cx,
-                    fnName,
-                    what,
-                    "only plain `\"...\"` literals (no interpolation, no triple-quoting, no raw form) are statically interned and allocation-free",
-                    node.start,
-                    node.end,
-                )
+                noAllocEmit(cx, fnName, what, "only plain `\"...\"` literals (no interpolation, no triple-quoting, no raw form) are statically interned and allocation-free", node.start, node.end)
             }
         },
         AstNCall -> {
             if !noAllocCalleeAllowed(arena, node.left, noAllocNames) {
-                noAllocEmit(
-                    cx,
-                    fnName,
-                    "call into a function that is not `#[no_alloc]`",
-                    "mark the callee `#[no_alloc]` (if it is in fact allocation-free), or restructure to avoid the call",
-                    node.start,
-                    node.end,
-                )
+                noAllocEmit(cx, fnName, "call into a function that is not `#[no_alloc]`", "mark the callee `#[no_alloc]` (if it is in fact allocation-free), or restructure to avoid the call", node.start, node.end)
             }
             noAllocWalkExpr(cx, arena, node.left, fnName, noAllocNames)
             for argIdx in node.children {
@@ -1024,10 +887,12 @@ fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllo
                 noAllocWalkExpr(cx, arena, elIdx, fnName, noAllocNames)
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
+// Closures capture an environment — that's a managed
+// allocation regardless of what the body does.
 fn noAllocCalleeAllowed(arena: AstArena, calleeIdx: Int, noAllocNames: List<String>) -> Bool {
     if calleeIdx < 0 {
         return false
@@ -1037,10 +902,6 @@ fn noAllocCalleeAllowed(arena: AstArena, calleeIdx: Int, noAllocNames: List<Stri
         return listContainsString(noAllocNames, callee.text)
     }
     if callee.kind == AstNField {
-        // `raw.*` — accept any method on a receiver named `raw`, and
-        // `self.<localNoAllocName>` — accept method calls on `self`
-        // targeting another `#[no_alloc]` fn in this file. These
-        // mirror the Go spike's escape hatches.
         if callee.left < 0 {
             return false
         }
@@ -1061,7 +922,10 @@ fn noAllocCalleeAllowed(arena: AstArena, calleeIdx: Int, noAllocNames: List<Stri
     }
     false
 }
-
+// `raw.*` — accept any method on a receiver named `raw`, and
+// `self.<localNoAllocName>` — accept method calls on `self`
+// targeting another `#[no_alloc]` fn in this file. These
+// mirror the Go spike's escape hatches.
 // isAllocatingStringText decides whether the parser's stored text for
 // an `AstNStringLit` corresponds to an allocating string form. The
 // parser preserves the surface syntax verbatim, so we can distinguish
@@ -1072,18 +936,17 @@ fn isAllocatingStringText(text: String) -> Bool {
     if text == "" {
         return false
     }
-    // Raw string: `r"..."` or `r"""..."""`.
     if strings.hasPrefix(text, "r\"") {
         return true
     }
-    // Triple-quoted: `"""..."""`.
     if strings.hasPrefix(text, "\"\"\"") {
         return true
     }
-    // Interpolated: plain `"..."` that contains an unescaped `{`.
     containsInterpolation(text)
 }
-
+// Raw string: `r"..."` or `r"""..."""`.
+// Triple-quoted: `"""..."""`.
+// Interpolated: plain `"..."` that contains an unescaped `{`.
 fn classifyAllocatingString(text: String) -> String {
     if strings.hasPrefix(text, "r\"") {
         return "use a raw string literal"
@@ -1096,18 +959,18 @@ fn classifyAllocatingString(text: String) -> String {
     }
     "use a string literal that allocates at runtime"
 }
-
 fn containsInterpolation(text: String) -> Bool {
-    // Walk characters; count `{` that are not preceded by `\`. This
-    // matches the parser's interpolation convention (§1.6.3): `{expr}`
-    // is interpolation, `\{` is an escaped literal brace.
     let units = strings.split(text, "")
     let mut i = 0
     let n = checkGateStringListLen(units)
     for i < n {
         let unit = units[i]
         if unit == r"{" {
-            let prev = if i == 0 { "" } else { units[i - 1] }
+            let prev = if i == 0 {
+                ""
+            } else {
+                units[i - 1]
+            }
             if prev != "\\" {
                 return true
             }
@@ -1116,11 +979,12 @@ fn containsInterpolation(text: String) -> Bool {
     }
     false
 }
-
+// Walk characters; count `{` that are not preceded by `\`. This
+// matches the parser's interpolation convention (§1.6.3): `{expr}`
+// is interpolation, `\{` is an escaped literal brace.
 fn checkGateStringListLen(xs: List<String>) -> Int {
     xs.len()
 }
-
 // ---------------------------------------------------------------------
 // E0775 — `#[pure]` body discipline (A13).
 //
@@ -1131,7 +995,6 @@ fn checkGateStringListLen(xs: List<String>) -> Int {
 // annotated `#[pure]`. Unknown function values and external calls are
 // rejected instead of silently trusting them.
 // ---------------------------------------------------------------------
-
 fn runPureGate(cx: ElabCx) {
     let arena = cx.ast.arena
     let pureNames = collectPureFnNames(arena)
@@ -1144,11 +1007,11 @@ fn runPureGate(cx: ElabCx) {
             AstNFnDecl -> pureCheckFn(cx, arena, node, pureNames),
             AstNStructDecl -> pureCheckMethods(cx, arena, node, pureNames),
             AstNEnumDecl -> pureCheckMethods(cx, arena, node, pureNames),
-            _ -> {},
+            _ -> {
+            },
         }
     }
 }
-
 fn collectPureFnNames(arena: AstArena) -> List<String> {
     let mut out: List<String> = []
     for declIdx in arena.decls {
@@ -1168,14 +1031,12 @@ fn collectPureFnNames(arena: AstArena) -> List<String> {
     }
     out
 }
-
 fn fnHasPureAnnotationAndBody(arena: AstArena, fn_: AstNode) -> Bool {
     if fn_.right < 0 {
         return false
     }
     checkGateAnnotationContains(arena, fn_.extra, "pure")
 }
-
 fn pureCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, pureNames: List<String>) {
     if !fnHasPureAnnotationAndBody(arena, fn_) {
         return
@@ -1189,7 +1050,6 @@ fn pureCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, pureNames: List<String
     }
     pureWalkBlock(cx, arena, fn_.right, fn_.text, pureNames, locals)
 }
-
 fn pureCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, pureNames: List<String>) {
     for memberIdx in parent.children {
         let member = astArenaNodeAt(arena, memberIdx)
@@ -1198,7 +1058,6 @@ fn pureCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, pureNames: Lis
         }
     }
 }
-
 fn pureWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, pureNames: List<String>, locals: List<String>) {
     if blockIdx < 0 {
         return
@@ -1212,11 +1071,9 @@ fn pureWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, pur
         pureWalkExpr(cx, arena, stmtIdx, fnName, pureNames, locals)
     }
 }
-
 fn pureEmit(cx: ElabCx, fnName: String, what: String, fixHint: String, start: Int, end: Int) {
     cx.env.local.diagnostics.push(diagPureViolation(fnName, what, fixHint, start, end))
 }
-
 fn pureWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, pureNames: List<String>, locals: List<String>) {
     if idx < 0 {
         return
@@ -1349,10 +1206,10 @@ fn pureWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, pureNames
                 pureWalkExpr(cx, arena, elIdx, fnName, pureNames, locals)
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn pureAssignTargetLocal(arena: AstArena, targetIdx: Int, locals: List<String>) -> Bool {
     if targetIdx < 0 {
         return false
@@ -1363,7 +1220,6 @@ fn pureAssignTargetLocal(arena: AstArena, targetIdx: Int, locals: List<String>) 
     }
     false
 }
-
 fn pureCalleeAllowed(arena: AstArena, calleeIdx: Int, pureNames: List<String>) -> Bool {
     if calleeIdx < 0 {
         return false
@@ -1380,22 +1236,10 @@ fn pureCalleeAllowed(arena: AstArena, calleeIdx: Int, pureNames: List<String>) -
     }
     false
 }
-
 fn pureCalleeLooksLikeIO(arena: AstArena, calleeIdx: Int) -> Bool {
     let name = pureCalleeLastName(arena, calleeIdx)
-    name == "print"
-        || name == "println"
-        || name == "eprint"
-        || name == "eprintln"
-        || name == "read"
-        || name == "readAll"
-        || name == "readToString"
-        || name == "write"
-        || name == "writeAll"
-        || name == "open"
-        || name == "create"
+    name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "read" || name == "readAll" || name == "readToString" || name == "write" || name == "writeAll" || name == "open" || name == "create"
 }
-
 fn pureCalleeLastName(arena: AstArena, calleeIdx: Int) -> String {
     if calleeIdx < 0 {
         return ""
@@ -1409,13 +1253,11 @@ fn pureCalleeLastName(arena: AstArena, calleeIdx: Int) -> String {
     }
     ""
 }
-
 fn pureAddPatternBindings(arena: AstArena, patIdx: Int, locals: List<String>) -> List<String> {
     let mut out = locals
     pureCollectPatternBindings(arena, patIdx, out)
     out
 }
-
 fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
     if patIdx < 0 {
         return

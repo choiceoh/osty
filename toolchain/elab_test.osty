@@ -4,100 +4,76 @@
 // asserts that the resulting `FrontCheckResult` matches expectations
 // previously encoded in the legacy `check_test.osty`. Orphan until the
 // toolchain native harness lands (see plan §V.a).
-
 use std.testing
-
 fn testElabLiteralLet() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn main() {
                 let answer: Int = 42
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.errors, 0)
     testing.assert(checked.assignments >= 1)
     testing.assert(checked.accepted >= 1)
 }
-
 fn testElabLetWithMismatchTriggersDiagnostic() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn main() {
                 let answer: Int = "nope"
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0700"))
 }
-
 fn testElabLetTuplePatternBindsDestructuredNames() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn main() {
                 let (count, label) = (1, "hi")
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "count"), "Int")
     testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
 }
-
 fn testElabLetRefutablePatternTriggersDiagnostic() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn main() {
                 let Some(value) = Some(1)
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0741"))
     testing.assertEq(frontCheckResultBindingType(checked, "value"), "Int")
 }
-
 fn testElabAllowsParameterReassignment() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn bump(total: Int) -> Int {
                 total = total + 1
                 total
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testElabEarlyReturnIfBeforeNegativeTail() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn pick(a: Bool, b: Bool) -> Int {
                 if a && b { return 1 }
                 -1
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testElabAllowsFieldAssignmentThroughParameters() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Counter { value: Int }
 
             fn bump(counter: Counter) {
                 counter.value = counter.value + 1
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testElabForInBindsLoopElementType() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn sum(xs: List<Int>) -> Int {
                 let mut total = 0
                 for x in xs {
@@ -105,15 +81,12 @@ fn testElabForInBindsLoopElementType() {
                 }
                 total
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "x"), "Int")
 }
-
 fn testElabAllowsMethodCallsThroughGenericBounds() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -134,15 +107,12 @@ fn testElabAllowsMethodCallsThroughGenericBounds() {
                 let user: User = User { name: "Ada" }
                 let label: String = display(user)
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
 }
-
 fn testElabRejectsUnsatisfiedGenericBounds() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -157,15 +127,12 @@ fn testElabRejectsUnsatisfiedGenericBounds() {
                 let user: User = User { age: 37 }
                 let label: String = display(user)
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0749"))
 }
-
 fn testElabRespectsInterfaceExtendsWhenCheckingBounds() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -195,15 +162,12 @@ fn testElabRespectsInterfaceExtendsWhenCheckingBounds() {
                 let user: User = User { name: "Ada" }
                 let label: String = display(user)
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
 }
-
 fn testElabCarriesOwnerGenericBoundsIntoMethods() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -228,15 +192,12 @@ fn testElabCarriesOwnerGenericBoundsIntoMethods() {
                 let box: Box<User> = Box { value: User { name: "Ada" } }
                 let label: String = box.display()
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
 }
-
 fn testElabRejectsUnsatisfiedOwnerGenericBounds() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             interface Named {
                 fn name(self) -> String
             }
@@ -248,26 +209,20 @@ fn testElabRejectsUnsatisfiedOwnerGenericBounds() {
             fn main() {
                 let box: Box<Int> = Box { value: 1 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0749"))
 }
-
 fn testElabIfElseJoinsBranches() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn main() {
                 let x: Int = if true { 1 } else { 2 }
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testElabGenericCallInstantiates() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(value: T) -> T {
                 value
             }
@@ -275,16 +230,13 @@ fn testElabGenericCallInstantiates() {
             fn main() {
                 let answer: Int = id::<Int>(1)
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
     testing.assertEq(frontCheckResultBindingType(checked, "answer"), "Int")
 }
-
 fn testElabStructLiteralSeedsFromExpected() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Box<T> {
                 value: T
             }
@@ -292,15 +244,12 @@ fn testElabStructLiteralSeedsFromExpected() {
             fn main() {
                 let boxed: Box<Int> = Box { value: 1 }
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
 }
-
 fn testElabClosureChecksAgainstExpectedFn() {
-    let checked = frontendCheckSource(
-        r"""
+    let checked = frontendCheckSource(r"""
             fn apply(f: fn(Int) -> Int, x: Int) -> Int {
                 f(x)
             }
@@ -308,14 +257,11 @@ fn testElabClosureChecksAgainstExpectedFn() {
             fn main() {
                 let y: Int = apply(|n| n + 1, 3)
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.errors, 0)
 }
-
 fn testElabMatchExhaustivenessFailsWithoutCatchAll() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             enum Color { Red, Green }
 
             fn code(c: Color) -> Int {
@@ -323,89 +269,71 @@ fn testElabMatchExhaustivenessFailsWithoutCatchAll() {
                     Red -> 1,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
 fn testElabMatchBoolMissingFalse() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(b: Bool) -> Int {
                 match b {
                     true -> 1,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
 fn testElabMatchBoolComplete() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(b: Bool) -> Int {
                 match b {
                     true -> 1,
                     false -> 0,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
-
 fn testElabMatchOrPatternCoversBothBools() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(b: Bool) -> Int {
                 match b {
                     true | false -> 1,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
-
 fn testElabMatchIntRequiresCatchAll() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     1 -> 10,
                     2 -> 20,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
 fn testElabMatchOptionNonWildcardPayload() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(o: Option<Int>) -> Int {
                 match o {
                     Some(42) -> 1,
                     None -> 0,
                 }
             }
-            """,
-    )
-    // Phase 1 treats `Some(42)` as non-covering (payload is a literal,
-    // not irrefutable), so the match is non-exhaustive with witness
-    // `Option.Some(_)`.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
+// Phase 1 treats `Some(42)` as non-covering (payload is a literal,
+// not irrefutable), so the match is non-exhaustive with witness
+// `Option.Some(_)`.
 fn testElabMatchReachabilityDuplicateTrue() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(b: Bool) -> Int {
                 match b {
                     true -> 1,
@@ -413,14 +341,11 @@ fn testElabMatchReachabilityDuplicateTrue() {
                     false -> 0,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
 fn testElabMatchReachabilityCatchAllBeforeSpecific() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             enum Color { Red, Green, Blue }
 
             fn code(c: Color) -> Int {
@@ -429,14 +354,11 @@ fn testElabMatchReachabilityCatchAllBeforeSpecific() {
                     Red -> 1,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
 fn testElabMatchReachabilityGuardedDoesNotShadow() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn positive(n: Int) -> Bool { n > 0 }
 
             fn code(n: Int) -> Int {
@@ -445,35 +367,28 @@ fn testElabMatchReachabilityGuardedDoesNotShadow() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // Guarded arm must not cause the trailing catch-all to be flagged
-    // unreachable, because the guard can fail.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
-
+// Guarded arm must not cause the trailing catch-all to be flagged
+// unreachable, because the guard can fail.
 // ---------------------------------------------------------------------
 // Phase 2: Maranget-style nested coverage + payload reachability.
 // ---------------------------------------------------------------------
-
 fn testElabMatchPhase2OrPatternExhaustsOption() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(o: Option<Int>) -> Int {
                 match o {
                     Some(_) | None -> 0,
                 }
             }
-            """,
-    )
-    // Phase 2 recognises `Some(_) | None` as full enumeration without
-    // a catch-all.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
-
+// Phase 2 recognises `Some(_) | None` as full enumeration without
+// a catch-all.
 fn testElabMatchPhase2NestedOptionExhaustive() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(o: Option<Option<Int>>) -> Int {
                 match o {
                     Some(Some(_)) -> 1,
@@ -481,29 +396,23 @@ fn testElabMatchPhase2NestedOptionExhaustive() {
                     None -> 0,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
-
 fn testElabMatchPhase2NestedOptionMissingInner() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(o: Option<Option<Int>>) -> Int {
                 match o {
                     Some(Some(_)) -> 1,
                     None -> 0,
                 }
             }
-            """,
-    )
-    // `Some(None)` is missing — E0706 witness should mention it.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
+// `Some(None)` is missing — E0706 witness should mention it.
 fn testElabMatchPhase2PayloadReachabilityDuplicate() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(o: Option<Int>) -> Int {
                 match o {
                     Some(_) -> 1,
@@ -511,14 +420,11 @@ fn testElabMatchPhase2PayloadReachabilityDuplicate() {
                     None -> 0,
                 }
             }
-            """,
-    )
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
 fn testElabMatchPhase2TupleCartesianExhaustive() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(p: (Bool, Bool)) -> Int {
                 match p {
                     (true, _) -> 1,
@@ -526,35 +432,28 @@ fn testElabMatchPhase2TupleCartesianExhaustive() {
                     (false, false) -> 3,
                 }
             }
-            """,
-    )
-    // (true, _) covers {(true, true), (true, false)} and the other two
-    // arms cover the false column; Phase 2 recognises the cartesian.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
-
+// (true, _) covers {(true, true), (true, false)} and the other two
+// arms cover the false column; Phase 2 recognises the cartesian.
 fn testElabMatchPhase2TupleMissingSlot() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(p: (Bool, Bool)) -> Int {
                 match p {
                     (true, true) -> 1,
                     (false, false) -> 2,
                 }
             }
-            """,
-    )
-    // Missing (true, false) and (false, true). Phase 2 reports E0706.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
+// Missing (true, false) and (false, true). Phase 2 reports E0706.
 // ---------------------------------------------------------------------
 // Phase 3: multi-witness + or-pat intra-duplicate.
 // ---------------------------------------------------------------------
-
 fn testElabMatchPhase3MultiWitnessListsMultipleMissing() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             enum Color { Red, Green, Blue }
 
             fn code(c: Color) -> Int {
@@ -562,19 +461,16 @@ fn testElabMatchPhase3MultiWitnessListsMultipleMissing() {
                     Red -> 1,
                 }
             }
-            """,
-    )
-    // Two variants are missing; the single E0706 message should mention
-    // both in its witness phrase. We only assert the code fires once;
-    // witness inspection (string contains "Green" and "Blue") is left
-    // to the golden snapshot when the harness runs this file.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
     testing.assertEq(elabDiagCodeCount(checked.diagnostics, "E0731"), 1)
 }
-
+// Two variants are missing; the single E0706 message should mention
+// both in its witness phrase. We only assert the code fires once;
+// witness inspection (string contains "Green" and "Blue") is left
+// to the golden snapshot when the harness runs this file.
 fn testElabMatchPhase3OrPatternRedundantAlt() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             enum Color { Red, Green, Blue }
 
             fn code(c: Color) -> Int {
@@ -584,29 +480,24 @@ fn testElabMatchPhase3OrPatternRedundantAlt() {
                     Blue -> 3,
                 }
             }
-            """,
-    )
-    // `Red | Red` — the second alt is redundant, arm flagged unreachable.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// `Red | Red` — the second alt is redundant, arm flagged unreachable.
 fn testElabMatchPhase3OrPatternSubsumedByPriorArm() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(b: Bool) -> Int {
                 match b {
                     true -> 1,
                     true | false -> 2,
                 }
             }
-            """,
-    )
-    // Arm 2's `true` alternative is subsumed by arm 1; E0707 fires.
-    // (The `false` alternative is still useful but the redundancy in the
-    // or-pat is reported at the arm level.)
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// Arm 2's `true` alternative is subsumed by arm 1; E0707 fires.
+// (The `false` alternative is still useful but the redundancy in the
+// or-pat is reported at the arm level.)
 fn elabDiagCodeCount(diags: List<CheckDiagnostic>, code: String) -> Int {
     let mut n = 0
     for d in diags {
@@ -616,14 +507,11 @@ fn elabDiagCodeCount(diags: List<CheckDiagnostic>, code: String) -> Int {
     }
     n
 }
-
 // ---------------------------------------------------------------------
 // Phase 4: Int range reachability + struct matrix support.
 // ---------------------------------------------------------------------
-
 fn testElabMatchPhase4IntLiteralInsidePriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     1..=5 -> 1,
@@ -631,15 +519,12 @@ fn testElabMatchPhase4IntLiteralInsidePriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // `3` falls inside `1..=5` → arm 2 is unreachable.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// `3` falls inside `1..=5` → arm 2 is unreachable.
 fn testElabMatchPhase4IntLiteralOutsidePriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     1..=5 -> 1,
@@ -647,15 +532,12 @@ fn testElabMatchPhase4IntLiteralOutsidePriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // `7` is outside `1..=5` → arm 2 is reachable.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
-
+// `7` is outside `1..=5` → arm 2 is reachable.
 fn testElabMatchPhase4RangeContainedInPriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0..=10 -> 1,
@@ -663,15 +545,12 @@ fn testElabMatchPhase4RangeContainedInPriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // `2..=8` ⊂ `0..=10` → arm 2 is unreachable.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// `2..=8` ⊂ `0..=10` → arm 2 is unreachable.
 fn testElabMatchPhase4RangeEscapesPriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0..=5 -> 1,
@@ -679,15 +558,12 @@ fn testElabMatchPhase4RangeEscapesPriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // `3..=10` extends beyond `0..=5` → arm 2 is reachable.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
-
+// `3..=10` extends beyond `0..=5` → arm 2 is reachable.
 fn testElabMatchPhase4NegativeIntLiteral() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     -5..=5 -> 1,
@@ -695,15 +571,12 @@ fn testElabMatchPhase4NegativeIntLiteral() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // `-3` is in `-5..=5` → arm 2 is unreachable.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// `-3` is in `-5..=5` → arm 2 is unreachable.
 fn testElabMatchPhase4StructExhaustive() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Point { x: Int, y: Int }
 
             fn code(p: Point) -> Int {
@@ -711,16 +584,13 @@ fn testElabMatchPhase4StructExhaustive() {
                     Point { x: _, y: _ } -> 0,
                 }
             }
-            """,
-    )
-    // Struct has exactly one constructor; the all-wildcard match is
-    // exhaustive without a catch-all.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
-
+// Struct has exactly one constructor; the all-wildcard match is
+// exhaustive without a catch-all.
 fn testElabMatchPhase4StructNonExhaustive() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct Flags { a: Bool, b: Bool }
 
             fn code(f: Flags) -> Int {
@@ -728,19 +598,15 @@ fn testElabMatchPhase4StructNonExhaustive() {
                     Flags { a: true, b: _ } -> 1,
                 }
             }
-            """,
-    )
-    // Missing `Flags { a: false, b: _ }` branch → E0706 reports it.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
-
+// Missing `Flags { a: false, b: _ }` branch → E0706 reports it.
 // ---------------------------------------------------------------------
 // Phase 5: hex/bin/oct int parsing + unbounded range intervals.
 // ---------------------------------------------------------------------
-
 fn testElabMatchPhase5HexLiteralInsidePriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0..=31 -> 1,
@@ -748,15 +614,12 @@ fn testElabMatchPhase5HexLiteralInsidePriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 0x10 == 16, inside [0, 31].
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// 0x10 == 16, inside [0, 31].
 fn testElabMatchPhase5BinLiteralInsidePriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0..=15 -> 1,
@@ -764,15 +627,12 @@ fn testElabMatchPhase5BinLiteralInsidePriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 0b1010 == 10, inside [0, 15].
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// 0b1010 == 10, inside [0, 15].
 fn testElabMatchPhase5OctLiteralInsidePriorRange() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0..=100 -> 1,
@@ -780,15 +640,12 @@ fn testElabMatchPhase5OctLiteralInsidePriorRange() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 0o77 == 63, inside [0, 100].
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// 0o77 == 63, inside [0, 100].
 fn testElabMatchPhase5UnboundedLoRangeCoversLiteral() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     ..=5 -> 1,
@@ -796,15 +653,12 @@ fn testElabMatchPhase5UnboundedLoRangeCoversLiteral() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 3 ∈ (-∞, 5].
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// 3 ∈ (-∞, 5].
 fn testElabMatchPhase5UnboundedHiRangeCoversLiteral() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     10.. -> 1,
@@ -812,15 +666,12 @@ fn testElabMatchPhase5UnboundedHiRangeCoversLiteral() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 42 ∈ [10, +∞).
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// 42 ∈ [10, +∞).
 fn testElabMatchPhase5UnboundedLoRangeRejectsOutside() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     ..=5 -> 1,
@@ -828,15 +679,12 @@ fn testElabMatchPhase5UnboundedLoRangeRejectsOutside() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // 7 ∉ (-∞, 5] → arm 2 reachable.
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
-
+// 7 ∉ (-∞, 5] → arm 2 reachable.
 fn testElabMatchPhase5BoundedRangeSubsumedByUnbounded() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn code(n: Int) -> Int {
                 match n {
                     0.. -> 1,
@@ -844,168 +692,131 @@ fn testElabMatchPhase5BoundedRangeSubsumedByUnbounded() {
                     _ -> 0,
                 }
             }
-            """,
-    )
-    // [5, 10] ⊂ [0, +∞) → arm 2 unreachable.
+            """)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
-
+// [5, 10] ⊂ [0, +∞) → arm 2 unreachable.
 fn testElabQuestionOperatorRequiresOption() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn bad(x: Int) -> Int {
                 x?
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0717"))
 }
-
 // ---------------------------------------------------------------------
 // G14 — generic callable value references.
 // ---------------------------------------------------------------------
-
 fn testElabGenericFnBareReferenceRejected() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(x: T) -> T { x }
 
             fn main() {
                 let g = id
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0742"))
 }
-
 fn testElabGenericFnTurbofishValueReferenceRejected() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(x: T) -> T { x }
 
             fn main() {
                 let g = id::<Int>
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0742"))
 }
-
 fn testElabGenericFnDirectCallAllowed() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(x: T) -> T { x }
 
             fn main() {
                 let r = id(1)
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
 }
-
 fn testElabGenericFnTurbofishCallAllowed() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(x: T) -> T { x }
 
             fn main() {
                 let r = id::<Int>(1)
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
 }
-
 fn testElabGenericFnClosureWrapAllowed() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn id<T>(x: T) -> T { x }
 
             fn main() {
                 let g = |x: Int| id::<Int>(x)
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
 }
-
 fn testElabNonGenericFnValueReferenceAllowed() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn add(x: Int, y: Int) -> Int { x + y }
 
             fn main() {
                 let f = add
             }
-            """,
-    )
+            """)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
 }
-
 // ---------------------------------------------------------------------
 // Struct spread (§A.2) — `{ ..x, field: v }`.
 // ---------------------------------------------------------------------
-
 fn testElabStructSpreadOverrideSingleField() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct P { x: Int, y: Int }
 
             fn bump(p: P) -> P {
                 P { ..p, x: p.x + 1 }
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testElabStructSpreadCoversMissingFields() {
-    // Without spread the literal would be missing `y`, but `..p` supplies it.
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct P { x: Int, y: Int }
 
             fn twiddle(p: P) -> P {
                 P { ..p, x: 5 }
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
     testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0708")))
 }
-
+// Without spread the literal would be missing `y`, but `..p` supplies it.
 fn testElabStructLiteralWithoutSpreadStillRequiresAllFields() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct P { x: Int, y: Int }
 
             fn partial() -> P {
                 P { x: 5 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0708"))
 }
-
 fn testElabStructSpreadRejectsWrongOwnerType() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             struct P { x: Int, y: Int }
             struct Q { a: Int, b: Int }
 
             fn bad(q: Q) -> P {
                 P { ..q, x: 5 }
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
 }
-
 // ---------------------------------------------------------------------
 // G15 — function values erase default / keyword metadata.
 //
@@ -1015,47 +826,37 @@ fn testElabStructSpreadRejectsWrongOwnerType() {
 // declaration still honor both. These tests pin that contract so a
 // future refactor cannot silently regrow default handling on fn values.
 // ---------------------------------------------------------------------
-
 fn testElabDirectCallHonorsDefaultArg() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn connect(host: String, port: Int = 80) -> Int { port }
 
             fn main() {
                 let n = connect("api.com")
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn testElabFnValueCallRequiresExactArity() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn connect(host: String, port: Int = 80) -> Int { port }
 
             fn call1(f: fn(String, Int) -> Int) -> Int {
                 f("api.com")
             }
-            """,
-    )
+            """)
     testing.assert(checked.summary.errors >= 1)
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0701"))
 }
-
 fn testElabFnValueCallAcceptsAllPositional() {
-    let checked = frontendCheckSourceStructured(
-        r"""
+    let checked = frontendCheckSourceStructured(r"""
             fn connect(host: String, port: Int = 80) -> Int { port }
 
             fn call2(f: fn(String, Int) -> Int) -> Int {
                 f("api.com", 443)
             }
-            """,
-    )
+            """)
     testing.assertEq(checked.summary.errors, 0)
 }
-
 fn elabDiagHasCode(diags: List<CheckDiagnostic>, code: String) -> Bool {
     for d in diags {
         if d.code == code {

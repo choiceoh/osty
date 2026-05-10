@@ -7,14 +7,12 @@
 // Hex literals are taken from the Go encoder's tested output
 // so the two sides start in lockstep.
 use std.testing
-
 fn assertEncodedEq(label: String, actual: Int?, expected: Int) {
     match actual {
         Some(word) -> testing.assertEq(word, expected),
         None -> testing.assert(false),
     }
 }
-
 fn testOnbXRegisterNumberKnownNames() {
     testing.assertEq(onbXRegisterNumber("x0"), 0)
     testing.assertEq(onbXRegisterNumber("x7"), 7)
@@ -23,81 +21,68 @@ fn testOnbXRegisterNumberKnownNames() {
     testing.assertEq(onbXRegisterNumber("x30"), 30)
     testing.assertEq(onbXRegisterNumber("sp"), 31)
 }
-
 fn testOnbXRegisterNumberRejectsUnknown() {
     testing.assertEq(onbXRegisterNumber("d0"), -1)
     testing.assertEq(onbXRegisterNumber("garbage"), -1)
     testing.assertEq(onbXRegisterNumber(""), -1)
 }
-
 fn testOnbDRegisterNumberKnownNames() {
     testing.assertEq(onbDRegisterNumber("d0"), 0)
     testing.assertEq(onbDRegisterNumber("d8"), 8)
     testing.assertEq(onbDRegisterNumber("d9"), 9)
     testing.assertEq(onbDRegisterNumber("x0"), -1)
 }
-
 fn testOnbEncodeBrkValid() {
-    // brk #1 — the canonical trap value emitted for
-    // `mir.UnreachableTerm` lowering. 0xd4200020 = base | (1 << 5).
     assertEncodedEq("brk #1", onbEncodeBrk(1), 0xd4200020)
     assertEncodedEq("brk #0", onbEncodeBrk(0), 0xd4200000)
     assertEncodedEq("brk #0xffff", onbEncodeBrk(0xffff), 0xd43fffe0)
 }
-
+// brk #1 — the canonical trap value emitted for
+// `mir.UnreachableTerm` lowering. 0xd4200020 = base | (1 << 5).
 fn testOnbEncodeBrkOutOfRange() {
     testing.assert(onbEncodeBrk(-1).isNone())
     testing.assert(onbEncodeBrk(0x10000).isNone())
 }
-
 fn testOnbEncodeFmovDFromX() {
-    // fmov d8, x9 — the standard float-const materialisation step
-    // (movz/movk into x9, then bitcast to d8). 0x9e670000 base
-    // with n=9 → 0x9e670120, then | d=8 → 0x9e670128.
     assertEncodedEq("fmov d8, x9", onbEncodeFmovDFromX("d8", "x9"), 0x9e670128)
 }
-
+// fmov d8, x9 — the standard float-const materialisation step
+// (movz/movk into x9, then bitcast to d8). 0x9e670000 base
+// with n=9 → 0x9e670120, then | d=8 → 0x9e670128.
 fn testOnbEncodeFmovXFromD() {
-    // fmov x1, d9 — the printf vararg step for Float locals.
     assertEncodedEq("fmov x1, d9", onbEncodeFmovXFromD("x1", "d9"), 0x9e660121)
 }
-
+// fmov x1, d9 — the printf vararg step for Float locals.
 fn testOnbEncodeFPArithFamily() {
-    // fadd d8, d8, d9 — the canonical Float local addition.
     assertEncodedEq("fadd d8, d8, d9", onbEncodeFPArith(0x1e602800, "d8", "d8", "d9"), 0x1e692908)
     assertEncodedEq("fsub d8, d8, d9", onbEncodeFPArith(0x1e603800, "d8", "d8", "d9"), 0x1e693908)
     assertEncodedEq("fmul d8, d8, d9", onbEncodeFPArith(0x1e600800, "d8", "d8", "d9"), 0x1e690908)
     assertEncodedEq("fdiv d8, d8, d9", onbEncodeFPArith(0x1e601800, "d8", "d8", "d9"), 0x1e691908)
 }
-
+// fadd d8, d8, d9 — the canonical Float local addition.
 fn testOnbEncodeBlrAndRet() {
-    // blr x9 — the indirect-call branch for closures.
     assertEncodedEq("blr x9", onbEncodeBlr("x9"), 0xd63f0120)
     testing.assertEq(onbEncodeRet(), 0xd65f03c0)
 }
-
+// blr x9 — the indirect-call branch for closures.
 fn testOnbEncodeFPStackBoundsAndAlignment() {
-    // str d8, [sp, #0]
     assertEncodedEq("str d8 [sp,0]", onbEncodeFPStack(0xfd000000, "d8", 0), 0xfd0003e8)
-    // ldr d9, [sp, #16]
     assertEncodedEq("ldr d9 [sp,16]", onbEncodeFPStack(0xfd400000, "d9", 16), 0xfd400be9)
-    // misaligned and out-of-range rejected
     testing.assert(onbEncodeFPStack(0xfd000000, "d8", 4).isNone())
     testing.assert(onbEncodeFPStack(0xfd000000, "d8", -8).isNone())
     testing.assert(onbEncodeFPStack(0xfd000000, "d8", 0x10000).isNone())
 }
-
+// str d8, [sp, #0]
+// ldr d9, [sp, #16]
+// misaligned and out-of-range rejected
 fn testOnbEncodeLoadStoreRegBoundsAndAlignment() {
-    // ldr x9, [x0, #0] — the indirect-arg unmarshal in paramShuffle.
     assertEncodedEq("ldr x9 [x0,0]", onbEncodeLoadStoreReg(0xf9400000, "x9", "x0", 0), 0xf9400009)
-    // str x9, [x8, #16] — the sret epilogue's per-half store.
     assertEncodedEq("str x9 [x8,16]", onbEncodeLoadStoreReg(0xf9000000, "x9", "x8", 16), 0xf9000909)
     testing.assert(onbEncodeLoadStoreReg(0xf9400000, "d0", "x0", 0).isNone())
     testing.assert(onbEncodeLoadStoreReg(0xf9400000, "x9", "x0", 1).isNone())
 }
-
+// ldr x9, [x0, #0] — the indirect-arg unmarshal in paramShuffle.
+// str x9, [x8, #16] — the sret epilogue's per-half store.
 fn testOnbEncodeMovRegReg() {
-    // mov x10, x0 — used to stash the freshly-allocated env pointer
-    // before staging captures into [x10 + 24 + i*8].
     assertEncodedEq("mov x10, x0", onbEncodeMovRegReg("x10", "x0"), 0xaa0003ea)
 }

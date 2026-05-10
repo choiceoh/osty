@@ -1,5 +1,4 @@
 use std.strings as strings
-
 /// SemSplit captures the first three fields from a string split.
 pub struct SemSplit {
     pub count: Int,
@@ -7,7 +6,6 @@ pub struct SemSplit {
     pub second: String,
     pub third: String,
 }
-
 /// splitSummary records split parts without depending on list indexing.
 pub fn splitSummary(parts: List<String>) -> SemSplit {
     let mut count = 0
@@ -24,9 +22,8 @@ pub fn splitSummary(parts: List<String>) -> SemSplit {
         }
         count = count + 1
     }
-    SemSplit { count, first, second, third }
+    SemSplit {count, first, second, third}
 }
-
 /// parseSemVersionText parses the SemVer forms used by Osty's package manager.
 ///
 /// Accepts `MAJOR.MINOR.PATCH[-PRE[.PRE[.PRE]]][+BUILD]` with an optional
@@ -50,32 +47,19 @@ pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
     if text == "" {
         return Err("empty version")
     }
-
     let plus = splitSummary(strings.splitN(text, "+", 2))
     let build = plus.second
     if plus.count == 2 && !(buildIdentifiersValid(build)) {
         return Err("invalid build metadata")
     }
-
     let dash = splitSummary(strings.splitN(plus.first, "-", 2))
     let base = parseSemCore(dash.first)?
     if dash.count == 1 {
-        return Ok(
-            semVersion(
-                base.major,
-                base.minor,
-                base.patch,
-                preNone(),
-                preNone(),
-                preNone(),
-                build,
-            ),
-        )
+        return Ok(semVersion(base.major, base.minor, base.patch, preNone(), preNone(), preNone(), build))
     }
     if dash.second == "" {
         return Err("empty pre-release")
     }
-
     let pre = splitSummary(strings.split(dash.second, "."))
     if pre.count > 3 {
         return Err("too many pre-release identifiers")
@@ -92,10 +76,8 @@ pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
     if pre.count >= 3 {
         pre3 = parseSemPreIdent(pre.third)?
     }
-
     Ok(semVersion(base.major, base.minor, base.patch, pre1, pre2, pre3, build))
 }
-
 /// parseSemCore parses major.minor.patch.
 pub fn parseSemCore(text: String) -> Result<SemVersion, String> {
     let parts = splitSummary(strings.split(text, "."))
@@ -107,7 +89,6 @@ pub fn parseSemCore(text: String) -> Result<SemVersion, String> {
     let patch = parseSemNumber(parts.third)?
     Ok(stableVersion(major, minor, patch))
 }
-
 /// parseSemPreIdent parses one pre-release identifier.
 pub fn parseSemPreIdent(text: String) -> Result<SemPreIdent, String> {
     if text == "" {
@@ -122,7 +103,6 @@ pub fn parseSemPreIdent(text: String) -> Result<SemPreIdent, String> {
     }
     Ok(preText(text))
 }
-
 /// parseSemNumber parses a non-negative decimal without leading zeroes.
 ///
 /// A lone `"0"` is accepted; any other leading-zero form is rejected so
@@ -152,7 +132,6 @@ pub fn parseSemNumber(text: String) -> Result<Int, String> {
     }
     Ok(out)
 }
-
 /// buildIdentifiersValid checks dot-separated build metadata identifiers.
 pub fn buildIdentifiersValid(text: String) -> Bool {
     if text == "" {
@@ -165,7 +144,6 @@ pub fn buildIdentifiersValid(text: String) -> Bool {
     }
     true
 }
-
 /// identifierTextValid accepts ASCII alphanumeric and hyphen identifiers.
 ///
 /// ```osty
@@ -187,7 +165,6 @@ pub fn identifierTextValid(text: String) -> Bool {
     }
     true
 }
-
 /// allAsciiDigits reports whether every string unit is a decimal digit.
 pub fn allAsciiDigits(text: String) -> Bool {
     if text == "" {
@@ -200,17 +177,14 @@ pub fn allAsciiDigits(text: String) -> Bool {
     }
     true
 }
-
 /// stringUnitCount counts ASCII-oriented split units.
 pub fn stringUnitCount(text: String) -> Int {
     strings.split(text, "").len()
 }
-
 /// isSemIdentUnit accepts the SemVer identifier character class.
 pub fn isSemIdentUnit(unit: String) -> Bool {
     (unit >= "0" && unit <= "9") || (unit >= "A" && unit <= "Z") || (unit >= "a" && unit <= "z") || unit == "-"
 }
-
 /// digitStringValue maps one ASCII digit string to its integer value.
 pub fn digitStringValue(unit: String) -> Int {
     if unit == "0" {

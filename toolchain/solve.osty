@@ -22,7 +22,6 @@
 // the original `List<Subst>` required and still lowers through the
 // self-host codegen as plain `List<Int>`. Last-binding-wins semantics
 // is preserved because `solverBind` overwrites the slot.
-
 /// Solver owns the substitutions produced during a single constraint
 /// episode. Callers allocate a fresh solver per call site and rely on
 /// the parent arenas (`TyArena`, `CheckEnv`) for the actual type
@@ -30,22 +29,18 @@
 pub struct Solver {
     pub substByVar: List<Int>,
 }
-
 pub fn newSolver() -> Solver {
-    Solver { substByVar: [] }
+    Solver {substByVar: []}
 }
-
 /// freshTyVar is a thin wrapper around `tyVarFresh` that lives on the
 /// solver side so callers can grab a fresh variable without importing
 /// `ty.osty` names directly.
 pub fn freshTyVar(tys: TyArena, owner: String, name: String) -> Int {
     tyVarFresh(tys, owner, name)
 }
-
 // ---------------------------------------------------------------------
 // Substitution storage.
 // ---------------------------------------------------------------------
-
 /// solverBind records `varId -> ty` in the solver. Callers must pre-
 /// resolve `ty` through `solverWalk` if they want eager path
 /// compression; `unify` already does that at the unification site.
@@ -60,7 +55,6 @@ pub fn solverBind(solver: Solver, varId: Int, ty: Int) {
     }
     solver.substByVar[varId] = ty
 }
-
 /// solverLookup returns the binding for `varId`, or -1 if none exists.
 /// Backed by `substByVar`, a sparse array indexed by `varId`, so the
 /// lookup is O(1) once the slot has been materialised.
@@ -70,7 +64,6 @@ pub fn solverLookup(solver: Solver, varId: Int) -> Int {
     }
     solver.substByVar[varId]
 }
-
 /// solverWalk follows the substitution chain: given any `ty`, if it is
 /// a `TyVar` that has been bound, keep following until we hit a
 /// non-variable or an unbound variable. This is the usual union-find
@@ -94,12 +87,10 @@ pub fn solverWalk(tys: TyArena, solver: Solver, ty: Int) -> Int {
     }
     current
 }
-
 // ---------------------------------------------------------------------
 // Occurs check — prevents infinite types when unifying a variable
 // with a type that mentions it.
 // ---------------------------------------------------------------------
-
 /// occursCheck returns true when `varId` appears anywhere inside `ty`
 /// after following substitutions. Used by `unify` to reject cyclic
 /// bindings like `T = List<T>`.
@@ -110,16 +101,14 @@ pub fn occursCheck(tys: TyArena, solver: Solver, varId: Int, ty: Int) -> Bool {
     }
     let kind = tyKindAt(tys, walked)
     match kind {
-        TkVar      -> tyVarIdAt(tys, walked) == varId,
-        TkNamed    -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
-        TkTuple    -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
-        TkFn       -> occursInList(tys, solver, varId, tyArgsAt(tys, walked))
-                        || occursCheck(tys, solver, varId, tyRetAt(tys, walked)),
+        TkVar -> tyVarIdAt(tys, walked) == varId,
+        TkNamed -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
+        TkTuple -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
+        TkFn -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)) || occursCheck(tys, solver, varId, tyRetAt(tys, walked)),
         TkOptional -> occursCheck(tys, solver, varId, tyInnerAt(tys, walked)),
-        _          -> false,
+        _ -> false,
     }
 }
-
 fn occursInList(tys: TyArena, solver: Solver, varId: Int, xs: List<Int>) -> Bool {
     for x in xs {
         if occursCheck(tys, solver, varId, x) {
@@ -128,7 +117,6 @@ fn occursInList(tys: TyArena, solver: Solver, varId: Int, xs: List<Int>) -> Bool
     }
     false
 }
-
 // ---------------------------------------------------------------------
 // Unification.
 //
@@ -137,11 +125,9 @@ fn occursInList(tys: TyArena, solver: Solver, varId: Int, xs: List<Int>) -> Bool
 // on failure no guarantee is made about the state beyond the usual
 // "don't read it if the error is fatal" convention.
 // ---------------------------------------------------------------------
-
 pub fn unify(env: CheckEnv, solver: Solver, a: Int, b: Int) -> Bool {
     unifyAt(env, solver, a, b, 0)
 }
-
 fn unifyAt(env: CheckEnv, solver: Solver, aIn: Int, bIn: Int, depth: Int) -> Bool {
     if depth > 64 {
         return false
@@ -151,33 +137,23 @@ fn unifyAt(env: CheckEnv, solver: Solver, aIn: Int, bIn: Int, depth: Int) -> Boo
     if a == b {
         return true
     }
-
     let aKind = tyKindAt(env.tys, a)
     let bKind = tyKindAt(env.tys, b)
-
-    // Err/Poison propagate silently — once a subtree is already bad we
-    // avoid feeding that failure back into the local solver.
     if aKind == TkErr || bKind == TkErr || aKind == TkPoison || bKind == TkPoison {
         return true
     }
-
-    // Never is bottom — unifies into anything on the RHS.
     if tyIsNever(env.tys, a) || tyIsNever(env.tys, b) {
         return true
     }
-
     if aKind == TkVar {
         return bindVar(env, solver, a, b)
     }
     if bKind == TkVar {
         return bindVar(env, solver, b, a)
     }
-
     if aKind != bKind {
-        // Cross-kind except the Untyped* numeric relaxation below.
         return unifyUntypedNumericCross(env, a, b)
     }
-
     match aKind {
         TkPrim -> unifyPrim(env, a, b),
         TkNamed -> unifyNamed(env, solver, a, b, depth + 1),
@@ -190,7 +166,10 @@ fn unifyAt(env: CheckEnv, solver: Solver, aIn: Int, bIn: Int, depth: Int) -> Boo
         TkVar -> false,
     }
 }
-
+// Err/Poison propagate silently — once a subtree is already bad we
+// avoid feeding that failure back into the local solver.
+// Never is bottom — unifies into anything on the RHS.
+// Cross-kind except the Untyped* numeric relaxation below.
 /// bindVar extends the solver with `var -> other` after an occurs
 /// check. `var` must be a `TyVar`; the caller ensures that.
 fn bindVar(env: CheckEnv, solver: Solver, var: Int, other: Int) -> Bool {
@@ -204,14 +183,12 @@ fn bindVar(env: CheckEnv, solver: Solver, var: Int, other: Int) -> Bool {
     solverBind(solver, varId, other)
     true
 }
-
 fn unifyPrim(env: CheckEnv, a: Int, b: Int) -> Bool {
     let pa = tyPrimAt(env.tys, a)
     let pb = tyPrimAt(env.tys, b)
     if pa == pb {
         return true
     }
-    // Untyped* ~ concrete numeric.
     if pa == PkUntypedInt {
         return isConcreteIntPrim(pb) || pb == PkFloat || pb == PkFloat32 || pb == PkFloat64
     }
@@ -226,20 +203,16 @@ fn unifyPrim(env: CheckEnv, a: Int, b: Int) -> Bool {
     }
     false
 }
-
+// Untyped* ~ concrete numeric.
 fn isConcreteIntPrim(p: PrimKind) -> Bool {
-    p == PkInt || p == PkInt8 || p == PkInt16 || p == PkInt32 || p == PkInt64 ||
-        p == PkUInt8 || p == PkUInt16 || p == PkUInt32 || p == PkUInt64 ||
-        p == PkByte || p == PkChar
+    p == PkInt || p == PkInt8 || p == PkInt16 || p == PkInt32 || p == PkInt64 || p == PkUInt8 || p == PkUInt16 || p == PkUInt32 || p == PkUInt64 || p == PkByte || p == PkChar
 }
-
 fn unifyNamed(env: CheckEnv, solver: Solver, a: Int, b: Int, depth: Int) -> Bool {
     if tyHeadAt(env.tys, a) != tyHeadAt(env.tys, b) {
         return false
     }
     unifyPositional(env, solver, tyArgsAt(env.tys, a), tyArgsAt(env.tys, b), depth)
 }
-
 fn unifyPositional(env: CheckEnv, solver: Solver, xs: List<Int>, ys: List<Int>, depth: Int) -> Bool {
     if solveIntLen(xs) != solveIntLen(ys) {
         return false
@@ -253,14 +226,12 @@ fn unifyPositional(env: CheckEnv, solver: Solver, xs: List<Int>, ys: List<Int>, 
     }
     true
 }
-
 fn unifyFn(env: CheckEnv, solver: Solver, a: Int, b: Int, depth: Int) -> Bool {
     if !(unifyPositional(env, solver, tyArgsAt(env.tys, a), tyArgsAt(env.tys, b), depth)) {
         return false
     }
     unifyAt(env, solver, tyRetAt(env.tys, a), tyRetAt(env.tys, b), depth)
 }
-
 /// unifyUntypedNumericCross handles the one asymmetric relaxation the
 /// elaborator wants for literal defaulting: a `TkPrim` untyped numeric
 /// paired with a `TkPrim` concrete numeric (the paths above already
@@ -273,12 +244,10 @@ fn unifyUntypedNumericCross(env: CheckEnv, a: Int, b: Int) -> Bool {
     let _ = b
     false
 }
-
 // ---------------------------------------------------------------------
 // Zonk — fully apply the substitution so downstream code sees concrete
 // types instead of arena handles that still reference `TyVar` nodes.
 // ---------------------------------------------------------------------
-
 /// zonk returns a type with every bound `TyVar` replaced by its
 /// representative. Unbound variables survive — the caller is
 /// responsible for emitting `E0720` once all args have been processed
@@ -286,7 +255,6 @@ fn unifyUntypedNumericCross(env: CheckEnv, a: Int, b: Int) -> Bool {
 pub fn zonk(env: CheckEnv, solver: Solver, ty: Int) -> Int {
     zonkAt(env, solver, ty, 0)
 }
-
 fn zonkAt(env: CheckEnv, solver: Solver, ty: Int, depth: Int) -> Int {
     if depth > 64 || ty < 0 {
         return ty
@@ -294,14 +262,13 @@ fn zonkAt(env: CheckEnv, solver: Solver, ty: Int, depth: Int) -> Int {
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
     match kind {
-        TkNamed    -> zonkAtNamed(env, solver, walked, depth),
-        TkTuple    -> zonkAtTuple(env, solver, walked, depth),
-        TkFn       -> zonkAtFn(env, solver, walked, depth),
+        TkNamed -> zonkAtNamed(env, solver, walked, depth),
+        TkTuple -> zonkAtTuple(env, solver, walked, depth),
+        TkFn -> zonkAtFn(env, solver, walked, depth),
         TkOptional -> tyOptional(env.tys, zonkAt(env, solver, tyInnerAt(env.tys, walked), depth + 1)),
-        _          -> walked,
+        _ -> walked,
     }
 }
-
 fn zonkAtNamed(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     let args = tyArgsAt(env.tys, walked)
     if solveIntLen(args) == 0 {
@@ -313,7 +280,6 @@ fn zonkAtNamed(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     }
     tyNamed(env.tys, tyHeadAt(env.tys, walked), rebuilt)
 }
-
 fn zonkAtTuple(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     let args = tyArgsAt(env.tys, walked)
     let mut rebuilt: List<Int> = []
@@ -322,7 +288,6 @@ fn zonkAtTuple(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     }
     tyTuple(env.tys, rebuilt)
 }
-
 fn zonkAtFn(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     let args = tyArgsAt(env.tys, walked)
     let mut rebuilt: List<Int> = []
@@ -332,11 +297,9 @@ fn zonkAtFn(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     let ret = zonkAt(env, solver, tyRetAt(env.tys, walked), depth + 1)
     tyFn(env.tys, rebuilt, ret)
 }
-
 // ---------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------
-
 /// isFullyResolved returns true when `ty` contains no unbound type
 /// variables after zonking. The elaborator uses this post-call to
 /// decide whether to emit `E0720 cannot infer type parameter`.
@@ -346,18 +309,16 @@ pub fn isFullyResolved(env: CheckEnv, solver: Solver, ty: Int) -> Bool {
     }
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
-    // Single-expression arms only (see note on tyEq).
     match kind {
-        TkVar      -> false,
-        TkNamed    -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
-        TkTuple    -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
-        TkFn       -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked))
-                        && isFullyResolved(env, solver, tyRetAt(env.tys, walked)),
+        TkVar -> false,
+        TkNamed -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
+        TkTuple -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
+        TkFn -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)) && isFullyResolved(env, solver, tyRetAt(env.tys, walked)),
         TkOptional -> isFullyResolved(env, solver, tyInnerAt(env.tys, walked)),
-        _          -> true,
+        _ -> true,
     }
 }
-
+// Single-expression arms only (see note on tyEq).
 pub fn allFullyResolved(env: CheckEnv, solver: Solver, xs: List<Int>) -> Bool {
     for x in xs {
         if !(isFullyResolved(env, solver, x)) {
@@ -366,7 +327,6 @@ pub fn allFullyResolved(env: CheckEnv, solver: Solver, xs: List<Int>) -> Bool {
     }
     true
 }
-
 /// zonkList zonks every element of a list. Useful for materialising
 /// concrete type-argument lists after all arg constraints have fired.
 pub fn zonkList(env: CheckEnv, solver: Solver, xs: List<Int>) -> List<Int> {
@@ -376,7 +336,6 @@ pub fn zonkList(env: CheckEnv, solver: Solver, xs: List<Int>) -> List<Int> {
     }
     out
 }
-
 /// checkGenericBoundSatisfied asks whether the zonked `concreteTy`
 /// implements the interface bound `ifaceTy`.
 pub fn checkGenericBoundSatisfied(env: CheckEnv, solver: Solver, concreteTy: Int, ifaceTy: Int) -> Bool {
@@ -384,7 +343,6 @@ pub fn checkGenericBoundSatisfied(env: CheckEnv, solver: Solver, concreteTy: Int
     let iface = zonk(env, solver, ifaceTy)
     checkTypeSatisfiesInterface(env, concrete, iface)
 }
-
 fn solveIntLen(xs: List<Int>) -> Int {
     xs.len()
 }

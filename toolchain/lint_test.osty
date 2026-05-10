@@ -1,8 +1,6 @@
 use std.testing
-
 fn testSelfLintFindsCoreRules() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct bad_type {}
             enum color { red, Green }
 
@@ -12,9 +10,7 @@ fn testSelfLintFindsCoreRules() {
                 return usedValue
                 let afterReturn = 2
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assert(selfLintCodeCount(report, "L0030") >= 2)
     testing.assert(selfLintCodeCount(report, "L0031") >= 1)
@@ -23,10 +19,8 @@ fn testSelfLintFindsCoreRules() {
     testing.assert(selfLintCodeCount(report, "L0001") >= 1)
     testing.assertEq(selfLintCodeCount(report, "L0020"), 1)
 }
-
 fn testSelfLintLeavesCleanSnippetAlone() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             /// A user record.
             pub struct User { pub name: String }
             enum Color { Red, Green }
@@ -35,16 +29,12 @@ fn testSelfLintLeavesCleanSnippetAlone() {
                 let total = left + right
                 total
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintDiagnosticCount(report), 0)
 }
-
 fn testSelfLintFindsMissingDocOnPubDecls() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             pub struct User { pub name: String }
 
             pub enum Color { Red, Green }
@@ -60,16 +50,12 @@ fn testSelfLintFindsMissingDocOnPubDecls() {
             }
 
             fn internal() -> Int { 1 }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0070"), 6)
 }
-
 fn testSelfLintSkipsMissingDocWhenDocCommentPresent() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             /// A user.
             pub struct User { pub name: String }
 
@@ -89,16 +75,12 @@ fn testSelfLintSkipsMissingDocWhenDocCommentPresent() {
             pub fn greet(u: User) -> String {
                 u.name
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0070"), 0)
 }
-
 fn testSelfLintFindsMissingDocOnPubMembers() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             /// A user.
             pub struct User {
                 pub name: String,
@@ -115,55 +97,41 @@ fn testSelfLintFindsMissingDocOnPubMembers() {
 
                 pub fn label(self) -> String { "c" }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0070"), 2)
 }
-
 fn testSelfLintSkipsMissingDocOnNonPubDecls() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Internal { value: Int }
 
             enum InternalColor { Red, Green }
 
             fn helper() -> Int { 1 }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0070"), 0)
 }
-
 fn testSelfLintHonorsAnnotationsBeforePubDecl() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             /// Documented annotated function.
             #[deprecated(since = "0.5")]
             pub fn oldApi() -> Int { 1 }
 
             #[deprecated(since = "0.5")]
             pub fn undocumented() -> Int { 1 }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0070"), 1)
 }
-
 fn testSelfLintFindsSimplifiableSelfOperations() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn same(x: Int) -> Bool {
                 let mut y = x
                 y = y
                 x == (x)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0041"), 1)
     testing.assertEq(selfLintCodeCount(report, "L0042"), 1)
@@ -175,10 +143,8 @@ fn testSelfLintFindsSimplifiableSelfOperations() {
     }
     testing.assertEq(nodeBackedSimplifications, 2)
 }
-
 fn testSelfLintCarriesMachineFixesForFixableRules() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             use std.fmt
 
             fn simplify(unusedParam: Bool, flag: Bool) -> Bool {
@@ -191,9 +157,7 @@ fn testSelfLintCarriesMachineFixesForFixableRules() {
                 let result = if flag { true } else { false }
                 return result
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     assertLintFirstFix(report, "L0001", "_", true)
     assertLintFirstFix(report, "L0002", "_", true)
@@ -203,43 +167,32 @@ fn testSelfLintCarriesMachineFixesForFixableRules() {
     assertLintFirstFix(report, "L0042", "", true)
     assertLintFirstFix(report, "L0024", "", true)
 }
-
 fn testSelfLintApplyFixesRewritesUnusedFixes() {
     let source = "use std.fmt\n\nfn f(unused: Bool) \{\n    let unusedValue = 1\n    let mut neverChanged = 2\n    println(neverChanged)\n\}\n"
     let report = selfLintSource(source)
     let fixed = selfLintApplyFixes(source, report)
-
     testing.assertEq(fixed.skipped, 0)
     testing.assertEq(fixed.applied, 4)
-    testing.assertEq(
-        fixed.source,
-        "\n\nfn f(_unused: Bool) \{\n    let _unusedValue = 1\n    let neverChanged = 2\n    println(neverChanged)\n\}\n",
-    )
+    testing.assertEq(fixed.source, "\n\nfn f(_unused: Bool) \{\n    let _unusedValue = 1\n    let neverChanged = 2\n    println(neverChanged)\n\}\n")
 }
-
 fn testSelfLintApplyFixesCopiesExpressionText() {
     let source = "fn f(flag: Bool) -> Bool \{ !!flag \}\n"
     let report = selfLintSource(source)
     let fixed = selfLintApplyFixes(source, report)
-
     testing.assertEq(fixed.skipped, 0)
     testing.assertEq(fixed.applied, 1)
     testing.assertEq(fixed.source, "fn f(flag: Bool) -> Bool \{ flag \}\n")
 }
-
 fn testSelfLintApplyFixesWrapsCopiedExpressionText() {
     let source = r"fn f(flag: Bool) -> Bool { if flag { false } else { true } }"
     let report = selfLintSource(source)
     let fixed = selfLintApplyFixes(source, report)
-
     testing.assertEq(fixed.skipped, 0)
     testing.assertEq(fixed.applied, 1)
     testing.assertEq(fixed.source, r"fn f(flag: Bool) -> Bool { !(flag) }")
 }
-
 fn testSelfLintUsesResolverTargetsForShadowedUnusedBindings() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work() {
                 let value = 1
                 {
@@ -247,16 +200,12 @@ fn testSelfLintUsesResolverTargetsForShadowedUnusedBindings() {
                     println(value)
                 }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
 }
-
 fn testSelfLintUsesResolverTargetsForShadowedUnusedMut() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work() {
                 let mut value = 1
                 {
@@ -266,16 +215,12 @@ fn testSelfLintUsesResolverTargetsForShadowedUnusedMut() {
                 }
                 println(value)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0004"), 1)
 }
-
 fn testSelfLintCountsStructShorthandAsRead() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct User { name: String }
 
             fn build() -> User {
@@ -283,16 +228,12 @@ fn testSelfLintCountsStructShorthandAsRead() {
                 let user = User { name }
                 user
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
 }
-
 fn testSelfLintFindsUnusedClosureAndMatchBindings() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             enum Maybe { Some(Int), None }
 
             fn work(value: Maybe) -> Int {
@@ -302,29 +243,22 @@ fn testSelfLintFindsUnusedClosureAndMatchBindings() {
                     Maybe.None -> 0,
                 }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0002"), 1)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
 }
-
 fn testSelfLintAstDoesNotCountFieldNamesAsReads() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn build() -> User {
                 let name = 1
                 let user = User { name: "Ada" }
                 user
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
 }
-
 fn testSelfLintParserStoresUseAliasInAst() {
     let file = astParse("use std.testing as t\n")
     let decl = astFileDeclAt(file, 0)
@@ -333,11 +267,9 @@ fn testSelfLintParserStoresUseAliasInAst() {
         aliasIdx = child
     }
     let alias = astArenaNodeAt(file.arena, aliasIdx)
-
     testing.assertEq(astFileErrorCount(file), 0)
     testing.assertEq(alias.text, "t")
 }
-
 fn testSelfLintUsesResolvedRefsForImportAliases() {
     let source = r"""
             use std.fmt as fmt
@@ -349,12 +281,10 @@ fn testSelfLintUsesResolvedRefsForImportAliases() {
     let file = astParse(source)
     let resolved = selfResolveAstFile(file)
     let report = selfLintResolvedAstSource(source, file, resolved)
-
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(report.resolveErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0003"), 0)
 }
-
 fn testSelfLintKeepsImportRefsWhenResolverHasOtherErrors() {
     let source = r"""
             use std.fmt as fmt
@@ -365,14 +295,11 @@ fn testSelfLintKeepsImportRefsWhenResolverHasOtherErrors() {
             }
             """
     let report = selfLintSource(source)
-
     testing.assert(report.resolveErrors >= 1)
     testing.assertEq(selfLintCodeCount(report, "L0003"), 0)
 }
-
 fn testSelfLintFindsImportMutAndShadowingRules() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             use std.testing
             use std.fmt as fmt
 
@@ -382,9 +309,7 @@ fn testSelfLintFindsImportMutAndShadowingRules() {
                 fmt.format("{}", [])
                 value
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     let unusedImport = selfLintCodeCount(report, "L0003")
     let unusedMut = selfLintCodeCount(report, "L0004")
@@ -393,10 +318,8 @@ fn testSelfLintFindsImportMutAndShadowingRules() {
         testing.fail("counts import={unusedImport} mut={unusedMut} shadow={shadowing}")
     }
 }
-
 fn testSelfLintFindsControlFlowAndBoolSimplifications() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn flow(flag: Bool) -> Bool {
                 if true {}
                 if flag { false } else {}
@@ -406,9 +329,7 @@ fn testSelfLintFindsControlFlowAndBoolSimplifications() {
                 let cmp = flag == true
                 return cmp
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0022"), 1)
     testing.assert(selfLintCodeCount(report, "L0023") >= 2)
@@ -418,10 +339,8 @@ fn testSelfLintFindsControlFlowAndBoolSimplifications() {
     testing.assertEq(selfLintCodeCount(report, "L0044"), 1)
     testing.assertEq(selfLintCodeCount(report, "L0045"), 1)
 }
-
 fn testSelfLintFindsRedundantElseAfterReturn() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn flow(flag: Bool) -> Int {
                 if flag {
                     return 1
@@ -429,16 +348,12 @@ fn testSelfLintFindsRedundantElseAfterReturn() {
                     return 2
                 }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0021"), 1)
 }
-
 fn testSelfLintFindsDeadCodeAfterDivergingIfMatchAndLoop() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn viaIf(flag: Bool) -> Int {
                 if flag {
                     return 1
@@ -465,16 +380,12 @@ fn testSelfLintFindsDeadCodeAfterDivergingIfMatchAndLoop() {
                 let dead = 1
                 dead
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0020"), 3)
 }
-
 fn testSelfLintKeepsCodeAfterInfiniteLoopWithBreakEscapeLive() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn loopWithBreak(flag: Bool) {
                 for {
                     if flag {
@@ -484,103 +395,75 @@ fn testSelfLintKeepsCodeAfterInfiniteLoopWithBreakEscapeLive() {
                 let live = 1
                 println(live)
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0020"), 0)
 }
-
 fn testSelfLintFindsIdenticalBranches() {
     let report = selfLintSource(r"fn flow(flag: Bool) -> Int { if flag { 1 } else { 1 } }")
-
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0025"), 1)
 }
-
 fn testSelfLintDoesNotTreatCallsAsIdenticalBranches() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn next() -> Int { 1 }
 
             fn flow(flag: Bool) -> Int {
                 if flag { next() } else { next() }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0025"), 0)
 }
-
 fn testSelfLintFindsParameterComplexity() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int) -> Int {
                 a + b + c + d + e + f + g
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0050"), 1)
 }
-
 fn testSelfLintReportsParseRecoveryErrors() {
     let report = selfLintSource(r"fn broken() { let x = 1")
-
     testing.assert(report.parseErrors > 0)
 }
-
 fn testSelfLintFindsDeadStore() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work() -> Int {
                 let mut x = 1
                 x = 2
                 x
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0008"), 1)
 }
-
 fn testSelfLintIgnoresDeadStoreWhenRhsReadsBinding() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work() -> Int {
                 let mut x = 1
                 x = x + 1
                 x
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
 }
-
 fn testSelfLintIgnoresDeadStoreAfterRead() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work() -> Int {
                 let mut x = 1
                 println(x)
                 x = 2
                 x
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
 }
-
 fn testSelfLintIgnoresDeadStoreOnFieldWrite() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter { value: Int }
 
             fn bump(c: Counter) -> Int {
@@ -588,16 +471,12 @@ fn testSelfLintIgnoresDeadStoreOnFieldWrite() {
                 x.value = 2
                 x.value
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
 }
-
 fn testSelfLintFindsDeadStoreAcrossNestedBlockReads() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn work(flag: Bool) -> Int {
                 let mut x = 1
                 if flag {
@@ -606,16 +485,12 @@ fn testSelfLintFindsDeadStoreAcrossNestedBlockReads() {
                 x = 2
                 x
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
 }
-
 fn testSelfLintFindsUnusedFieldOnNonPubStruct() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Point {
                 x: Int,
                 y: Int,
@@ -625,16 +500,12 @@ fn testSelfLintFindsUnusedFieldOnNonPubStruct() {
                 let p = Point { x: 1, y: 2 }
                 p
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
 }
-
 fn testSelfLintFindsUnusedFieldWhenNeverRead() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter {
                 value: Int,
                 spare: Int,
@@ -643,43 +514,31 @@ fn testSelfLintFindsUnusedFieldWhenNeverRead() {
             fn use(c: Counter) -> Int {
                 c.value
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0005"), 1)
 }
-
 fn testSelfLintSkipsUnusedFieldOnPubStruct() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             pub struct Counter {
                 pub value: Int,
                 spare: Int,
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
 }
-
 fn testSelfLintSkipsUnusedFieldWhenFieldIsPub() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter {
                 pub spare: Int,
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
 }
-
 fn testSelfLintCountsStructPatternAsFieldRead() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct User {
                 name: String,
                 age: Int,
@@ -689,16 +548,12 @@ fn testSelfLintCountsStructPatternAsFieldRead() {
                 let User { name, age } = u
                 name
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
 }
-
 fn testSelfLintFindsUnusedPrivateMethodOnNonPubStruct() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter {
                 value: Int,
 
@@ -708,16 +563,12 @@ fn testSelfLintFindsUnusedPrivateMethodOnNonPubStruct() {
             fn build(c: Counter) -> Int {
                 c.value
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0006"), 1)
 }
-
 fn testSelfLintSkipsUnusedMethodWhenMethodIsPub() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter {
                 value: Int,
 
@@ -727,32 +578,24 @@ fn testSelfLintSkipsUnusedMethodWhenMethodIsPub() {
             fn build(c: Counter) -> Int {
                 c.value
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
 }
-
 fn testSelfLintSkipsUnusedMethodOnPubEnum() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             pub enum Color {
                 Red,
                 Green,
 
                 fn label(self) -> String { "c" }
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
 }
-
 fn testSelfLintCountsMethodCallAsUsed() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             struct Counter {
                 value: Int,
 
@@ -762,16 +605,12 @@ fn testSelfLintCountsMethodCallAsUsed() {
             fn run(c: Counter) -> Int {
                 c.bump()
             }
-            """,
-    )
-
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
 }
-
 fn testSelfLintFindsIgnoredResultViaTypeHints() {
-    let source =
-        r"""
+    let source = r"""
             fn risky() -> Result<Int, Error> { Ok(1) }
 
             fn caller() {
@@ -782,14 +621,11 @@ fn testSelfLintFindsIgnoredResultViaTypeHints() {
     let resolved = selfResolveAstFile(file)
     let checked = frontendCheckAstStructured(file)
     let report = selfLintCheckedAstSource(source, file, resolved, checked)
-
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0007"), 1)
 }
-
 fn testSelfLintEmitsL0007ForDeferResult() {
-    let source =
-        r"""
+    let source = r"""
             fn close() -> Result<(), Error> { Ok(()) }
 
             fn caller() {
@@ -800,14 +636,11 @@ fn testSelfLintEmitsL0007ForDeferResult() {
     let resolved = selfResolveAstFile(file)
     let checked = frontendCheckAstStructured(file)
     let report = selfLintCheckedAstSource(source, file, resolved, checked)
-
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0007"), 1)
 }
-
 fn testSelfLintSkipsL0007ForDeferUnit() {
-    let source =
-        r"""
+    let source = r"""
             fn shutdown() {}
 
             fn caller() {
@@ -818,36 +651,29 @@ fn testSelfLintSkipsL0007ForDeferUnit() {
     let resolved = selfResolveAstFile(file)
     let checked = frontendCheckAstStructured(file)
     let report = selfLintCheckedAstSource(source, file, resolved, checked)
-
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0007"), 0)
 }
-
 fn testSelfLintSkipsL0007WithoutTypeHints() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn risky() -> Result<Int, Error> { Ok(1) }
 
             fn caller() {
                 risky()
             }
-            """,
-    )
-    // L0007 gated behind the type-hint bridge; plain entry point does not fire it.
+            """)
     testing.assertEq(selfLintCodeCount(report, "L0007"), 0)
 }
-
+// L0007 gated behind the type-hint bridge; plain entry point does not fire it.
 fn testSelfLintPackageScopeSuppressesCrossFileMemberWarnings() {
-    let defSrc =
-        r"""
+    let defSrc = r"""
             struct Counter {
                 value: Int,
 
                 fn bump(self) -> Int { self.value + 1 }
             }
             """
-    let useSrc =
-        r"""
+    let useSrc = r"""
             fn run(c: Counter) -> Int {
                 c.bump() + c.value
             }
@@ -856,7 +682,6 @@ fn testSelfLintPackageScopeSuppressesCrossFileMemberWarnings() {
     testing.assertEq(singleReport.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(singleReport, "L0006"), 1)
     testing.assertEq(selfLintCodeCount(singleReport, "L0005"), 1)
-
     let reports = selfLintPackageSources([defSrc, useSrc])
     let mut total = 0
     for r in reports {
@@ -865,13 +690,7 @@ fn testSelfLintPackageScopeSuppressesCrossFileMemberWarnings() {
     }
     testing.assertEq(total, 0)
 }
-
-fn assertLintFirstFix(
-    report: SelfLintReport,
-    code: String,
-    replacement: String,
-    machineApplicable: Bool,
-) {
+fn assertLintFirstFix(report: SelfLintReport, code: String, replacement: String, machineApplicable: Bool) {
     for diag in report.diagnostics {
         if diag.code == code {
             testing.assert(selfLintFixCount(diag) > 0)
@@ -883,10 +702,8 @@ fn assertLintFirstFix(
     }
     testing.fail("expected lint fix for {code}")
 }
-
 fn testSelfLintRegistryListsEveryRule() {
     let rules = selfLintAllRules()
-    // Sanity spot-checks over a handful of well-known codes.
     let codes = ["L0001", "L0005", "L0007", "L0010", "L0020", "L0070"]
     for code in codes {
         let info = selfLintExplainRule(code)
@@ -899,75 +716,59 @@ fn testSelfLintRegistryListsEveryRule() {
     }
     testing.assert(rules.len() >= 27)
 }
-
+// Sanity spot-checks over a handful of well-known codes.
 fn testSelfLintAllowSuppressesSpecificCode() {
-    let withoutAllow = selfLintSource(
-        r"""
+    let withoutAllow = selfLintSource(r"""
             fn noisy(unusedParam: Int) -> Int {
                 let unusedValue = 1
                 42
             }
-            """,
-    )
+            """)
     testing.assertEq(withoutAllow.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(withoutAllow, "L0001"), 1)
     testing.assertEq(selfLintCodeCount(withoutAllow, "L0002"), 1)
-
-    let withAllow = selfLintSource(
-        r"""
+    let withAllow = selfLintSource(r"""
             #[allow(L0001)]
             fn noisy(unusedParam: Int) -> Int {
                 let unusedValue = 1
                 42
             }
-            """,
-    )
+            """)
     testing.assertEq(withAllow.parseErrors, 0)
-    // L0001 suppressed; L0002 still fires — the allow list is scoped to the listed codes only.
     testing.assertEq(selfLintCodeCount(withAllow, "L0001"), 0)
     testing.assertEq(selfLintCodeCount(withAllow, "L0002"), 1)
 }
-
+// L0001 suppressed; L0002 still fires — the allow list is scoped to the listed codes only.
 fn testSelfLintFindsUnnecessaryResultWrap() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn parseLen(s: String) -> Result<Int, Error> {
                 Ok(s.len())
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 1)
 }
-
 fn testSelfLintFindsUnnecessaryOptionWrap() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn maybeLen(s: String) -> Option<Int> {
                 Some(s.len())
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 1)
 }
-
 fn testSelfLintSkipsWrapWhenBodyPropagatesWithQuestion() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn load(path: String) -> Result<Int, Error> {
                 let n = parse(path)?
                 Ok(n)
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
 }
-
 fn testSelfLintSkipsWrapWhenBodyReturnsErr() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn maybeDo(flag: Bool) -> Result<Int, Error> {
                 if flag {
                     Ok(1)
@@ -975,83 +776,65 @@ fn testSelfLintSkipsWrapWhenBodyReturnsErr() {
                     Err(SomeError.Boom)
                 }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
 }
-
 fn testSelfLintSkipsWrapWhenBodyReturnsNone() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn maybeLen(s: String) -> Option<Int> {
                 if s.len() == 0 { None } else { Some(s.len()) }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
 }
-
 fn testSelfLintWrapRespectsAllow() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             #[allow(L0046)]
             fn parseLen(s: String) -> Result<Int, Error> {
                 Ok(s.len())
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
 }
-
 fn testSelfLintAllowAcceptsRuleAlias() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             #[allow(unused_let)]
             fn noisy() {
                 let unusedValue = 1
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
 }
-
 fn testSelfLintAllowAcceptsCategoryAlias() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             #[allow(unused)]
             fn noisy(unusedParam: Int) -> Int {
                 let unusedValue = 1
                 42
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
     testing.assertEq(selfLintCodeCount(report, "L0002"), 0)
 }
-
 fn testSelfLintAllowWildcardSuppressesEverything() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             #[allow(all)]
             fn noisy(unusedParam: Int) -> Int {
                 let unusedValue = 1
                 42
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
     testing.assertEq(selfLintCodeCount(report, "L0002"), 0)
 }
-
 fn testSelfLintAllowIsDeclScoped() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             #[allow(L0001)]
             fn quiet() {
                 let unusedValue = 1
@@ -1060,143 +843,112 @@ fn testSelfLintAllowIsDeclScoped() {
             fn noisy() {
                 let alsoUnused = 2
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
-    // Only the second fn should still emit L0001 — the first is suppressed.
     testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
 }
-
+// Only the second fn should still emit L0001 — the first is suppressed.
 fn testSelfLintFindsLetReturnSimplify() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn doubleN(n: Int) -> Int {
                 let out = n * 2
                 out
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0047"), 1)
 }
-
 fn testSelfLintSkipsLetReturnWhenMut() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn doubleN(n: Int) -> Int {
                 let mut out = n
                 out = out * 2
                 out
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0047"), 0)
 }
-
 fn testSelfLintSkipsLetReturnWhenUsedTwice() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn use(n: Int) -> Int {
                 let tmp = n + 1
                 println(tmp)
                 tmp
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0047"), 0)
 }
-
 fn testSelfLintFindsNeedlessParensInIf() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn pick(flag: Bool) -> Int {
                 if (flag) { 1 } else { 0 }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0048"), 1)
 }
-
 fn testSelfLintSkipsBareIfCondition() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn pick(flag: Bool) -> Int {
                 if flag { 1 } else { 0 }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0048"), 0)
 }
-
 fn testSelfLintFindsInfiniteLoopLiteral() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn spin() {
                 for true {
                     break
                 }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0049"), 1)
 }
-
 fn testSelfLintSkipsBareForInfinite() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn spin() {
                 for {
                     break
                 }
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0049"), 0)
 }
-
 fn testSelfLintFindsMissingTestAssertion() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn testParsesEmpty() {
                 let r = parse("")
                 let _ = r
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0080"), 1)
 }
-
 fn testSelfLintSkipsTestWithTestingCall() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             use std.testing
 
             fn testParsesEmpty() {
                 let r = parse("")
                 testing.assertEq(r, 0)
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0080"), 0)
 }
-
 fn testSelfLintSkipsNonTestFunction() {
-    let report = selfLintSource(
-        r"""
+    let report = selfLintSource(r"""
             fn normalFn() {
                 let r = 1
                 let _ = r
             }
-            """,
-    )
+            """)
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0080"), 0)
 }

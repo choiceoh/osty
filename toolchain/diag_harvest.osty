@@ -1,5 +1,4 @@
 use std.strings as harvestStrings
-
 /// DiagHarvestOutcome reports what happened when an example was
 /// routed through the matching self-host pipeline.
 ///
@@ -14,7 +13,6 @@ pub struct DiagHarvestOutcome {
     pub phase: String,
     pub skipped: Bool,
 }
-
 /// diagHarvestResolveCodes extracts every code observed while resolving
 /// `source` through the lex/parse/resolve pipeline.
 pub fn diagHarvestResolveCodes(source: String) -> List<String> {
@@ -25,7 +23,6 @@ pub fn diagHarvestResolveCodes(source: String) -> List<String> {
     }
     codes
 }
-
 /// diagHarvestCheckCodes runs the full frontend (lex/parse/check) and
 /// returns the diagnostic codes.
 pub fn diagHarvestCheckCodes(source: String) -> List<String> {
@@ -36,7 +33,6 @@ pub fn diagHarvestCheckCodes(source: String) -> List<String> {
     }
     codes
 }
-
 /// diagHarvestLintCodes runs the linter pipeline on the source.
 pub fn diagHarvestLintCodes(source: String) -> List<String> {
     let mut codes: List<String> = []
@@ -46,20 +42,13 @@ pub fn diagHarvestLintCodes(source: String) -> List<String> {
     }
     codes
 }
-
 /// diagHarvestRun routes a single case through the correct self-host
 /// phase and records what fired. Cases tagged `phase: "skip"` return
 /// with `skipped: true` and no codes — the test scopes out
 /// manifest/scaffold bands that have no String-input entry point.
 pub fn diagHarvestRun(case: DiagHarvestCase) -> DiagHarvestOutcome {
     if case.phase == "skip" {
-        return DiagHarvestOutcome {
-            expectedCode: case.code,
-            matched: false,
-            emittedCodes: [],
-            phase: case.phase,
-            skipped: true,
-        }
+        return DiagHarvestOutcome {expectedCode: case.code, matched: false, emittedCodes: [], phase: case.phase, skipped: true}
     }
     let codes = if case.phase == "lint" {
         diagHarvestLintCodes(case.example)
@@ -68,15 +57,8 @@ pub fn diagHarvestRun(case: DiagHarvestCase) -> DiagHarvestOutcome {
     } else {
         diagHarvestResolveCodes(case.example)
     }
-    DiagHarvestOutcome {
-        expectedCode: case.code,
-        matched: listContainsString(codes, case.code),
-        emittedCodes: codes,
-        phase: case.phase,
-        skipped: false,
-    }
+    DiagHarvestOutcome {expectedCode: case.code, matched: listContainsString(codes, case.code), emittedCodes: codes, phase: case.phase, skipped: false}
 }
-
 /// diagHarvestFormatFailure renders a single failing outcome into a
 /// human-readable one-liner for test failure output.
 pub fn diagHarvestFormatFailure(outcome: DiagHarvestOutcome) -> String {

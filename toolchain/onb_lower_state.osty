@@ -18,9 +18,7 @@
 // no hash dependency. Lookup is linear in the number of locals /
 // cstrings, which is fine for small CUs (typical function has < 64
 // locals; per-CU cstring intern is < 256 entries).
-
 // === Per-local stack slot ===========================================
-
 // OnbLocalSlot records the byte offset (relative to sp) where one
 // MIR local's value is stored on the function's stack frame. The
 // frame planner emits these before lowering; the lowerer reads
@@ -29,13 +27,10 @@ pub struct OnbLocalSlot {
     pub local: Int,
     pub offset: Int,
 }
-
 pub fn onbLocalSlot(local: Int, offset: Int) -> OnbLocalSlot {
-    OnbLocalSlot { local: local, offset: offset }
+    OnbLocalSlot {local: local, offset: offset}
 }
-
 // === Per-cstring intern entry =======================================
-
 // OnbCStringEntry pairs a string literal value with its assigned
 // `__cstring` label. The lowering pass interns each unique value
 // once; subsequent loads of the same literal reuse the existing
@@ -44,13 +39,10 @@ pub struct OnbCStringEntry {
     pub value: String,
     pub label: String,
 }
-
 pub fn onbCStringEntry(value: String, label: String) -> OnbCStringEntry {
-    OnbCStringEntry { value: value, label: label }
+    OnbCStringEntry {value: value, label: label}
 }
-
 // === Lowering state ==================================================
-
 // OnbLowerState is the mutable state thread through the lowering
 // pass. The Go `lowerState` carries pointers; this Osty mirror
 // carries owned record fields and rebuilds itself when fields are
@@ -64,23 +56,14 @@ pub struct OnbLowerState {
     pub cstrings: List<OnbCStringEntry>,
     pub cstringCounter: Int,
 }
-
 // onbNewLowerState builds an empty state for one function. Slot
 // entries are added per-local by the frame planner before
 // lowering; cstring entries are added on demand during operand
 // materialisation.
 pub fn onbNewLowerState(func: MirFunction, layouts: MirLayoutTable) -> OnbLowerState {
-    OnbLowerState {
-        func: func,
-        layouts: layouts,
-        localSlots: [],
-        cstrings: [],
-        cstringCounter: 0,
-    }
+    OnbLowerState {func: func, layouts: layouts, localSlots: [], cstrings: [], cstringCounter: 0}
 }
-
 // === Local lookups ==================================================
-
 // onbLookupLocal returns the MIR local with id `id`, or a sentinel
 // (id = -1) if it doesn't exist. Mirror of `lookupLocal` in
 // lower.go — the Go version returns `*mir.Local` / `nil`; the
@@ -92,41 +75,37 @@ pub fn onbLookupLocal(func: MirFunction, id: Int) -> MirLocal {
     }
     func.locals[id]
 }
-
 // onbLocalExists reports whether a local exists in the function
 // for reverse-direction lookups that don't want the sentinel.
 pub fn onbLocalExists(func: MirFunction, id: Int) -> Bool {
     id >= 0 && id < func.locals.len()
 }
-
 // onbDestType returns the MIR type of the local that holds the
 // dest of a Call/Assign. Mirror of `destType` in lower.go — falls
 // back to `Int` when the local is missing so the 1-register
 // capture path keeps working in the face of malformed MIR.
 pub fn onbDestType(state: OnbLowerState, id: Int) -> String {
     let local = onbLookupLocal(state.func, id)
-    if local.id < 0 { return "Int" }
+    if local.id < 0 {
+        return "Int"
+    }
     local.typ
 }
-
 // === Stack slot accessors ===========================================
-
 // onbLocalSlotResult reports both the offset and a found flag.
 // Mirror of the Go `slot, ok := s.localSlots[id]` pattern.
 pub struct OnbLocalSlotResult {
     pub offset: Int,
     pub found: Bool,
 }
-
 pub fn onbLocalSlotLookup(state: OnbLowerState, id: Int) -> OnbLocalSlotResult {
     for entry in state.localSlots {
         if entry.local == id {
-            return OnbLocalSlotResult { offset: entry.offset, found: true }
+            return OnbLocalSlotResult {offset: entry.offset, found: true}
         }
     }
-    OnbLocalSlotResult { offset: 0, found: false }
+    OnbLocalSlotResult {offset: 0, found: false}
 }
-
 // onbLocalSlotInsert records `local → offset`. The frame planner
 // calls this once per allocated local before lowering starts.
 // Subsequent inserts of the same local replace the existing entry
@@ -145,11 +124,9 @@ pub fn onbLocalSlotInsert(state: OnbLowerState, id: Int, offset: Int) -> OnbLowe
     if !replaced {
         next.push(onbLocalSlot(id, offset))
     }
-    OnbLowerState { ..state, localSlots: next }
+    OnbLowerState {localSlots: next, ..state}
 }
-
 // === CString intern =================================================
-
 // onbCStringLookup returns the existing label for a value, or the
 // empty string if the value hasn't been interned yet.
 pub fn onbCStringLookup(state: OnbLowerState, value: String) -> String {
@@ -160,7 +137,6 @@ pub fn onbCStringLookup(state: OnbLowerState, value: String) -> String {
     }
     ""
 }
-
 // OnbAddCStringResult bundles the rebuilt state with the assigned
 // label. Mirror of Go's `addCString` which returns just the label
 // while mutating the receiver — Osty rebuilds the state record so
@@ -169,7 +145,6 @@ pub struct OnbAddCStringResult {
     pub state: OnbLowerState,
     pub label: String,
 }
-
 // onbAddCString interns `value` if it isn't already present and
 // returns the assigned `__cstring` label. Mirror of `addCString`
 // in lower.go. Labels are `strN` where N is a 0-based counter —
@@ -178,7 +153,7 @@ pub struct OnbAddCStringResult {
 pub fn onbAddCString(state: OnbLowerState, value: String) -> OnbAddCStringResult {
     let existing = onbCStringLookup(state, value)
     if existing != "" {
-        return OnbAddCStringResult { state: state, label: existing }
+        return OnbAddCStringResult {state: state, label: existing}
     }
     let label = "str{state.cstringCounter}"
     let mut nextEntries: List<OnbCStringEntry> = []
@@ -186,14 +161,9 @@ pub fn onbAddCString(state: OnbLowerState, value: String) -> OnbAddCStringResult
         nextEntries.push(entry)
     }
     nextEntries.push(onbCStringEntry(value, label))
-    let nextState = OnbLowerState {
-        ..state,
-        cstrings: nextEntries,
-        cstringCounter: state.cstringCounter + 1,
-    }
-    OnbAddCStringResult { state: nextState, label: label }
+    let nextState = OnbLowerState {cstrings: nextEntries, cstringCounter: state.cstringCounter + 1, ..state}
+    OnbAddCStringResult {state: nextState, label: label}
 }
-
 // === ABI-reg arrays =================================================
 //
 // AAPCS64 calling convention's argument registers. The lowering
@@ -202,7 +172,6 @@ pub fn onbAddCString(state: OnbLowerState, value: String) -> OnbAddCStringResult
 // helper functions so the Osty `for i in 0..n` index loops can
 // pick up the right name without baking the constant array
 // in-place.
-
 pub fn onbArgRegs() -> List<String> {
     let mut regs: List<String> = []
     regs.push("x0")
@@ -215,7 +184,6 @@ pub fn onbArgRegs() -> List<String> {
     regs.push("x7")
     regs
 }
-
 pub fn onbFpArgRegs() -> List<String> {
     let mut regs: List<String> = []
     regs.push("d0")
@@ -228,7 +196,6 @@ pub fn onbFpArgRegs() -> List<String> {
     regs.push("d7")
     regs
 }
-
 // onbReturnRegs returns the integer return-value registers. AAPCS64
 // uses x0/x1 for direct returns up to 16 bytes; we ship just those
 // two — anything wider takes the indirect (sret) path.
@@ -238,13 +205,15 @@ pub fn onbReturnRegs() -> List<String> {
     regs.push("x1")
     regs
 }
-
 // onbIndirectResultReg is x8, the AAPCS64 indirect-result register.
 // Caller stores `&dest` here before the call; sret-returning
 // callees read it and write through it.
-pub fn onbIndirectResultReg() -> String { "x8" }
-
+pub fn onbIndirectResultReg() -> String {
+    "x8"
+}
 // onbScratchReg is x9, the dev backend's all-purpose integer
 // scratch. Used by indirect-struct copy loops, FP immediate
 // staging, and indirect-call fn-pointer loads.
-pub fn onbScratchReg() -> String { "x9" }
+pub fn onbScratchReg() -> String {
+    "x9"
+}

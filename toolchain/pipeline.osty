@@ -1,5 +1,4 @@
 use std.strings as strings
-
 pub struct ToolchainPipelineReport {
     pub tokens: Int,
     pub parseNodes: Int,
@@ -29,16 +28,10 @@ pub struct ToolchainPipelineReport {
     pub fixedSource: String,
     pub diagnostics: String,
 }
-
 pub fn toolchainPipelineSource(packageName: String, source: String) -> ToolchainPipelineReport {
     toolchainPipelineSourceWithFixes(packageName, source, false)
 }
-
-pub fn toolchainPipelineSourceWithFixes(
-    packageName: String,
-    source: String,
-    applyFixes: Bool,
-) -> ToolchainPipelineReport {
+pub fn toolchainPipelineSourceWithFixes(packageName: String, source: String, applyFixes: Bool) -> ToolchainPipelineReport {
     let stream = frontendLexStream(source)
     let tree = frontendParseTree(source)
     let ast = astParse(source)
@@ -47,55 +40,19 @@ pub fn toolchainPipelineSourceWithFixes(
     let resolved = selfResolveAstFile(ast)
     let checked = frontendCheckSource(source)
     let linted = selfLintResolvedAstSource(source, ast, resolved)
-    let mut fixed = SelfLintApplyResult { source: "", applied: 0, skipped: 0 }
+    let mut fixed = SelfLintApplyResult {source: "", applied: 0, skipped: 0}
     if applyFixes {
         fixed = selfLintApplyFixes(source, linted)
     }
-
-    ToolchainPipelineReport {
-        tokens: frontLexTokenCount(stream),
-        parseNodes: frontParseTreeNodeCount(tree),
-        parseDiagnostics: frontParseTreeDiagnosticCount(tree),
-        irNodes: ir.nodes,
-        irDecls: ir.decls,
-        irFuncs: ir.funcs,
-        irStmts: ir.stmts,
-        irExprs: ir.exprs,
-        irDiagnostics: ir.diagnostics,
-        irInvalidParents: ir.invalidParents,
-        irScopes: ir.scopes,
-        irSymbols: ir.symbols,
-        irTypedNodes: ir.typedNodes,
-        irEffectfulNodes: ir.effectfulNodes,
-        irTerminalNodes: ir.terminalNodes,
-        irInvalidScopes: ir.invalidScopes,
-        resolveSymbols: toolchainPipelineSymbolCount(resolved),
-        resolveDiagnostics: selfResolveDiagnosticCount(resolved),
-        checkDiagnostics: checked.errors,
-        checkedExpressions: checked.accepted,
-        lintDiagnostics: selfLintDiagnosticCount(linted),
-        lintParseErrors: linted.parseErrors,
-        lintFixes: selfLintMachineFixCount(linted),
-        lintFixApplied: fixed.applied,
-        lintFixSkipped: fixed.skipped,
-        fixedSource: fixed.source,
-        diagnostics: toolchainPipelineDiagnosticOutput(source, resolved, linted),
-    }
+    ToolchainPipelineReport {tokens: frontLexTokenCount(stream), parseNodes: frontParseTreeNodeCount(tree), parseDiagnostics: frontParseTreeDiagnosticCount(tree), irNodes: ir.nodes, irDecls: ir.decls, irFuncs: ir.funcs, irStmts: ir.stmts, irExprs: ir.exprs, irDiagnostics: ir.diagnostics, irInvalidParents: ir.invalidParents, irScopes: ir.scopes, irSymbols: ir.symbols, irTypedNodes: ir.typedNodes, irEffectfulNodes: ir.effectfulNodes, irTerminalNodes: ir.terminalNodes, irInvalidScopes: ir.invalidScopes, resolveSymbols: toolchainPipelineSymbolCount(resolved), resolveDiagnostics: selfResolveDiagnosticCount(resolved), checkDiagnostics: checked.errors, checkedExpressions: checked.accepted, lintDiagnostics: selfLintDiagnosticCount(linted), lintParseErrors: linted.parseErrors, lintFixes: selfLintMachineFixCount(linted), lintFixApplied: fixed.applied, lintFixSkipped: fixed.skipped, fixedSource: fixed.source, diagnostics: toolchainPipelineDiagnosticOutput(source, resolved, linted)}
 }
-
 pub fn toolchainPipelineBlockingErrorCount(report: ToolchainPipelineReport) -> Int {
     report.parseDiagnostics + report.irDiagnostics + report.irInvalidParents + report.irInvalidScopes + report.resolveDiagnostics + report.checkDiagnostics + report.lintParseErrors
 }
-
 fn toolchainPipelineSymbolCount(result: SelfResolveResult) -> Int {
     result.symbols.len()
 }
-
-fn toolchainPipelineDiagnosticOutput(
-    source: String,
-    resolved: SelfResolveResult,
-    linted: SelfLintReport,
-) -> String {
+fn toolchainPipelineDiagnosticOutput(source: String, resolved: SelfResolveResult, linted: SelfLintReport) -> String {
     let mut lines: List<String> = []
     let resolveText = diagnosticFormatSelfResolveDiagnostics(source, resolved)
     if resolveText != "" {

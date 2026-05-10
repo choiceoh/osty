@@ -1,18 +1,15 @@
 use std.strings as strings
-
 /// Pure policy for the scaffold/new/fixture family of commands.
 /// Host code (internal/scaffold) owns file I/O and diag.Diagnostic
 /// construction; this module decides *whether* an input is
 /// acceptable and *what number* the cap is.
 ///
 /// Mirrored by `internal/runner/scaffold_policy.go`.
-
 /// Maximum placeholder rows `osty new fixture` will emit. Higher
 /// values produce unreadable starter files. Exported so the CLI's
 /// flag default (3) and the cap (64) live in one place.
-pub let scaffoldFixtureCasesDefault: Int = 3
-pub let scaffoldFixtureCasesMax: Int = 64
-
+let scaffoldFixtureCasesDefault: Int = 3
+let scaffoldFixtureCasesMax: Int = 64
 /// isValidScaffoldName reports whether `name` can be used as both
 /// a directory name and the `name` field of osty.toml.
 ///
@@ -42,7 +39,6 @@ pub fn isValidScaffoldName(name: String) -> Bool {
     }
     true
 }
-
 /// resolveFixtureCases picks the row count for the generated
 /// fixture table. Zero/negative fall back to the default; values
 /// above the cap return the cap paired with `true` so the host
@@ -51,21 +47,18 @@ pub struct FixtureCaseCount {
     pub count: Int,
     pub overCap: Bool,
 }
-
 pub fn resolveFixtureCases(requested: Int) -> FixtureCaseCount {
     if requested > scaffoldFixtureCasesMax {
-        return FixtureCaseCount { count: scaffoldFixtureCasesMax, overCap: true }
+        return FixtureCaseCount {count: scaffoldFixtureCasesMax, overCap: true}
     }
     if requested <= 0 {
-        return FixtureCaseCount { count: scaffoldFixtureCasesDefault, overCap: false }
+        return FixtureCaseCount {count: scaffoldFixtureCasesDefault, overCap: false}
     }
-    FixtureCaseCount { count: requested, overCap: false }
+    FixtureCaseCount {count: requested, overCap: false}
 }
-
 fn scaffoldIsLetter(unit: String) -> Bool {
     (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z")
 }
-
 fn scaffoldIsDigit(unit: String) -> Bool {
     unit >= "0" && unit <= "9"
 }

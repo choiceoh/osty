@@ -1,5 +1,4 @@
 use std.strings as strings
-
 // hir_print.osty — stable debug rendering helpers for self-hosted HIR.
 //
 // This is the HIR-side counterpart to `internal/ir/print.go` plus
@@ -7,15 +6,12 @@ use std.strings as strings
 // based like Go IR, so the entry points are per-shape (`hirPrintModule`,
 // `hirPrintStmt`, `hirPrintExpr`, `hirPatternString`) rather than a single
 // `PrintNode(any)` API.
-
 // ====================================================================
 // Public entry points
 // ====================================================================
-
 pub fn hirPrintModule(m: HirModule) -> String {
     let mut parts: List<String> = []
     parts.push("(module \"{hirPrintEscapeString(m.packageName)}\"")
-
     for decl in m.fns {
         parts.push("\n")
         parts.push(hirPrintIndent(1))
@@ -51,7 +47,6 @@ pub fn hirPrintModule(m: HirModule) -> String {
         parts.push(hirPrintIndent(1))
         parts.push(hirPrintUseDecl(decl))
     }
-
     if m.script.len() > 0 {
         parts.push("\n")
         parts.push(hirPrintIndent(1))
@@ -63,11 +58,9 @@ pub fn hirPrintModule(m: HirModule) -> String {
         }
         parts.push(")")
     }
-
     parts.push(")")
     strings.join(parts, "")
 }
-
 pub fn hirPrintBlock(b: HirBlock, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(block")
@@ -86,7 +79,6 @@ pub fn hirPrintBlock(b: HirBlock, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 pub fn hirPrintStmt(s: HirStmt, indent: Int) -> String {
     match s.kind {
         HirStmtInvalid -> "(stmt <invalid>)",
@@ -101,57 +93,54 @@ pub fn hirPrintStmt(s: HirStmt, indent: Int) -> String {
         HirStmtFor -> hirPrintForStmt(s, indent),
         HirStmtMatch -> hirPrintMatchStmt(s, indent),
         HirStmtDefer -> "(defer " + hirPrintBlock(s.deferBody, indent) + ")",
-        HirStmtChanSend -> "(send " + hirPrintExpr(s.chanChannel, indent) + " "
-            + hirPrintExpr(s.chanValue, indent) + ")",
+        HirStmtChanSend -> "(send " + hirPrintExpr(s.chanChannel, indent) + " " + hirPrintExpr(s.chanValue, indent) + ")",
         HirStmtError -> "(err-stmt \"" + hirPrintEscapeString(s.errorNote) + "\")",
     }
 }
-
 pub fn hirPrintExpr(e: HirExpr, indent: Int) -> String {
     match e.kind {
         HirExprInvalid -> "nil",
         HirExprIntLit -> e.numText,
         HirExprFloatLit -> e.numText,
-        HirExprBoolLit -> if e.boolValue { "true" } else { "false" },
+        HirExprBoolLit -> if e.boolValue {
+            "true"
+        } else {
+            "false"
+        },
         HirExprCharLit -> "'" + hirPrintEscapeChar(e.charValue) + "'",
         HirExprByteLit -> "b" + hirPrintIntToString(e.byteValue),
         HirExprBytesLit -> "b" + hirPrintStringLit(e),
         HirExprStringLit -> hirPrintStringLit(e),
         HirExprUnitLit -> "()",
         HirExprIdent -> hirPrintIdentExpr(e),
-        HirExprUnary -> "(" + hirUnOpName(e.unaryOp) + " "
-            + hirPrintExpr(hirPrintFirstExpr(e.unaryChild), indent) + ")",
-        HirExprBinary -> "(" + hirBinOpName(e.binaryOp) + " "
-            + hirPrintExpr(hirPrintFirstExpr(e.binaryLeft), indent) + " "
-            + hirPrintExpr(hirPrintFirstExpr(e.binaryRight), indent) + ")",
+        HirExprUnary -> "(" + hirUnOpName(e.unaryOp) + " " + hirPrintExpr(hirPrintFirstExpr(e.unaryChild), indent) + ")",
+        HirExprBinary -> "(" + hirBinOpName(e.binaryOp) + " " + hirPrintExpr(hirPrintFirstExpr(e.binaryLeft), indent) + " " + hirPrintExpr(hirPrintFirstExpr(e.binaryRight), indent) + ")",
         HirExprCall -> hirPrintCallExpr(e, indent),
         HirExprIntrinsic -> hirPrintIntrinsicExpr(e, indent),
         HirExprList -> hirPrintListExpr(e, indent),
         HirExprBlock -> hirPrintBlock(hirPrintFirstBlock(e.blockBody), indent),
         HirExprIf -> hirPrintIfExpr(e, indent),
-        HirExprField -> "(" + if e.fieldOptional { "?." } else { "." } + " "
-            + hirPrintExpr(hirPrintFirstExpr(e.fieldTarget), indent) + " "
-            + e.fieldName + ")",
-        HirExprIndex -> "(idx " + hirPrintExpr(hirPrintFirstExpr(e.indexTarget), indent)
-            + " " + hirPrintExpr(hirPrintFirstExpr(e.indexIndex), indent) + ")",
+        HirExprField -> "(" + if e.fieldOptional {
+            "?."
+        } else {
+            "."
+        } + " " + hirPrintExpr(hirPrintFirstExpr(e.fieldTarget), indent) + " " + e.fieldName + ")",
+        HirExprIndex -> "(idx " + hirPrintExpr(hirPrintFirstExpr(e.indexTarget), indent) + " " + hirPrintExpr(hirPrintFirstExpr(e.indexIndex), indent) + ")",
         HirExprMethod -> hirPrintMethodExpr(e, indent),
         HirExprStructLit -> hirPrintStructLitExpr(e, indent),
         HirExprTupleLit -> hirPrintTupleExpr(e, indent),
         HirExprMapLit -> hirPrintMapExpr(e, indent),
         HirExprRange -> hirPrintRangeExpr(e, indent),
         HirExprQuestion -> "(? " + hirPrintExpr(hirPrintFirstExpr(e.questionChild), indent) + ")",
-        HirExprCoalesce -> "(?? " + hirPrintExpr(hirPrintFirstExpr(e.coalesceLeft), indent)
-            + " " + hirPrintExpr(hirPrintFirstExpr(e.coalesceRight), indent) + ")",
+        HirExprCoalesce -> "(?? " + hirPrintExpr(hirPrintFirstExpr(e.coalesceLeft), indent) + " " + hirPrintExpr(hirPrintFirstExpr(e.coalesceRight), indent) + ")",
         HirExprClosure -> hirPrintClosureExpr(e, indent),
         HirExprVariantLit -> hirPrintVariantLitExpr(e, indent),
         HirExprMatch -> hirPrintMatchExpr(e, indent),
         HirExprIfLet -> hirPrintIfLetExpr(e, indent),
-        HirExprTupleAccess -> "(." + hirPrintIntToString(e.tupleAccessIndex) + " "
-            + hirPrintExpr(hirPrintFirstExpr(e.tupleAccessTarget), indent) + ")",
+        HirExprTupleAccess -> "(." + hirPrintIntToString(e.tupleAccessIndex) + " " + hirPrintExpr(hirPrintFirstExpr(e.tupleAccessTarget), indent) + ")",
         HirExprError -> "(err \"" + hirPrintEscapeString(e.errorNote) + "\")",
     }
 }
-
 pub fn hirPatternString(p: HirPattern) -> String {
     match p.kind {
         HirPatInvalid -> "<nil>",
@@ -173,11 +162,9 @@ pub fn hirPatternString(p: HirPattern) -> String {
         HirPatError -> "<error:" + p.errorNote + ">",
     }
 }
-
 // ====================================================================
 // Decl printers
 // ====================================================================
-
 fn hirPrintFnDecl(d: HirFnDecl, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(fn ")
@@ -214,7 +201,6 @@ fn hirPrintFnDecl(d: HirFnDecl, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintStructDecl(d: HirStructDecl, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(struct ")
@@ -265,7 +251,6 @@ fn hirPrintStructDecl(d: HirStructDecl, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintEnumDecl(d: HirEnumDecl, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(enum ")
@@ -297,7 +282,6 @@ fn hirPrintEnumDecl(d: HirEnumDecl, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintInterfaceDecl(d: HirInterfaceDecl, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(interface ")
@@ -310,11 +294,9 @@ fn hirPrintInterfaceDecl(d: HirInterfaceDecl, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintTypeAliasDecl(d: HirTypeAliasDecl) -> String {
     "(alias " + d.name + " " + hirTypeString(d.target) + ")"
 }
-
 fn hirPrintLetDecl(d: HirLetDecl) -> String {
     let mut out = "(let " + d.name + " " + hirTypeString(d.typ) + " "
     if d.hasValue {
@@ -324,7 +306,6 @@ fn hirPrintLetDecl(d: HirLetDecl) -> String {
     }
     out + ")"
 }
-
 fn hirPrintUseDecl(d: HirUseDecl) -> String {
     let path = if d.isGoFFI {
         d.goPath
@@ -339,11 +320,9 @@ fn hirPrintUseDecl(d: HirUseDecl) -> String {
     }
     out + ")"
 }
-
 // ====================================================================
 // Statement printers
 // ====================================================================
-
 fn hirPrintLetStmt(s: HirStmt, indent: Int) -> String {
     let mut out = ""
     if s.letHasPattern {
@@ -363,7 +342,6 @@ fn hirPrintLetStmt(s: HirStmt, indent: Int) -> String {
     }
     out + ")"
 }
-
 fn hirPrintAssignStmt(s: HirStmt, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(assign ")
@@ -377,7 +355,6 @@ fn hirPrintAssignStmt(s: HirStmt, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintReturnStmt(s: HirStmt, indent: Int) -> String {
     let mut out = "(return"
     if s.returnHasValue {
@@ -385,7 +362,6 @@ fn hirPrintReturnStmt(s: HirStmt, indent: Int) -> String {
     }
     out + ")"
 }
-
 fn hirPrintIfStmt(s: HirStmt, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(if ")
@@ -402,7 +378,6 @@ fn hirPrintIfStmt(s: HirStmt, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintForStmt(s: HirStmt, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(for ")
@@ -444,7 +419,6 @@ fn hirPrintForStmt(s: HirStmt, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintMatchStmt(s: HirStmt, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(match-stmt ")
@@ -457,11 +431,9 @@ fn hirPrintMatchStmt(s: HirStmt, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 // ====================================================================
 // Expression printers
 // ====================================================================
-
 fn hirPrintIdentExpr(e: HirExpr) -> String {
     let mut out = e.identName
     if e.identKind != HirIdentUnknown {
@@ -481,7 +453,6 @@ fn hirPrintIdentExpr(e: HirExpr) -> String {
     }
     out
 }
-
 fn hirPrintCallExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(call ")
@@ -505,7 +476,6 @@ fn hirPrintCallExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintIntrinsicExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(intrinsic ")
@@ -517,7 +487,6 @@ fn hirPrintIntrinsicExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintMethodExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(mcall ")
@@ -543,7 +512,6 @@ fn hirPrintMethodExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintListExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("[")
@@ -558,7 +526,6 @@ fn hirPrintListExpr(e: HirExpr, indent: Int) -> String {
     parts.push("]")
     strings.join(parts, "")
 }
-
 fn hirPrintTupleExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(")
@@ -573,7 +540,6 @@ fn hirPrintTupleExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintMapExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("\{")
@@ -590,7 +556,6 @@ fn hirPrintMapExpr(e: HirExpr, indent: Int) -> String {
     parts.push("\}")
     strings.join(parts, "")
 }
-
 fn hirPrintStructLitExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(")
@@ -617,7 +582,6 @@ fn hirPrintStructLitExpr(e: HirExpr, indent: Int) -> String {
     parts.push("\})")
     strings.join(parts, "")
 }
-
 fn hirPrintRangeExpr(e: HirExpr, indent: Int) -> String {
     let mut out = ""
     if e.rangeStart.len() > 0 {
@@ -633,7 +597,6 @@ fn hirPrintRangeExpr(e: HirExpr, indent: Int) -> String {
     }
     out
 }
-
 fn hirPrintClosureExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(\\(")
@@ -666,7 +629,6 @@ fn hirPrintClosureExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintVariantLitExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(")
@@ -682,7 +644,6 @@ fn hirPrintVariantLitExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintIfExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(if-expr ")
@@ -696,7 +657,6 @@ fn hirPrintIfExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintIfLetExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(if-let ")
@@ -712,7 +672,6 @@ fn hirPrintIfLetExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintMatchExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(match ")
@@ -725,7 +684,6 @@ fn hirPrintMatchExpr(e: HirExpr, indent: Int) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintStringLit(e: HirExpr) -> String {
     let mut out = "\""
     for part in e.strParts {
@@ -739,11 +697,9 @@ fn hirPrintStringLit(e: HirExpr) -> String {
     }
     out + "\""
 }
-
 // ====================================================================
 // Shared leaf printers
 // ====================================================================
-
 fn hirPrintParam(pm: HirParam) -> String {
     if hirParamIsDestructured(pm) {
         hirPatternString(pm.pattern) + ":" + hirTypeString(pm.typ)
@@ -751,7 +707,6 @@ fn hirPrintParam(pm: HirParam) -> String {
         pm.name + ":" + hirTypeString(pm.typ)
     }
 }
-
 fn hirPrintArg(a: HirArg, indent: Int) -> String {
     if a.name != "" {
         a.name + ":" + hirPrintExpr(a.value, indent)
@@ -759,7 +714,6 @@ fn hirPrintArg(a: HirArg, indent: Int) -> String {
         hirPrintExpr(a.value, indent)
     }
 }
-
 fn hirPrintMatchArm(a: HirMatchArm, indent: Int) -> String {
     let mut out = "(arm " + hirPatternString(a.pattern)
     if a.hasGuard {
@@ -768,7 +722,6 @@ fn hirPrintMatchArm(a: HirMatchArm, indent: Int) -> String {
     out = out + " " + hirPrintBlock(a.body, indent)
     out + ")"
 }
-
 fn hirPrintTuplePattern(p: HirPattern) -> String {
     let mut parts: List<String> = []
     parts.push("(")
@@ -783,7 +736,6 @@ fn hirPrintTuplePattern(p: HirPattern) -> String {
     parts.push(")")
     strings.join(parts, "")
 }
-
 fn hirPrintStructPattern(p: HirPattern) -> String {
     let mut parts: List<String> = []
     parts.push(p.structTypeName)
@@ -809,7 +761,6 @@ fn hirPrintStructPattern(p: HirPattern) -> String {
     parts.push(" \}")
     strings.join(parts, "")
 }
-
 fn hirPrintVariantPattern(p: HirPattern) -> String {
     let mut parts: List<String> = []
     if p.variantEnum != "" {
@@ -831,7 +782,6 @@ fn hirPrintVariantPattern(p: HirPattern) -> String {
     }
     strings.join(parts, "")
 }
-
 fn hirPrintRangePattern(p: HirPattern) -> String {
     let mut out = ""
     if p.rangeLow.len() > 0 {
@@ -847,7 +797,6 @@ fn hirPrintRangePattern(p: HirPattern) -> String {
     }
     out
 }
-
 fn hirPrintOrPattern(p: HirPattern) -> String {
     let mut parts: List<String> = []
     let mut i = 0
@@ -860,12 +809,15 @@ fn hirPrintOrPattern(p: HirPattern) -> String {
     }
     strings.join(parts, "")
 }
-
 fn hirExprLiteralText(e: HirExpr) -> String {
     match e.kind {
         HirExprIntLit -> e.numText,
         HirExprFloatLit -> e.numText,
-        HirExprBoolLit -> if e.boolValue { "true" } else { "false" },
+        HirExprBoolLit -> if e.boolValue {
+            "true"
+        } else {
+            "false"
+        },
         HirExprCharLit -> "'" + hirPrintEscapeChar(e.charValue) + "'",
         HirExprByteLit -> "b" + hirPrintIntToString(e.byteValue),
         HirExprStringLit -> {
@@ -883,11 +835,9 @@ fn hirExprLiteralText(e: HirExpr) -> String {
         _ -> "<expr>",
     }
 }
-
 // ====================================================================
 // Small helpers
 // ====================================================================
-
 fn hirPrintFirstExpr(xs: List<HirExpr>) -> HirExpr {
     if xs.len() > 0 {
         xs[0]
@@ -895,7 +845,6 @@ fn hirPrintFirstExpr(xs: List<HirExpr>) -> HirExpr {
         hirExprInvalid()
     }
 }
-
 fn hirPrintFirstBlock(xs: List<HirBlock>) -> HirBlock {
     if xs.len() > 0 {
         xs[0]
@@ -903,7 +852,6 @@ fn hirPrintFirstBlock(xs: List<HirBlock>) -> HirBlock {
         hirBlock(hirNoSpan())
     }
 }
-
 fn hirPrintFirstPattern(xs: List<HirPattern>) -> HirPattern {
     if xs.len() > 0 {
         xs[0]
@@ -911,14 +859,12 @@ fn hirPrintFirstPattern(xs: List<HirPattern>) -> HirPattern {
         hirPatternInvalid()
     }
 }
-
 fn hirPrintEscapeString(text: String) -> String {
     let slash = strings.replaceAll(text, "\\", "\\\\")
     let quote = strings.replaceAll(slash, "\"", "\\\"")
     let newline = strings.replaceAll(quote, "\n", "\\n")
     strings.replaceAll(newline, "\t", "\\t")
 }
-
 fn hirPrintEscapeChar(value: Int) -> String {
     if value == 39 {
         "\\'"
@@ -926,7 +872,6 @@ fn hirPrintEscapeChar(value: Int) -> String {
         "{value}"
     }
 }
-
 fn hirPrintIndent(depth: Int) -> String {
     let mut out = ""
     for _i in 0..depth {
@@ -934,7 +879,6 @@ fn hirPrintIndent(depth: Int) -> String {
     }
     out
 }
-
 fn hirPrintIntToString(n: Int) -> String {
     if n == 0 {
         return "0"
@@ -967,18 +911,36 @@ fn hirPrintIntToString(n: Int) -> String {
     }
     out
 }
-
 fn hirPrintDigitChar(d: Int) -> String {
-    // B2: payload-less int dispatch as if-else chain (stage0 P0–P15).
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
+    if d == 0 {
+        return "0"
+    }
+    if d == 1 {
+        return "1"
+    }
+    if d == 2 {
+        return "2"
+    }
+    if d == 3 {
+        return "3"
+    }
+    if d == 4 {
+        return "4"
+    }
+    if d == 5 {
+        return "5"
+    }
+    if d == 6 {
+        return "6"
+    }
+    if d == 7 {
+        return "7"
+    }
+    if d == 8 {
+        return "8"
+    }
+    if d == 9 {
+        return "9"
+    }
     "?"
 }

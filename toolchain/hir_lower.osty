@@ -26,13 +26,10 @@
 //   - Go `primitiveByName(name)`          ↔ hirLowerPrimByName(name)
 //   - Go `primitiveByKind(k)`             ↔ hirLowerPrimByPk(pk)
 //   - Go `joinDottedPath(parts)`          ↔ hirLowerJoinDottedPath(parts)
-
 use std.strings as strings
-
 // ====================================================================
 // Lowerer state
 // ====================================================================
-
 /// HirLowerer is the per-module lowering context. Mirrors Go's
 /// `lowerer`. State grows in stage 5b/5c/5d as more of lower.go
 /// ports in; for stage 5a only the output module + issue list are
@@ -42,22 +39,15 @@ pub struct HirLowerer {
     pub out: HirModule,
     pub issues: List<String>,
 }
-
 pub fn hirLowerer(packageName: String) -> HirLowerer {
-    HirLowerer {
-        packageName,
-        out: hirModule(packageName),
-        issues: [],
-    }
+    HirLowerer {packageName, out: hirModule(packageName), issues: []}
 }
-
 /// hirLowerNote records a non-fatal lowering issue. Matches Go's
 /// `lowerer.note` — issues surface through the final HirModule's
 /// `issues` list once lowering finishes.
 pub fn hirLowerNote(l: HirLowerer, msg: String) {
     l.issues.push(msg)
 }
-
 /// hirLowerFinish copies accumulated issues onto the output module
 /// and returns it. Call once AST lowering completes.
 pub fn hirLowerFinish(l: HirLowerer) -> HirModule {
@@ -66,62 +56,42 @@ pub fn hirLowerFinish(l: HirLowerer) -> HirModule {
     }
     l.out
 }
-
 pub struct HirLowerContext {
     pub l: HirLowerer,
     pub ast: AstFile,
     pub elab: ElabCx,
     pub resolved: SelfResolveResult,
 }
-
 pub struct HirLowerTypeScope {
     pub genericNames: List<String>,
     pub genericOwners: List<String>,
     pub selfOwner: String,
 }
-
 pub struct HirLowerStmtScope {
     pub loopResultName: String,
     pub loopResultType: HirType,
 }
-
 fn hirLowerTypeScope(selfOwner: String) -> HirLowerTypeScope {
-    HirLowerTypeScope {
-        genericNames: [],
-        genericOwners: [],
-        selfOwner,
-    }
+    HirLowerTypeScope {genericNames: [], genericOwners: [], selfOwner}
 }
-
 fn hirLowerStmtScope() -> HirLowerStmtScope {
-    HirLowerStmtScope {
-        loopResultName: "",
-        loopResultType: hirTypeInvalid(),
-    }
+    HirLowerStmtScope {loopResultName: "", loopResultType: hirTypeInvalid()}
 }
-
 /// hirLowerModule remains as the zero-input wrapper used by the
 /// self-host transpile smoke tests. Real lowering flows through
 /// `hirLowerSource` / `hirLowerAstFile`.
 pub fn hirLowerModule(packageName: String) -> HirModule {
     hirLowerAstFile(packageName, astParse(""))
 }
-
 pub fn hirLowerSource(packageName: String, source: String) -> HirModule {
     hirLowerAstFile(packageName, astParse(source))
 }
-
 pub fn hirLowerAstFile(packageName: String, ast: AstFile) -> HirModule {
     let tys = emptyTyArena()
     let elab = newElabCx(ast, tys)
     elabFile(elab)
     let resolved = selfResolveAstFile(ast)
-    let cx = HirLowerContext {
-        l: hirLowerer(packageName),
-        ast,
-        elab,
-        resolved,
-    }
+    let cx = HirLowerContext {l: hirLowerer(packageName), ast, elab, resolved}
     hirLowerSeedModuleSpan(cx)
     hirLowerCollectDiagnostics(cx)
     for declIdx in cx.ast.arena.decls {
@@ -129,7 +99,6 @@ pub fn hirLowerAstFile(packageName: String, ast: AstFile) -> HirModule {
     }
     hirLowerFinish(cx.l)
 }
-
 fn hirLowerSeedModuleSpan(cx: HirLowerContext) {
     let decls = cx.ast.arena.decls
     if decls.len() == 0 {
@@ -141,7 +110,6 @@ fn hirLowerSeedModuleSpan(cx: HirLowerContext) {
     let last = astArenaNodeAt(cx.ast.arena, lastIdx)
     cx.l.out.span = hirSpanFromOffsets(first.start, last.end)
 }
-
 fn hirLowerCollectDiagnostics(cx: HirLowerContext) {
     for e in cx.ast.arena.errors {
         let mut msg = if e.code != "" {
@@ -172,7 +140,6 @@ fn hirLowerCollectDiagnostics(cx: HirLowerContext) {
         hirLowerNote(cx.l, checkDiagRender(d))
     }
 }
-
 // ====================================================================
 // Type lowering: TyArena → HirType
 // ====================================================================
@@ -188,7 +155,6 @@ fn hirLowerCollectDiagnostics(cx: HirLowerContext) {
 // the equivalent `HirType`. This is the path expression lowering
 // will use — the checker already assigned a type to every
 // expression, so we never need to re-derive types from AST shape.
-
 /// hirLowerTyToHirType converts an elaborated `TyArena` type
 /// (referenced by `idx`) into a `HirType`. Invalid / poisoned /
 /// out-of-range inputs render as `hirTypeErr`. Type-var nodes
@@ -201,12 +167,19 @@ pub fn hirLowerTyToHirType(arena: TyArena, idx: Int) -> HirType {
     if tyIsErr(arena, idx) || tyIsPoison(arena, idx) {
         return hirTypeErr()
     }
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     let kind = tyKindAt(arena, idx)
-    if kind == TkErr { return hirTypeErr() }
-    if kind == TkPoison { return hirTypeErr() }
-    if kind == TkPrim { return hirLowerPrimByPk(tyPrimAt(arena, idx)) }
-    if kind == TkNamed { return hirLowerNamedFromTy(arena, idx) }
+    if kind == TkErr {
+        return hirTypeErr()
+    }
+    if kind == TkPoison {
+        return hirTypeErr()
+    }
+    if kind == TkPrim {
+        return hirLowerPrimByPk(tyPrimAt(arena, idx))
+    }
+    if kind == TkNamed {
+        return hirLowerNamedFromTy(arena, idx)
+    }
     if kind == TkOptional {
         let inner = hirLowerTyToHirType(arena, tyInnerAt(arena, idx))
         return hirTypeOptional(inner)
@@ -237,16 +210,16 @@ pub fn hirLowerTyToHirType(arena: TyArena, idx: Int) -> HirType {
         return hirTypeVar(varName, varOwner)
     }
     if kind == TkSelf {
-        // Interface / trait bodies carry `Self` as a distinct arena
-        // kind; the HIR has no separate Self — represent it as a
-        // TypeVar bound to the owning type's name so monomorphization
-        // can substitute it per impl.
         let owner = tyHeadAt(arena, idx)
         return hirTypeVar("Self", owner)
     }
     unreachable()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+// Interface / trait bodies carry `Self` as a distinct arena
+// kind; the HIR has no separate Self — represent it as a
+// TypeVar bound to the owning type's name so monomorphization
+// can substitute it per impl.
 /// hirLowerNamedFromTy reconstructs a `HirType` for a `TkNamed`
 /// arena node. Built-in generic heads (List / Map / Set / Option /
 /// Result / Maybe) flip the `builtin` bit on the resulting
@@ -275,50 +248,94 @@ fn hirLowerNamedFromTy(arena: TyArena, idx: Int) -> HirType {
     }
     hirTypeNamed(head, args)
 }
-
 /// hirLowerIsBuiltinGenericName reports whether `name` is one of the
 /// stdlib-provided generic type heads. Mirrors Go's
 /// `lowerNamedType`'s fallback case.
 fn hirLowerIsBuiltinGenericName(name: String) -> Bool {
-    if name == "List" { return true }
-    if name == "Map" { return true }
-    if name == "Set" { return true }
-    if name == "Option" { return true }
-    if name == "Result" { return true }
-    if name == "Maybe" { return true }
+    if name == "List" {
+        return true
+    }
+    if name == "Map" {
+        return true
+    }
+    if name == "Set" {
+        return true
+    }
+    if name == "Option" {
+        return true
+    }
+    if name == "Result" {
+        return true
+    }
+    if name == "Maybe" {
+        return true
+    }
     false
 }
-
 // ====================================================================
 // Primitive lookups
 // ====================================================================
-
 /// hirLowerPrimByName maps a scalar type name to the HirType
 /// singleton constructor. Mirrors Go's `primitiveByName` — returns
 /// an invalid HirType when the name isn't a primitive scalar so
 /// callers can fall through to the named-type path.
 pub fn hirLowerPrimByName(name: String) -> HirType {
-    if name == "Int" { return hirTInt() }
-    if name == "Int8" { return hirTInt8() }
-    if name == "Int16" { return hirTInt16() }
-    if name == "Int32" { return hirTInt32() }
-    if name == "Int64" { return hirTInt64() }
-    if name == "UInt8" { return hirTUInt8() }
-    if name == "UInt16" { return hirTUInt16() }
-    if name == "UInt32" { return hirTUInt32() }
-    if name == "UInt64" { return hirTUInt64() }
-    if name == "Byte" { return hirTByte() }
-    if name == "Float" { return hirTFloat() }
-    if name == "Float32" { return hirTFloat32() }
-    if name == "Float64" { return hirTFloat64() }
-    if name == "Bool" { return hirTBool() }
-    if name == "Char" { return hirTChar() }
-    if name == "String" { return hirTString() }
-    if name == "Bytes" { return hirTBytes() }
-    if name == "RawPtr" { return hirTRawPtr() }
+    if name == "Int" {
+        return hirTInt()
+    }
+    if name == "Int8" {
+        return hirTInt8()
+    }
+    if name == "Int16" {
+        return hirTInt16()
+    }
+    if name == "Int32" {
+        return hirTInt32()
+    }
+    if name == "Int64" {
+        return hirTInt64()
+    }
+    if name == "UInt8" {
+        return hirTUInt8()
+    }
+    if name == "UInt16" {
+        return hirTUInt16()
+    }
+    if name == "UInt32" {
+        return hirTUInt32()
+    }
+    if name == "UInt64" {
+        return hirTUInt64()
+    }
+    if name == "Byte" {
+        return hirTByte()
+    }
+    if name == "Float" {
+        return hirTFloat()
+    }
+    if name == "Float32" {
+        return hirTFloat32()
+    }
+    if name == "Float64" {
+        return hirTFloat64()
+    }
+    if name == "Bool" {
+        return hirTBool()
+    }
+    if name == "Char" {
+        return hirTChar()
+    }
+    if name == "String" {
+        return hirTString()
+    }
+    if name == "Bytes" {
+        return hirTBytes()
+    }
+    if name == "RawPtr" {
+        return hirTRawPtr()
+    }
     hirTypeInvalid()
 }
-
 /// hirLowerPrimByPk maps a `ty.osty` PrimKind to the HirType
 /// primitive. Mirrors Go's `primitiveByKind`. Unknown / invalid
 /// inputs render as ErrType.
@@ -327,36 +344,78 @@ pub fn hirLowerPrimByName(name: String) -> HirType {
 /// `Float` — matches Go's `types.Untyped.Default()` convention so
 /// downstream passes never see an untyped carrier.
 pub fn hirLowerPrimByPk(pk: PrimKind) -> HirType {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if pk == PkInvalid { return hirTypeErr() }
-    if pk == PkInt { return hirTInt() }
-    if pk == PkInt8 { return hirTInt8() }
-    if pk == PkInt16 { return hirTInt16() }
-    if pk == PkInt32 { return hirTInt32() }
-    if pk == PkInt64 { return hirTInt64() }
-    if pk == PkUInt8 { return hirTUInt8() }
-    if pk == PkUInt16 { return hirTUInt16() }
-    if pk == PkUInt32 { return hirTUInt32() }
-    if pk == PkUInt64 { return hirTUInt64() }
-    if pk == PkByte { return hirTByte() }
-    if pk == PkFloat { return hirTFloat() }
-    if pk == PkFloat32 { return hirTFloat32() }
-    if pk == PkFloat64 { return hirTFloat64() }
-    if pk == PkBool { return hirTBool() }
-    if pk == PkChar { return hirTChar() }
-    if pk == PkString { return hirTString() }
-    if pk == PkBytes { return hirTBytes() }
-    if pk == PkUnit { return hirTUnit() }
-    if pk == PkNever { return hirTNever() }
-    if pk == PkUntypedInt { return hirTInt() }
-    if pk == PkUntypedFloat { return hirTFloat() }
+    if pk == PkInvalid {
+        return hirTypeErr()
+    }
+    if pk == PkInt {
+        return hirTInt()
+    }
+    if pk == PkInt8 {
+        return hirTInt8()
+    }
+    if pk == PkInt16 {
+        return hirTInt16()
+    }
+    if pk == PkInt32 {
+        return hirTInt32()
+    }
+    if pk == PkInt64 {
+        return hirTInt64()
+    }
+    if pk == PkUInt8 {
+        return hirTUInt8()
+    }
+    if pk == PkUInt16 {
+        return hirTUInt16()
+    }
+    if pk == PkUInt32 {
+        return hirTUInt32()
+    }
+    if pk == PkUInt64 {
+        return hirTUInt64()
+    }
+    if pk == PkByte {
+        return hirTByte()
+    }
+    if pk == PkFloat {
+        return hirTFloat()
+    }
+    if pk == PkFloat32 {
+        return hirTFloat32()
+    }
+    if pk == PkFloat64 {
+        return hirTFloat64()
+    }
+    if pk == PkBool {
+        return hirTBool()
+    }
+    if pk == PkChar {
+        return hirTChar()
+    }
+    if pk == PkString {
+        return hirTString()
+    }
+    if pk == PkBytes {
+        return hirTBytes()
+    }
+    if pk == PkUnit {
+        return hirTUnit()
+    }
+    if pk == PkNever {
+        return hirTNever()
+    }
+    if pk == PkUntypedInt {
+        return hirTInt()
+    }
+    if pk == PkUntypedFloat {
+        return hirTFloat()
+    }
     hirTypeErr()
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================
 // Misc helpers
 // ====================================================================
-
 /// hirLowerJoinDottedPath joins a non-empty list with `.`. Mirrors
 /// Go's `joinDottedPath` — used when reconstructing qualified
 /// NamedType package prefixes.
@@ -369,7 +428,6 @@ pub fn hirLowerJoinDottedPath(parts: List<String>) -> String {
     }
     strings.join(parts, ".")
 }
-
 /// hirLowerDropLast returns `xs` without its final element, or an
 /// empty list when `xs` is empty. Used when splitting a dotted
 /// NamedType path into qualifier + leaf name.
@@ -388,7 +446,6 @@ pub fn hirLowerDropLast(xs: List<String>) -> List<String> {
     }
     out
 }
-
 /// hirLowerLast returns the final element of `xs`, or an empty
 /// string for an empty list. Used alongside hirLowerDropLast for
 /// qualifier/name splitting.
@@ -398,7 +455,6 @@ pub fn hirLowerLast(xs: List<String>) -> String {
     }
     xs[xs.len() - 1]
 }
-
 // ====================================================================
 // Annotation extraction (Stage 5b)
 // ====================================================================
@@ -411,7 +467,6 @@ pub fn hirLowerLast(xs: List<String>) -> String {
 //
 // Callers get these by walking the AST's annotation list once into
 // `List<HirAnnotation>` and then invoking the relevant extractors.
-
 /// hirLowerHasNamedAnnotation reports whether the list contains a
 /// `#[name]` annotation. Used for bare-flag shapes (c_abi / no_alloc
 /// / intrinsic / parallel / pure / hot / cold / no_vectorize).
@@ -423,7 +478,6 @@ pub fn hirLowerHasNamedAnnotation(annots: List<HirAnnotation>, name: String) -> 
     }
     false
 }
-
 /// hirLowerExtractInlineMode resolves the A8 `#[inline]`
 /// family:
 ///   - no annotation            → HirInlineNone
@@ -453,7 +507,6 @@ pub fn hirLowerExtractInlineMode(annots: List<HirAnnotation>) -> HirInlineMode {
     }
     HirInlineNone
 }
-
 /// hirLowerExtractNoaliasArgs reads `#[noalias]` / `#[noalias(p1,
 /// p2)]` and returns (allParams, names):
 ///   - absent              → (false, [])
@@ -466,12 +519,11 @@ pub struct HirLowerNoaliasInfo {
     pub all: Bool,
     pub names: List<String>,
 }
-
 pub fn hirLowerExtractNoaliasArgs(annots: List<HirAnnotation>) -> HirLowerNoaliasInfo {
     for a in annots {
         if a.name == "noalias" {
             if a.args.len() == 0 {
-                return HirLowerNoaliasInfo { all: true, names: [] }
+                return HirLowerNoaliasInfo {all: true, names: []}
             }
             let mut names: List<String> = []
             for arg in a.args {
@@ -479,12 +531,11 @@ pub fn hirLowerExtractNoaliasArgs(annots: List<HirAnnotation>) -> HirLowerNoalia
                     names.push(arg.key)
                 }
             }
-            return HirLowerNoaliasInfo { all: false, names }
+            return HirLowerNoaliasInfo {all: false, names}
         }
     }
-    HirLowerNoaliasInfo { all: false, names: [] }
+    HirLowerNoaliasInfo {all: false, names: []}
 }
-
 /// hirLowerExtractTargetFeatures reads every bare-identifier
 /// argument from the `#[target_feature(...)]` annotations and
 /// returns them in source order. Empty keys are skipped (the
@@ -502,7 +553,6 @@ pub fn hirLowerExtractTargetFeatures(annots: List<HirAnnotation>) -> List<String
     }
     out
 }
-
 /// hirLowerExtractVectorizeArgs reads `#[vectorize(...)]` metadata
 /// and returns (enable, width, scalable, predicate). `enable` tracks
 /// presence; three flags come from the arg list. Matches Go's
@@ -513,14 +563,8 @@ pub struct HirLowerVectorizeInfo {
     pub scalable: Bool,
     pub predicate: Bool,
 }
-
 pub fn hirLowerExtractVectorizeArgs(annots: List<HirAnnotation>) -> HirLowerVectorizeInfo {
-    let mut out = HirLowerVectorizeInfo {
-        enable: false,
-        width: 0,
-        scalable: false,
-        predicate: false,
-    }
+    let mut out = HirLowerVectorizeInfo {enable: false, width: 0, scalable: false, predicate: false}
     for a in annots {
         if a.name == "vectorize" {
             out.enable = true
@@ -542,7 +586,6 @@ pub fn hirLowerExtractVectorizeArgs(annots: List<HirAnnotation>) -> HirLowerVect
     }
     out
 }
-
 /// hirLowerExtractUnrollArgs reads `#[unroll]` / `#[unroll(count =
 /// N)]` and returns (enable, count). `count == 0` marks the bare
 /// form; a positive value is the fixed factor.
@@ -550,9 +593,8 @@ pub struct HirLowerUnrollInfo {
     pub enable: Bool,
     pub count: Int,
 }
-
 pub fn hirLowerExtractUnrollArgs(annots: List<HirAnnotation>) -> HirLowerUnrollInfo {
-    let mut out = HirLowerUnrollInfo { enable: false, count: 0 }
+    let mut out = HirLowerUnrollInfo {enable: false, count: 0}
     for a in annots {
         if a.name == "unroll" {
             out.enable = true
@@ -568,7 +610,6 @@ pub fn hirLowerExtractUnrollArgs(annots: List<HirAnnotation>) -> HirLowerUnrollI
     }
     out
 }
-
 /// hirLowerExtractExportSymbol reads the `#[export("name")]`
 /// annotation and returns the literal string. Empty for missing /
 /// malformed (malformed cases are already rejected by the resolver;
@@ -587,9 +628,7 @@ pub fn hirLowerExtractExportSymbol(annots: List<HirAnnotation>) -> String {
     }
     ""
 }
-
 // ---- json(...) options -------------------------------------------
-
 /// HirLowerJsonFieldInfo carries the extracted `#[json(...)]` flags
 /// for a struct field: `key = "..."` override, `skip` flag, and
 /// `optional` flag.
@@ -598,9 +637,8 @@ pub struct HirLowerJsonFieldInfo {
     pub skip: Bool,
     pub optional: Bool,
 }
-
 pub fn hirLowerJsonFieldOptions(annots: List<HirAnnotation>) -> HirLowerJsonFieldInfo {
-    let mut out = HirLowerJsonFieldInfo { key: "", skip: false, optional: false }
+    let mut out = HirLowerJsonFieldInfo {key: "", skip: false, optional: false}
     for a in annots {
         if a.name == "json" {
             for arg in a.args {
@@ -619,7 +657,6 @@ pub fn hirLowerJsonFieldOptions(annots: List<HirAnnotation>) -> HirLowerJsonFiel
     }
     out
 }
-
 /// HirLowerJsonVariantInfo carries the extracted `#[json(...)]`
 /// flags for an enum variant: discriminator `tag` override via
 /// `key = "..."`, and `skip` flag.
@@ -627,9 +664,8 @@ pub struct HirLowerJsonVariantInfo {
     pub tag: String,
     pub skip: Bool,
 }
-
 pub fn hirLowerJsonVariantOptions(annots: List<HirAnnotation>) -> HirLowerJsonVariantInfo {
-    let mut out = HirLowerJsonVariantInfo { tag: "", skip: false }
+    let mut out = HirLowerJsonVariantInfo {tag: "", skip: false}
     for a in annots {
         if a.name == "json" {
             for arg in a.args {
@@ -646,16 +682,13 @@ pub fn hirLowerJsonVariantOptions(annots: List<HirAnnotation>) -> HirLowerJsonVa
     }
     out
 }
-
 // ---- Literal parsing helpers -------------------------------------
-
 /// HirLowerIntParse is a (value, ok) pair. Osty doesn't yet have
 /// tuple returns in our convention, so we use a small struct.
 pub struct HirLowerIntParse {
     pub value: Int,
     pub ok: Bool,
 }
-
 /// hirLowerParseAnnotationInt consumes an IntLit-shaped HirExpr
 /// and returns a (value, ok) pair. Supports the full Osty numeric
 /// grammar (decimal, hex, binary, octal, underscores). Returns
@@ -666,16 +699,16 @@ pub fn hirLowerParseAnnotationInt(e: HirExpr) -> HirLowerIntParse {
         _ -> false,
     }
     if !isIntLit {
-        return HirLowerIntParse { value: 0, ok: false }
+        return HirLowerIntParse {value: 0, ok: false}
     }
     let stripped = hirLowerStripUnderscores(e.numText)
     if stripped.len() == 0 {
-        return HirLowerIntParse { value: 0, ok: false }
+        return HirLowerIntParse {value: 0, ok: false}
     }
     let text = hirLowerStripSign(stripped)
     let negative = stripped.startsWith("-")
     if text.len() == 0 {
-        return HirLowerIntParse { value: 0, ok: false }
+        return HirLowerIntParse {value: 0, ok: false}
     }
     let mut body = text
     let mut base = 10
@@ -690,30 +723,28 @@ pub fn hirLowerParseAnnotationInt(e: HirExpr) -> HirLowerIntParse {
         body = strings.slice(text, 2, text.len())
     }
     if body.len() == 0 {
-        return HirLowerIntParse { value: 0, ok: false }
+        return HirLowerIntParse {value: 0, ok: false}
     }
     let mut acc = 0
     let chars = body.chars()
     for ch in chars {
         let d = hirLowerCharToDigit(ch)
         if d < 0 || d >= base {
-            return HirLowerIntParse { value: 0, ok: false }
+            return HirLowerIntParse {value: 0, ok: false}
         }
         acc = acc * base + d
     }
     if negative {
         acc = 0 - acc
     }
-    HirLowerIntParse { value: acc, ok: true }
+    HirLowerIntParse {value: acc, ok: true}
 }
-
 /// HirLowerStringParse is a (value, ok) pair for literal-only
 /// StringLit extraction.
 pub struct HirLowerStringParse {
     pub value: String,
     pub ok: Bool,
 }
-
 /// hirLowerAnnotationStringLit extracts a simple (non-interpolated)
 /// String literal from an annotation arg value. Interpolated forms
 /// are rejected — annotation args must be literals.
@@ -723,24 +754,21 @@ pub fn hirLowerAnnotationStringLit(e: HirExpr) -> HirLowerStringParse {
         _ -> false,
     }
     if !isStringLit {
-        return HirLowerStringParse { value: "", ok: false }
+        return HirLowerStringParse {value: "", ok: false}
     }
     let mut buf: List<String> = []
     for part in e.strParts {
         if !part.isLit {
-            return HirLowerStringParse { value: "", ok: false }
+            return HirLowerStringParse {value: "", ok: false}
         }
         buf.push(part.lit)
     }
-    HirLowerStringParse { value: strings.join(buf, ""), ok: true }
+    HirLowerStringParse {value: strings.join(buf, ""), ok: true}
 }
-
 // ---- Internal digit helpers --------------------------------------
-
 fn hirLowerStripUnderscores(text: String) -> String {
     strings.join(strings.split(text, "_"), "")
 }
-
 fn hirLowerStripSign(text: String) -> String {
     if text.startsWith("+") || text.startsWith("-") {
         strings.slice(text, 1, text.len())
@@ -748,7 +776,6 @@ fn hirLowerStripSign(text: String) -> String {
         text
     }
 }
-
 // hirLowerCharToDigit takes a Char (i32 Unicode scalar) because the
 // caller iterates `text.chars()` which returns `List<Char>` per the
 // String primitive contract. Earlier this took `String` and matched
@@ -766,7 +793,6 @@ fn hirLowerCharToDigit(ch: Char) -> Int {
         -1
     }
 }
-
 // ====================================================================
 // Decl assembly helpers (Stage 5c)
 // ====================================================================
@@ -788,18 +814,10 @@ fn hirLowerCharToDigit(ch: Char) -> Int {
 //
 // Keeping assembly pure lets us unit-test decl shaping without
 // depending on any particular AST arena encoding.
-
 // ---- Param + TypeParam -------------------------------------------
-
 /// hirLowerAssembleParam wraps `hirParam` for simple name-bound
 /// parameters, threading an optional default expression.
-pub fn hirLowerAssembleParam(
-    name: String,
-    typ: HirType,
-    hasDefault: Bool,
-    defaultValue: HirExpr,
-    span: HirSpan,
-) -> HirParam {
+pub fn hirLowerAssembleParam(name: String, typ: HirType, hasDefault: Bool, defaultValue: HirExpr, span: HirSpan) -> HirParam {
     let mut p = hirParam(name, typ, span)
     p.hasDefault = hasDefault
     if hasDefault {
@@ -807,33 +825,21 @@ pub fn hirLowerAssembleParam(
     }
     p
 }
-
 /// hirLowerAssembleParamDestructured wraps `hirParamDestructured`
 /// for pattern-bound parameters (`|(a, b)|`, `|User { name }|`).
 /// Destructured params never have a default value — the resolver
 /// rejects that combination.
-pub fn hirLowerAssembleParamDestructured(
-    pattern: HirPattern,
-    typ: HirType,
-    span: HirSpan,
-) -> HirParam {
+pub fn hirLowerAssembleParamDestructured(pattern: HirPattern, typ: HirType, span: HirSpan) -> HirParam {
     hirParamDestructured(pattern, typ, span)
 }
-
 /// hirLowerAssembleTypeParam wraps `hirTypeParam` and sets the
 /// generic's bounds list.
-pub fn hirLowerAssembleTypeParam(
-    name: String,
-    bounds: List<HirType>,
-    span: HirSpan,
-) -> HirTypeParam {
+pub fn hirLowerAssembleTypeParam(name: String, bounds: List<HirType>, span: HirSpan) -> HirTypeParam {
     let mut tp = hirTypeParam(name, span)
     tp.bounds = bounds
     tp
 }
-
 // ---- FnDecl ------------------------------------------------------
-
 /// hirLowerAssembleFnDecl builds a HirFnDecl from already-lowered
 /// components plus a raw annotation list. Calls every relevant
 /// extractor and writes the result into the concrete fields
@@ -843,17 +849,7 @@ pub fn hirLowerAssembleTypeParam(
 /// Unit default: if `ret` is invalid (callers pass `hirTypeInvalid()`
 /// for "no return clause"), it is replaced with `Unit` — matches
 /// Go's `if out.Return == nil { out.Return = TUnit }`.
-pub fn hirLowerAssembleFnDecl(
-    name: String,
-    params: List<HirParam>,
-    ret: HirType,
-    generics: List<HirTypeParam>,
-    body: HirBlock,
-    annotations: List<HirAnnotation>,
-    receiverMut: Bool,
-    exported: Bool,
-    span: HirSpan,
-) -> HirFnDecl {
+pub fn hirLowerAssembleFnDecl(name: String, params: List<HirParam>, ret: HirType, generics: List<HirTypeParam>, body: HirBlock, annotations: List<HirAnnotation>, receiverMut: Bool, exported: Bool, span: HirSpan) -> HirFnDecl {
     let finalRet = if hirTypeIsValid(ret) {
         ret
     } else {
@@ -865,28 +861,22 @@ pub fn hirLowerAssembleFnDecl(
     decl.body = body
     decl.receiverMut = receiverMut
     decl.exported = exported
-
     let noVec = hirLowerHasNamedAnnotation(annotations, "no_vectorize")
     let vecInfo = hirLowerExtractVectorizeArgs(annotations)
     let unrollInfo = hirLowerExtractUnrollArgs(annotations)
     let noaliasInfo = hirLowerExtractNoaliasArgs(annotations)
-
     decl.exportSymbol = hirLowerExtractExportSymbol(annotations)
     decl.cAbi = hirLowerHasNamedAnnotation(annotations, "c_abi")
     decl.isIntrinsic = hirLowerHasNamedAnnotation(annotations, "intrinsic")
     decl.noAlloc = hirLowerHasNamedAnnotation(annotations, "no_alloc")
-
-    // A5.2: vectorize is default-on; `#[no_vectorize]` opts out.
     decl.vectorize = !noVec
     decl.noVectorize = noVec
     decl.vectorizeWidth = vecInfo.width
     decl.vectorizeScalable = vecInfo.scalable
     decl.vectorizePredicate = vecInfo.predicate
-
     decl.parallel = hirLowerHasNamedAnnotation(annotations, "parallel")
     decl.unroll = unrollInfo.enable
     decl.unrollCount = unrollInfo.count
-
     decl.inlineMode = hirLowerExtractInlineMode(annotations)
     decl.hot = hirLowerHasNamedAnnotation(annotations, "hot")
     decl.cold = hirLowerHasNamedAnnotation(annotations, "cold")
@@ -895,25 +885,15 @@ pub fn hirLowerAssembleFnDecl(
     decl.noaliasAll = noaliasInfo.all
     decl.noaliasParams = noaliasInfo.names
     let _ = vecInfo.enable
-
     decl
 }
-
+// A5.2: vectorize is default-on; `#[no_vectorize]` opts out.
 // ---- Field + Variant --------------------------------------------
-
 /// hirLowerAssembleField builds a HirField from already-lowered
 /// components. JSON annotation options fill `jsonKey` / `jsonSkip` /
 /// `jsonOptional`. An invalid `defaultValue` argument is taken as
 /// "no default" when `hasDefault` is false.
-pub fn hirLowerAssembleField(
-    name: String,
-    typ: HirType,
-    hasDefault: Bool,
-    defaultValue: HirExpr,
-    exported: Bool,
-    annotations: List<HirAnnotation>,
-    span: HirSpan,
-) -> HirField {
+pub fn hirLowerAssembleField(name: String, typ: HirType, hasDefault: Bool, defaultValue: HirExpr, exported: Bool, annotations: List<HirAnnotation>, span: HirSpan) -> HirField {
     let mut f = hirField(name, typ, span)
     f.hasDefault = hasDefault
     if hasDefault {
@@ -926,15 +906,9 @@ pub fn hirLowerAssembleField(
     f.jsonOptional = jinfo.optional
     f
 }
-
 /// hirLowerAssembleVariant builds a HirVariant with payload types
 /// already lowered. JSON variant options fill `jsonTag` / `jsonSkip`.
-pub fn hirLowerAssembleVariant(
-    name: String,
-    payload: List<HirType>,
-    annotations: List<HirAnnotation>,
-    span: HirSpan,
-) -> HirVariant {
+pub fn hirLowerAssembleVariant(name: String, payload: List<HirType>, annotations: List<HirAnnotation>, span: HirSpan) -> HirVariant {
     let mut v = hirVariant(name, span)
     v.payload = payload
     let jinfo = hirLowerJsonVariantOptions(annotations)
@@ -942,24 +916,13 @@ pub fn hirLowerAssembleVariant(
     v.jsonSkip = jinfo.skip
     v
 }
-
 // ---- StructDecl -------------------------------------------------
-
 /// hirLowerAssembleStructDecl builds a HirStructDecl. Drives
 /// builder-derive classification by deriving the parallel
 /// (name / exported / hasDefault / methodName) lists consumed by the
 /// shared `checkClassifyBuilderDerive` helper in
 /// `toolchain/builder_policy.osty`.
-pub fn hirLowerAssembleStructDecl(
-    name: String,
-    fields: List<HirField>,
-    methods: List<HirFnDecl>,
-    builderMethodNames: List<String>,
-    generics: List<HirTypeParam>,
-    exported: Bool,
-    annotations: List<HirAnnotation>,
-    span: HirSpan,
-) -> HirStructDecl {
+pub fn hirLowerAssembleStructDecl(name: String, fields: List<HirField>, methods: List<HirFnDecl>, builderMethodNames: List<String>, generics: List<HirTypeParam>, exported: Bool, annotations: List<HirAnnotation>, span: HirSpan) -> HirStructDecl {
     let mut s = hirStructDecl(name, span)
     s.fields = fields
     s.methods = methods
@@ -967,8 +930,6 @@ pub fn hirLowerAssembleStructDecl(
     s.exported = exported
     s.pod = hirLowerHasNamedAnnotation(annotations, "pod")
     s.reprC = hirLowerHasNamedAnnotation(annotations, "repr")
-
-    // Builder-derive classification.
     let mut names: List<String> = []
     let mut fExported: List<Bool> = []
     let mut hasDefaults: List<Bool> = []
@@ -982,17 +943,9 @@ pub fn hirLowerAssembleStructDecl(
     s.builderRequiredFields = info.required
     s
 }
-
+// Builder-derive classification.
 // ---- EnumDecl ---------------------------------------------------
-
-pub fn hirLowerAssembleEnumDecl(
-    name: String,
-    variants: List<HirVariant>,
-    methods: List<HirFnDecl>,
-    generics: List<HirTypeParam>,
-    exported: Bool,
-    span: HirSpan,
-) -> HirEnumDecl {
+pub fn hirLowerAssembleEnumDecl(name: String, variants: List<HirVariant>, methods: List<HirFnDecl>, generics: List<HirTypeParam>, exported: Bool, span: HirSpan) -> HirEnumDecl {
     let mut e = hirEnumDecl(name, span)
     e.variants = variants
     e.methods = methods
@@ -1000,22 +953,12 @@ pub fn hirLowerAssembleEnumDecl(
     e.exported = exported
     e
 }
-
 // ---- LetDecl ----------------------------------------------------
-
 /// hirLowerAssembleLetDecl builds a top-level `let` / `pub let`.
 /// When `typ` is invalid AND `hasValue` is true, the value's
 /// inferred type is used — matches Go's `out.Type = out.Value.Type()`
 /// fallback.
-pub fn hirLowerAssembleLetDecl(
-    name: String,
-    typ: HirType,
-    hasValue: Bool,
-    value: HirExpr,
-    mutable: Bool,
-    exported: Bool,
-    span: HirSpan,
-) -> HirLetDecl {
+pub fn hirLowerAssembleLetDecl(name: String, typ: HirType, hasValue: Bool, value: HirExpr, mutable: Bool, exported: Bool, span: HirSpan) -> HirLetDecl {
     let finalType = if hirTypeIsValid(typ) {
         typ
     } else if hasValue && hirTypeIsValid(value.typ) {
@@ -1032,17 +975,8 @@ pub fn hirLowerAssembleLetDecl(
     }
     ld
 }
-
 // ---- InterfaceDecl ----------------------------------------------
-
-pub fn hirLowerAssembleInterfaceDecl(
-    name: String,
-    methods: List<HirFnDecl>,
-    extends: List<HirType>,
-    generics: List<HirTypeParam>,
-    exported: Bool,
-    span: HirSpan,
-) -> HirInterfaceDecl {
+pub fn hirLowerAssembleInterfaceDecl(name: String, methods: List<HirFnDecl>, extends: List<HirType>, generics: List<HirTypeParam>, exported: Bool, span: HirSpan) -> HirInterfaceDecl {
     let mut i = hirInterfaceDecl(name, span)
     i.methods = methods
     i.extends = extends
@@ -1050,33 +984,18 @@ pub fn hirLowerAssembleInterfaceDecl(
     i.exported = exported
     i
 }
-
 // ---- TypeAliasDecl ---------------------------------------------
-
-pub fn hirLowerAssembleTypeAliasDecl(
-    name: String,
-    target: HirType,
-    generics: List<HirTypeParam>,
-    exported: Bool,
-    span: HirSpan,
-) -> HirTypeAliasDecl {
+pub fn hirLowerAssembleTypeAliasDecl(name: String, target: HirType, generics: List<HirTypeParam>, exported: Bool, span: HirSpan) -> HirTypeAliasDecl {
     let mut t = hirTypeAliasDecl(name, target, span)
     t.generics = generics
     t.exported = exported
     t
 }
-
 // ---- UseDecl ---------------------------------------------------
-
 /// hirLowerAssembleUseDecl builds a plain (non-FFI) `use path.to.mod
 /// [as alias]` declaration. Caller supplies the dotted path segments
 /// and the explicit alias (empty for the last-segment default).
-pub fn hirLowerAssembleUseDecl(
-    path: List<String>,
-    alias: String,
-    rawPath: String,
-    span: HirSpan,
-) -> HirUseDecl {
+pub fn hirLowerAssembleUseDecl(path: List<String>, alias: String, rawPath: String, span: HirSpan) -> HirUseDecl {
     let effectiveAlias = if alias == "" {
         hirLowerLast(path)
     } else {
@@ -1086,70 +1005,48 @@ pub fn hirLowerAssembleUseDecl(
     u.path = path
     u
 }
-
 /// hirLowerAssembleUseDeclGo builds a `use go "pkg/path" { … }` FFI
 /// binding. `goPath` is the verbatim Go import path, `goBodyFns`
 /// are the inline fn decls (produced by walking the FFI body with
 /// the regular AST→HIR pipeline).
-pub fn hirLowerAssembleUseDeclGo(
-    alias: String,
-    rawPath: String,
-    goPath: String,
-    goBodyFns: List<HirFnDecl>,
-    span: HirSpan,
-) -> HirUseDecl {
+pub fn hirLowerAssembleUseDeclGo(alias: String, rawPath: String, goPath: String, goBodyFns: List<HirFnDecl>, span: HirSpan) -> HirUseDecl {
     let mut u = hirUseDecl(alias, rawPath, span)
     u.isGoFFI = true
     u.goPath = goPath
     u.goBodyFns = goBodyFns
     u
 }
-
 /// hirLowerAssembleUseDeclRuntime builds a `use runtime "path" { … }`
 /// FFI binding (LANG_SPEC §19 runtime sublanguage).
-pub fn hirLowerAssembleUseDeclRuntime(
-    alias: String,
-    rawPath: String,
-    runtimePath: String,
-    span: HirSpan,
-) -> HirUseDecl {
+pub fn hirLowerAssembleUseDeclRuntime(alias: String, rawPath: String, runtimePath: String, span: HirSpan) -> HirUseDecl {
     let mut u = hirUseDecl(alias, rawPath, span)
     u.isRuntimeFFI = true
     u.runtimePath = runtimePath
     u
 }
-
 // ---- Module wiring ---------------------------------------------
-
 /// hirLowerAddFnDecl appends a fn to the lowerer's output module.
 pub fn hirLowerAddFnDecl(l: HirLowerer, decl: HirFnDecl) {
     l.out.fns.push(decl)
 }
-
 pub fn hirLowerAddStructDecl(l: HirLowerer, s: HirStructDecl) {
     l.out.structs.push(s)
 }
-
 pub fn hirLowerAddEnumDecl(l: HirLowerer, e: HirEnumDecl) {
     l.out.enums.push(e)
 }
-
 pub fn hirLowerAddLetDecl(l: HirLowerer, ld: HirLetDecl) {
     l.out.lets.push(ld)
 }
-
 pub fn hirLowerAddInterfaceDecl(l: HirLowerer, i: HirInterfaceDecl) {
     l.out.interfaces.push(i)
 }
-
 pub fn hirLowerAddTypeAliasDecl(l: HirLowerer, t: HirTypeAliasDecl) {
     l.out.aliases.push(t)
 }
-
 pub fn hirLowerAddUseDecl(l: HirLowerer, u: HirUseDecl) {
     l.out.uses.push(u)
 }
-
 // ====================================================================
 // Stmt assembly helpers (Stage 5d)
 // ====================================================================
@@ -1164,16 +1061,13 @@ pub fn hirLowerAddUseDecl(l: HirLowerer, u: HirUseDecl) {
 // The low-level hir.osty constructors already cover every stmt shape;
 // these helpers handle the "which constructor to call" logic that
 // depends on what's present in the input.
-
 // ---- Pattern utilities -----------------------------------------
-
 /// HirLowerNameBind is a (name, ok) pair — Osty doesn't have tuple
 /// returns in our convention.
 pub struct HirLowerNameBind {
     pub name: String,
     pub ok: Bool,
 }
-
 /// hirLowerSimpleBindName returns (name, true) when `pattern` is a
 /// bare IdentPat (no mut, no nested binding). All other patterns
 /// require the full pattern-binding path via HirPattern.
@@ -1182,18 +1076,16 @@ pub struct HirLowerNameBind {
 /// case too — callers that want the Go semantics (reject `mut` for
 /// simple-name form) can check pattern.identMut themselves.
 pub fn hirLowerSimpleBindName(pattern: HirPattern) -> HirLowerNameBind {
-    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
     if pattern.kind == HirPatIdent {
         if pattern.identMut {
-            return HirLowerNameBind { name: "", ok: false }
+            return HirLowerNameBind {name: "", ok: false}
         }
-        return HirLowerNameBind { name: pattern.identName, ok: true }
+        return HirLowerNameBind {name: pattern.identName, ok: true}
     }
-    HirLowerNameBind { name: "", ok: false }
+    HirLowerNameBind {name: "", ok: false}
 }
-
+// B2: payload-less enum dispatch as if-else (stage0 P0–P15).
 // ---- Type-yield classifier -------------------------------------
-
 /// hirLowerExpressionYieldsValue reports whether an expression with
 /// the given type produces a value worth materialising at a stmt-
 /// position call site. Unit / Never / Err types are "no value"; every
@@ -1217,9 +1109,7 @@ pub fn hirLowerExpressionYieldsValue(typ: HirType) -> Bool {
     }
     true
 }
-
 // ---- LetStmt ---------------------------------------------------
-
 /// hirLowerAssembleLetStmt normalises a let-binding:
 ///   - bare `IdentPat` (non-mut) → hirLetStmt (name form)
 ///   - every other pattern       → hirLetStmtPattern
@@ -1229,16 +1119,8 @@ pub fn hirLowerExpressionYieldsValue(typ: HirType) -> Bool {
 /// `hasValue` is true (matches Go's `out.Type = out.Value.Type()`).
 /// Missing value with invalid type produces a no-value let stmt
 /// matching Go's `s.Value == nil` branch.
-pub fn hirLowerAssembleLetStmt(
-    pattern: HirPattern,
-    typ: HirType,
-    hasValue: Bool,
-    value: HirExpr,
-    mutable: Bool,
-    span: HirSpan,
-) -> HirStmt {
+pub fn hirLowerAssembleLetStmt(pattern: HirPattern, typ: HirType, hasValue: Bool, value: HirExpr, mutable: Bool, span: HirSpan) -> HirStmt {
     let simple = hirLowerSimpleBindName(pattern)
-
     let finalType = if hirTypeIsValid(typ) {
         typ
     } else if hasValue && hirTypeIsValid(value.typ) {
@@ -1246,14 +1128,10 @@ pub fn hirLowerAssembleLetStmt(
     } else {
         hirTypeInvalid()
     }
-
     if !hasValue {
         if simple.ok {
             return hirLetStmtNoValue(simple.name, finalType, mutable, span)
         }
-        // Pattern-form without a value is unusual — the resolver
-        // requires let bindings to have either a type or a value.
-        // Emit the pattern form anyway so downstream can diagnose.
         let mut s = hirStmtInvalid()
         s.kind = HirStmtLet
         s.letPattern = pattern
@@ -1269,46 +1147,33 @@ pub fn hirLowerAssembleLetStmt(
     }
     hirLetStmtPattern(pattern, finalType, value, mutable, span)
 }
-
+// Pattern-form without a value is unusual — the resolver
+// requires let bindings to have either a type or a value.
+// Emit the pattern form anyway so downstream can diagnose.
 // ---- AssignStmt ------------------------------------------------
-
 /// hirLowerAssembleAssignStmt picks the single- vs multi-target
 /// form based on the targets list length. Compound operators are
 /// only valid with a single target (the resolver enforces this);
 /// the helper still threads the raw `op` through so callers see a
 /// well-formed multi-target `=` or a defensive `op x = …` for the
 /// unusual cases.
-pub fn hirLowerAssembleAssignStmt(
-    op: HirAssignOp,
-    targets: List<HirExpr>,
-    value: HirExpr,
-    span: HirSpan,
-) -> HirStmt {
+pub fn hirLowerAssembleAssignStmt(op: HirAssignOp, targets: List<HirExpr>, value: HirExpr, span: HirSpan) -> HirStmt {
     if targets.len() == 1 {
         return hirAssignStmt(op, targets[0], value, span)
     }
     hirAssignStmtMulti(op, targets, value, span)
 }
-
 // ---- IfStmt ----------------------------------------------------
-
 /// hirLowerAssembleIfStmt wraps a statement-position if. When the
 /// else branch is absent, `hasElse` should be false; `elseBlock` is
 /// then ignored. Callers who need an `else if` chain should flatten
 /// it themselves via hirLowerFlattenElseIfChain before calling.
-pub fn hirLowerAssembleIfStmt(
-    cond: HirExpr,
-    thenBlock: HirBlock,
-    hasElse: Bool,
-    elseBlock: HirBlock,
-    span: HirSpan,
-) -> HirStmt {
+pub fn hirLowerAssembleIfStmt(cond: HirExpr, thenBlock: HirBlock, hasElse: Bool, elseBlock: HirBlock, span: HirSpan) -> HirStmt {
     if hasElse {
         return hirIfStmtElse(cond, thenBlock, elseBlock, span)
     }
     hirIfStmt(cond, thenBlock, span)
 }
-
 /// hirLowerFlattenElseIf wraps an `else if` (produced by the AST
 /// walker as an IfExpr not directly usable as a Block) into a
 /// singleton-statement block. Mirrors Go's `lowerElseStmt` IfExpr
@@ -1320,7 +1185,6 @@ pub fn hirLowerFlattenElseIf(stmt: HirStmt, span: HirSpan) -> HirBlock {
     hirBlockAppend(b, stmt)
     b
 }
-
 /// hirLowerFlattenElseExpr wraps a non-if else expression into a
 /// singleton-statement block. Used when the else branch is a plain
 /// expression (e.g. a value literal in an if-else chain at stmt
@@ -1330,9 +1194,7 @@ pub fn hirLowerFlattenElseExpr(e: HirExpr, span: HirSpan) -> HirBlock {
     hirBlockAppend(b, hirExprStmt(e, span))
     b
 }
-
 // ---- ForStmt ---------------------------------------------------
-
 /// hirLowerAssembleForStmt classifies a for-loop by the presence of
 /// pattern + iter + range-expr shape:
 ///
@@ -1348,29 +1210,13 @@ pub fn hirLowerFlattenElseExpr(e: HirExpr, span: HirSpan) -> HirBlock {
 ///
 /// The helper funnels into the specific `hirForXxxStmt`
 /// constructors, threading the right subset of arguments per kind.
-pub fn hirLowerAssembleForStmt(
-    hasPattern: Bool,
-    pattern: HirPattern,
-    hasCond: Bool,
-    cond: HirExpr,
-    hasIter: Bool,
-    iter: HirExpr,
-    isRange: Bool,
-    start: HirExpr,
-    end: HirExpr,
-    inclusive: Bool,
-    body: HirBlock,
-    span: HirSpan,
-) -> HirStmt {
-    // Infinite: no pattern + no iter/cond.
+pub fn hirLowerAssembleForStmt(hasPattern: Bool, pattern: HirPattern, hasCond: Bool, cond: HirExpr, hasIter: Bool, iter: HirExpr, isRange: Bool, start: HirExpr, end: HirExpr, inclusive: Bool, body: HirBlock, span: HirSpan) -> HirStmt {
     if !hasPattern && !hasIter && !hasCond {
         return hirForInfiniteStmt(body, span)
     }
-    // While: cond-controlled; no loop variable.
     if !hasPattern && hasCond {
         return hirForWhileStmt(cond, body, span)
     }
-    // Range: pattern + start/end.
     if isRange {
         let simple = hirLowerSimpleBindName(pattern)
         if simple.ok {
@@ -1378,26 +1224,26 @@ pub fn hirLowerAssembleForStmt(
         }
         return hirForRangeStmtPattern(pattern, start, end, inclusive, body, span)
     }
-    // In: pattern + arbitrary iter.
     let simple = hirLowerSimpleBindName(pattern)
     if simple.ok {
         return hirForInStmt(simple.name, iter, body, span)
     }
     hirForInStmtPattern(pattern, iter, body, span)
 }
-
+// Infinite: no pattern + no iter/cond.
+// While: cond-controlled; no loop variable.
+// Range: pattern + start/end.
+// In: pattern + arbitrary iter.
 // ---- ExprStmt promotion ----------------------------------------
-
 /// HirLowerStmtPromotion is a (stmt, promoted) pair — when an
 /// expression at statement position is actually an if / match with
 /// a unit/never value, the walker should emit the stmt form
 /// instead of `ExprStmt { X: IfExpr / MatchExpr }`. Callers check
 /// `promoted` and use `stmt` when true.
 pub struct HirLowerStmtPromotion {
-    pub stmt: HirStmt
-    pub promoted: Bool
+    pub stmt: HirStmt,
+    pub promoted: Bool,
 }
-
 /// hirLowerPromoteIfExprToStmt converts a statement-position
 /// HirIfExpr into a HirIfStmt when the expression yields no value
 /// (Unit/Never/Err). Returns `promoted=false` when the expression
@@ -1416,16 +1262,10 @@ pub fn hirLowerPromoteIfExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
         _ -> false,
     }
     if !isIf {
-        return HirLowerStmtPromotion {
-            stmt: hirStmtInvalid(),
-            promoted: false,
-        }
+        return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
     if hirLowerExpressionYieldsValue(e.typ) {
-        return HirLowerStmtPromotion {
-            stmt: hirStmtInvalid(),
-            promoted: false,
-        }
+        return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
     let cond = if e.ifExprCond.len() > 0 {
         e.ifExprCond[0]
@@ -1438,17 +1278,10 @@ pub fn hirLowerPromoteIfExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
         hirBlock(hirNoSpan())
     }
     if e.ifExprElse.len() > 0 {
-        return HirLowerStmtPromotion {
-            stmt: hirIfStmtElse(cond, thenBlock, e.ifExprElse[0], e.span),
-            promoted: true,
-        }
+        return HirLowerStmtPromotion {stmt: hirIfStmtElse(cond, thenBlock, e.ifExprElse[0], e.span), promoted: true}
     }
-    HirLowerStmtPromotion {
-        stmt: hirIfStmt(cond, thenBlock, e.span),
-        promoted: true,
-    }
+    HirLowerStmtPromotion {stmt: hirIfStmt(cond, thenBlock, e.span), promoted: true}
 }
-
 /// hirLowerPromoteMatchExprToStmt converts a HirMatchExpr used at
 /// statement position into a HirMatchStmt when its value is
 /// discarded. Same shape / semantics as the IfExpr promoter.
@@ -1458,16 +1291,10 @@ pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
         _ -> false,
     }
     if !isMatch {
-        return HirLowerStmtPromotion {
-            stmt: hirStmtInvalid(),
-            promoted: false,
-        }
+        return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
     if hirLowerExpressionYieldsValue(e.typ) {
-        return HirLowerStmtPromotion {
-            stmt: hirStmtInvalid(),
-            promoted: false,
-        }
+        return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
     let scrutinee = if e.matchExprScrutinee.len() > 0 {
         e.matchExprScrutinee[0]
@@ -1475,14 +1302,13 @@ pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
         hirExprInvalid()
     }
     let mut s = hirMatchStmt(scrutinee, e.matchExprArms, e.span)
-    // Thread decision tree through when present (Stage 4f wire-up).
     if e.matchExprHasTree {
         s.matchHasTree = true
         s.matchTree = e.matchExprTree
     }
-    HirLowerStmtPromotion { stmt: s, promoted: true }
+    HirLowerStmtPromotion {stmt: s, promoted: true}
 }
-
+// Thread decision tree through when present (Stage 4f wire-up).
 // ====================================================================
 // Expr assembly helpers (Stage 5e)
 // ====================================================================
@@ -1497,67 +1323,127 @@ pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
 // vs. external tooling) may use slightly different tag conventions
 // — normalising on the canonical source-level operator text keeps
 // these helpers portable.
-
 // ---- Operator mappers -------------------------------------------
-
 /// hirLowerUnaryOpFromToken maps the source-level unary-op token
 /// text to a HirUnOp. Unknown tokens return HirUnInvalid — callers
 /// should emit an ErrorExpr with a descriptive note.
 pub fn hirLowerUnaryOpFromToken(text: String) -> HirUnOp {
-    if text == "-" { return HirUnNeg }
-    if text == "+" { return HirUnPlus }
-    if text == "!" { return HirUnNot }
-    if text == "~" { return HirUnBitNot }
+    if text == "-" {
+        return HirUnNeg
+    }
+    if text == "+" {
+        return HirUnPlus
+    }
+    if text == "!" {
+        return HirUnNot
+    }
+    if text == "~" {
+        return HirUnBitNot
+    }
     HirUnInvalid
 }
-
 /// hirLowerBinaryOpFromToken maps the source-level binary-op token
 /// text to a HirBinOp. Covers every op Osty binary-expr tokens
 /// produce today (arithmetic / comparison / logical / bitwise /
 /// shift). The `??` coalesce op is deliberately absent — it routes
 /// through HirExprCoalesce, not HirExprBinary.
 pub fn hirLowerBinaryOpFromToken(text: String) -> HirBinOp {
-    if text == "+" { return HirBinAdd }
-    if text == "-" { return HirBinSub }
-    if text == "*" { return HirBinMul }
-    if text == "/" { return HirBinDiv }
-    if text == "%" { return HirBinMod }
-    if text == "==" { return HirBinEq }
-    if text == "!=" { return HirBinNeq }
-    if text == "<" { return HirBinLt }
-    if text == "<=" { return HirBinLeq }
-    if text == ">" { return HirBinGt }
-    if text == ">=" { return HirBinGeq }
-    if text == "&&" { return HirBinAnd }
-    if text == "||" { return HirBinOr }
-    if text == "&" { return HirBinBitAnd }
-    if text == "|" { return HirBinBitOr }
-    if text == "^" { return HirBinBitXor }
-    if text == "<<" { return HirBinShl }
-    if text == ">>" { return HirBinShr }
+    if text == "+" {
+        return HirBinAdd
+    }
+    if text == "-" {
+        return HirBinSub
+    }
+    if text == "*" {
+        return HirBinMul
+    }
+    if text == "/" {
+        return HirBinDiv
+    }
+    if text == "%" {
+        return HirBinMod
+    }
+    if text == "==" {
+        return HirBinEq
+    }
+    if text == "!=" {
+        return HirBinNeq
+    }
+    if text == "<" {
+        return HirBinLt
+    }
+    if text == "<=" {
+        return HirBinLeq
+    }
+    if text == ">" {
+        return HirBinGt
+    }
+    if text == ">=" {
+        return HirBinGeq
+    }
+    if text == "&&" {
+        return HirBinAnd
+    }
+    if text == "||" {
+        return HirBinOr
+    }
+    if text == "&" {
+        return HirBinBitAnd
+    }
+    if text == "|" {
+        return HirBinBitOr
+    }
+    if text == "^" {
+        return HirBinBitXor
+    }
+    if text == "<<" {
+        return HirBinShl
+    }
+    if text == ">>" {
+        return HirBinShr
+    }
     HirBinInvalid
 }
-
 /// hirLowerAssignOpFromToken maps the source-level assign-op token
 /// text to a HirAssignOp. Plain `=` is HirAssignEq; every compound
 /// form routes to its dedicated variant.
 pub fn hirLowerAssignOpFromToken(text: String) -> HirAssignOp {
-    if text == "=" { return HirAssignEq }
-    if text == "+=" { return HirAssignAdd }
-    if text == "-=" { return HirAssignSub }
-    if text == "*=" { return HirAssignMul }
-    if text == "/=" { return HirAssignDiv }
-    if text == "%=" { return HirAssignMod }
-    if text == "&=" { return HirAssignAnd }
-    if text == "|=" { return HirAssignOr }
-    if text == "^=" { return HirAssignXor }
-    if text == "<<=" { return HirAssignShl }
-    if text == ">>=" { return HirAssignShr }
+    if text == "=" {
+        return HirAssignEq
+    }
+    if text == "+=" {
+        return HirAssignAdd
+    }
+    if text == "-=" {
+        return HirAssignSub
+    }
+    if text == "*=" {
+        return HirAssignMul
+    }
+    if text == "/=" {
+        return HirAssignDiv
+    }
+    if text == "%=" {
+        return HirAssignMod
+    }
+    if text == "&=" {
+        return HirAssignAnd
+    }
+    if text == "|=" {
+        return HirAssignOr
+    }
+    if text == "^=" {
+        return HirAssignXor
+    }
+    if text == "<<=" {
+        return HirAssignShl
+    }
+    if text == ">>=" {
+        return HirAssignShr
+    }
     HirAssignInvalid
 }
-
 // ---- IdentKind classifier --------------------------------------
-
 /// hirLowerIdentKindFromSymbol maps a canonical resolver symbol-kind
 /// string to a HirIdentKind. Matches Go's `identKind` for every
 /// symbol category HIR preserves.
@@ -1567,162 +1453,257 @@ pub fn hirLowerAssignOpFromToken(text: String) -> HirAssignOp {
 /// but the kind string (e.g. "Let", "Param", "Fn") is portable.
 /// Callers classify SymLet as Global vs Local based on whether the
 /// decl is top-level — passed in via `isTopLevelLet`.
-pub fn hirLowerIdentKindFromSymbol(
-    symKind: String,
-    isTopLevelLet: Bool,
-) -> HirIdentKind {
+pub fn hirLowerIdentKindFromSymbol(symKind: String, isTopLevelLet: Bool) -> HirIdentKind {
     if symKind == "Let" {
         if isTopLevelLet {
             return HirIdentGlobal
         }
         return HirIdentLocal
     }
-    if symKind == "Param" { return HirIdentParam }
-    if symKind == "Fn" { return HirIdentFn }
-    if symKind == "Variant" { return HirIdentVariant }
-    if symKind == "Struct" { return HirIdentTypeName }
-    if symKind == "Enum" { return HirIdentTypeName }
-    if symKind == "Interface" { return HirIdentTypeName }
-    if symKind == "TypeAlias" { return HirIdentTypeName }
-    if symKind == "Builtin" { return HirIdentBuiltin }
+    if symKind == "Param" {
+        return HirIdentParam
+    }
+    if symKind == "Fn" {
+        return HirIdentFn
+    }
+    if symKind == "Variant" {
+        return HirIdentVariant
+    }
+    if symKind == "Struct" {
+        return HirIdentTypeName
+    }
+    if symKind == "Enum" {
+        return HirIdentTypeName
+    }
+    if symKind == "Interface" {
+        return HirIdentTypeName
+    }
+    if symKind == "TypeAlias" {
+        return HirIdentTypeName
+    }
+    if symKind == "Builtin" {
+        return HirIdentBuiltin
+    }
     HirIdentUnknown
 }
-
 // ---- Intrinsic + prelude-name recognisers ----------------------
-
 /// hirLowerIntrinsicFromIdent recognises bare-identifier print-family
 /// intrinsics (print / println / eprint / eprintln). Mirrors Go's
 /// `intrinsicByName`. Non-intrinsic names return
 /// HirIntrinsicInvalid.
 pub fn hirLowerIntrinsicFromIdent(name: String) -> HirIntrinsicKind {
-    if name == "print" { return HirIntrinsicPrint }
-    if name == "println" { return HirIntrinsicPrintln }
-    if name == "eprint" { return HirIntrinsicEprint }
-    if name == "eprintln" { return HirIntrinsicEprintln }
+    if name == "print" {
+        return HirIntrinsicPrint
+    }
+    if name == "println" {
+        return HirIntrinsicPrintln
+    }
+    if name == "eprint" {
+        return HirIntrinsicEprint
+    }
+    if name == "eprintln" {
+        return HirIntrinsicEprintln
+    }
     HirIntrinsicInvalid
 }
-
 /// hirLowerIsPreludeVariantName reports whether `name` is one of
 /// the stdlib-exposed builtin variant constructors (Some / None /
 /// Ok / Err). Used by the call-lowering path to route
 /// `Some(42)` / `Ok(x)` / `Err(e)` / `None` through variant-ctor
 /// lowering rather than plain fn calls.
 pub fn hirLowerIsPreludeVariantName(name: String) -> Bool {
-    if name == "Some" { return true }
-    if name == "None" { return true }
-    if name == "Ok" { return true }
-    if name == "Err" { return true }
+    if name == "Some" {
+        return true
+    }
+    if name == "None" {
+        return true
+    }
+    if name == "Ok" {
+        return true
+    }
+    if name == "Err" {
+        return true
+    }
     false
 }
-
 // ---- Primitive predicates --------------------------------------
-
 /// hirLowerIsPrim reports whether `t` is a primitive HirType with
 /// the given PrimKind. Mirrors Go's `isPrim`.
 pub fn hirLowerIsPrim(t: HirType, pk: HirPrimKind) -> Bool {
-    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
     if t.kind == HirTypePrim {
         return hirLowerPrimKindEq(t.primKind, pk)
     }
     false
 }
-
+// B2: payload-less enum dispatch as if-else (stage0 P0–P15).
 fn hirLowerPrimKindEq(a: HirPrimKind, b: HirPrimKind) -> Bool {
-    // B2: 21-variant exhaustive prim-vs-prim match collapses to a
-    // single Equal compare (auto-derived for payload-less enums).
     a == b
 }
-
+// B2: 21-variant exhaustive prim-vs-prim match collapses to a
+// single Equal compare (auto-derived for payload-less enums).
 /// hirLowerIsIntegralType reports whether `t` is an integer
 /// primitive. Used by bitwise-op type recovery.
 pub fn hirLowerIsIntegralType(t: HirType) -> Bool {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if t.kind != HirTypePrim { return false }
-    if t.primKind == HirPrimInt { return true }
-    if t.primKind == HirPrimInt8 { return true }
-    if t.primKind == HirPrimInt16 { return true }
-    if t.primKind == HirPrimInt32 { return true }
-    if t.primKind == HirPrimInt64 { return true }
-    if t.primKind == HirPrimUInt8 { return true }
-    if t.primKind == HirPrimUInt16 { return true }
-    if t.primKind == HirPrimUInt32 { return true }
-    if t.primKind == HirPrimUInt64 { return true }
-    if t.primKind == HirPrimByte { return true }
+    if t.kind != HirTypePrim {
+        return false
+    }
+    if t.primKind == HirPrimInt {
+        return true
+    }
+    if t.primKind == HirPrimInt8 {
+        return true
+    }
+    if t.primKind == HirPrimInt16 {
+        return true
+    }
+    if t.primKind == HirPrimInt32 {
+        return true
+    }
+    if t.primKind == HirPrimInt64 {
+        return true
+    }
+    if t.primKind == HirPrimUInt8 {
+        return true
+    }
+    if t.primKind == HirPrimUInt16 {
+        return true
+    }
+    if t.primKind == HirPrimUInt32 {
+        return true
+    }
+    if t.primKind == HirPrimUInt64 {
+        return true
+    }
+    if t.primKind == HirPrimByte {
+        return true
+    }
     false
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// hirLowerIsFloatType reports whether `t` is a floating-point
 /// primitive. Symmetric with hirLowerIsIntegralType.
 pub fn hirLowerIsFloatType(t: HirType) -> Bool {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if t.kind != HirTypePrim { return false }
-    if t.primKind == HirPrimFloat { return true }
-    if t.primKind == HirPrimFloat32 { return true }
-    if t.primKind == HirPrimFloat64 { return true }
+    if t.kind != HirTypePrim {
+        return false
+    }
+    if t.primKind == HirPrimFloat {
+        return true
+    }
+    if t.primKind == HirPrimFloat32 {
+        return true
+    }
+    if t.primKind == HirPrimFloat64 {
+        return true
+    }
     false
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// hirLowerIsNumericType reports whether `t` is integer or float.
 pub fn hirLowerIsNumericType(t: HirType) -> Bool {
     hirLowerIsIntegralType(t) || hirLowerIsFloatType(t)
 }
-
 // ---- Type recovery ---------------------------------------------
-
 /// hirLowerNumericResult picks the result type for a numeric binary
 /// op given its operand types. Follows Go's `numericResult`: if
 /// either operand is a float, the result is that float type; else
 /// prefer the non-invalid operand; else `Int` as a safe default.
 pub fn hirLowerNumericResult(lt: HirType, rt: HirType) -> HirType {
-    if hirLowerIsFloatType(lt) { return lt }
-    if hirLowerIsFloatType(rt) { return rt }
-    if hirTypeIsValid(lt) && !hirTypeIsErr(lt) { return lt }
-    if hirTypeIsValid(rt) && !hirTypeIsErr(rt) { return rt }
+    if hirLowerIsFloatType(lt) {
+        return lt
+    }
+    if hirLowerIsFloatType(rt) {
+        return rt
+    }
+    if hirTypeIsValid(lt) && !hirTypeIsErr(lt) {
+        return lt
+    }
+    if hirTypeIsValid(rt) && !hirTypeIsErr(rt) {
+        return rt
+    }
     hirTInt()
 }
-
 /// hirLowerRecoverBinaryType derives a binary-expression result
 /// type from its operand types. Called when the checker didn't
 /// populate `Types[e]` — without it, one missing type node
 /// cascades an ErrType through every enclosing arithmetic /
 /// comparison expression. Mirrors Go's `recoverBinaryType`.
 pub fn hirLowerRecoverBinaryType(op: HirBinOp, lt: HirType, rt: HirType) -> HirType {
-    if hirTypeIsErr(lt) || hirTypeIsErr(rt) { return hirTypeErr() }
-    if !hirTypeIsValid(lt) || !hirTypeIsValid(rt) { return hirTypeErr() }
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == HirBinEq { return hirTBool() }
-    if op == HirBinNeq { return hirTBool() }
-    if op == HirBinLt { return hirTBool() }
-    if op == HirBinLeq { return hirTBool() }
-    if op == HirBinGt { return hirTBool() }
-    if op == HirBinGeq { return hirTBool() }
-    if op == HirBinAnd { return hirTBool() }
-    if op == HirBinOr { return hirTBool() }
+    if hirTypeIsErr(lt) || hirTypeIsErr(rt) {
+        return hirTypeErr()
+    }
+    if !hirTypeIsValid(lt) || !hirTypeIsValid(rt) {
+        return hirTypeErr()
+    }
+    if op == HirBinEq {
+        return hirTBool()
+    }
+    if op == HirBinNeq {
+        return hirTBool()
+    }
+    if op == HirBinLt {
+        return hirTBool()
+    }
+    if op == HirBinLeq {
+        return hirTBool()
+    }
+    if op == HirBinGt {
+        return hirTBool()
+    }
+    if op == HirBinGeq {
+        return hirTBool()
+    }
+    if op == HirBinAnd {
+        return hirTBool()
+    }
+    if op == HirBinOr {
+        return hirTBool()
+    }
     if op == HirBinAdd {
-        // String + String → String; else numeric.
         if hirLowerIsPrim(lt, HirPrimString) && hirLowerIsPrim(rt, HirPrimString) {
             return hirTString()
         }
         return hirLowerNumericResult(lt, rt)
     }
-    if op == HirBinSub { return hirLowerNumericResult(lt, rt) }
-    if op == HirBinMul { return hirLowerNumericResult(lt, rt) }
-    if op == HirBinDiv { return hirLowerNumericResult(lt, rt) }
-    if op == HirBinMod { return hirLowerNumericResult(lt, rt) }
-    if op == HirBinBitAnd { return hirLowerBitwiseResult(lt, rt) }
-    if op == HirBinBitOr { return hirLowerBitwiseResult(lt, rt) }
-    if op == HirBinBitXor { return hirLowerBitwiseResult(lt, rt) }
-    if op == HirBinShl { return hirLowerBitwiseResult(lt, rt) }
-    if op == HirBinShr { return hirLowerBitwiseResult(lt, rt) }
+    if op == HirBinSub {
+        return hirLowerNumericResult(lt, rt)
+    }
+    if op == HirBinMul {
+        return hirLowerNumericResult(lt, rt)
+    }
+    if op == HirBinDiv {
+        return hirLowerNumericResult(lt, rt)
+    }
+    if op == HirBinMod {
+        return hirLowerNumericResult(lt, rt)
+    }
+    if op == HirBinBitAnd {
+        return hirLowerBitwiseResult(lt, rt)
+    }
+    if op == HirBinBitOr {
+        return hirLowerBitwiseResult(lt, rt)
+    }
+    if op == HirBinBitXor {
+        return hirLowerBitwiseResult(lt, rt)
+    }
+    if op == HirBinShl {
+        return hirLowerBitwiseResult(lt, rt)
+    }
+    if op == HirBinShr {
+        return hirLowerBitwiseResult(lt, rt)
+    }
     hirTypeErr()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+// String + String → String; else numeric.
 fn hirLowerBitwiseResult(lt: HirType, rt: HirType) -> HirType {
-    if hirLowerIsIntegralType(lt) { return lt }
-    if hirLowerIsIntegralType(rt) { return rt }
+    if hirLowerIsIntegralType(lt) {
+        return lt
+    }
+    if hirLowerIsIntegralType(rt) {
+        return rt
+    }
     hirTypeErr()
 }
-
 /// hirLowerRecoverIndexType derives an indexing expression's
 /// element type from the receiver's type when the checker left the
 /// index node unknown. Covers:
@@ -1739,10 +1720,13 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
     if !hirTypeIsValid(baseT) {
         return hirTypeErr()
     }
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     if baseT.kind == HirTypePrim {
-        if baseT.primKind == HirPrimBytes { return hirTByte() }
-        if baseT.primKind == HirPrimString { return hirTChar() }
+        if baseT.primKind == HirPrimBytes {
+            return hirTByte()
+        }
+        if baseT.primKind == HirPrimString {
+            return hirTChar()
+        }
         return hirTypeErr()
     }
     if baseT.kind == HirTypeNamed {
@@ -1756,9 +1740,8 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
     }
     hirTypeErr()
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // ---- Place-expression detection --------------------------------
-
 /// hirLowerCanLowerAsPlace reports whether `e` is a syntactic
 /// "place" — something that can appear on the LHS of an assign
 /// without materialising through a temporary. HIR place shapes:
@@ -1769,10 +1752,13 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
 /// Optional-field chains (`x?.y`) are NOT places — they can return
 /// None and therefore need to materialise.
 pub fn hirLowerCanLowerAsPlace(e: HirExpr) -> Bool {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if e.kind == HirExprIdent { return true }
+    if e.kind == HirExprIdent {
+        return true
+    }
     if e.kind == HirExprField {
-        if e.fieldOptional { return false }
+        if e.fieldOptional {
+            return false
+        }
         if e.fieldTarget.len() > 0 {
             return hirLowerCanLowerAsPlace(e.fieldTarget[0])
         }
@@ -1792,9 +1778,8 @@ pub fn hirLowerCanLowerAsPlace(e: HirExpr) -> Bool {
     }
     false
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // ---- Literal text normalization --------------------------------
-
 /// hirLowerNormalizeIntText strips underscore separators from an
 /// integer literal's source text. Used before handing the text to
 /// mirConstInt / hirLowerParseIntLit so those consumers see a
@@ -1807,43 +1792,55 @@ pub fn hirLowerNormalizeIntText(text: String) -> String {
     }
     strings.replaceAll(text, "_", "")
 }
-
 /// hirLowerNormalizeFloatText shares the same underscore-stripping
 /// logic as hirLowerNormalizeIntText. Kept as a distinct name so
 /// call sites document intent.
 pub fn hirLowerNormalizeFloatText(text: String) -> String {
     hirLowerNormalizeIntText(text)
 }
-
 // ---- Range classifier ------------------------------------------
-
 /// HirLowerRangeShape classifies a range literal by which bounds
 /// are present. The shape drives which `hirRangeLitBounded` /
 /// `hirRangeLitFrom` / `hirRangeLitTo` constructor the caller
 /// uses — matches Go's RangeExpr handling.
 pub enum HirLowerRangeShape {
-    HirRangeShapeEmpty,       // `..` or `..=` with no bounds — error
-    HirRangeShapeBounded,     // `a..b` / `a..=b`
-    HirRangeShapeFrom,        // `a..` — unbounded above
-    HirRangeShapeTo,          // `..b` / `..=b` — unbounded below
+    HirRangeShapeEmpty,
+    HirRangeShapeBounded,
+    HirRangeShapeFrom,
+    HirRangeShapeTo,
 }
-
+// `..` or `..=` with no bounds — error
+// `a..b` / `a..=b`
+// `a..` — unbounded above
+// `..b` / `..=b` — unbounded below
 pub fn hirLowerClassifyRange(hasStart: Bool, hasEnd: Bool) -> HirLowerRangeShape {
-    if hasStart && hasEnd { return HirRangeShapeBounded }
-    if hasStart { return HirRangeShapeFrom }
-    if hasEnd { return HirRangeShapeTo }
+    if hasStart && hasEnd {
+        return HirRangeShapeBounded
+    }
+    if hasStart {
+        return HirRangeShapeFrom
+    }
+    if hasEnd {
+        return HirRangeShapeTo
+    }
     HirRangeShapeEmpty
 }
-
 pub fn hirLowerRangeShapeName(s: HirLowerRangeShape) -> String {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if s == HirRangeShapeEmpty { return "empty" }
-    if s == HirRangeShapeBounded { return "bounded" }
-    if s == HirRangeShapeFrom { return "from" }
-    if s == HirRangeShapeTo { return "to" }
+    if s == HirRangeShapeEmpty {
+        return "empty"
+    }
+    if s == HirRangeShapeBounded {
+        return "bounded"
+    }
+    if s == HirRangeShapeFrom {
+        return "from"
+    }
+    if s == HirRangeShapeTo {
+        return "to"
+    }
     "empty"
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================
 // Composite expr assemblers (Stage 5f)
 // ====================================================================
@@ -1855,86 +1852,47 @@ pub fn hirLowerRangeShapeName(s: HirLowerRangeShape) -> String {
 //
 // As with Stage 5c/5d, these helpers stay AST-agnostic — the
 // caller walks the parser arena, these normalise the assembly.
-
 // ---- Call / MethodCall / IntrinsicCall -------------------------
-
 /// hirLowerAssembleCall builds a plain function call. TypeArgs
 /// (turbofish) are optional — pass an empty list when absent.
-pub fn hirLowerAssembleCall(
-    callee: HirExpr,
-    typeArgs: List<HirType>,
-    args: List<HirArg>,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleCall(callee: HirExpr, typeArgs: List<HirType>, args: List<HirArg>, typ: HirType, span: HirSpan) -> HirExpr {
     if typeArgs.len() == 0 {
         return hirCall(callee, args, typ, span)
     }
     hirCallTyped(callee, typeArgs, args, typ, span)
 }
-
 /// hirLowerAssembleMethodCall builds `receiver.name(args)`.
 /// TypeArgs (turbofish) are optional.
-pub fn hirLowerAssembleMethodCall(
-    receiver: HirExpr,
-    name: String,
-    typeArgs: List<HirType>,
-    args: List<HirArg>,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleMethodCall(receiver: HirExpr, name: String, typeArgs: List<HirType>, args: List<HirArg>, typ: HirType, span: HirSpan) -> HirExpr {
     if typeArgs.len() == 0 {
         return hirMethodCall(receiver, name, args, typ, span)
     }
     hirMethodCallTyped(receiver, name, typeArgs, args, typ, span)
 }
-
 /// hirLowerAssembleIntrinsicCall wraps hirIntrinsic for the
 /// print family. Stage 5e's hirLowerIntrinsicFromIdent gives the
 /// caller the kind; this helper threads the already-lowered args.
-pub fn hirLowerAssembleIntrinsicCall(
-    kind: HirIntrinsicKind,
-    args: List<HirArg>,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleIntrinsicCall(kind: HirIntrinsicKind, args: List<HirArg>, span: HirSpan) -> HirExpr {
     hirIntrinsic(kind, args, span)
 }
-
 // ---- StructLit / VariantLit ------------------------------------
-
 /// hirLowerAssembleStructLit picks between the plain-fields form
 /// and the spread form based on `hasSpread`. Variant ctor calls
 /// from identifier-style shapes route through hirLowerAssembleVariantLit
 /// instead.
-pub fn hirLowerAssembleStructLit(
-    typeName: String,
-    fields: List<HirStructLitField>,
-    hasSpread: Bool,
-    spread: HirExpr,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleStructLit(typeName: String, fields: List<HirStructLitField>, hasSpread: Bool, spread: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     if hasSpread {
         return hirStructLitSpread(typeName, fields, spread, typ, span)
     }
     hirStructLit(typeName, fields, typ, span)
 }
-
 /// hirLowerAssembleVariantLit builds an enum variant construction.
 /// `enumName` may be empty for prelude variants (Some/None/Ok/Err)
 /// whose owning enum is inferred from the typ.
-pub fn hirLowerAssembleVariantLit(
-    enumName: String,
-    variant: String,
-    args: List<HirArg>,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleVariantLit(enumName: String, variant: String, args: List<HirArg>, typ: HirType, span: HirSpan) -> HirExpr {
     hirVariantLit(enumName, variant, args, typ, span)
 }
-
 // ---- MatchExpr + decision tree integration ---------------------
-
 /// hirLowerAssembleMatchExpr builds a HirMatchExpr and optionally
 /// attaches a pre-compiled decision tree produced by
 /// `pmCompileDecisionTree` (see pmcompile.osty). The tree lets
@@ -1950,13 +1908,7 @@ pub fn hirLowerAssembleVariantLit(
 ///
 /// Passing a default-invalid tree signals "skip tree path"; the
 /// helper honours that and leaves matchExprHasTree=false.
-pub fn hirLowerAssembleMatchExpr(
-    scrutinee: HirExpr,
-    arms: List<HirMatchArm>,
-    tree: HirDecisionNode,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleMatchExpr(scrutinee: HirExpr, arms: List<HirMatchArm>, tree: HirDecisionNode, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirMatchExpr(scrutinee, arms, typ, span)
     if hirDecisionIsValid(tree) {
         e.matchExprHasTree = true
@@ -1964,16 +1916,10 @@ pub fn hirLowerAssembleMatchExpr(
     }
     e
 }
-
 /// hirLowerAssembleMatchStmt mirrors MatchExpr but for statement
 /// position. Value is discarded; the walker routes through
 /// mirLowerMatchStmt's core on the MIR side.
-pub fn hirLowerAssembleMatchStmt(
-    scrutinee: HirExpr,
-    arms: List<HirMatchArm>,
-    tree: HirDecisionNode,
-    span: HirSpan,
-) -> HirStmt {
+pub fn hirLowerAssembleMatchStmt(scrutinee: HirExpr, arms: List<HirMatchArm>, tree: HirDecisionNode, span: HirSpan) -> HirStmt {
     let mut s = hirMatchStmt(scrutinee, arms, span)
     if hirDecisionIsValid(tree) {
         s.matchHasTree = true
@@ -1981,81 +1927,42 @@ pub fn hirLowerAssembleMatchStmt(
     }
     s
 }
-
 // ---- If / IfLet / BlockExpr ------------------------------------
-
 /// hirLowerAssembleIfExpr builds an if-as-expression. Unlike
 /// stmt-form if, expression-form always requires both arms — the
 /// resolver rejects else-less expression-form if.
-pub fn hirLowerAssembleIfExpr(
-    cond: HirExpr,
-    thenBlock: HirBlock,
-    elseBlock: HirBlock,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleIfExpr(cond: HirExpr, thenBlock: HirBlock, elseBlock: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     hirIfExpr(cond, thenBlock, elseBlock, typ, span)
 }
-
 /// hirLowerAssembleIfLetExpr builds `if let pat = scrut { then }
 /// [else { else }]`. `hasElse=false` emits the no-else form;
 /// `elseBlock` is ignored.
-pub fn hirLowerAssembleIfLetExpr(
-    pattern: HirPattern,
-    scrutinee: HirExpr,
-    thenBlock: HirBlock,
-    hasElse: Bool,
-    elseBlock: HirBlock,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleIfLetExpr(pattern: HirPattern, scrutinee: HirExpr, thenBlock: HirBlock, hasElse: Bool, elseBlock: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     if hasElse {
         return hirIfLetExprElse(pattern, scrutinee, thenBlock, elseBlock, typ, span)
     }
     hirIfLetExpr(pattern, scrutinee, thenBlock, typ, span)
 }
-
 /// hirLowerAssembleBlockExpr wraps a block used as expression.
-pub fn hirLowerAssembleBlockExpr(
-    body: HirBlock,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleBlockExpr(body: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     hirBlockExpr(body, typ, span)
 }
-
 // ---- Closure ---------------------------------------------------
-
 /// hirLowerAssembleClosure builds a closure expression from
 /// already-lowered components. Callers collect captures via the
 /// resolver's closure-analysis pass (or approximate by walking the
 /// body for free-variable references) before calling.
-pub fn hirLowerAssembleClosure(
-    params: List<HirParam>,
-    returnType: HirType,
-    body: HirBlock,
-    captures: List<HirCapture>,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleClosure(params: List<HirParam>, returnType: HirType, body: HirBlock, captures: List<HirCapture>, typ: HirType, span: HirSpan) -> HirExpr {
     hirClosure(params, returnType, body, captures, typ, span)
 }
-
 /// hirLowerAssembleCapture wraps `hirCapture` with the
 /// `CaptureKind` pre-resolved from the enclosing scope's symbol
 /// table. Mirrors Go's closure-capture classifier.
-pub fn hirLowerAssembleCapture(
-    name: String,
-    kind: HirCaptureKind,
-    typ: HirType,
-    mutable: Bool,
-    span: HirSpan,
-) -> HirCapture {
+pub fn hirLowerAssembleCapture(name: String, kind: HirCaptureKind, typ: HirType, mutable: Bool, span: HirSpan) -> HirCapture {
     let mut c = hirCapture(name, kind, typ, span)
     c.mutable = mutable
     c
 }
-
 /// hirLowerCaptureKindFromSymbol maps a resolver symbol-kind string
 /// (same convention as hirLowerIdentKindFromSymbol) to the closure
 /// CaptureKind. Self / fn / param / global / local are the five
@@ -2063,13 +1970,16 @@ pub fn hirLowerAssembleCapture(
 ///
 /// `isTopLevelLet` routes SymLet to CaptureGlobal when the
 /// referenced let is module-level, matching the identKind split.
-pub fn hirLowerCaptureKindFromSymbol(
-    symKind: String,
-    isTopLevelLet: Bool,
-) -> HirCaptureKind {
-    if symKind == "Param" { return HirCaptureParam }
-    if symKind == "Fn" { return HirCaptureFn }
-    if symKind == "Self" { return HirCaptureSelf }
+pub fn hirLowerCaptureKindFromSymbol(symKind: String, isTopLevelLet: Bool) -> HirCaptureKind {
+    if symKind == "Param" {
+        return HirCaptureParam
+    }
+    if symKind == "Fn" {
+        return HirCaptureFn
+    }
+    if symKind == "Self" {
+        return HirCaptureSelf
+    }
     if symKind == "Let" {
         if isTopLevelLet {
             return HirCaptureGlobal
@@ -2078,63 +1988,37 @@ pub fn hirLowerCaptureKindFromSymbol(
     }
     HirCaptureUnknown
 }
-
 // ---- Arg assemblers --------------------------------------------
-
 /// hirLowerAssembleArg picks between keyword and positional arg
 /// based on `name`. Empty name → positional; non-empty → keyword.
-pub fn hirLowerAssembleArg(
-    name: String,
-    value: HirExpr,
-    span: HirSpan,
-) -> HirArg {
+pub fn hirLowerAssembleArg(name: String, value: HirExpr, span: HirSpan) -> HirArg {
     if name == "" {
         return hirArg(value, span)
     }
     hirArgKeyword(name, value, span)
 }
-
 // ---- Pattern assemblers ----------------------------------------
-
 /// hirLowerAssemblePatternIdent normalises the mut / non-mut
 /// IdentPat split. Caller passes the flag directly.
-pub fn hirLowerAssemblePatternIdent(
-    name: String,
-    mutable: Bool,
-    span: HirSpan,
-) -> HirPattern {
+pub fn hirLowerAssemblePatternIdent(name: String, mutable: Bool, span: HirSpan) -> HirPattern {
     if mutable {
         return hirIdentPatMut(name, span)
     }
     hirIdentPat(name, span)
 }
-
 /// hirLowerAssemblePatternStruct picks between the exact-fields form
 /// and the `..` rest form based on `rest`.
-pub fn hirLowerAssemblePatternStruct(
-    typeName: String,
-    fields: List<HirStructPatField>,
-    rest: Bool,
-    span: HirSpan,
-) -> HirPattern {
+pub fn hirLowerAssemblePatternStruct(typeName: String, fields: List<HirStructPatField>, rest: Bool, span: HirSpan) -> HirPattern {
     if rest {
         return hirStructPatRest(typeName, fields, span)
     }
     hirStructPat(typeName, fields, span)
 }
-
 /// hirLowerAssemblePatternRange classifies a range pattern by which
 /// bounds are present — same three-form split as RangeLit. Empty
 /// range (`..`) is rejected by the caller's classifier
 /// (hirLowerClassifyRange returns HirRangeShapeEmpty).
-pub fn hirLowerAssemblePatternRange(
-    hasLow: Bool,
-    low: HirExpr,
-    hasHigh: Bool,
-    high: HirExpr,
-    inclusive: Bool,
-    span: HirSpan,
-) -> HirPattern {
+pub fn hirLowerAssemblePatternRange(hasLow: Bool, low: HirExpr, hasHigh: Bool, high: HirExpr, inclusive: Bool, span: HirSpan) -> HirPattern {
     if hasLow && hasHigh {
         return hirRangePatBounded(low, high, inclusive, span)
     }
@@ -2144,55 +2028,34 @@ pub fn hirLowerAssemblePatternRange(
     if hasHigh {
         return hirRangePatTo(high, inclusive, span)
     }
-    // Empty `..` — caller should have already rejected; emit an
-    // error pattern so downstream stays structured.
     hirErrorPat("empty range pattern", span)
 }
-
+// Empty `..` — caller should have already rejected; emit an
+// error pattern so downstream stays structured.
 /// hirLowerAssemblePatternStructField picks between the shorthand
 /// and expanded struct-field pattern forms.
-pub fn hirLowerAssemblePatternStructField(
-    name: String,
-    hasPattern: Bool,
-    pattern: HirPattern,
-    span: HirSpan,
-) -> HirStructPatField {
+pub fn hirLowerAssemblePatternStructField(name: String, hasPattern: Bool, pattern: HirPattern, span: HirSpan) -> HirStructPatField {
     if hasPattern {
         return hirStructPatField(name, pattern, span)
     }
     hirStructPatFieldShorthand(name, span)
 }
-
 // ---- MatchArm + decision tree wiring ---------------------------
-
 /// hirLowerAssembleMatchArm picks between the plain and guarded
 /// forms. The guard expression — if present — must be of type Bool;
 /// the HIR layer doesn't re-validate that.
-pub fn hirLowerAssembleMatchArm(
-    pattern: HirPattern,
-    hasGuard: Bool,
-    guard: HirExpr,
-    body: HirBlock,
-    span: HirSpan,
-) -> HirMatchArm {
+pub fn hirLowerAssembleMatchArm(pattern: HirPattern, hasGuard: Bool, guard: HirExpr, body: HirBlock, span: HirSpan) -> HirMatchArm {
     if hasGuard {
         return hirMatchArmGuarded(pattern, guard, body, span)
     }
     hirMatchArm(pattern, body, span)
 }
-
 // ---- String interpolation assembler ----------------------------
-
 /// hirLowerAssembleStringLit wraps the raw / triple / plain String
 /// lit constructor forms. The parts list carries both literal
 /// fragments and interpolated expressions; caller builds it via
 /// hirStringPartLit / hirStringPartExpr.
-pub fn hirLowerAssembleStringLit(
-    parts: List<HirStringPart>,
-    isRaw: Bool,
-    isTriple: Bool,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleStringLit(parts: List<HirStringPart>, isRaw: Bool, isTriple: Bool, span: HirSpan) -> HirExpr {
     if isTriple {
         return hirStringLitTriple(parts, span)
     }
@@ -2201,13 +2064,7 @@ pub fn hirLowerAssembleStringLit(
     }
     hirStringLit(parts, span)
 }
-
-pub fn hirLowerAssembleBytesLit(
-    parts: List<HirStringPart>,
-    isRaw: Bool,
-    isTriple: Bool,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleBytesLit(parts: List<HirStringPart>, isRaw: Bool, isTriple: Bool, span: HirSpan) -> HirExpr {
     if isTriple {
         return hirBytesLitTriple(parts, span)
     }
@@ -2216,29 +2073,20 @@ pub fn hirLowerAssembleBytesLit(
     }
     hirBytesLit(parts, span)
 }
-
 // ---- ErrorExpr / ErrorStmt shortcuts ---------------------------
-
 /// hirLowerAssembleErrorExpr builds a poisoned expression for
 /// unsupported shapes the lowerer encountered. `note` is carried
 /// on the module's issue list separately; ErrorExpr preserves it
 /// inline for per-node context.
-pub fn hirLowerAssembleErrorExpr(
-    note: String,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+pub fn hirLowerAssembleErrorExpr(note: String, typ: HirType, span: HirSpan) -> HirExpr {
     hirErrorExpr(note, typ, span)
 }
-
 pub fn hirLowerAssembleErrorStmt(note: String, span: HirSpan) -> HirStmt {
     hirErrorStmt(note, span)
 }
-
 // ====================================================================
 // AST -> HIR lowering
 // ====================================================================
-
 fn hirLowerTopLevel(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) {
     if idx < 0 {
         return
@@ -2280,7 +2128,6 @@ fn hirLowerTopLevel(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope)
         cx.l.out.script.push(stmt)
     }
 }
-
 fn hirLowerTopLevelUse(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) {
     let _ = typeScope
     let node = astArenaNodeAt(cx.ast.arena, idx)
@@ -2292,22 +2139,10 @@ fn hirLowerTopLevelUse(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeSco
     }
     hirLowerAddUseDecl(cx.l, hirLowerUseDecl(cx, idx))
 }
-
-fn hirLowerFnDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    owner: String,
-    parentScope: HirLowerTypeScope,
-) -> HirFnDecl {
+fn hirLowerFnDecl(cx: HirLowerContext, idx: Int, owner: String, parentScope: HirLowerTypeScope) -> HirFnDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
-    let genericScope = hirLowerTypeScopeWithGenerics(
-        cx.ast,
-        node.children2,
-        node.text,
-        parentScope.selfOwner,
-        parentScope,
-    )
+    let genericScope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, parentScope.selfOwner, parentScope)
     let generics = hirLowerGenericParams(cx, node.children2, genericScope)
     let annotations = hirLowerAnnotations(cx, node.extra, genericScope)
     let mut params: List<HirParam> = []
@@ -2328,24 +2163,9 @@ fn hirLowerFnDecl(
     } else {
         hirBlock(span)
     }
-    hirLowerAssembleFnDecl(
-        node.text,
-        params,
-        ret,
-        generics,
-        body,
-        annotations,
-        receiverMut,
-        node.flags == 1,
-        span,
-    )
+    hirLowerAssembleFnDecl(node.text, params, ret, generics, body, annotations, receiverMut, node.flags == 1, span)
 }
-
-fn hirLowerStructDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    parentScope: HirLowerTypeScope,
-) -> HirStructDecl {
+fn hirLowerStructDecl(cx: HirLowerContext, idx: Int, parentScope: HirLowerTypeScope) -> HirStructDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
@@ -2365,18 +2185,8 @@ fn hirLowerStructDecl(
             }
         }
     }
-    hirLowerAssembleStructDecl(
-        node.text,
-        fields,
-        methods,
-        builderMethodNames,
-        generics,
-        node.flags == 1,
-        annotations,
-        span,
-    )
+    hirLowerAssembleStructDecl(node.text, fields, methods, builderMethodNames, generics, node.flags == 1, annotations, span)
 }
-
 fn hirLowerFnDeclHasNoReceiver(ast: AstFile, idx: Int) -> Bool {
     let node = astArenaNodeAt(ast.arena, idx)
     if node.kind != AstNFnDecl {
@@ -2388,12 +2198,7 @@ fn hirLowerFnDeclHasNoReceiver(ast: AstFile, idx: Int) -> Bool {
     let first = astArenaNodeAt(ast.arena, node.children[0])
     !(first.kind == AstNParam && first.text == "self" && first.left < 0)
 }
-
-fn hirLowerEnumDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    parentScope: HirLowerTypeScope,
-) -> HirEnumDecl {
+fn hirLowerEnumDecl(cx: HirLowerContext, idx: Int, parentScope: HirLowerTypeScope) -> HirEnumDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
@@ -2408,21 +2213,9 @@ fn hirLowerEnumDecl(
             methods.push(hirLowerFnDecl(cx, memberIdx, node.text, scope))
         }
     }
-    hirLowerAssembleEnumDecl(
-        node.text,
-        variants,
-        methods,
-        generics,
-        node.flags == 1,
-        span,
-    )
+    hirLowerAssembleEnumDecl(node.text, variants, methods, generics, node.flags == 1, span)
 }
-
-fn hirLowerInterfaceDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    parentScope: HirLowerTypeScope,
-) -> HirInterfaceDecl {
+fn hirLowerInterfaceDecl(cx: HirLowerContext, idx: Int, parentScope: HirLowerTypeScope) -> HirInterfaceDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
@@ -2437,54 +2230,22 @@ fn hirLowerInterfaceDecl(
             extends.push(hirLowerTypeFromAst(cx.ast, memberIdx, scope))
         }
     }
-    hirLowerAssembleInterfaceDecl(
-        node.text,
-        methods,
-        extends,
-        generics,
-        node.flags == 1,
-        span,
-    )
+    hirLowerAssembleInterfaceDecl(node.text, methods, extends, generics, node.flags == 1, span)
 }
-
-fn hirLowerTypeAliasDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    parentScope: HirLowerTypeScope,
-) -> HirTypeAliasDecl {
+fn hirLowerTypeAliasDecl(cx: HirLowerContext, idx: Int, parentScope: HirLowerTypeScope) -> HirTypeAliasDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
-    let scope = hirLowerTypeScopeWithGenerics(
-        cx.ast,
-        node.children,
-        node.text,
-        parentScope.selfOwner,
-        parentScope,
-    )
+    let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children, node.text, parentScope.selfOwner, parentScope)
     let generics = hirLowerGenericParams(cx, node.children, scope)
     let target = hirLowerTypeFromAst(cx.ast, node.left, scope)
-    hirLowerAssembleTypeAliasDecl(
-        node.text,
-        target,
-        generics,
-        node.flags == 1,
-        span,
-    )
+    hirLowerAssembleTypeAliasDecl(node.text, target, generics, node.flags == 1, span)
 }
-
-fn hirLowerTopLevelLetDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirLetDecl {
+fn hirLowerTopLevelLetDecl(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirLetDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let name = hirLowerTopLevelLetName(cx.ast, node.left)
     if name == "" {
-        hirLowerNote(
-            cx.l,
-            "hir_lower: unsupported top-level destructuring let at " + hirLowerSpanText(span),
-        )
+        hirLowerNote(cx.l, "hir_lower: unsupported top-level destructuring let at " + hirLowerSpanText(span))
         return hirLetDecl("", hirTypeInvalid(), span)
     }
     let typeIdx = hirLowerAstFirst(node.children)
@@ -2497,7 +2258,6 @@ fn hirLowerTopLevelLetDecl(
     }
     hirLowerAssembleLetDecl(name, typ, hasValue, value, node.flags == 1, false, span)
 }
-
 fn hirLowerUseDecl(cx: HirLowerContext, idx: Int) -> HirUseDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
@@ -2509,32 +2269,17 @@ fn hirLowerUseDecl(cx: HirLowerContext, idx: Int) -> HirUseDecl {
             if body.kind == AstNFnDecl {
                 fns.push(hirLowerFnDecl(cx, bodyIdx, "", hirLowerTypeScope("")))
             } else {
-                hirLowerNote(
-                    cx.l,
-                    "hir_lower: use go body item not representable in HIR use decl: "
-                        + astNodeKindName(body.kind),
-                )
+                hirLowerNote(cx.l, "hir_lower: use go body item not representable in HIR use decl: " + astNodeKindName(body.kind))
             }
         }
-        return hirLowerAssembleUseDeclGo(
-            alias,
-            node.text,
-            hirLowerDecodeStringToken(node.text).body,
-            fns,
-            span,
-        )
+        return hirLowerAssembleUseDeclGo(alias, node.text, hirLowerDecodeStringToken(node.text).body, fns, span)
     }
     if hirLowerPathStartsWithRuntime(node.text) {
         return hirLowerAssembleUseDeclRuntime(alias, node.text, node.text, span)
     }
     hirLowerAssembleUseDecl(hirLowerUsePathSegments(node.text), alias, node.text, span)
 }
-
-fn hirLowerStructFieldDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirField {
+fn hirLowerStructFieldDecl(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirField {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let annotations = hirLowerAnnotations(cx, node.extra, typeScope)
@@ -2545,22 +2290,9 @@ fn hirLowerStructFieldDecl(
     } else {
         hirExprInvalid()
     }
-    hirLowerAssembleField(
-        node.text,
-        typ,
-        hasDefault,
-        defaultValue,
-        node.flags == 1,
-        annotations,
-        span,
-    )
+    hirLowerAssembleField(node.text, typ, hasDefault, defaultValue, node.flags == 1, annotations, span)
 }
-
-fn hirLowerEnumVariantDecl(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirVariant {
+fn hirLowerEnumVariantDecl(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirVariant {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let annotations = hirLowerAnnotations(cx, node.extra, typeScope)
@@ -2570,12 +2302,7 @@ fn hirLowerEnumVariantDecl(
     }
     hirLowerAssembleVariant(node.text, payload, annotations, span)
 }
-
-fn hirLowerParam(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirParam {
+fn hirLowerParam(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirParam {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let typ = if node.right >= 0 {
@@ -2599,14 +2326,7 @@ fn hirLowerParam(
     }
     hirLowerAssembleParamDestructured(pattern, typ, span)
 }
-
-fn hirLowerClosureParam(
-    cx: HirLowerContext,
-    idx: Int,
-    closureTy: HirType,
-    paramPos: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirParam {
+fn hirLowerClosureParam(cx: HirLowerContext, idx: Int, closureTy: HirType, paramPos: Int, typeScope: HirLowerTypeScope) -> HirParam {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let inferred = hirLowerFnParamTypeAt(closureTy, paramPos)
     let typ = if node.right >= 0 {
@@ -2621,13 +2341,7 @@ fn hirLowerClosureParam(
     let pattern = hirLowerPattern(cx, node.left, typeScope)
     hirLowerAssembleParamDestructured(pattern, typ, span)
 }
-
-fn hirLowerStmt(
-    cx: HirLowerContext,
-    idx: Int,
-    stmtScope: HirLowerStmtScope,
-    typeScope: HirLowerTypeScope,
-) -> HirStmt {
+fn hirLowerStmt(cx: HirLowerContext, idx: Int, stmtScope: HirLowerStmtScope, typeScope: HirLowerTypeScope) -> HirStmt {
     if idx < 0 {
         return hirStmtInvalid()
     }
@@ -2647,12 +2361,7 @@ fn hirLowerStmt(
     if node.kind == AstNAssign {
         let target = hirLowerExpr(cx, node.left, typeScope)
         let value = hirLowerExpr(cx, node.right, typeScope)
-        return hirLowerAssembleAssignStmt(
-            hirLowerAssignOpFromFrontToken(node.op),
-            [target],
-            value,
-            span,
-        )
+        return hirLowerAssembleAssignStmt(hirLowerAssignOpFromFrontToken(node.op), [target], value, span)
     }
     if node.kind == AstNReturn {
         if node.left >= 0 {
@@ -2667,18 +2376,8 @@ fn hirLowerStmt(
         if node.left >= 0 {
             if stmtScope.loopResultName != "" {
                 let mut block = hirBlock(span)
-                let target = hirIdent(
-                    stmtScope.loopResultName,
-                    HirIdentLocal,
-                    stmtScope.loopResultType,
-                    span,
-                )
-                let assign = hirAssignStmt(
-                    HirAssignEq,
-                    target,
-                    hirLowerExpr(cx, node.left, typeScope),
-                    span,
-                )
+                let target = hirIdent(stmtScope.loopResultName, HirIdentLocal, stmtScope.loopResultType, span)
+                let assign = hirAssignStmt(HirAssignEq, target, hirLowerExpr(cx, node.left, typeScope), span)
                 hirBlockAppend(block, assign)
                 hirBlockAppend(block, hirBreakStmt(span))
                 return hirBlockStmt(block, span)
@@ -2695,20 +2394,13 @@ fn hirLowerStmt(
         return hirContinueStmt(span)
     }
     if node.kind == AstNDefer {
-        return hirDeferStmt(
-            hirLowerDeferredBlock(cx, node.left, typeScope),
-            span,
-        )
+        return hirDeferStmt(hirLowerDeferredBlock(cx, node.left, typeScope), span)
     }
     if node.kind == AstNFor {
         return hirLowerForStmt(cx, idx, stmtScope, typeScope)
     }
     if node.kind == AstNChanSend {
-        return hirChanSendStmt(
-            hirLowerExpr(cx, node.left, typeScope),
-            hirLowerExpr(cx, node.right, typeScope),
-            span,
-        )
+        return hirChanSendStmt(hirLowerExpr(cx, node.left, typeScope), hirLowerExpr(cx, node.right, typeScope), span)
     }
     if node.kind == AstNExprStmt {
         let e = hirLowerExpr(cx, node.left, typeScope)
@@ -2730,13 +2422,7 @@ fn hirLowerStmt(
     }
     hirExprStmt(hirLowerExpr(cx, idx, typeScope), span)
 }
-
-fn hirLowerForStmt(
-    cx: HirLowerContext,
-    idx: Int,
-    stmtScope: HirLowerStmtScope,
-    typeScope: HirLowerTypeScope,
-) -> HirStmt {
+fn hirLowerForStmt(cx: HirLowerContext, idx: Int, stmtScope: HirLowerStmtScope, typeScope: HirLowerTypeScope) -> HirStmt {
     let _ = stmtScope
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
@@ -2757,15 +2443,7 @@ fn hirLowerForStmt(
         let scrutinee = hirLowerExpr(cx, node.left, typeScope)
         let mut elseBlock = hirBlock(span)
         hirBlockAppend(elseBlock, hirBreakStmt(span))
-        let ifLetExpr = hirLowerAssembleIfLetExpr(
-            pattern,
-            scrutinee,
-            body,
-            true,
-            elseBlock,
-            hirTUnit(),
-            span,
-        )
+        let ifLetExpr = hirLowerAssembleIfLetExpr(pattern, scrutinee, body, true, elseBlock, hirTUnit(), span)
         let mut loopBody = hirBlock(span)
         hirBlockAppend(loopBody, hirExprStmt(ifLetExpr, span))
         return hirForInfiniteStmt(loopBody, span)
@@ -2788,47 +2466,15 @@ fn hirLowerForStmt(
                 } else {
                     hirExprInvalid()
                 }
-                return hirLowerAssembleForStmt(
-                    true,
-                    pattern,
-                    false,
-                    hirExprInvalid(),
-                    false,
-                    hirExprInvalid(),
-                    true,
-                    start,
-                    end,
-                    hirLowerAstRangeInclusive(iterNode),
-                    body,
-                    span,
-                )
+                return hirLowerAssembleForStmt(true, pattern, false, hirExprInvalid(), false, hirExprInvalid(), true, start, end, hirLowerAstRangeInclusive(iterNode), body, span)
             }
         }
         let iter = hirLowerExpr(cx, iterIdx, typeScope)
-        return hirLowerAssembleForStmt(
-            true,
-            pattern,
-            false,
-            hirExprInvalid(),
-            true,
-            iter,
-            false,
-            hirExprInvalid(),
-            hirExprInvalid(),
-            false,
-            body,
-            span,
-        )
+        return hirLowerAssembleForStmt(true, pattern, false, hirExprInvalid(), true, iter, false, hirExprInvalid(), hirExprInvalid(), false, body, span)
     }
     hirForInfiniteStmt(body, span)
 }
-
-fn hirLowerBlockFromAst(
-    cx: HirLowerContext,
-    idx: Int,
-    stmtScope: HirLowerStmtScope,
-    typeScope: HirLowerTypeScope,
-) -> HirBlock {
+fn hirLowerBlockFromAst(cx: HirLowerContext, idx: Int, stmtScope: HirLowerStmtScope, typeScope: HirLowerTypeScope) -> HirBlock {
     if idx < 0 {
         return hirBlock(hirNoSpan())
     }
@@ -2853,13 +2499,7 @@ fn hirLowerBlockFromAst(
     }
     out
 }
-
-fn hirLowerBlockLike(
-    cx: HirLowerContext,
-    idx: Int,
-    stmtScope: HirLowerStmtScope,
-    typeScope: HirLowerTypeScope,
-) -> HirBlock {
+fn hirLowerBlockLike(cx: HirLowerContext, idx: Int, stmtScope: HirLowerStmtScope, typeScope: HirLowerTypeScope) -> HirBlock {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     if node.kind == AstNBlock {
         return hirLowerBlockFromAst(cx, idx, stmtScope, typeScope)
@@ -2868,12 +2508,7 @@ fn hirLowerBlockLike(
     hirBlockSetResult(out, hirLowerExpr(cx, idx, typeScope))
     out
 }
-
-fn hirLowerDeferredBlock(
-    cx: HirLowerContext,
-    exprIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirBlock {
+fn hirLowerDeferredBlock(cx: HirLowerContext, exprIdx: Int, typeScope: HirLowerTypeScope) -> HirBlock {
     let span = hirLowerSpanFromAst(cx.ast, exprIdx)
     let node = astArenaNodeAt(cx.ast.arena, exprIdx)
     if node.kind == AstNBlock {
@@ -2894,12 +2529,7 @@ fn hirLowerDeferredBlock(
     hirBlockAppend(block, hirExprStmt(e, span))
     block
 }
-
-fn hirLowerExpr(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerExpr(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     if idx < 0 {
         return hirExprInvalid()
     }
@@ -2916,48 +2546,29 @@ fn hirLowerExpr(
     let coreIdx = hirLowerExprCoreIdx(cx, idx)
     if coreIdx < 0 {
         let span = hirLowerSpanFromNode(node)
-        hirLowerNote(
-            cx.l,
-            "hir_lower: expression did not elaborate to Core: " + astNodeKindName(node.kind),
-        )
+        hirLowerNote(cx.l, "hir_lower: expression did not elaborate to Core: " + astNodeKindName(node.kind))
         return hirLowerAssembleErrorExpr("expression did not elaborate", hirTypeErr(), span)
     }
     hirLowerExprFromCore(cx, coreIdx, typeScope)
 }
-
-fn hirLowerLoopExpr(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerLoopExpr(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let loopTy = hirLowerExprType(cx, idx)
     let mut outer = hirBlock(span)
     let resultName = "__loop_result_" + hirLowerIntToString(idx)
-    let stmtScope = HirLowerStmtScope {
-        loopResultName: resultName,
-        loopResultType: loopTy,
-    }
+    let stmtScope = HirLowerStmtScope {loopResultName: resultName, loopResultType: loopTy}
     if !hirTypeIsNever(loopTy) {
         hirBlockAppend(outer, hirLetStmtNoValue(resultName, loopTy, true, span))
     }
     let loopBody = hirLowerBlockFromAst(cx, node.right, stmtScope, typeScope)
     hirBlockAppend(outer, hirForInfiniteStmt(loopBody, span))
     if !hirTypeIsNever(loopTy) {
-        hirBlockSetResult(
-            outer,
-            hirIdent(resultName, HirIdentLocal, loopTy, span),
-        )
+        hirBlockSetResult(outer, hirIdent(resultName, HirIdentLocal, loopTy, span))
     }
     hirLowerAssembleBlockExpr(outer, loopTy, span)
 }
-
-fn hirLowerClosureExpr(
-    cx: HirLowerContext,
-    idx: Int,
-    parentScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerClosureExpr(cx: HirLowerContext, idx: Int, parentScope: HirLowerTypeScope) -> HirExpr {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let closureTy = hirLowerExprType(cx, idx)
@@ -2977,11 +2588,7 @@ fn hirLowerClosureExpr(
     let captures = hirLowerClosureCaptures(cx, idx)
     hirLowerAssembleClosure(params, returnType, body, captures, closureTy, span)
 }
-
-fn hirLowerClosureCaptures(
-    cx: HirLowerContext,
-    closureIdx: Int,
-) -> List<HirCapture> {
+fn hirLowerClosureCaptures(cx: HirLowerContext, closureIdx: Int) -> List<HirCapture> {
     let node = astArenaNodeAt(cx.ast.arena, closureIdx)
     let mut names: List<String> = []
     let mut out: List<HirCapture> = []
@@ -3015,25 +2622,12 @@ fn hirLowerClosureCaptures(
             } else {
                 node
             }
-            out.push(
-                hirLowerAssembleCapture(
-                    name,
-                    identKind,
-                    typ,
-                    hirLowerBindingMutable(targetNode),
-                    hirLowerSpanFromAst(cx.ast, refNode),
-                ),
-            )
+            out.push(hirLowerAssembleCapture(name, identKind, typ, hirLowerBindingMutable(targetNode), hirLowerSpanFromAst(cx.ast, refNode)))
         }
     }
     out
 }
-
-fn hirLowerExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
     let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
@@ -3066,29 +2660,13 @@ fn hirLowerExprFromCore(
         return hirIdent(node.text, hirLowerIdentKindFromCore(coreIdentKindAt(cx.elab.core, coreIdx)), typ, span)
     }
     if node.kind == CkUnary {
-        return hirUnary(
-            hirLowerUnaryOpFromCore(coreUnaryOpAt(cx.elab.core, coreIdx)),
-            hirLowerExprFromCore(cx, node.left, typeScope),
-            typ,
-            span,
-        )
+        return hirUnary(hirLowerUnaryOpFromCore(coreUnaryOpAt(cx.elab.core, coreIdx)), hirLowerExprFromCore(cx, node.left, typeScope), typ, span)
     }
     if node.kind == CkBinary {
-        return hirBinary(
-            hirLowerBinaryOpFromCore(coreBinaryOpAt(cx.elab.core, coreIdx)),
-            hirLowerExprFromCore(cx, node.left, typeScope),
-            hirLowerExprFromCore(cx, node.right, typeScope),
-            typ,
-            span,
-        )
+        return hirBinary(hirLowerBinaryOpFromCore(coreBinaryOpAt(cx.elab.core, coreIdx)), hirLowerExprFromCore(cx, node.left, typeScope), hirLowerExprFromCore(cx, node.right, typeScope), typ, span)
     }
     if node.kind == CkCoalesce {
-        return hirCoalesce(
-            hirLowerExprFromCore(cx, node.left, typeScope),
-            hirLowerExprFromCore(cx, node.right, typeScope),
-            typ,
-            span,
-        )
+        return hirCoalesce(hirLowerExprFromCore(cx, node.left, typeScope), hirLowerExprFromCore(cx, node.right, typeScope), typ, span)
     }
     if node.kind == CkQuestion {
         return hirQuestion(hirLowerExprFromCore(cx, node.left, typeScope), typ, span)
@@ -3116,20 +2694,10 @@ fn hirLowerExprFromCore(
         return hirFieldExpr(target, node.text, typ, span)
     }
     if node.kind == CkTupleAccess {
-        return hirTupleAccess(
-            hirLowerExprFromCore(cx, node.left, typeScope),
-            node.value,
-            typ,
-            span,
-        )
+        return hirTupleAccess(hirLowerExprFromCore(cx, node.left, typeScope), node.value, typ, span)
     }
     if node.kind == CkIndex {
-        return hirIndexExpr(
-            hirLowerExprFromCore(cx, node.left, typeScope),
-            hirLowerExprFromCore(cx, node.right, typeScope),
-            typ,
-            span,
-        )
+        return hirIndexExpr(hirLowerExprFromCore(cx, node.left, typeScope), hirLowerExprFromCore(cx, node.right, typeScope), typ, span)
     }
     if node.kind == CkList {
         return hirLowerListExprFromCore(cx, coreIdx, typeScope, typ, span)
@@ -3184,11 +2752,7 @@ fn hirLowerExprFromCore(
     }
     if node.kind == CkBlock {
         if origin >= 0 {
-            return hirLowerAssembleBlockExpr(
-                hirLowerBlockFromAst(cx, origin, hirLowerStmtScope(), typeScope),
-                typ,
-                span,
-            )
+            return hirLowerAssembleBlockExpr(hirLowerBlockFromAst(cx, origin, hirLowerStmtScope(), typeScope), typ, span)
         }
         hirLowerNote(cx.l, "hir_lower: synthetic Core block without AST origin")
         return hirLowerAssembleBlockExpr(hirBlock(span), typ, span)
@@ -3205,20 +2769,10 @@ fn hirLowerExprFromCore(
     if node.kind == CkErr {
         return hirLowerAssembleErrorExpr("poisoned expression", typ, span)
     }
-    hirLowerNote(
-        cx.l,
-        "hir_lower: unsupported Core expr kind " + coreKindName(node.kind),
-    )
+    hirLowerNote(cx.l, "hir_lower: unsupported Core expr kind " + coreKindName(node.kind))
     hirLowerAssembleErrorExpr("unsupported Core expr", typ, span)
 }
-
-fn hirLowerIfExprFromAst(
-    cx: HirLowerContext,
-    origin: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerIfExprFromAst(cx: HirLowerContext, origin: Int, typeScope: HirLowerTypeScope, typ: HirType, span: HirSpan) -> HirExpr {
     if origin < 0 {
         return hirLowerAssembleErrorExpr("if expression lost AST origin", typ, span)
     }
@@ -3233,14 +2787,7 @@ fn hirLowerIfExprFromAst(
     }
     hirLowerAssembleIfExpr(cond, thenBlock, elseBlock, typ, span)
 }
-
-fn hirLowerIfLetExprFromAst(
-    cx: HirLowerContext,
-    origin: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerIfLetExprFromAst(cx: HirLowerContext, origin: Int, typeScope: HirLowerTypeScope, typ: HirType, span: HirSpan) -> HirExpr {
     if origin < 0 {
         return hirLowerAssembleErrorExpr("if-let expression lost AST origin", typ, span)
     }
@@ -3251,26 +2798,11 @@ fn hirLowerIfLetExprFromAst(
     let thenBlock = hirLowerBlockFromAst(cx, node.right, hirLowerStmtScope(), typeScope)
     let elseIdx = hirLowerAstChildAt(node.children, 0)
     if elseIdx >= 0 {
-        return hirLowerAssembleIfLetExpr(
-            pattern,
-            scrutinee,
-            thenBlock,
-            true,
-            hirLowerBlockLike(cx, elseIdx, hirLowerStmtScope(), typeScope),
-            typ,
-            span,
-        )
+        return hirLowerAssembleIfLetExpr(pattern, scrutinee, thenBlock, true, hirLowerBlockLike(cx, elseIdx, hirLowerStmtScope(), typeScope), typ, span)
     }
     hirLowerAssembleIfLetExpr(pattern, scrutinee, thenBlock, false, hirBlock(span), typ, span)
 }
-
-fn hirLowerMatchExprFromAst(
-    cx: HirLowerContext,
-    origin: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerMatchExprFromAst(cx: HirLowerContext, origin: Int, typeScope: HirLowerTypeScope, typ: HirType, span: HirSpan) -> HirExpr {
     if origin < 0 {
         return hirLowerAssembleErrorExpr("match expression lost AST origin", typ, span)
     }
@@ -3287,12 +2819,7 @@ fn hirLowerMatchExprFromAst(
     }
     hirLowerAssembleMatchExpr(scrutinee, arms, tree, typ, span)
 }
-
-fn hirLowerMatchArmFromAst(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirMatchArm {
+fn hirLowerMatchArmFromAst(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirMatchArm {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let pattern = hirLowerPattern(cx, node.left, typeScope)
@@ -3306,12 +2833,7 @@ fn hirLowerMatchArmFromAst(
     let body = hirLowerBlockLike(cx, node.right, hirLowerStmtScope(), typeScope)
     hirLowerAssembleMatchArm(pattern, hasGuard, guard, body, span)
 }
-
-fn hirLowerCallExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerCallExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
     let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
@@ -3323,12 +2845,7 @@ fn hirLowerCallExprFromCore(
     let typeArgs = hirLowerTypeArgs(cx.elab.env.tys, node.typeArgs)
     hirLowerAssembleCall(callee, typeArgs, args, typ, span)
 }
-
-fn hirLowerMethodCallExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerMethodCallExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
     let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
@@ -3340,12 +2857,7 @@ fn hirLowerMethodCallExprFromCore(
     let typeArgs = hirLowerTypeArgs(cx.elab.env.tys, node.typeArgs)
     hirLowerAssembleMethodCall(recv, node.name, typeArgs, args, typ, span)
 }
-
-fn hirLowerIntrinsicExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerIntrinsicExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
     let kind = hirLowerIntrinsicFromIdent(node.name)
@@ -3355,12 +2867,7 @@ fn hirLowerIntrinsicExprFromCore(
     }
     hirLowerAssembleIntrinsicCall(kind, args, span)
 }
-
-fn hirLowerVariantExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerVariantExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
     let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
@@ -3370,13 +2877,7 @@ fn hirLowerVariantExprFromCore(
     }
     hirLowerAssembleVariantLit(node.owner, node.name, args, typ, span)
 }
-
-fn hirLowerStructExprFromAst(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-) -> HirExpr {
+fn hirLowerStructExprFromAst(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope, typ: HirType) -> HirExpr {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     let mut fields: List<HirStructLitField> = []
@@ -3398,36 +2899,19 @@ fn hirLowerStructExprFromAst(
     }
     hirLowerAssembleStructLit(typeName, fields, hasSpread, spread, typ, span)
 }
-
-fn hirLowerStringExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerStringExprFromCore(cx: HirLowerContext, coreIdx: Int, span: HirSpan) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let decoded = hirLowerDecodeStringToken(node.text)
     let parts = [hirStringPartLit(decoded.body)]
     hirLowerAssembleStringLit(parts, decoded.raw, decoded.triple, span)
 }
-
-fn hirLowerBytesExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerBytesExprFromCore(cx: HirLowerContext, coreIdx: Int, span: HirSpan) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let decoded = hirLowerDecodeBytesToken(node.text)
     let parts = [hirStringPartLit(decoded.body)]
     hirLowerAssembleBytesLit(parts, decoded.raw, decoded.triple, span)
 }
-
-fn hirLowerListExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerListExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope, typ: HirType, span: HirSpan) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let mut elems: List<HirExpr> = []
     for childIdx in node.children {
@@ -3436,35 +2920,17 @@ fn hirLowerListExprFromCore(
     let elemT = hirLowerListElemType(typ, elems)
     hirListLit(elems, elemT, span)
 }
-
-fn hirLowerMapExprFromCore(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    typeScope: HirLowerTypeScope,
-    typ: HirType,
-    span: HirSpan,
-) -> HirExpr {
+fn hirLowerMapExprFromCore(cx: HirLowerContext, coreIdx: Int, typeScope: HirLowerTypeScope, typ: HirType, span: HirSpan) -> HirExpr {
     let node = coreArenaNodeAt(cx.elab.core, coreIdx)
     let kv = hirLowerMapTypes(typ)
     let mut entries: List<HirMapEntry> = []
     for entryIdx in node.children {
         let entry = coreArenaNodeAt(cx.elab.core, entryIdx)
-        entries.push(
-            hirMapEntry(
-                hirLowerExprFromCore(cx, entry.left, typeScope),
-                hirLowerExprFromCore(cx, entry.right, typeScope),
-                hirLowerSpanFromCore(cx.elab.core, entryIdx),
-            ),
-        )
+        entries.push(hirMapEntry(hirLowerExprFromCore(cx, entry.left, typeScope), hirLowerExprFromCore(cx, entry.right, typeScope), hirLowerSpanFromCore(cx.elab.core, entryIdx)))
     }
     hirMapLit(entries, kv.keyT, kv.valT, span)
 }
-
-fn hirLowerPattern(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirPattern {
+fn hirLowerPattern(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirPattern {
     if idx < 0 {
         return hirPatternInvalid()
     }
@@ -3524,14 +2990,7 @@ fn hirLowerPattern(
         } else {
             hirExprInvalid()
         }
-        return hirLowerAssemblePatternRange(
-            node.left >= 0,
-            low,
-            node.right >= 0,
-            high,
-            node.flags == 1,
-            span,
-        )
+        return hirLowerAssemblePatternRange(node.left >= 0, low, node.right >= 0, high, node.flags == 1, span)
     }
     if node.extra == astPatternOrKind() {
         let mut alts: List<HirPattern> = []
@@ -3554,12 +3013,7 @@ fn hirLowerPattern(
     }
     hirErrorPat("unsupported pattern", span)
 }
-
-fn hirLowerPatternLiteralExpr(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirExpr {
+fn hirLowerPatternLiteralExpr(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirExpr {
     if idx < 0 {
         return hirExprInvalid()
     }
@@ -3622,12 +3076,7 @@ fn hirLowerPatternLiteralExpr(
     }
     hirLowerExpr(cx, idx, typeScope)
 }
-
-fn hirLowerAnnotations(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> List<HirAnnotation> {
+fn hirLowerAnnotations(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> List<HirAnnotation> {
     let mut out: List<HirAnnotation> = []
     if idx < 0 {
         return out
@@ -3642,12 +3091,7 @@ fn hirLowerAnnotations(
     out.push(hirLowerOneAnnotation(cx, idx, typeScope))
     out
 }
-
-fn hirLowerOneAnnotation(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirAnnotation {
+fn hirLowerOneAnnotation(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirAnnotation {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let mut ann = hirAnnotation(node.text, hirLowerSpanFromNode(node))
     for argIdx in node.children {
@@ -3655,12 +3099,7 @@ fn hirLowerOneAnnotation(
     }
     ann
 }
-
-fn hirLowerAnnotationArg(
-    cx: HirLowerContext,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirAnnotationArg {
+fn hirLowerAnnotationArg(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) -> HirAnnotationArg {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     let span = hirLowerSpanFromNode(node)
     if node.kind == AstNField_ {
@@ -3671,14 +3110,7 @@ fn hirLowerAnnotationArg(
     }
     hirAnnotationArgPositional(hirLowerExpr(cx, idx, typeScope), span)
 }
-
-fn hirLowerTypeScopeWithGenerics(
-    ast: AstFile,
-    genericIdxs: List<Int>,
-    genericOwner: String,
-    selfOwner: String,
-    parent: HirLowerTypeScope,
-) -> HirLowerTypeScope {
+fn hirLowerTypeScopeWithGenerics(ast: AstFile, genericIdxs: List<Int>, genericOwner: String, selfOwner: String, parent: HirLowerTypeScope) -> HirLowerTypeScope {
     let mut out = parent
     if selfOwner != "" {
         out.selfOwner = selfOwner
@@ -3692,12 +3124,7 @@ fn hirLowerTypeScopeWithGenerics(
     }
     out
 }
-
-fn hirLowerGenericParams(
-    cx: HirLowerContext,
-    idxs: List<Int>,
-    typeScope: HirLowerTypeScope,
-) -> List<HirTypeParam> {
+fn hirLowerGenericParams(cx: HirLowerContext, idxs: List<Int>, typeScope: HirLowerTypeScope) -> List<HirTypeParam> {
     let mut out: List<HirTypeParam> = []
     for idx in idxs {
         let node = astArenaNodeAt(cx.ast.arena, idx)
@@ -3712,12 +3139,7 @@ fn hirLowerGenericParams(
     }
     out
 }
-
-fn hirLowerTypeFromAst(
-    ast: AstFile,
-    idx: Int,
-    typeScope: HirLowerTypeScope,
-) -> HirType {
+fn hirLowerTypeFromAst(ast: AstFile, idx: Int, typeScope: HirLowerTypeScope) -> HirType {
     if idx < 0 {
         return hirTypeInvalid()
     }
@@ -3779,7 +3201,6 @@ fn hirLowerTypeFromAst(
     }
     hirTypeNamed(node.text, args)
 }
-
 fn hirLowerTypeScopeLookup(scope: HirLowerTypeScope, name: String) -> String {
     let mut i = scope.genericNames.len() - 1
     for i >= 0 {
@@ -3790,7 +3211,6 @@ fn hirLowerTypeScopeLookup(scope: HirLowerTypeScope, name: String) -> String {
     }
     ""
 }
-
 fn hirLowerTypeArgs(tys: TyArena, idxs: List<Int>) -> List<HirType> {
     let mut out: List<HirType> = []
     for idx in idxs {
@@ -3798,29 +3218,24 @@ fn hirLowerTypeArgs(tys: TyArena, idxs: List<Int>) -> List<HirType> {
     }
     out
 }
-
 fn hirLowerSpanFromNode(node: AstNode) -> HirSpan {
     hirSpanFromOffsets(node.start, node.end)
 }
-
 fn hirLowerSpanFromAst(ast: AstFile, idx: Int) -> HirSpan {
     if idx < 0 {
         return hirNoSpan()
     }
     hirLowerSpanFromNode(astArenaNodeAt(ast.arena, idx))
 }
-
 fn hirLowerSpanFromCore(core: CoreArena, idx: Int) -> HirSpan {
     if idx < 0 {
         return hirNoSpan()
     }
     hirSpanFromOffsets(coreStartAt(core, idx), coreEndAt(core, idx))
 }
-
 fn hirLowerSpanText(span: HirSpan) -> String {
     hirLowerIntToString(span.start.offset) + ".." + hirLowerIntToString(span.end.offset)
 }
-
 fn hirLowerExprCoreIdx(cx: HirLowerContext, idx: Int) -> Int {
     let mapped = elabTypedExprCoreAt(cx.elab, idx)
     if mapped >= 0 {
@@ -3831,7 +3246,6 @@ fn hirLowerExprCoreIdx(cx: HirLowerContext, idx: Int) -> Int {
     }
     elabInfer(cx.elab, idx).node
 }
-
 fn hirLowerExprType(cx: HirLowerContext, idx: Int) -> HirType {
     let mapped = elabTypedExprTyAt(cx.elab, idx)
     if mapped >= 0 {
@@ -3843,7 +3257,6 @@ fn hirLowerExprType(cx: HirLowerContext, idx: Int) -> HirType {
     let r = elabInfer(cx.elab, idx)
     hirLowerTyToHirType(cx.elab.env.tys, r.ty)
 }
-
 fn hirLowerUseAlias(ast: AstFile, node: AstNode) -> String {
     let aliasIdx = hirLowerAstChildAt(node.children2, 0)
     if aliasIdx >= 0 {
@@ -3854,10 +3267,13 @@ fn hirLowerUseAlias(ast: AstFile, node: AstNode) -> String {
     }
     hirLowerPathLastSegment(node.text)
 }
-
 fn hirLowerUsePathSegments(path: String) -> List<String> {
     let raw = hirLowerDecodeStringToken(path).body
-    let source = if raw != "" { raw } else { path }
+    let source = if raw != "" {
+        raw
+    } else {
+        path
+    }
     let mut out: List<String> = []
     for slash in strings.split(source, "/") {
         for dot in strings.split(slash, ".") {
@@ -3870,104 +3286,61 @@ fn hirLowerUsePathSegments(path: String) -> List<String> {
     }
     out
 }
-
 fn hirLowerPathLastSegment(path: String) -> String {
     let parts = hirLowerUsePathSegments(path)
     hirLowerLast(parts)
 }
-
 fn hirLowerPathStartsWithRuntime(path: String) -> Bool {
     path.startsWith("runtime.") || path.startsWith("runtime/") || path.startsWith("runtime:")
 }
-
 pub struct HirLowerDecodedString {
     pub body: String,
     pub raw: Bool,
     pub triple: Bool,
 }
-
 fn hirLowerDecodeStringToken(text: String) -> HirLowerDecodedString {
     let n = text.len()
     if n >= 7 && text[0..4] == "r\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {
-            body: text[4..n - 3],
-            raw: true,
-            triple: true,
-        }
+        return HirLowerDecodedString {body: text[4..n - 3], raw: true, triple: true}
     }
     if n >= 6 && text[0..3] == "\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {
-            body: text[3..n - 3],
-            raw: false,
-            triple: true,
-        }
+        return HirLowerDecodedString {body: text[3..n - 3], raw: false, triple: true}
     }
     if n >= 3 && text[0..2] == "r\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {
-            body: text[2..n - 1],
-            raw: true,
-            triple: false,
-        }
+        return HirLowerDecodedString {body: text[2..n - 1], raw: true, triple: false}
     }
     if n >= 2 && text[0..1] == "\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {
-            body: text[1..n - 1],
-            raw: false,
-            triple: false,
-        }
+        return HirLowerDecodedString {body: text[1..n - 1], raw: false, triple: false}
     }
-    HirLowerDecodedString { body: text, raw: false, triple: false }
+    HirLowerDecodedString {body: text, raw: false, triple: false}
 }
-
 fn hirLowerDecodeBytesToken(text: String) -> HirLowerDecodedString {
     let n = text.len()
     if n >= 4 && text[0..2] == "b\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {
-            body: text[2..n - 1],
-            raw: false,
-            triple: false,
-        }
+        return HirLowerDecodedString {body: text[2..n - 1], raw: false, triple: false}
     }
     if n >= 5 && text[0..3] == "b\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {
-            body: text[3..n - 3],
-            raw: false,
-            triple: true,
-        }
+        return HirLowerDecodedString {body: text[3..n - 3], raw: false, triple: true}
     }
     if n >= 5 && text[0..3] == "br\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {
-            body: text[3..n - 1],
-            raw: true,
-            triple: false,
-        }
+        return HirLowerDecodedString {body: text[3..n - 1], raw: true, triple: false}
     }
     if n >= 6 && text[0..4] == "br\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {
-            body: text[4..n - 3],
-            raw: true,
-            triple: true,
-        }
+        return HirLowerDecodedString {body: text[4..n - 3], raw: true, triple: true}
     }
-    HirLowerDecodedString { body: text, raw: false, triple: false }
+    HirLowerDecodedString {body: text, raw: false, triple: false}
 }
-
 pub struct HirLowerQualifiedName {
     pub owner: String,
     pub leaf: String,
 }
-
 fn hirLowerSplitQualifiedName(name: String) -> HirLowerQualifiedName {
     let parts = strings.split(name, ".")
     if parts.len() <= 1 {
-        return HirLowerQualifiedName { owner: "", leaf: name }
+        return HirLowerQualifiedName {owner: "", leaf: name}
     }
-    HirLowerQualifiedName {
-        owner: hirLowerJoinDottedPath(hirLowerDropLast(parts)),
-        leaf: hirLowerLast(parts),
-    }
+    HirLowerQualifiedName {owner: hirLowerJoinDottedPath(hirLowerDropLast(parts)), leaf: hirLowerLast(parts)}
 }
-
 fn hirLowerStructLitTypeName(ast: AstFile, node: AstNode, typ: HirType) -> String {
     if node.flags == 1 {
         return hirTypeString(typ)
@@ -3977,7 +3350,6 @@ fn hirLowerStructLitTypeName(ast: AstFile, node: AstNode, typ: HirType) -> Strin
     }
     hirTypeString(typ)
 }
-
 fn hirLowerTopLevelLetName(ast: AstFile, patIdx: Int) -> String {
     if patIdx < 0 {
         return ""
@@ -3991,7 +3363,6 @@ fn hirLowerTopLevelLetName(ast: AstFile, patIdx: Int) -> String {
     }
     ""
 }
-
 fn hirLowerFnParamTypeAt(fnTy: HirType, idx: Int) -> HirType {
     if fnTy.kind != HirTypeFn {
         return hirTypeErr()
@@ -4001,14 +3372,12 @@ fn hirLowerFnParamTypeAt(fnTy: HirType, idx: Int) -> HirType {
     }
     fnTy.fnParams[idx]
 }
-
 fn hirLowerFnReturnType(fnTy: HirType) -> HirType {
     if fnTy.kind != HirTypeFn || fnTy.fnReturn.len() == 0 {
         return hirTypeErr()
     }
     fnTy.fnReturn[0]
 }
-
 fn hirLowerListElemType(typ: HirType, elems: List<HirExpr>) -> HirType {
     if typ.kind == HirTypeNamed && typ.namedName == "List" && typ.namedArgs.len() > 0 {
         return typ.namedArgs[0]
@@ -4018,50 +3387,40 @@ fn hirLowerListElemType(typ: HirType, elems: List<HirExpr>) -> HirType {
     }
     hirTypeErr()
 }
-
 pub struct HirLowerMapTypeInfo {
     pub keyT: HirType,
     pub valT: HirType,
 }
-
 fn hirLowerMapTypes(typ: HirType) -> HirLowerMapTypeInfo {
     if typ.kind == HirTypeNamed && typ.namedName == "Map" && typ.namedArgs.len() >= 2 {
-        return HirLowerMapTypeInfo {
-            keyT: typ.namedArgs[0],
-            valT: typ.namedArgs[1],
-        }
+        return HirLowerMapTypeInfo {keyT: typ.namedArgs[0], valT: typ.namedArgs[1]}
     }
-    HirLowerMapTypeInfo { keyT: hirTypeErr(), valT: hirTypeErr() }
+    HirLowerMapTypeInfo {keyT: hirTypeErr(), valT: hirTypeErr()}
 }
-
 fn hirLowerAstFirst(xs: List<Int>) -> Int {
     if xs.len() == 0 {
         return -1
     }
     xs[0]
 }
-
 fn hirLowerAstChildAt(xs: List<Int>, idx: Int) -> Int {
     if idx < 0 || idx >= xs.len() {
         return -1
     }
     xs[idx]
 }
-
 fn hirLowerStringListAt(xs: List<String>, idx: Int) -> String {
     if idx < 0 || idx >= xs.len() {
         return ""
     }
     xs[idx]
 }
-
 fn hirLowerIntListAt(xs: List<Int>, idx: Int) -> Int {
     if idx < 0 || idx >= xs.len() {
         return -1
     }
     xs[idx]
 }
-
 fn hirLowerContainsString(xs: List<String>, needle: String) -> Bool {
     for x in xs {
         if x == needle {
@@ -4070,71 +3429,142 @@ fn hirLowerContainsString(xs: List<String>, needle: String) -> Bool {
     }
     false
 }
-
 fn hirLowerAssignOpFromFrontToken(op: FrontTokenKind) -> HirAssignOp {
-    if op == FrontAssign { return HirAssignEq }
-    if op == FrontPlusEq { return HirAssignAdd }
-    if op == FrontMinusEq { return HirAssignSub }
-    if op == FrontStarEq { return HirAssignMul }
-    if op == FrontSlashEq { return HirAssignDiv }
-    if op == FrontPercentEq { return HirAssignMod }
-    if op == FrontBitAndEq { return HirAssignAnd }
-    if op == FrontBitOrEq { return HirAssignOr }
-    if op == FrontBitXorEq { return HirAssignXor }
-    if op == FrontShlEq { return HirAssignShl }
-    if op == FrontShrEq { return HirAssignShr }
+    if op == FrontAssign {
+        return HirAssignEq
+    }
+    if op == FrontPlusEq {
+        return HirAssignAdd
+    }
+    if op == FrontMinusEq {
+        return HirAssignSub
+    }
+    if op == FrontStarEq {
+        return HirAssignMul
+    }
+    if op == FrontSlashEq {
+        return HirAssignDiv
+    }
+    if op == FrontPercentEq {
+        return HirAssignMod
+    }
+    if op == FrontBitAndEq {
+        return HirAssignAnd
+    }
+    if op == FrontBitOrEq {
+        return HirAssignOr
+    }
+    if op == FrontBitXorEq {
+        return HirAssignXor
+    }
+    if op == FrontShlEq {
+        return HirAssignShl
+    }
+    if op == FrontShrEq {
+        return HirAssignShr
+    }
     HirAssignInvalid
 }
-
 fn hirLowerUnaryOpFromCore(op: UnOp) -> HirUnOp {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if op == UoNeg { return HirUnNeg }
-    if op == UoPlus { return HirUnPlus }
-    if op == UoNot { return HirUnNot }
-    if op == UoBitNot { return HirUnBitNot }
+    if op == UoNeg {
+        return HirUnNeg
+    }
+    if op == UoPlus {
+        return HirUnPlus
+    }
+    if op == UoNot {
+        return HirUnNot
+    }
+    if op == UoBitNot {
+        return HirUnBitNot
+    }
     HirUnInvalid
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 fn hirLowerBinaryOpFromCore(op: BinOp) -> HirBinOp {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if op == BoAdd { return HirBinAdd }
-    if op == BoSub { return HirBinSub }
-    if op == BoMul { return HirBinMul }
-    if op == BoDiv { return HirBinDiv }
-    if op == BoMod { return HirBinMod }
-    if op == BoEq { return HirBinEq }
-    if op == BoNe { return HirBinNeq }
-    if op == BoLt { return HirBinLt }
-    if op == BoLe { return HirBinLeq }
-    if op == BoGt { return HirBinGt }
-    if op == BoGe { return HirBinGeq }
-    if op == BoAnd { return HirBinAnd }
-    if op == BoOr { return HirBinOr }
-    if op == BoBitAnd { return HirBinBitAnd }
-    if op == BoBitOr { return HirBinBitOr }
-    if op == BoBitXor { return HirBinBitXor }
-    if op == BoShl { return HirBinShl }
-    if op == BoShr { return HirBinShr }
+    if op == BoAdd {
+        return HirBinAdd
+    }
+    if op == BoSub {
+        return HirBinSub
+    }
+    if op == BoMul {
+        return HirBinMul
+    }
+    if op == BoDiv {
+        return HirBinDiv
+    }
+    if op == BoMod {
+        return HirBinMod
+    }
+    if op == BoEq {
+        return HirBinEq
+    }
+    if op == BoNe {
+        return HirBinNeq
+    }
+    if op == BoLt {
+        return HirBinLt
+    }
+    if op == BoLe {
+        return HirBinLeq
+    }
+    if op == BoGt {
+        return HirBinGt
+    }
+    if op == BoGe {
+        return HirBinGeq
+    }
+    if op == BoAnd {
+        return HirBinAnd
+    }
+    if op == BoOr {
+        return HirBinOr
+    }
+    if op == BoBitAnd {
+        return HirBinBitAnd
+    }
+    if op == BoBitOr {
+        return HirBinBitOr
+    }
+    if op == BoBitXor {
+        return HirBinBitXor
+    }
+    if op == BoShl {
+        return HirBinShl
+    }
+    if op == BoShr {
+        return HirBinShr
+    }
     HirBinInvalid
 }
-
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 fn hirLowerIdentKindFromCore(kind: IdentKind) -> HirIdentKind {
-    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-    if kind == IkLocal { return HirIdentLocal }
-    if kind == IkParam { return HirIdentParam }
-    if kind == IkFn { return HirIdentFn }
-    if kind == IkVariant { return HirIdentVariant }
-    if kind == IkTypeName { return HirIdentTypeName }
-    if kind == IkGlobal { return HirIdentGlobal }
-    if kind == IkBuiltin { return HirIdentBuiltin }
+    if kind == IkLocal {
+        return HirIdentLocal
+    }
+    if kind == IkParam {
+        return HirIdentParam
+    }
+    if kind == IkFn {
+        return HirIdentFn
+    }
+    if kind == IkVariant {
+        return HirIdentVariant
+    }
+    if kind == IkTypeName {
+        return HirIdentTypeName
+    }
+    if kind == IkGlobal {
+        return HirIdentGlobal
+    }
+    if kind == IkBuiltin {
+        return HirIdentBuiltin
+    }
     HirIdentUnknown
 }
-
-fn hirLowerCoreIdentCaptureKind(
-    cx: HirLowerContext,
-    coreIdx: Int,
-    name: String,
-) -> HirCaptureKind {
+// B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+fn hirLowerCoreIdentCaptureKind(cx: HirLowerContext, coreIdx: Int, name: String) -> HirCaptureKind {
     let _ = cx
     if name == "self" {
         return HirCaptureSelf
@@ -4142,15 +3572,22 @@ fn hirLowerCoreIdentCaptureKind(
     if coreIdx < 0 {
         return HirCaptureUnknown
     }
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     let kind = coreIdentKindAt(cx.elab.core, coreIdx)
-    if kind == IkLocal { return HirCaptureLocal }
-    if kind == IkParam { return HirCaptureParam }
-    if kind == IkFn { return HirCaptureFn }
-    if kind == IkGlobal { return HirCaptureGlobal }
+    if kind == IkLocal {
+        return HirCaptureLocal
+    }
+    if kind == IkParam {
+        return HirCaptureParam
+    }
+    if kind == IkFn {
+        return HirCaptureFn
+    }
+    if kind == IkGlobal {
+        return HirCaptureGlobal
+    }
     HirCaptureUnknown
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn hirLowerBindingMutable(node: AstNode) -> Bool {
     if node.kind == AstNLet {
         return node.flags == 1
@@ -4163,13 +3600,7 @@ fn hirLowerBindingMutable(node: AstNode) -> Bool {
     }
     false
 }
-
-fn hirLowerNodeInsideClosure(
-    ast: AstFile,
-    closureIdx: Int,
-    targetIdx: Int,
-    skipNestedClosures: Bool,
-) -> Bool {
+fn hirLowerNodeInsideClosure(ast: AstFile, closureIdx: Int, targetIdx: Int, skipNestedClosures: Bool) -> Bool {
     if closureIdx < 0 || targetIdx < 0 {
         return false
     }
@@ -4181,14 +3612,7 @@ fn hirLowerNodeInsideClosure(
     }
     hirLowerNodeInsideAstSubtree(ast, closure.left, targetIdx, skipNestedClosures, false)
 }
-
-fn hirLowerNodeInsideAstSubtree(
-    ast: AstFile,
-    rootIdx: Int,
-    targetIdx: Int,
-    skipNestedClosures: Bool,
-    nested: Bool,
-) -> Bool {
+fn hirLowerNodeInsideAstSubtree(ast: AstFile, rootIdx: Int, targetIdx: Int, skipNestedClosures: Bool, nested: Bool) -> Bool {
     if rootIdx < 0 {
         return false
     }
@@ -4221,21 +3645,22 @@ fn hirLowerNodeInsideAstSubtree(
     }
     false
 }
-
 fn hirLowerAstRangeInclusive(node: AstNode) -> Bool {
     node.flags == 1 || node.flags == 3
 }
-
 fn hirLowerAstRangeHasStep(node: AstNode) -> Bool {
     node.flags == 2 || node.flags == 3 || node.children.len() > 0
 }
-
 fn hirLowerIntToString(n: Int) -> String {
     if n == 0 {
         return "0"
     }
     let negative = n < 0
-    let mut value = if negative { 0 - n } else { n }
+    let mut value = if negative {
+        0 - n
+    } else {
+        n
+    }
     let mut digits: List<String> = []
     for value > 0 {
         let digit = value % 10
@@ -4253,21 +3678,39 @@ fn hirLowerIntToString(n: Int) -> String {
     }
     out
 }
-
 fn hirLowerDigitText(d: Int) -> String {
-    if d == 0 { return "0" }
-    if d == 1 { return "1" }
-    if d == 2 { return "2" }
-    if d == 3 { return "3" }
-    if d == 4 { return "4" }
-    if d == 5 { return "5" }
-    if d == 6 { return "6" }
-    if d == 7 { return "7" }
-    if d == 8 { return "8" }
-    if d == 9 { return "9" }
+    if d == 0 {
+        return "0"
+    }
+    if d == 1 {
+        return "1"
+    }
+    if d == 2 {
+        return "2"
+    }
+    if d == 3 {
+        return "3"
+    }
+    if d == 4 {
+        return "4"
+    }
+    if d == 5 {
+        return "5"
+    }
+    if d == 6 {
+        return "6"
+    }
+    if d == 7 {
+        return "7"
+    }
+    if d == 8 {
+        return "8"
+    }
+    if d == 9 {
+        return "9"
+    }
     "0"
 }
-
 fn hirLowerCharValue(text: String) -> Int {
     if text.len() >= 3 {
         let inner = text[1..text.len() - 1]
@@ -4277,7 +3720,6 @@ fn hirLowerCharValue(text: String) -> Int {
     }
     0
 }
-
 fn hirLowerByteValue(text: String) -> Int {
     if text.startsWith("b'") && text.len() >= 4 {
         let inner = text[2..text.len() - 1]

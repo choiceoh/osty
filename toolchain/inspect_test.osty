@@ -1,17 +1,12 @@
 use std.testing
-
 fn testInspectEmitsLiteralAndIdentRecords() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let x: Int = 42
                 let y = x + 1
             }
-            """,
-    )
-
+            """)
     testing.assert(recs.len() >= 3)
-
     let mut sawIntLit = false
     let mut sawVar = false
     let mut sawBinop = false
@@ -30,22 +25,17 @@ fn testInspectEmitsLiteralAndIdentRecords() {
     testing.assert(sawVar)
     testing.assert(sawBinop)
 }
-
 fn testInspectRecordsSortedByStart() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let a = 1
                 let b = 2
                 let c = a + b
             }
-            """,
-    )
-
+            """)
     if recs.len() < 2 {
         return
     }
-
     let mut prev = recs[0].start
     for i in 1..recs.len() {
         let cur = recs[i].start
@@ -53,17 +43,13 @@ fn testInspectRecordsSortedByStart() {
         prev = cur
     }
 }
-
 fn testInspectCarriesTypeNamesForLiterals() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let x: Int = 7
                 let s: String = "hi"
             }
-            """,
-    )
-
+            """)
     let mut sawIntType = false
     let mut sawStringType = false
     for rec in recs {
@@ -77,43 +63,44 @@ fn testInspectCarriesTypeNamesForLiterals() {
     testing.assert(sawIntType)
     testing.assert(sawStringType)
 }
-
 fn testInspectRuleCoverageIsNonEmpty() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let xs: List<Int> = [1, 2, 3]
                 let pair: (Int, Int) = (1, 2)
                 let result = if xs.len() > 0 { 1 } else { 0 }
                 let _ = xs[0]
             }
-            """,
-    )
-
+            """)
     let mut sawList = false
     let mut sawTuple = false
     let mut sawIf = false
     let mut sawIndex = false
     for rec in recs {
-        if rec.rule == "LIST" { sawList = true }
-        if rec.rule == "TUPLE" { sawTuple = true }
-        if rec.rule == "IF" { sawIf = true }
-        if rec.rule == "INDEX" { sawIndex = true }
+        if rec.rule == "LIST" {
+            sawList = true
+        }
+        if rec.rule == "TUPLE" {
+            sawTuple = true
+        }
+        if rec.rule == "IF" {
+            sawIf = true
+        }
+        if rec.rule == "INDEX" {
+            sawIndex = true
+        }
     }
     testing.assert(sawList)
     testing.assert(sawTuple)
     testing.assert(sawIf)
     testing.assert(sawIndex)
 }
-
 fn testInspectEmptyOnEmptyFile() {
     let recs = inspectSource("")
     testing.assertEq(recs.len(), 0)
 }
-
 fn testInspectEmitsFnDeclRecords() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             pub fn greet(name: String) -> String {
                 "hi, {name}"
             }
@@ -121,9 +108,7 @@ fn testInspectEmitsFnDeclRecords() {
             fn main() {
                 let _ = greet("alice")
             }
-            """,
-    )
-
+            """)
     let mut sawGreet = false
     let mut sawMain = false
     for rec in recs {
@@ -142,18 +127,14 @@ fn testInspectEmitsFnDeclRecords() {
     testing.assert(sawGreet)
     testing.assert(sawMain)
 }
-
 fn testInspectEmitsTopLevelLetRecord() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             let answer: Int = 42
 
             fn main() {
                 let _ = answer
             }
-            """,
-    )
-
+            """)
     let mut sawLet = false
     for rec in recs {
         if rec.rule == "LET" && rec.typeName == "Int" {
@@ -166,10 +147,8 @@ fn testInspectEmitsTopLevelLetRecord() {
     }
     testing.assert(sawLet)
 }
-
 fn testInspectEmitsBindRecords() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let opt: Option<Int> = Some(42)
                 match opt {
@@ -177,9 +156,7 @@ fn testInspectEmitsBindRecords() {
                     None -> 0,
                 }
             }
-            """,
-    )
-
+            """)
     let mut sawBind = false
     for rec in recs {
         if rec.rule == "BIND" {
@@ -192,18 +169,14 @@ fn testInspectEmitsBindRecords() {
     }
     testing.assert(sawBind)
 }
-
 fn testInspectEmitsLocalLetAsLetRule() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let inner: Int = 7
                 let mut counter: Int = 0
                 counter = counter + inner
             }
-            """,
-    )
-
+            """)
     let mut sawInner = false
     let mut sawCounter = false
     for rec in recs {
@@ -225,17 +198,13 @@ fn testInspectEmitsLocalLetAsLetRule() {
     testing.assert(sawInner)
     testing.assert(sawCounter)
 }
-
 fn testInspectEmitsTupleDestructureLet() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let (lo, hi): (Int, Int) = (1, 10)
                 let _ = lo + hi
             }
-            """,
-    )
-
+            """)
     let mut sawLo = false
     let mut sawHi = false
     for rec in recs {
@@ -254,10 +223,8 @@ fn testInspectEmitsTupleDestructureLet() {
     testing.assert(sawLo)
     testing.assert(sawHi)
 }
-
 fn testInspectEmitsStructDestructureLet() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             pub struct Point { pub x: Int, pub y: Int }
 
             fn main() {
@@ -265,9 +232,7 @@ fn testInspectEmitsStructDestructureLet() {
                 let Point { x, y } = p
                 let _ = x + y
             }
-            """,
-    )
-
+            """)
     let mut sawX = false
     let mut sawY = false
     for rec in recs {
@@ -286,10 +251,8 @@ fn testInspectEmitsStructDestructureLet() {
     testing.assert(sawX)
     testing.assert(sawY)
 }
-
 fn testInspectMatchPatternStaysBindRule() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let opt: Option<Int> = Some(3)
                 match opt {
@@ -297,9 +260,7 @@ fn testInspectMatchPatternStaysBindRule() {
                     None -> 0,
                 }
             }
-            """,
-    )
-
+            """)
     let mut sawBindV = false
     for rec in recs {
         if rec.rule == "BIND" && rec.nodeKind == "Binding" {
@@ -312,10 +273,8 @@ fn testInspectMatchPatternStaysBindRule() {
     }
     testing.assert(sawBindV)
 }
-
 fn testInspectEmitsStructAndEnumDeclRecords() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             pub struct Point { pub x: Int, pub y: Int }
 
             pub enum Color { Red, Green, Blue }
@@ -323,9 +282,7 @@ fn testInspectEmitsStructAndEnumDeclRecords() {
             fn main() {
                 let _ = Point { x: 1, y: 2 }
             }
-            """,
-    )
-
+            """)
     let mut sawStruct = false
     let mut sawEnum = false
     for rec in recs {
@@ -347,16 +304,12 @@ fn testInspectEmitsStructAndEnumDeclRecords() {
     testing.assert(sawStruct)
     testing.assert(sawEnum)
 }
-
 fn testInspectHintsListElement() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let xs: List<Int> = [42]
             }
-            """,
-    )
-
+            """)
     let mut sawHint = false
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -365,16 +318,12 @@ fn testInspectHintsListElement() {
     }
     testing.assert(sawHint)
 }
-
 fn testInspectHintsTupleElements() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let pair: (Int, String) = (7, "hi")
             }
-            """,
-    )
-
+            """)
     let mut sawIntHint = false
     let mut sawStringHint = false
     for rec in recs {
@@ -388,10 +337,8 @@ fn testInspectHintsTupleElements() {
     testing.assert(sawIntHint)
     testing.assert(sawStringHint)
 }
-
 fn testInspectHintsCallArguments() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn scale(n: Int, factor: Int) -> Int {
                 n * factor
             }
@@ -399,9 +346,7 @@ fn testInspectHintsCallArguments() {
             fn main() {
                 let _ = scale(3, 5)
             }
-            """,
-    )
-
+            """)
     let mut intHintCount = 0
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -410,16 +355,12 @@ fn testInspectHintsCallArguments() {
     }
     testing.assert(intHintCount >= 2)
 }
-
 fn testInspectHintThreadsThroughBlock() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn answer() -> Int {
                 42
             }
-            """,
-    )
-
+            """)
     let mut sawThreaded = false
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -428,10 +369,8 @@ fn testInspectHintThreadsThroughBlock() {
     }
     testing.assert(sawThreaded)
 }
-
 fn testInspectHintThreadsThroughIfArms() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn pick(flag: Bool) -> Int {
                 if flag {
                     1
@@ -439,9 +378,7 @@ fn testInspectHintThreadsThroughIfArms() {
                     2
                 }
             }
-            """,
-    )
-
+            """)
     let mut intHintCount = 0
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -450,10 +387,8 @@ fn testInspectHintThreadsThroughIfArms() {
     }
     testing.assert(intHintCount >= 2)
 }
-
 fn testInspectHintThreadsThroughMatchArms() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn describe(n: Int) -> Int {
                 match n {
                     0 -> 100,
@@ -461,30 +396,24 @@ fn testInspectHintThreadsThroughMatchArms() {
                     _ -> 300,
                 }
             }
-            """,
-    )
-
+            """)
     let mut intHintCount = 0
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
             intHintCount = intHintCount + 1
         }
     }
-    // 100/200/300 are arm bodies inside fn -> Int; all three should
-    // inherit the outer Int hint via the match-arm threading.
     testing.assert(intHintCount >= 3)
 }
-
+// 100/200/300 are arm bodies inside fn -> Int; all three should
+// inherit the outer Int hint via the match-arm threading.
 fn testInspectHintThreadsThroughParen() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let x: Int = (99)
                 let _ = x
             }
-            """,
-    )
-
+            """)
     let mut sawHint = false
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -493,41 +422,33 @@ fn testInspectHintThreadsThroughParen() {
     }
     testing.assert(sawHint)
 }
-
 fn testInspectHintsForInIter() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let xs: List<Int> = [1, 2, 3]
                 for x in xs {
                     let _ = x
                 }
             }
-            """,
-    )
-
+            """)
     let mut sawListIntHint = false
     for rec in recs {
-        // The iter expression (`xs`) is an identifier; the for-loop
-        // back-hint propagates `List<Int>` to it because the loop
-        // pattern `x` is bound to `Int`.
         if rec.rule == "VAR" && rec.hintName == "List<Int>" {
             sawListIntHint = true
         }
     }
     testing.assert(sawListIntHint)
 }
-
+// The iter expression (`xs`) is an identifier; the for-loop
+// back-hint propagates `List<Int>` to it because the loop
+// pattern `x` is bound to `Int`.
 fn testInspectHintsThroughMethodCallArg() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let mut xs: List<Int> = []
                 xs.push(42)
             }
-            """,
-    )
-
+            """)
     let mut sawArgHint = false
     for rec in recs {
         if rec.rule == "LIT-INT" && rec.hintName == "Int" {
@@ -536,17 +457,13 @@ fn testInspectHintsThroughMethodCallArg() {
     }
     testing.assert(sawArgHint)
 }
-
 fn testInspectEmitsMethodCalleeFieldRecord() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let mut xs: List<Int> = []
                 xs.push(1)
             }
-            """,
-    )
-
+            """)
     let mut sawMethodField = false
     for rec in recs {
         if rec.rule == "FIELD" && rec.typeName.startsWith("fn(") {
@@ -555,10 +472,8 @@ fn testInspectEmitsMethodCalleeFieldRecord() {
     }
     testing.assert(sawMethodField)
 }
-
 fn testInspectFieldChainHintFromFnReturn() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             pub struct User { pub age: Int }
 
             fn main() {
@@ -569,30 +484,24 @@ fn testInspectFieldChainHintFromFnReturn() {
             fn ageOf(u: User) -> Int {
                 u.age
             }
-            """,
-    )
-
+            """)
     let mut sawFieldHint = false
     for rec in recs {
-        // The tail `u.age` inside `fn ageOf -> Int` is a FieldExpr
-        // threaded through the function body block, so it inherits
-        // the fn's return-type hint.
         if rec.rule == "FIELD" && rec.hintName == "Int" {
             sawFieldHint = true
         }
     }
     testing.assert(sawFieldHint)
 }
-
+// The tail `u.age` inside `fn ageOf -> Int` is a FieldExpr
+// threaded through the function body block, so it inherits
+// the fn's return-type hint.
 fn testInspectRecordFieldsStable() {
-    let recs = inspectSource(
-        r"""
+    let recs = inspectSource(r"""
             fn main() {
                 let _ = 1
             }
-            """,
-    )
-
+            """)
     if recs.len() == 0 {
         return
     }

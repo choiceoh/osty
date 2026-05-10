@@ -25,20 +25,15 @@
 //   and the Core arena never owns a type — types live in a parallel
 //   `TyArena`. This keeps the two arenas freely mixed inside a single
 //   `ElabCx` without ownership tangles.
-
 use std.strings as strings
-
 // ---------------------------------------------------------------------
 // Kind discriminators.
 // ---------------------------------------------------------------------
-
 /// CoreKind tags every node in the arena. Buckets:
 ///   Ck* = expression, Cs* = statement, Cd* = decl, Cp* = pattern,
 ///   CkErr / CsErr / CpErr = poisoned node (lowering could not recover).
 pub enum CoreKind {
     CkErr,
-
-    // Literals
     CkIntLit,
     CkFloatLit,
     CkBoolLit,
@@ -47,26 +42,18 @@ pub enum CoreKind {
     CkStringLit,
     CkBytesLit,
     CkUnitLit,
-
-    // Atoms and operators
     CkIdent,
     CkUnary,
     CkBinary,
     CkCoalesce,
     CkQuestion,
-
-    // Callables
     CkCall,
     CkMethodCall,
     CkIntrinsic,
     CkVariantLit,
-
-    // Access
     CkField,
     CkTupleAccess,
     CkIndex,
-
-    // Aggregates
     CkList,
     CkMap,
     CkMapEntry,
@@ -74,16 +61,12 @@ pub enum CoreKind {
     CkStruct,
     CkStructField,
     CkRange,
-
-    // Control
     CkClosure,
     CkBlock,
     CkIf,
     CkIfLet,
     CkMatch,
     CkMatchArm,
-
-    // Statements
     CsBlock,
     CsLet,
     CsAssign,
@@ -97,8 +80,6 @@ pub enum CoreKind {
     CsDefer,
     CsChanSend,
     CsErr,
-
-    // Decls
     CdFn,
     CdStruct,
     CdEnum,
@@ -110,8 +91,6 @@ pub enum CoreKind {
     CdField,
     CdParam,
     CdGenericParam,
-
-    // Patterns
     CpWild,
     CpIdent,
     CpLit,
@@ -124,7 +103,15 @@ pub enum CoreKind {
     CpBinding,
     CpErr,
 }
-
+// Literals
+// Atoms and operators
+// Callables
+// Access
+// Aggregates
+// Control
+// Statements
+// Decls
+// Patterns
 /// IdentKind mirrors `ir.IdentKind` (`internal/ir/ir.go:640-649`) so
 /// the Go-side bridge can thread `CoreIdent` into the backend without a
 /// second resolution pass.
@@ -138,18 +125,30 @@ pub enum IdentKind {
     IkGlobal,
     IkBuiltin,
 }
-
 /// BinOp mirrors the operator enum used by `ast.BinaryExpr`. Values are
 /// ordered to match the grammar precedence table; numeric encoding is
 /// stable across the bridge.
 pub enum BinOp {
-    BoAdd, BoSub, BoMul, BoDiv, BoMod,
-    BoEq, BoNe, BoLt, BoLe, BoGt, BoGe,
-    BoAnd, BoOr,
-    BoBitAnd, BoBitOr, BoBitXor, BoShl, BoShr,
+    BoAdd,
+    BoSub,
+    BoMul,
+    BoDiv,
+    BoMod,
+    BoEq,
+    BoNe,
+    BoLt,
+    BoLe,
+    BoGt,
+    BoGe,
+    BoAnd,
+    BoOr,
+    BoBitAnd,
+    BoBitOr,
+    BoBitXor,
+    BoShl,
+    BoShr,
     BoInvalid,
 }
-
 pub enum UnOp {
     UoNeg,
     UoPlus,
@@ -157,84 +156,66 @@ pub enum UnOp {
     UoBitNot,
     UoInvalid,
 }
-
 // ---------------------------------------------------------------------
 // Storage.
 // ---------------------------------------------------------------------
-
 /// CoreNode is the discriminated union stored in the arena. Clients
 /// should read fields through the typed accessors below rather than
 /// inspecting this struct directly.
 pub struct CoreNode {
     pub kind: CoreKind,
-    pub ty: Int,                 // Ty arena index, -1 for stmt/decl/pat
+    pub ty: Int,
     pub start: Int,
     pub end: Int,
-    pub originAst: Int,          // Source AST node index for typed-expression coverage, -1 when not tracked
-
-    pub text: String,            // literal text, ident name, field name, variant name, method name
-    pub name: String,            // fn/struct/enum/interface/alias/let binding name
-    pub owner: String,           // owner type name for methods/variants/fields
-
-    pub value: Int,              // BoolLit 0/1, CharLit rune, ByteLit byte, TupleAccess idx, BinOp/UnOp
-    pub flags: Int,              // IdentKind enum int, pattern flags, let-mutability, fn purity, ...
-
-    pub left: Int,               // structural child #1 (call.fn, binary.left, if.cond, field.recv, unary.x)
-    pub right: Int,              // structural child #2 (binary.right, if.then, index.idx)
-    pub extra: Int,              // structural child #3 (if.else, range.stop, method.recv, question.inner)
-
-    pub children: List<Int>,     // variadic child refs #1: call args, block stmts, list elems, tuple elems, match arms, fn params, struct lit fields, decls under use, generic params
-    pub children2: List<Int>,    // variadic child refs #2: call typeArgs (Ty arena!), closure param types (Ty arena!), match arm order, struct fields for decl
-
-    pub typeArgs: List<Int>,     // explicit type args (Ty arena indices) — for CkCall/CkMethodCall/CkVariantLit/CdFn/CdStruct/...
+    pub originAst: Int,
+    pub text: String,
+    pub name: String,
+    pub owner: String,
+    pub value: Int,
+    pub flags: Int,
+    pub left: Int,
+    pub right: Int,
+    pub extra: Int,
+    pub children: List<Int>,
+    pub children2: List<Int>,
+    pub typeArgs: List<Int>,
 }
-
+// Ty arena index, -1 for stmt/decl/pat
+// Source AST node index for typed-expression coverage, -1 when not tracked
+// literal text, ident name, field name, variant name, method name
+// fn/struct/enum/interface/alias/let binding name
+// owner type name for methods/variants/fields
+// BoolLit 0/1, CharLit rune, ByteLit byte, TupleAccess idx, BinOp/UnOp
+// IdentKind enum int, pattern flags, let-mutability, fn purity, ...
+// structural child #1 (call.fn, binary.left, if.cond, field.recv, unary.x)
+// structural child #2 (binary.right, if.then, index.idx)
+// structural child #3 (if.else, range.stop, method.recv, question.inner)
+// variadic child refs #1: call args, block stmts, list elems, tuple elems, match arms, fn params, struct lit fields, decls under use, generic params
+// variadic child refs #2: call typeArgs (Ty arena!), closure param types (Ty arena!), match arm order, struct fields for decl
+// explicit type args (Ty arena indices) — for CkCall/CkMethodCall/CkVariantLit/CdFn/CdStruct/...
 pub fn emptyCoreNode(kind: CoreKind) -> CoreNode {
-    CoreNode {
-        kind,
-        ty: -1,
-        start: 0,
-        end: 0,
-        originAst: -1,
-        text: "",
-        name: "",
-        owner: "",
-        value: 0,
-        flags: 0,
-        left: -1,
-        right: -1,
-        extra: -1,
-        children: [],
-        children2: [],
-        typeArgs: [],
-    }
+    CoreNode {kind, ty: -1, start: 0, end: 0, originAst: -1, text: "", name: "", owner: "", value: 0, flags: 0, left: -1, right: -1, extra: -1, children: [], children2: [], typeArgs: []}
 }
-
 pub struct CoreArena {
     pub nodes: List<CoreNode>,
 }
-
 pub fn emptyCoreArena() -> CoreArena {
-    CoreArena { nodes: [] }
+    CoreArena {nodes: []}
 }
-
 pub fn coreArenaNodeCount(arena: CoreArena) -> Int {
     arena.nodes.len()
 }
-
 fn coreArenaAdd(arena: CoreArena, node: CoreNode) -> Int {
     let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
-
 pub fn coreArenaNodeAt(arena: CoreArena, idx: Int) -> CoreNode {
     if idx < 0 {
         return emptyCoreNode(CkErr)
     }
     arena.nodes[idx]
 }
-
 pub fn coreSetOrigin(arena: CoreArena, idx: Int, originAst: Int) {
     if idx < 0 {
         return
@@ -243,7 +224,6 @@ pub fn coreSetOrigin(arena: CoreArena, idx: Int, originAst: Int) {
     node.originAst = originAst
     arena.nodes[idx] = node
 }
-
 /// CoreModule is the top-level container — one per Osty source file.
 /// `script` captures top-level statements that the backend wraps in a
 /// synthetic `main`; `decls` are top-level declarations in source
@@ -257,25 +237,13 @@ pub struct CoreModule {
     pub start: Int,
     pub end: Int,
 }
-
 pub fn emptyCoreModule(packageName: String) -> CoreModule {
-    CoreModule {
-        packageName,
-        arena: emptyCoreArena(),
-        decls: [],
-        script: [],
-        diagnostics: [],
-        start: 0,
-        end: 0,
-    }
+    CoreModule {packageName, arena: emptyCoreArena(), decls: [], script: [], diagnostics: [], start: 0, end: 0}
 }
-
 // =====================================================================
 // Constructors. Each returns an arena index.
 // =====================================================================
-
 // ---- Literals & atoms ----
-
 pub fn coreIntLit(arena: CoreArena, text: String, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIntLit)
     n.text = text
@@ -284,7 +252,6 @@ pub fn coreIntLit(arena: CoreArena, text: String, ty: Int, start: Int, end: Int)
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreFloatLit(arena: CoreArena, text: String, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkFloatLit)
     n.text = text
@@ -293,16 +260,18 @@ pub fn coreFloatLit(arena: CoreArena, text: String, ty: Int, start: Int, end: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreBoolLit(arena: CoreArena, value: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkBoolLit)
-    n.value = if value { 1 } else { 0 }
+    n.value = if value {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreCharLit(arena: CoreArena, rune: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkCharLit)
     n.value = rune
@@ -311,7 +280,6 @@ pub fn coreCharLit(arena: CoreArena, rune: Int, ty: Int, start: Int, end: Int) -
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreByteLit(arena: CoreArena, byte: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkByteLit)
     n.value = byte
@@ -320,7 +288,6 @@ pub fn coreByteLit(arena: CoreArena, byte: Int, ty: Int, start: Int, end: Int) -
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 /// coreStringLit records the raw source text (including interpolation
 /// braces). Interpolation children go in `children`, alternating
 /// literal-text sentinel nodes and expression nodes — the backend walks
@@ -334,7 +301,6 @@ pub fn coreStringLit(arena: CoreArena, text: String, parts: List<Int>, ty: Int, 
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreBytesLit(arena: CoreArena, text: String, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkBytesLit)
     n.text = text
@@ -343,7 +309,6 @@ pub fn coreBytesLit(arena: CoreArena, text: String, ty: Int, start: Int, end: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreUnitLit(arena: CoreArena, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkUnitLit)
     n.ty = ty
@@ -351,7 +316,6 @@ pub fn coreUnitLit(arena: CoreArena, ty: Int, start: Int, end: Int) -> Int {
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreIdent(arena: CoreArena, name: String, kind: IdentKind, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIdent)
     n.text = name
@@ -362,9 +326,7 @@ pub fn coreIdent(arena: CoreArena, name: String, kind: IdentKind, ty: Int, start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Operators ----
-
 pub fn coreUnary(arena: CoreArena, op: UnOp, x: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkUnary)
     n.value = unOpToInt(op)
@@ -374,7 +336,6 @@ pub fn coreUnary(arena: CoreArena, op: UnOp, x: Int, ty: Int, start: Int, end: I
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreBinary(arena: CoreArena, op: BinOp, left: Int, right: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkBinary)
     n.value = binOpToInt(op)
@@ -385,7 +346,6 @@ pub fn coreBinary(arena: CoreArena, op: BinOp, left: Int, right: Int, ty: Int, s
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreCoalesce(arena: CoreArena, left: Int, right: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkCoalesce)
     n.left = left
@@ -395,7 +355,6 @@ pub fn coreCoalesce(arena: CoreArena, left: Int, right: Int, ty: Int, start: Int
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreQuestion(arena: CoreArena, x: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkQuestion)
     n.left = x
@@ -404,18 +363,8 @@ pub fn coreQuestion(arena: CoreArena, x: Int, ty: Int, start: Int, end: Int) -> 
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Callables ----
-
-pub fn coreCall(
-    arena: CoreArena,
-    fn_: Int,
-    args: List<Int>,
-    typeArgs: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreCall(arena: CoreArena, fn_: Int, args: List<Int>, typeArgs: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkCall)
     n.left = fn_
     n.children = args
@@ -425,18 +374,7 @@ pub fn coreCall(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreMethodCall(
-    arena: CoreArena,
-    recv: Int,
-    name: String,
-    owner: String,
-    args: List<Int>,
-    typeArgs: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreMethodCall(arena: CoreArena, recv: Int, name: String, owner: String, args: List<Int>, typeArgs: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkMethodCall)
     n.left = recv
     n.text = name
@@ -449,7 +387,6 @@ pub fn coreMethodCall(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreIntrinsic(arena: CoreArena, name: String, args: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIntrinsic)
     n.text = name
@@ -460,17 +397,7 @@ pub fn coreIntrinsic(arena: CoreArena, name: String, args: List<Int>, ty: Int, s
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreVariantLit(
-    arena: CoreArena,
-    owner: String,
-    name: String,
-    args: List<Int>,
-    typeArgs: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreVariantLit(arena: CoreArena, owner: String, name: String, args: List<Int>, typeArgs: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkVariantLit)
     n.text = name
     n.name = name
@@ -482,9 +409,7 @@ pub fn coreVariantLit(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Access ----
-
 pub fn coreField(arena: CoreArena, recv: Int, name: String, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkField)
     n.left = recv
@@ -495,7 +420,6 @@ pub fn coreField(arena: CoreArena, recv: Int, name: String, ty: Int, start: Int,
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreTupleAccess(arena: CoreArena, recv: Int, idx: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkTupleAccess)
     n.left = recv
@@ -505,7 +429,6 @@ pub fn coreTupleAccess(arena: CoreArena, recv: Int, idx: Int, ty: Int, start: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreIndex(arena: CoreArena, recv: Int, idx: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIndex)
     n.left = recv
@@ -515,9 +438,7 @@ pub fn coreIndex(arena: CoreArena, recv: Int, idx: Int, ty: Int, start: Int, end
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Aggregates ----
-
 pub fn coreList(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkList)
     n.children = elems
@@ -526,7 +447,6 @@ pub fn coreList(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreMap(arena: CoreArena, entries: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkMap)
     n.children = entries
@@ -535,7 +455,6 @@ pub fn coreMap(arena: CoreArena, entries: List<Int>, ty: Int, start: Int, end: I
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreMapEntry(arena: CoreArena, key: Int, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkMapEntry)
     n.left = key
@@ -544,7 +463,6 @@ pub fn coreMapEntry(arena: CoreArena, key: Int, value: Int, start: Int, end: Int
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreTuple(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkTuple)
     n.children = elems
@@ -553,17 +471,7 @@ pub fn coreTuple(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end: I
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreStruct(
-    arena: CoreArena,
-    owner: String,
-    fields: List<Int>,
-    spread: Int,
-    typeArgs: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreStruct(arena: CoreArena, owner: String, fields: List<Int>, spread: Int, typeArgs: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkStruct)
     n.owner = owner
     n.name = owner
@@ -575,7 +483,6 @@ pub fn coreStruct(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreStructField(arena: CoreArena, name: String, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkStructField)
     n.text = name
@@ -585,7 +492,6 @@ pub fn coreStructField(arena: CoreArena, name: String, value: Int, start: Int, e
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 /// coreRange encodes `a..b` / `a..=b` — `flags` stores the inclusive
 /// bit (1 = inclusive, 0 = half-open) so backends can switch without
 /// re-parsing.
@@ -593,23 +499,18 @@ pub fn coreRange(arena: CoreArena, start_: Int, stop: Int, inclusive: Bool, ty: 
     let mut n = emptyCoreNode(CkRange)
     n.left = start_
     n.right = stop
-    n.flags = if inclusive { 1 } else { 0 }
+    n.flags = if inclusive {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = pos
     n.end = endPos
     coreArenaAdd(arena, n)
 }
-
 // ---- Control ----
-
-pub fn coreClosure(
-    arena: CoreArena,
-    params: List<Int>,
-    body: Int,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreClosure(arena: CoreArena, params: List<Int>, body: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkClosure)
     n.children = params
     n.left = body
@@ -618,7 +519,6 @@ pub fn coreClosure(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 /// coreBlock is a block used as an expression. Statements go in
 /// `children`; the tail expression (if any) goes in `left` and
 /// contributes the block's overall type.
@@ -631,16 +531,7 @@ pub fn coreBlock(arena: CoreArena, stmts: List<Int>, tail: Int, ty: Int, start: 
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreIf(
-    arena: CoreArena,
-    cond: Int,
-    then_: Int,
-    else_: Int,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreIf(arena: CoreArena, cond: Int, then_: Int, else_: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIf)
     n.left = cond
     n.right = then_
@@ -650,17 +541,7 @@ pub fn coreIf(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreIfLet(
-    arena: CoreArena,
-    pattern: Int,
-    scrutinee: Int,
-    then_: Int,
-    else_: Int,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreIfLet(arena: CoreArena, pattern: Int, scrutinee: Int, then_: Int, else_: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkIfLet)
     n.left = scrutinee
     n.right = then_
@@ -671,15 +552,7 @@ pub fn coreIfLet(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreMatch(
-    arena: CoreArena,
-    scrutinee: Int,
-    arms: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreMatch(arena: CoreArena, scrutinee: Int, arms: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkMatch)
     n.left = scrutinee
     n.children = arms
@@ -688,20 +561,11 @@ pub fn coreMatch(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 /// coreMatchArm stores the pattern in `left`, the optional guard in
 /// `right` (-1 when absent), and the body in `extra`. Match arm nodes
 /// inherit their body's type so parent `CkMatch` can join the arm
 /// types.
-pub fn coreMatchArm(
-    arena: CoreArena,
-    pattern: Int,
-    guard: Int,
-    body: Int,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreMatchArm(arena: CoreArena, pattern: Int, guard: Int, body: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkMatchArm)
     n.left = pattern
     n.right = guard
@@ -711,28 +575,21 @@ pub fn coreMatchArm(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Statements ----
-
-pub fn coreLetStmt(
-    arena: CoreArena,
-    pattern: Int,
-    value: Int,
-    mutable: Bool,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreLetStmt(arena: CoreArena, pattern: Int, value: Int, mutable: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsLet)
     n.left = pattern
     n.right = value
-    n.flags = if mutable { 1 } else { 0 }
+    n.flags = if mutable {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreAssignStmt(arena: CoreArena, targets: List<Int>, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsAssign)
     n.children = targets
@@ -741,7 +598,6 @@ pub fn coreAssignStmt(arena: CoreArena, targets: List<Int>, value: Int, start: I
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreReturnStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsReturn)
     n.left = value
@@ -749,21 +605,18 @@ pub fn coreReturnStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreBreakStmt(arena: CoreArena, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsBreak)
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreContinueStmt(arena: CoreArena, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsContinue)
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreIfStmt(arena: CoreArena, cond: Int, then_: Int, else_: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsIf)
     n.left = cond
@@ -773,21 +626,12 @@ pub fn coreIfStmt(arena: CoreArena, cond: Int, then_: Int, else_: Int, start: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 /// coreForStmt covers `for`/`while`/`for-in` uniformly. `pattern` is
 /// -1 for `while`/infinite loops, the iteration binding otherwise;
 /// `iter` is -1 for infinite, a condition expression for `while`, and
 /// an iterable expression for `for-in`. `flags` encodes the variety:
 /// 0 = infinite, 1 = while, 2 = for-in.
-pub fn coreForStmt(
-    arena: CoreArena,
-    pattern: Int,
-    iter: Int,
-    body: Int,
-    variety: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreForStmt(arena: CoreArena, pattern: Int, iter: Int, body: Int, variety: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsFor)
     n.left = pattern
     n.right = iter
@@ -797,7 +641,6 @@ pub fn coreForStmt(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreMatchStmt(arena: CoreArena, scrutinee: Int, arms: List<Int>, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsMatch)
     n.left = scrutinee
@@ -806,7 +649,6 @@ pub fn coreMatchStmt(arena: CoreArena, scrutinee: Int, arms: List<Int>, start: I
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreExprStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsExprStmt)
     n.left = value
@@ -814,7 +656,6 @@ pub fn coreExprStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int {
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreDeferStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsDefer)
     n.left = value
@@ -822,7 +663,6 @@ pub fn coreDeferStmt(arena: CoreArena, value: Int, start: Int, end: Int) -> Int 
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreChanSendStmt(arena: CoreArena, channel: Int, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsChanSend)
     n.left = channel
@@ -831,7 +671,6 @@ pub fn coreChanSendStmt(arena: CoreArena, channel: Int, value: Int, start: Int, 
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreStmtBlock(arena: CoreArena, stmts: List<Int>, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsBlock)
     n.children = stmts
@@ -839,25 +678,11 @@ pub fn coreStmtBlock(arena: CoreArena, stmts: List<Int>, start: Int, end: Int) -
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Decls ----
-
 /// coreFnDecl records a top-level function declaration. `params` are
 /// CdParam arena indices; `body` is a CsBlock/CkBlock (may be -1 for
 /// interface methods). `ty` holds the declared function type.
-pub fn coreFnDecl(
-    arena: CoreArena,
-    name: String,
-    owner: String,
-    generics: List<Int>,
-    params: List<Int>,
-    retTy: Int,
-    body: Int,
-    fnTy: Int,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreFnDecl(arena: CoreArena, name: String, owner: String, generics: List<Int>, params: List<Int>, retTy: Int, body: Int, fnTy: Int, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdFn)
     n.name = name
     n.text = name
@@ -867,20 +692,16 @@ pub fn coreFnDecl(
     n.left = body
     n.right = retTy
     n.ty = fnTy
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreParam(
-    arena: CoreArena,
-    name: String,
-    ty: Int,
-    defaultValue: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreParam(arena: CoreArena, name: String, ty: Int, defaultValue: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdParam)
     n.name = name
     n.text = name
@@ -890,14 +711,7 @@ pub fn coreParam(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreGenericParam(
-    arena: CoreArena,
-    name: String,
-    bounds: List<Int>,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreGenericParam(arena: CoreArena, name: String, bounds: List<Int>, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdGenericParam)
     n.name = name
     n.text = name
@@ -906,81 +720,55 @@ pub fn coreGenericParam(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreStructDecl(
-    arena: CoreArena,
-    name: String,
-    generics: List<Int>,
-    fields: List<Int>,
-    methods: List<Int>,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreStructDecl(arena: CoreArena, name: String, generics: List<Int>, fields: List<Int>, methods: List<Int>, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdStruct)
     n.name = name
     n.text = name
     n.children = fields
     n.children2 = generics
     n.typeArgs = methods
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreFieldDecl(
-    arena: CoreArena,
-    owner: String,
-    name: String,
-    ty: Int,
-    defaultValue: Int,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreFieldDecl(arena: CoreArena, owner: String, name: String, ty: Int, defaultValue: Int, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdField)
     n.name = name
     n.text = name
     n.owner = owner
     n.ty = ty
     n.left = defaultValue
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreEnumDecl(
-    arena: CoreArena,
-    name: String,
-    generics: List<Int>,
-    variants: List<Int>,
-    methods: List<Int>,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreEnumDecl(arena: CoreArena, name: String, generics: List<Int>, variants: List<Int>, methods: List<Int>, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdEnum)
     n.name = name
     n.text = name
     n.children = variants
     n.children2 = generics
     n.typeArgs = methods
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreEnumVariant(
-    arena: CoreArena,
-    owner: String,
-    name: String,
-    payload: List<Int>,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreEnumVariant(arena: CoreArena, owner: String, name: String, payload: List<Int>, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdEnumVariant)
     n.name = name
     n.text = name
@@ -990,78 +778,57 @@ pub fn coreEnumVariant(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreInterfaceDecl(
-    arena: CoreArena,
-    name: String,
-    generics: List<Int>,
-    extends: List<Int>,
-    methods: List<Int>,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreInterfaceDecl(arena: CoreArena, name: String, generics: List<Int>, extends: List<Int>, methods: List<Int>, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdInterface)
     n.name = name
     n.text = name
     n.children = methods
     n.children2 = generics
     n.typeArgs = extends
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreTypeAliasDecl(
-    arena: CoreArena,
-    name: String,
-    generics: List<Int>,
-    target: Int,
-    isPub: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreTypeAliasDecl(arena: CoreArena, name: String, generics: List<Int>, target: Int, isPub: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdTypeAlias)
     n.name = name
     n.text = name
     n.children2 = generics
     n.ty = target
-    n.flags = if isPub { 1 } else { 0 }
+    n.flags = if isPub {
+        1
+    } else {
+        0
+    }
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreLetDecl(
-    arena: CoreArena,
-    name: String,
-    ty: Int,
-    value: Int,
-    isPub: Bool,
-    mutable: Bool,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreLetDecl(arena: CoreArena, name: String, ty: Int, value: Int, isPub: Bool, mutable: Bool, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdLet)
     n.name = name
     n.text = name
     n.ty = ty
     n.left = value
-    n.flags = (if isPub { 1 } else { 0 }) + (if mutable { 2 } else { 0 })
+    n.flags = (if isPub {
+        1
+    } else {
+        0
+    }) + (if mutable {
+        2
+    } else {
+        0
+    })
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn coreUseDecl(
-    arena: CoreArena,
-    path: String,
-    alias: String,
-    body: List<Int>,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn coreUseDecl(arena: CoreArena, path: String, alias: String, body: List<Int>, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CdUse)
     n.text = path
     n.name = alias
@@ -1070,27 +837,27 @@ pub fn coreUseDecl(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Patterns ----
-
 pub fn corePatWild(arena: CoreArena, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpWild)
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatIdent(arena: CoreArena, name: String, mutable: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpIdent)
     n.name = name
     n.text = name
-    n.flags = if mutable { 1 } else { 0 }
+    n.flags = if mutable {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatLit(arena: CoreArena, value: Int, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpLit)
     n.left = value
@@ -1099,7 +866,6 @@ pub fn corePatLit(arena: CoreArena, value: Int, ty: Int, start: Int, end: Int) -
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatTuple(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpTuple)
     n.children = elems
@@ -1108,27 +874,21 @@ pub fn corePatTuple(arena: CoreArena, elems: List<Int>, ty: Int, start: Int, end
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn corePatStruct(
-    arena: CoreArena,
-    owner: String,
-    fields: List<Int>,
-    hasRest: Bool,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn corePatStruct(arena: CoreArena, owner: String, fields: List<Int>, hasRest: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpStruct)
     n.owner = owner
     n.name = owner
     n.children = fields
-    n.flags = if hasRest { 1 } else { 0 }
+    n.flags = if hasRest {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatStructField(arena: CoreArena, name: String, value: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpStructField)
     n.text = name
@@ -1138,16 +898,7 @@ pub fn corePatStructField(arena: CoreArena, name: String, value: Int, start: Int
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn corePatVariant(
-    arena: CoreArena,
-    owner: String,
-    name: String,
-    fields: List<Int>,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn corePatVariant(arena: CoreArena, owner: String, name: String, fields: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpVariant)
     n.owner = owner
     n.name = name
@@ -1158,18 +909,20 @@ pub fn corePatVariant(
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatRange(arena: CoreArena, lo: Int, hi: Int, inclusive: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpRange)
     n.left = lo
     n.right = hi
-    n.flags = if inclusive { 1 } else { 0 }
+    n.flags = if inclusive {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatOr(arena: CoreArena, alts: List<Int>, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpOr)
     n.children = alts
@@ -1178,36 +931,28 @@ pub fn corePatOr(arena: CoreArena, alts: List<Int>, ty: Int, start: Int, end: In
     n.end = end
     coreArenaAdd(arena, n)
 }
-
-pub fn corePatBinding(
-    arena: CoreArena,
-    name: String,
-    inner: Int,
-    mutable: Bool,
-    ty: Int,
-    start: Int,
-    end: Int,
-) -> Int {
+pub fn corePatBinding(arena: CoreArena, name: String, inner: Int, mutable: Bool, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpBinding)
     n.name = name
     n.text = name
     n.left = inner
-    n.flags = if mutable { 1 } else { 0 }
+    n.flags = if mutable {
+        1
+    } else {
+        0
+    }
     n.ty = ty
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn corePatErr(arena: CoreArena, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CpErr)
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // ---- Error nodes ----
-
 pub fn coreErrExpr(arena: CoreArena, ty: Int, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CkErr)
     n.ty = ty
@@ -1215,307 +960,571 @@ pub fn coreErrExpr(arena: CoreArena, ty: Int, start: Int, end: Int) -> Int {
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 pub fn coreErrStmt(arena: CoreArena, start: Int, end: Int) -> Int {
     let mut n = emptyCoreNode(CsErr)
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)
 }
-
 // =====================================================================
 // Accessors. Callers read fields through these so field aliasing stays
 // private to this module.
 // =====================================================================
-
 pub fn coreKindAt(arena: CoreArena, idx: Int) -> CoreKind {
     coreArenaNodeAt(arena, idx).kind
 }
-
 pub fn coreTyAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).ty
 }
-
 pub fn coreStartAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).start
 }
-
 pub fn coreEndAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).end
 }
-
 pub fn coreTextAt(arena: CoreArena, idx: Int) -> String {
     coreArenaNodeAt(arena, idx).text
 }
-
 pub fn coreNameAt(arena: CoreArena, idx: Int) -> String {
     coreArenaNodeAt(arena, idx).name
 }
-
 pub fn coreOwnerAt(arena: CoreArena, idx: Int) -> String {
     coreArenaNodeAt(arena, idx).owner
 }
-
 pub fn coreLeftAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).left
 }
-
 pub fn coreRightAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).right
 }
-
 pub fn coreExtraAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).extra
 }
-
 pub fn coreValueAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).value
 }
-
 pub fn coreFlagsAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).flags
 }
-
 pub fn coreChildrenAt(arena: CoreArena, idx: Int) -> List<Int> {
     coreArenaNodeAt(arena, idx).children
 }
-
 pub fn coreChildren2At(arena: CoreArena, idx: Int) -> List<Int> {
     coreArenaNodeAt(arena, idx).children2
 }
-
 pub fn coreTypeArgsAt(arena: CoreArena, idx: Int) -> List<Int> {
     coreArenaNodeAt(arena, idx).typeArgs
 }
-
 // ---- Bool helpers ----
-
 pub fn coreBoolLitValueAt(arena: CoreArena, idx: Int) -> Bool {
     coreArenaNodeAt(arena, idx).value != 0
 }
-
 pub fn coreLetMutableAt(arena: CoreArena, idx: Int) -> Bool {
     coreArenaNodeAt(arena, idx).flags != 0
 }
-
 pub fn coreStructSpreadAt(arena: CoreArena, idx: Int) -> Int {
     coreArenaNodeAt(arena, idx).extra
 }
-
 // =====================================================================
 // Enum integer codecs.
 // =====================================================================
-
 fn identKindToInt(kind: IdentKind) -> Int {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == IkUnknown { return 0 }
-    if kind == IkLocal { return 1 }
-    if kind == IkParam { return 2 }
-    if kind == IkFn { return 3 }
-    if kind == IkVariant { return 4 }
-    if kind == IkTypeName { return 5 }
-    if kind == IkGlobal { return 6 }
-    if kind == IkBuiltin { return 7 }
+    if kind == IkUnknown {
+        return 0
+    }
+    if kind == IkLocal {
+        return 1
+    }
+    if kind == IkParam {
+        return 2
+    }
+    if kind == IkFn {
+        return 3
+    }
+    if kind == IkVariant {
+        return 4
+    }
+    if kind == IkTypeName {
+        return 5
+    }
+    if kind == IkGlobal {
+        return 6
+    }
+    if kind == IkBuiltin {
+        return 7
+    }
     0
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn coreIdentKindAt(arena: CoreArena, idx: Int) -> IdentKind {
     identKindFromInt(coreArenaNodeAt(arena, idx).flags)
 }
-
 fn identKindFromInt(n: Int) -> IdentKind {
-    if n == 1 { return IkLocal }
-    if n == 2 { return IkParam }
-    if n == 3 { return IkFn }
-    if n == 4 { return IkVariant }
-    if n == 5 { return IkTypeName }
-    if n == 6 { return IkGlobal }
-    if n == 7 { return IkBuiltin }
+    if n == 1 {
+        return IkLocal
+    }
+    if n == 2 {
+        return IkParam
+    }
+    if n == 3 {
+        return IkFn
+    }
+    if n == 4 {
+        return IkVariant
+    }
+    if n == 5 {
+        return IkTypeName
+    }
+    if n == 6 {
+        return IkGlobal
+    }
+    if n == 7 {
+        return IkBuiltin
+    }
     IkUnknown
 }
-
 fn binOpToInt(op: BinOp) -> Int {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == BoAdd { return 1 }
-    if op == BoSub { return 2 }
-    if op == BoMul { return 3 }
-    if op == BoDiv { return 4 }
-    if op == BoMod { return 5 }
-    if op == BoEq { return 6 }
-    if op == BoNe { return 7 }
-    if op == BoLt { return 8 }
-    if op == BoLe { return 9 }
-    if op == BoGt { return 10 }
-    if op == BoGe { return 11 }
-    if op == BoAnd { return 12 }
-    if op == BoOr { return 13 }
-    if op == BoBitAnd { return 14 }
-    if op == BoBitOr { return 15 }
-    if op == BoBitXor { return 16 }
-    if op == BoShl { return 17 }
-    if op == BoShr { return 18 }
+    if op == BoAdd {
+        return 1
+    }
+    if op == BoSub {
+        return 2
+    }
+    if op == BoMul {
+        return 3
+    }
+    if op == BoDiv {
+        return 4
+    }
+    if op == BoMod {
+        return 5
+    }
+    if op == BoEq {
+        return 6
+    }
+    if op == BoNe {
+        return 7
+    }
+    if op == BoLt {
+        return 8
+    }
+    if op == BoLe {
+        return 9
+    }
+    if op == BoGt {
+        return 10
+    }
+    if op == BoGe {
+        return 11
+    }
+    if op == BoAnd {
+        return 12
+    }
+    if op == BoOr {
+        return 13
+    }
+    if op == BoBitAnd {
+        return 14
+    }
+    if op == BoBitOr {
+        return 15
+    }
+    if op == BoBitXor {
+        return 16
+    }
+    if op == BoShl {
+        return 17
+    }
+    if op == BoShr {
+        return 18
+    }
     0
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn coreBinaryOpAt(arena: CoreArena, idx: Int) -> BinOp {
     binOpFromInt(coreArenaNodeAt(arena, idx).value)
 }
-
 fn binOpFromInt(n: Int) -> BinOp {
-    if n == 1 { return BoAdd }
-    if n == 2 { return BoSub }
-    if n == 3 { return BoMul }
-    if n == 4 { return BoDiv }
-    if n == 5 { return BoMod }
-    if n == 6 { return BoEq }
-    if n == 7 { return BoNe }
-    if n == 8 { return BoLt }
-    if n == 9 { return BoLe }
-    if n == 10 { return BoGt }
-    if n == 11 { return BoGe }
-    if n == 12 { return BoAnd }
-    if n == 13 { return BoOr }
-    if n == 14 { return BoBitAnd }
-    if n == 15 { return BoBitOr }
-    if n == 16 { return BoBitXor }
-    if n == 17 { return BoShl }
-    if n == 18 { return BoShr }
+    if n == 1 {
+        return BoAdd
+    }
+    if n == 2 {
+        return BoSub
+    }
+    if n == 3 {
+        return BoMul
+    }
+    if n == 4 {
+        return BoDiv
+    }
+    if n == 5 {
+        return BoMod
+    }
+    if n == 6 {
+        return BoEq
+    }
+    if n == 7 {
+        return BoNe
+    }
+    if n == 8 {
+        return BoLt
+    }
+    if n == 9 {
+        return BoLe
+    }
+    if n == 10 {
+        return BoGt
+    }
+    if n == 11 {
+        return BoGe
+    }
+    if n == 12 {
+        return BoAnd
+    }
+    if n == 13 {
+        return BoOr
+    }
+    if n == 14 {
+        return BoBitAnd
+    }
+    if n == 15 {
+        return BoBitOr
+    }
+    if n == 16 {
+        return BoBitXor
+    }
+    if n == 17 {
+        return BoShl
+    }
+    if n == 18 {
+        return BoShr
+    }
     BoInvalid
 }
-
 fn unOpToInt(op: UnOp) -> Int {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == UoNeg { return 1 }
-    if op == UoPlus { return 2 }
-    if op == UoNot { return 3 }
-    if op == UoBitNot { return 4 }
+    if op == UoNeg {
+        return 1
+    }
+    if op == UoPlus {
+        return 2
+    }
+    if op == UoNot {
+        return 3
+    }
+    if op == UoBitNot {
+        return 4
+    }
     0
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn coreUnaryOpAt(arena: CoreArena, idx: Int) -> UnOp {
     unOpFromInt(coreArenaNodeAt(arena, idx).value)
 }
-
 fn unOpFromInt(n: Int) -> UnOp {
-    if n == 1 { return UoNeg }
-    if n == 2 { return UoPlus }
-    if n == 3 { return UoNot }
-    if n == 4 { return UoBitNot }
+    if n == 1 {
+        return UoNeg
+    }
+    if n == 2 {
+        return UoPlus
+    }
+    if n == 3 {
+        return UoNot
+    }
+    if n == 4 {
+        return UoBitNot
+    }
     UoInvalid
 }
-
 pub fn binOpSymbol(op: BinOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == BoAdd { return "+" }
-    if op == BoSub { return "-" }
-    if op == BoMul { return "*" }
-    if op == BoDiv { return "/" }
-    if op == BoMod { return "%" }
-    if op == BoEq { return "==" }
-    if op == BoNe { return "!=" }
-    if op == BoLt { return "<" }
-    if op == BoLe { return "<=" }
-    if op == BoGt { return ">" }
-    if op == BoGe { return ">=" }
-    if op == BoAnd { return "&&" }
-    if op == BoOr { return "||" }
-    if op == BoBitAnd { return "&" }
-    if op == BoBitOr { return "|" }
-    if op == BoBitXor { return "^" }
-    if op == BoShl { return "<<" }
-    if op == BoShr { return ">>" }
+    if op == BoAdd {
+        return "+"
+    }
+    if op == BoSub {
+        return "-"
+    }
+    if op == BoMul {
+        return "*"
+    }
+    if op == BoDiv {
+        return "/"
+    }
+    if op == BoMod {
+        return "%"
+    }
+    if op == BoEq {
+        return "=="
+    }
+    if op == BoNe {
+        return "!="
+    }
+    if op == BoLt {
+        return "<"
+    }
+    if op == BoLe {
+        return "<="
+    }
+    if op == BoGt {
+        return ">"
+    }
+    if op == BoGe {
+        return ">="
+    }
+    if op == BoAnd {
+        return "&&"
+    }
+    if op == BoOr {
+        return "||"
+    }
+    if op == BoBitAnd {
+        return "&"
+    }
+    if op == BoBitOr {
+        return "|"
+    }
+    if op == BoBitXor {
+        return "^"
+    }
+    if op == BoShl {
+        return "<<"
+    }
+    if op == BoShr {
+        return ">>"
+    }
     "?"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn unOpSymbol(op: UnOp) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if op == UoNeg { return "-" }
-    if op == UoPlus { return "+" }
-    if op == UoNot { return "!" }
-    if op == UoBitNot { return "~" }
+    if op == UoNeg {
+        return "-"
+    }
+    if op == UoPlus {
+        return "+"
+    }
+    if op == UoNot {
+        return "!"
+    }
+    if op == UoBitNot {
+        return "~"
+    }
     "?"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn coreKindName(kind: CoreKind) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == CkErr { return "Err" }
-    if kind == CkIntLit { return "IntLit" }
-    if kind == CkFloatLit { return "FloatLit" }
-    if kind == CkBoolLit { return "BoolLit" }
-    if kind == CkCharLit { return "CharLit" }
-    if kind == CkByteLit { return "ByteLit" }
-    if kind == CkStringLit { return "StringLit" }
-    if kind == CkBytesLit { return "BytesLit" }
-    if kind == CkUnitLit { return "UnitLit" }
-    if kind == CkIdent { return "Ident" }
-    if kind == CkUnary { return "Unary" }
-    if kind == CkBinary { return "Binary" }
-    if kind == CkCoalesce { return "Coalesce" }
-    if kind == CkQuestion { return "Question" }
-    if kind == CkCall { return "Call" }
-    if kind == CkMethodCall { return "MethodCall" }
-    if kind == CkIntrinsic { return "Intrinsic" }
-    if kind == CkVariantLit { return "VariantLit" }
-    if kind == CkField { return "Field" }
-    if kind == CkTupleAccess { return "TupleAccess" }
-    if kind == CkIndex { return "Index" }
-    if kind == CkList { return "List" }
-    if kind == CkMap { return "Map" }
-    if kind == CkMapEntry { return "MapEntry" }
-    if kind == CkTuple { return "Tuple" }
-    if kind == CkStruct { return "Struct" }
-    if kind == CkStructField { return "StructField" }
-    if kind == CkRange { return "Range" }
-    if kind == CkClosure { return "Closure" }
-    if kind == CkBlock { return "Block" }
-    if kind == CkIf { return "If" }
-    if kind == CkIfLet { return "IfLet" }
-    if kind == CkMatch { return "Match" }
-    if kind == CkMatchArm { return "MatchArm" }
-    if kind == CsBlock { return "StmtBlock" }
-    if kind == CsLet { return "LetStmt" }
-    if kind == CsAssign { return "AssignStmt" }
-    if kind == CsReturn { return "ReturnStmt" }
-    if kind == CsBreak { return "BreakStmt" }
-    if kind == CsContinue { return "ContinueStmt" }
-    if kind == CsIf { return "IfStmt" }
-    if kind == CsFor { return "ForStmt" }
-    if kind == CsMatch { return "MatchStmt" }
-    if kind == CsExprStmt { return "ExprStmt" }
-    if kind == CsDefer { return "DeferStmt" }
-    if kind == CsChanSend { return "ChanSendStmt" }
-    if kind == CsErr { return "ErrStmt" }
-    if kind == CdFn { return "FnDecl" }
-    if kind == CdStruct { return "StructDecl" }
-    if kind == CdEnum { return "EnumDecl" }
-    if kind == CdEnumVariant { return "EnumVariant" }
-    if kind == CdInterface { return "InterfaceDecl" }
-    if kind == CdTypeAlias { return "TypeAliasDecl" }
-    if kind == CdLet { return "LetDecl" }
-    if kind == CdUse { return "UseDecl" }
-    if kind == CdField { return "Field" }
-    if kind == CdParam { return "Param" }
-    if kind == CdGenericParam { return "GenericParam" }
-    if kind == CpWild { return "WildPat" }
-    if kind == CpIdent { return "IdentPat" }
-    if kind == CpLit { return "LitPat" }
-    if kind == CpTuple { return "TuplePat" }
-    if kind == CpStruct { return "StructPat" }
-    if kind == CpStructField { return "StructPatField" }
-    if kind == CpVariant { return "VariantPat" }
-    if kind == CpRange { return "RangePat" }
-    if kind == CpOr { return "OrPat" }
-    if kind == CpBinding { return "BindingPat" }
-    if kind == CpErr { return "ErrPat" }
+    if kind == CkErr {
+        return "Err"
+    }
+    if kind == CkIntLit {
+        return "IntLit"
+    }
+    if kind == CkFloatLit {
+        return "FloatLit"
+    }
+    if kind == CkBoolLit {
+        return "BoolLit"
+    }
+    if kind == CkCharLit {
+        return "CharLit"
+    }
+    if kind == CkByteLit {
+        return "ByteLit"
+    }
+    if kind == CkStringLit {
+        return "StringLit"
+    }
+    if kind == CkBytesLit {
+        return "BytesLit"
+    }
+    if kind == CkUnitLit {
+        return "UnitLit"
+    }
+    if kind == CkIdent {
+        return "Ident"
+    }
+    if kind == CkUnary {
+        return "Unary"
+    }
+    if kind == CkBinary {
+        return "Binary"
+    }
+    if kind == CkCoalesce {
+        return "Coalesce"
+    }
+    if kind == CkQuestion {
+        return "Question"
+    }
+    if kind == CkCall {
+        return "Call"
+    }
+    if kind == CkMethodCall {
+        return "MethodCall"
+    }
+    if kind == CkIntrinsic {
+        return "Intrinsic"
+    }
+    if kind == CkVariantLit {
+        return "VariantLit"
+    }
+    if kind == CkField {
+        return "Field"
+    }
+    if kind == CkTupleAccess {
+        return "TupleAccess"
+    }
+    if kind == CkIndex {
+        return "Index"
+    }
+    if kind == CkList {
+        return "List"
+    }
+    if kind == CkMap {
+        return "Map"
+    }
+    if kind == CkMapEntry {
+        return "MapEntry"
+    }
+    if kind == CkTuple {
+        return "Tuple"
+    }
+    if kind == CkStruct {
+        return "Struct"
+    }
+    if kind == CkStructField {
+        return "StructField"
+    }
+    if kind == CkRange {
+        return "Range"
+    }
+    if kind == CkClosure {
+        return "Closure"
+    }
+    if kind == CkBlock {
+        return "Block"
+    }
+    if kind == CkIf {
+        return "If"
+    }
+    if kind == CkIfLet {
+        return "IfLet"
+    }
+    if kind == CkMatch {
+        return "Match"
+    }
+    if kind == CkMatchArm {
+        return "MatchArm"
+    }
+    if kind == CsBlock {
+        return "StmtBlock"
+    }
+    if kind == CsLet {
+        return "LetStmt"
+    }
+    if kind == CsAssign {
+        return "AssignStmt"
+    }
+    if kind == CsReturn {
+        return "ReturnStmt"
+    }
+    if kind == CsBreak {
+        return "BreakStmt"
+    }
+    if kind == CsContinue {
+        return "ContinueStmt"
+    }
+    if kind == CsIf {
+        return "IfStmt"
+    }
+    if kind == CsFor {
+        return "ForStmt"
+    }
+    if kind == CsMatch {
+        return "MatchStmt"
+    }
+    if kind == CsExprStmt {
+        return "ExprStmt"
+    }
+    if kind == CsDefer {
+        return "DeferStmt"
+    }
+    if kind == CsChanSend {
+        return "ChanSendStmt"
+    }
+    if kind == CsErr {
+        return "ErrStmt"
+    }
+    if kind == CdFn {
+        return "FnDecl"
+    }
+    if kind == CdStruct {
+        return "StructDecl"
+    }
+    if kind == CdEnum {
+        return "EnumDecl"
+    }
+    if kind == CdEnumVariant {
+        return "EnumVariant"
+    }
+    if kind == CdInterface {
+        return "InterfaceDecl"
+    }
+    if kind == CdTypeAlias {
+        return "TypeAliasDecl"
+    }
+    if kind == CdLet {
+        return "LetDecl"
+    }
+    if kind == CdUse {
+        return "UseDecl"
+    }
+    if kind == CdField {
+        return "Field"
+    }
+    if kind == CdParam {
+        return "Param"
+    }
+    if kind == CdGenericParam {
+        return "GenericParam"
+    }
+    if kind == CpWild {
+        return "WildPat"
+    }
+    if kind == CpIdent {
+        return "IdentPat"
+    }
+    if kind == CpLit {
+        return "LitPat"
+    }
+    if kind == CpTuple {
+        return "TuplePat"
+    }
+    if kind == CpStruct {
+        return "StructPat"
+    }
+    if kind == CpStructField {
+        return "StructPatField"
+    }
+    if kind == CpVariant {
+        return "VariantPat"
+    }
+    if kind == CpRange {
+        return "RangePat"
+    }
+    if kind == CpOr {
+        return "OrPat"
+    }
+    if kind == CpBinding {
+        return "BindingPat"
+    }
+    if kind == CpErr {
+        return "ErrPat"
+    }
     "Unknown"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // =====================================================================
 // Pretty-printer — stable S-expression-like form used for debugging and
 // for snapshot tests. Mirrors the shape of `internal/ir/print.go` so
 // the Go-side harness can diff before/after Core migrations.
 // =====================================================================
-
 pub fn corePrintModule(m: CoreModule, tys: TyArena) -> String {
     let mut parts: List<String> = []
     parts.push("(module {m.packageName}")
@@ -1539,15 +1548,22 @@ pub fn corePrintModule(m: CoreModule, tys: TyArena) -> String {
     parts.push(")")
     strings.join(parts, "\n")
 }
-
 pub fn corePrintNode(arena: CoreArena, tys: TyArena, idx: Int, depth: Int) -> String {
     if idx < 0 {
         return "_"
     }
     let node = coreArenaNodeAt(arena, idx)
     let head = coreKindName(node.kind)
-    let tyText = if node.ty >= 0 { ":" } else { "" }
-    let tyRendered = if node.ty >= 0 { tyToString(tys, node.ty) } else { "" }
+    let tyText = if node.ty >= 0 {
+        ":"
+    } else {
+        ""
+    }
+    let tyRendered = if node.ty >= 0 {
+        tyToString(tys, node.ty)
+    } else {
+        ""
+    }
     let annotated = if node.ty >= 0 {
         "({head}{tyText}{tyRendered}"
     } else {
@@ -1560,12 +1576,15 @@ pub fn corePrintNode(arena: CoreArena, tys: TyArena, idx: Int, depth: Int) -> St
         "{annotated} {body})"
     }
 }
-
 fn corePrintNodeBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     match node.kind {
         CkIntLit -> node.text,
         CkFloatLit -> node.text,
-        CkBoolLit -> if node.value == 0 { "false" } else { "true" },
+        CkBoolLit -> if node.value == 0 {
+            "false"
+        } else {
+            "true"
+        },
         CkCharLit -> "#{node.value}",
         CkByteLit -> "b#{node.value}",
         CkStringLit -> "\"{node.text}\"",
@@ -1619,38 +1638,32 @@ fn corePrintNodeBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int)
         _ -> "",
     }
 }
-
 fn corePrintCallBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let callee = corePrintNode(arena, tys, node.left, depth + 1)
     let args = corePrintList(arena, tys, node.children, depth)
     let ta = corePrintTypeArgs(tys, node.typeArgs)
     "{callee}{ta} {args}"
 }
-
 fn corePrintMapEntryBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let left = corePrintNode(arena, tys, node.left, depth + 1)
     let right = corePrintNode(arena, tys, node.right, depth + 1)
     strings.join([left, " =", ">", " ", right], "")
 }
-
 fn corePrintMethodCallBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let recv = corePrintNode(arena, tys, node.left, depth + 1)
     let args = corePrintList(arena, tys, node.children, depth)
     let ta = corePrintTypeArgs(tys, node.typeArgs)
     "{recv}.{node.name}{ta} {args}"
 }
-
 fn corePrintIntrinsicBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let args = corePrintList(arena, tys, node.children, depth)
     "@{node.name} {args}"
 }
-
 fn corePrintVariantBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let args = corePrintList(arena, tys, node.children, depth)
     let ta = corePrintTypeArgs(tys, node.typeArgs)
     "{node.owner}.{node.name}{ta} {args}"
 }
-
 fn corePrintStructBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let fields = corePrintList(arena, tys, node.children, depth)
     let spread = if node.extra >= 0 {
@@ -1660,20 +1673,29 @@ fn corePrintStructBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: In
     }
     "{node.owner}{corePrintTypeArgs(tys, node.typeArgs)} {fields}{spread}"
 }
-
 fn corePrintRangeBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
-    let op = if node.flags == 1 { "..=" } else { ".." }
-    let lo = if node.left >= 0 { corePrintNode(arena, tys, node.left, depth + 1) } else { "_" }
-    let hi = if node.right >= 0 { corePrintNode(arena, tys, node.right, depth + 1) } else { "_" }
+    let op = if node.flags == 1 {
+        "..="
+    } else {
+        ".."
+    }
+    let lo = if node.left >= 0 {
+        corePrintNode(arena, tys, node.left, depth + 1)
+    } else {
+        "_"
+    }
+    let hi = if node.right >= 0 {
+        corePrintNode(arena, tys, node.right, depth + 1)
+    } else {
+        "_"
+    }
     "{lo} {op} {hi}"
 }
-
 fn corePrintClosureBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let params = corePrintList(arena, tys, node.children, depth)
     let body = corePrintNode(arena, tys, node.left, depth + 1)
     "|{params}| {body}"
 }
-
 fn corePrintBlockBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let stmts = corePrintList(arena, tys, node.children, depth)
     let tail = if node.left >= 0 {
@@ -1683,7 +1705,6 @@ fn corePrintBlockBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int
     }
     "{stmts}{tail}"
 }
-
 fn corePrintIfBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let cond = corePrintNode(arena, tys, node.left, depth + 1)
     let then_ = corePrintNode(arena, tys, node.right, depth + 1)
@@ -1694,10 +1715,13 @@ fn corePrintIfBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -
     }
     "{cond} then {then_}{else_}"
 }
-
 fn corePrintIfLetBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let patList = node.children
-    let patIdx = if coreIntLen(patList) > 0 { patList[0] } else { -1 }
+    let patIdx = if coreIntLen(patList) > 0 {
+        patList[0]
+    } else {
+        -1
+    }
     let pat = corePrintNode(arena, tys, patIdx, depth + 1)
     let scrutinee = corePrintNode(arena, tys, node.left, depth + 1)
     let then_ = corePrintNode(arena, tys, node.right, depth + 1)
@@ -1708,13 +1732,11 @@ fn corePrintIfLetBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int
     }
     "let {pat} = {scrutinee} then {then_}{else_}"
 }
-
 fn corePrintMatchBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let scrutinee = corePrintNode(arena, tys, node.left, depth + 1)
     let arms = corePrintList(arena, tys, node.children, depth)
     "{scrutinee} {arms}"
 }
-
 fn corePrintMatchArmBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let pat = corePrintNode(arena, tys, node.left, depth + 1)
     let guard = if node.right >= 0 {
@@ -1725,20 +1747,21 @@ fn corePrintMatchArmBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: 
     let body = corePrintNode(arena, tys, node.extra, depth + 1)
     "{pat}{guard} -> {body}"
 }
-
 fn corePrintLetStmtBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let pat = corePrintNode(arena, tys, node.left, depth + 1)
     let value = corePrintNode(arena, tys, node.right, depth + 1)
-    let mutWord = if node.flags == 0 { "" } else { "mut " }
+    let mutWord = if node.flags == 0 {
+        ""
+    } else {
+        "mut "
+    }
     "{mutWord}{pat} = {value}"
 }
-
 fn corePrintAssignBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let targets = corePrintList(arena, tys, node.children, depth)
     let value = corePrintNode(arena, tys, node.left, depth + 1)
     "{targets} <- {value}"
 }
-
 fn corePrintFnDeclBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
     let _ = depth
     let params = corePrintList(arena, tys, node.children, depth)
@@ -1749,7 +1772,6 @@ fn corePrintFnDeclBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: In
     }
     "{node.name}{params} -> {retType}"
 }
-
 fn corePrintList(arena: CoreArena, tys: TyArena, items: List<Int>, depth: Int) -> String {
     let sep = ", "
     let mut parts: List<String> = []
@@ -1758,7 +1780,6 @@ fn corePrintList(arena: CoreArena, tys: TyArena, items: List<Int>, depth: Int) -
     }
     "[{strings.join(parts, sep)}]"
 }
-
 fn corePrintTypeArgs(tys: TyArena, args: List<Int>) -> String {
     if coreIntLen(args) == 0 {
         return ""
@@ -1770,18 +1791,14 @@ fn corePrintTypeArgs(tys: TyArena, args: List<Int>) -> String {
     }
     "::<{strings.join(parts, sep)}>"
 }
-
 fn coreIntLen(xs: List<Int>) -> Int {
     xs.len()
 }
-
 fn coreDiagCount(xs: List<CheckDiagnostic>) -> Int {
     xs.len()
 }
-
 // Shared list helpers (toolchain-wide). O(n) linear scans — keep caller
 // sets small or switch to a `Map<K, Bool>` keyed set.
-
 fn listContainsString(xs: List<String>, needle: String) -> Bool {
     for x in xs {
         if x == needle {
@@ -1790,7 +1807,6 @@ fn listContainsString(xs: List<String>, needle: String) -> Bool {
     }
     false
 }
-
 fn listContainsInt(xs: List<Int>, needle: Int) -> Bool {
     for x in xs {
         if x == needle {

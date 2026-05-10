@@ -12,9 +12,7 @@
 // Aggregate live in the sister `onb_binary.osty` /
 // `onb_aggregate.osty` modules so the file budget per slice stays
 // near 1k lines.
-
 // === Top-level dispatch =============================================
-
 // onbLowerInstr returns the LIR sequence for a single MIR
 // instruction. StorageLive / StorageDead are no-ops; Assign /
 // Intrinsic / Call dispatch to the right branch. Mirror of
@@ -33,7 +31,6 @@ pub fn onbLowerInstr(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseRes
         _ -> onbMaterialiseErr(state, "instruction outside slice H"),
     }
 }
-
 // onbLowerInstrCall routes Call instructions to the direct or
 // indirect call lowering depending on the callee shape. The
 // underlying functions live in Slice G (`onb_call.osty`).
@@ -43,24 +40,28 @@ fn onbLowerInstrCall(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseRes
     }
     onbLowerCall(state, instr)
 }
-
 // === isUnitReturnAssignment =========================================
-
 // onbIsUnitReturnAssignment reports whether `instr` is an
 // `Assign _return := unit` produced by the front end at the end
 // of every Unit-returning function. The lowerer drops these — the
 // epilogue's `ret` is enough; storing a Unit doesn't carry any
 // information.
 pub fn onbIsUnitReturnAssignment(func: MirFunction, instr: MirInstr) -> Bool {
-    if mirPlaceHasProjections(instr.dest) { return false }
-    if instr.dest.local != func.returnLocal { return false }
-    if instr.src.kind != MirRValueKind.MirRVUse { return false }
-    if instr.src.arg.kind != MirOperandKind.MirOpConst { return false }
+    if mirPlaceHasProjections(instr.dest) {
+        return false
+    }
+    if instr.dest.local != func.returnLocal {
+        return false
+    }
+    if instr.src.kind != MirRValueKind.MirRVUse {
+        return false
+    }
+    if instr.src.arg.kind != MirOperandKind.MirOpConst {
+        return false
+    }
     instr.src.arg.const.kind == MirConstKind.MirConstUnit
 }
-
 // === Assign top-level ===============================================
-
 // onbLowerAssign dispatches an Assign instruction by RV kind. The
 // dest slot is resolved up front; an Assign without a slot but
 // targeting `_return` of a scalar return type allocates a synthetic
@@ -95,15 +96,12 @@ pub fn onbLowerAssign(state: OnbLowerState, instr: MirInstr) -> OnbMaterialiseRe
         _ -> onbMaterialiseErr(working, "rvalue outside slice H"),
     }
 }
-
 // === Synthetic return-slot allocator ================================
-
 // OnbAllocateResult bundles the rebuilt state with the new slot.
 pub struct OnbAllocateResult {
     pub state: OnbLowerState,
     pub offset: Int,
 }
-
 // onbAllocateReturnSlot reserves an 8-byte slot at the frame's
 // tail for the return local. Mirror of `allocateReturnSlot` —
 // the Go side rounds the frame size up to 16 here too, but we
@@ -118,17 +116,17 @@ pub fn onbAllocateReturnSlot(state: OnbLowerState) -> OnbAllocateResult {
         }
     }
     let nextState = onbLocalSlotInsert(state, state.func.returnLocal, maxOff)
-    OnbAllocateResult { state: nextState, offset: maxOff }
+    OnbAllocateResult {state: nextState, offset: maxOff}
 }
-
 // === projectionEndType ==============================================
-
 // onbProjectionEndType returns the type at the end of a place's
 // projection chain. FieldProj.typ / VariantProj.typ carry the
 // field's declared type; empty chains return `()`. Mirror of
 // `projectionEndType`.
 pub fn onbProjectionEndType(place: MirPlace) -> String {
-    if place.projections.len() == 0 { return "()" }
+    if place.projections.len() == 0 {
+        return "()"
+    }
     let last = place.projections[place.projections.len() - 1]
     match last.kind {
         MirProjectionKind.MirProjField -> last.typ,
@@ -136,9 +134,7 @@ pub fn onbProjectionEndType(place: MirPlace) -> String {
         _ -> "()",
     }
 }
-
 // === lowerAssignToProjection ========================================
-
 // onbLowerAssignToProjection covers `dest.field = rvalue` writes.
 // Today's coverage: FieldProj / VariantProj on a struct or enum
 // local. IndexProj writes (`xs[i] = v`) and dest-side
@@ -160,16 +156,24 @@ pub fn onbLowerAssignToProjection(state: OnbLowerState, instr: MirInstr) -> OnbM
             let fieldT = onbProjectionEndType(instr.dest)
             if onbIsFloatAbiType(fieldT) {
                 let r = onbMaterialiseFloatOperand(state, instr.src.arg, "d8")
-                if !r.ok { return r }
+                if !r.ok {
+                    return r
+                }
                 let mut out: List<OnbInstr> = []
-                for i in r.instrs { out.push(i) }
+                for i in r.instrs {
+                    out.push(i)
+                }
                 out.push(onbInstrStoreFloat64Stack("d8", slot))
                 return onbMaterialiseOk(r.state, out)
             }
             let r = onbMaterialiseOperand(state, instr.src.arg, "x9")
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             let mut out: List<OnbInstr> = []
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             out.push(onbInstrStore64Stack("x9", slot))
             onbMaterialiseOk(r.state, out)
         },
@@ -177,9 +181,7 @@ pub fn onbLowerAssignToProjection(state: OnbLowerState, instr: MirInstr) -> OnbM
         _ -> onbMaterialiseErr(state, "assign-to-projection rvalue outside slice H"),
     }
 }
-
 // === placeProjectionOffset ==========================================
-
 // onbPlaceProjectionOffset reduces a place's projection chain to a
 // single byte offset relative to the local's slot. Field projections
 // add `index * 8`; variant projections add `8 + fieldIdx * 8` (the
@@ -187,20 +189,25 @@ pub fn onbLowerAssignToProjection(state: OnbLowerState, instr: MirInstr) -> OnbM
 // through to 0 — the caller is supposed to route those types
 // through the runtime intrinsic path before reaching here.
 pub fn onbPlaceProjectionOffset(state: OnbLowerState, place: MirPlace) -> Int {
-    if !mirPlaceHasProjections(place) { return 0 }
+    if !mirPlaceHasProjections(place) {
+        return 0
+    }
     let mut off = 0
     for proj in place.projections {
         match proj.kind {
-            MirProjectionKind.MirProjField -> { off = off + onbStructFieldByteOffset(proj.index) },
-            MirProjectionKind.MirProjVariant -> { off = off + onbEnumPayloadOffset(proj.variantField) },
-            _ -> {},
+            MirProjectionKind.MirProjField -> {
+                off = off + onbStructFieldByteOffset(proj.index)
+            },
+            MirProjectionKind.MirProjVariant -> {
+                off = off + onbEnumPayloadOffset(proj.variantField)
+            },
+            _ -> {
+            },
         }
     }
     off
 }
-
 // === lowerUseAssign =================================================
-
 // onbLowerUseAssign handles `Assign dest := Use(operand)`. Single
 // 8B slot copy through x9 is the common case; multi-slot copies
 // (struct / small enum) walk through `onbLowerUseAssignMulti`.
@@ -211,9 +218,13 @@ pub fn onbLowerUseAssign(state: OnbLowerState, rv: MirRValue, destId: Int, destS
     if destLoc.id >= 0 {
         if onbIsFloatAbiType(destLoc.typ) {
             let r = onbMaterialiseFloatOperand(state, rv.arg, "d8")
-            if !r.ok { return r }
+            if !r.ok {
+                return r
+            }
             let mut out: List<OnbInstr> = []
-            for i in r.instrs { out.push(i) }
+            for i in r.instrs {
+                out.push(i)
+            }
             out.push(onbInstrStoreFloat64Stack("d8", destSlot))
             return onbMaterialiseOk(r.state, out)
         }
@@ -223,13 +234,16 @@ pub fn onbLowerUseAssign(state: OnbLowerState, rv: MirRValue, destId: Int, destS
         }
     }
     let r = onbMaterialiseOperand(state, rv.arg, "x9")
-    if !r.ok { return r }
+    if !r.ok {
+        return r
+    }
     let mut out: List<OnbInstr> = []
-    for i in r.instrs { out.push(i) }
+    for i in r.instrs {
+        out.push(i)
+    }
     out.push(onbInstrStore64Stack("x9", destSlot))
     onbMaterialiseOk(r.state, out)
 }
-
 // onbLowerUseAssignMulti copies an N-slot value (struct / small
 // enum) from a Copy/Move source slot to the destination slot a
 // half at a time. Const operands aren't valid for multi-slot
@@ -252,9 +266,7 @@ pub fn onbLowerUseAssignMulti(state: OnbLowerState, rv: MirRValue, slots: Int, d
     }
     onbMaterialiseOk(state, out)
 }
-
 // === lowerLenAssign =================================================
-
 // onbLowerLenAssign lowers `dest = len <place>` for List
 // operands. The runtime call returns the length in x0; we capture
 // it into the destination slot. Mirror of `lowerLenAssign`.
@@ -272,9 +284,7 @@ pub fn onbLowerLenAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> 
     out.push(onbInstrStore64Stack("x0", destSlot))
     onbMaterialiseOk(state, out)
 }
-
 // === lowerNullaryAssign =============================================
-
 // onbLowerNullaryAssign covers `dest = none T?` — write the None
 // tag (0) to slot+0 and leave the payload undefined. Mirror of
 // `lowerNullaryAssign`.
@@ -285,8 +295,6 @@ pub fn onbLowerNullaryAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int)
     let head = onbExtractTypeName(rv.typ)
     match onbLookupEnumLayout(state.layouts, head) {
         Some(layout) -> {
-            // Find the "None" variant; for synthetic Option layouts
-            // it's at index 0 by construction.
             let mut noneIdx = 0
             for v in layout.variants {
                 if v.name == "None" {
@@ -302,7 +310,8 @@ pub fn onbLowerNullaryAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int)
         None -> onbMaterialiseErr(state, "nullary none on non-enum type"),
     }
 }
-
+// Find the "None" variant; for synthetic Option layouts
+// it's at index 0 by construction.
 // onbEnumDiscriminantValue returns the integer tag for a variant.
 // Synthetic Option / Result layouts use the variant's `index`
 // field; user enums fall back to the variant index in the list.
@@ -313,9 +322,7 @@ pub fn onbEnumDiscriminantValue(layout: MirEnumLayout, variantIdx: Int) -> Int {
     }
     layout.variants[variantIdx].index
 }
-
 // === lowerDiscriminantAssign ========================================
-
 // onbLowerDiscriminantAssign reads the discriminant tag of an enum
 // local into the destination slot. The discriminant always sits
 // at offset 0 of the source slot, so this is just `ldr x9 + str

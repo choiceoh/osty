@@ -17,7 +17,6 @@
 // relevant fields and zeros the rest. Unused fields stay sentinel
 // (empty string / 0 / OnbCondEq) — `onbEncodeInstr` only reads the
 // fields its kind branch cares about.
-
 // === Condition codes ====================================================
 //
 // The aarch64 `cond` 4-bit encoding values that ONB's `Cset` /
@@ -32,7 +31,6 @@ pub enum OnbCond {
     OnbCondGt,
     OnbCondLe,
 }
-
 // onbCondToCode maps the OnbCond enum to its aarch64 4-bit code.
 pub fn onbCondToCode(c: OnbCond) -> Int {
     match c {
@@ -44,7 +42,6 @@ pub fn onbCondToCode(c: OnbCond) -> Int {
         OnbCond.OnbCondLe -> onbCondCodeLe(),
     }
 }
-
 // === Debug type kinds ===================================================
 //
 // The DWARF emitter's view of a local's primitive type. Mirrors
@@ -59,7 +56,6 @@ pub enum OnbDebugTypeKind {
     OnbDebugTypeString,
     OnbDebugTypeStruct,
 }
-
 // === LIR opcode kind enum ==============================================
 //
 // The single-word opcode set Phase 2a covers. Multi-word /
@@ -92,26 +88,28 @@ pub enum OnbInstrKind {
     OnbInstrFmulReg,
     OnbInstrFdivReg,
     OnbInstrBranchLinkReg,
-    // Phase 2b: multi-word constant materialisation. These produce
-    // 1..4 32-bit words rather than a single Int, and route through
-    // `onbEncodeInstrWords` instead of the single-word
-    // `onbEncodeInstr` dispatcher.
     OnbInstrMovImm32,
     OnbInstrMovImm64,
-    // Phase 2d: block-relative branches. Encoded as placeholder
-    // words at emit time + a fixup record that the per-function
-    // resolve pass patches once block byte offsets are known.
     OnbInstrBranch,
     OnbInstrBranchCond,
     OnbInstrBranchCondNotZero,
-    // Phase 2c: symbol-relative addressing + calls. These emit
-    // placeholder words paired with Mach-O reloc records (the
-    // linker patches the imm field at link time).
-    OnbInstrLoadCStringAddress, // adrp + add → label@PAGE / @PAGEOFF
-    OnbInstrLoadSymbolAddress,  // adrp + add → fn / data symbol
-    OnbInstrBranchLink,         // bl symbol  → external / local fn call
+    OnbInstrLoadCStringAddress,
+    OnbInstrLoadSymbolAddress,
+    OnbInstrBranchLink,
 }
-
+// Phase 2b: multi-word constant materialisation. These produce
+// 1..4 32-bit words rather than a single Int, and route through
+// `onbEncodeInstrWords` instead of the single-word
+// `onbEncodeInstr` dispatcher.
+// Phase 2d: block-relative branches. Encoded as placeholder
+// words at emit time + a fixup record that the per-function
+// resolve pass patches once block byte offsets are known.
+// Phase 2c: symbol-relative addressing + calls. These emit
+// placeholder words paired with Mach-O reloc records (the
+// linker patches the imm field at link time).
+// adrp + add → label@PAGE / @PAGEOFF
+// adrp + add → fn / data symbol
+// bl symbol  → external / local fn call
 // === LIR instruction record ============================================
 //
 // Flat record with named fields per role. Each constructor below
@@ -129,137 +127,97 @@ pub struct OnbInstr {
     pub imm: Int,
     pub offset: Int,
     pub cond: OnbCond,
-    // targetBlock is the destination block index for branch
-    // opcodes (Phase 2d). -1 for non-branch instructions, where
-    // the field is ignored.
     pub targetBlock: Int,
-    // symbol is the link-time target name for adrp+add /
-    // bl-shaped opcodes (Phase 2c). Empty string for ops that
-    // don't reference a symbol.
     pub symbol: String,
-    // label is the `__cstring` label for `LoadCStringAddress`
-    // (Phase 2c). Empty for non-cstring opcodes.
     pub label: String,
 }
-
+// targetBlock is the destination block index for branch
+// opcodes (Phase 2d). -1 for non-branch instructions, where
+// the field is ignored.
+// symbol is the link-time target name for adrp+add /
+// bl-shaped opcodes (Phase 2c). Empty string for ops that
+// don't reference a symbol.
+// label is the `__cstring` label for `LoadCStringAddress`
+// (Phase 2c). Empty for non-cstring opcodes.
 // emptyOnbInstr returns a zero-valued instruction record. Internal
 // helper — every public `onbInstr*` constructor builds on top of
 // it so the field-initialiser surface lives in one place.
 fn emptyOnbInstr() -> OnbInstr {
-    OnbInstr {
-        kind: OnbInstrKind.OnbInstrInvalid,
-        dst: "",
-        src: "",
-        lhs: "",
-        rhs: "",
-        base: "",
-        imm: 0,
-        offset: 0,
-        cond: OnbCond.OnbCondEq,
-        targetBlock: -1,
-        symbol: "",
-        label: "",
-    }
+    OnbInstr {kind: OnbInstrKind.OnbInstrInvalid, dst: "", src: "", lhs: "", rhs: "", base: "", imm: 0, offset: 0, cond: OnbCond.OnbCondEq, targetBlock: -1, symbol: "", label: ""}
 }
-
 // === Constructors ======================================================
-
 pub fn onbInstrBrk(imm: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBrk, imm: imm }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBrk, imm: imm, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrRet() -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrRet }
+    OnbInstr {kind: OnbInstrKind.OnbInstrRet, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrAddReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrAddReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrAddReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrSubReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrSubReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrSubReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrMulReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMulReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrMulReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrCmp(lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrCmp, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrCmp, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrCset(dst: String, cond: OnbCond) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrCset, dst: dst, cond: cond }
+    OnbInstr {kind: OnbInstrKind.OnbInstrCset, dst: dst, cond: cond, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrStore64Stack(src: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStore64Stack, src: src, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrStore64Stack, src: src, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrLoad64Stack(dst: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoad64Stack, dst: dst, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoad64Stack, dst: dst, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrMovRegReg(dst: String, src: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovRegReg, dst: dst, src: src }
+    OnbInstr {kind: OnbInstrKind.OnbInstrMovRegReg, dst: dst, src: src, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrLoadStackAddress(dst: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadStackAddress, dst: dst, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoadStackAddress, dst: dst, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrLoadFromReg(dst: String, src: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadFromReg, dst: dst, src: src, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoadFromReg, dst: dst, src: src, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrStoreToReg(src: String, base: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStoreToReg, src: src, base: base, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrStoreToReg, src: src, base: base, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrLoadFloat64Stack(dst: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadFloat64Stack, dst: dst, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoadFloat64Stack, dst: dst, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrStoreFloat64Stack(src: String, offset: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStoreFloat64Stack, src: src, offset: offset }
+    OnbInstr {kind: OnbInstrKind.OnbInstrStoreFloat64Stack, src: src, offset: offset, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFmovDFromX(dst: String, src: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmovDFromX, dst: dst, src: src }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFmovDFromX, dst: dst, src: src, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFmovXFromD(dst: String, src: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmovXFromD, dst: dst, src: src }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFmovXFromD, dst: dst, src: src, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFaddReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFaddReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFaddReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFsubReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFsubReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFsubReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFmulReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmulReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFmulReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrFdivReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFdivReg, dst: dst, lhs: lhs, rhs: rhs }
+    OnbInstr {kind: OnbInstrKind.OnbInstrFdivReg, dst: dst, lhs: lhs, rhs: rhs, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrBranchLinkReg(reg: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchLinkReg, src: reg }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBranchLinkReg, src: reg, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrMovImm32(dst: String, imm: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovImm32, dst: dst, imm: imm }
+    OnbInstr {kind: OnbInstrKind.OnbInstrMovImm32, dst: dst, imm: imm, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrMovImm64(dst: String, imm: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovImm64, dst: dst, imm: imm }
+    OnbInstr {kind: OnbInstrKind.OnbInstrMovImm64, dst: dst, imm: imm, ..emptyOnbInstr()}
 }
-
 // === Phase 2d branch constructors ===================================
 //
 // Branch instructions store their target block index in
@@ -267,35 +225,26 @@ pub fn onbInstrMovImm64(dst: String, imm: Int) -> OnbInstr {
 // payload (cbnz's register; b.cond's condition). The encoder
 // helpers below produce the placeholder word + fixup record pair
 // that the per-function resolve pass needs.
-
 pub fn onbInstrBranch(targetBlock: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranch, targetBlock: targetBlock }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBranch, targetBlock: targetBlock, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrBranchCond(cond: OnbCond, targetBlock: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchCond, cond: cond, targetBlock: targetBlock }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBranchCond, cond: cond, targetBlock: targetBlock, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrBranchCondNotZero(src: String, targetBlock: Int) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchCondNotZero, src: src, targetBlock: targetBlock }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBranchCondNotZero, src: src, targetBlock: targetBlock, ..emptyOnbInstr()}
 }
-
 // === Phase 2c branch-link / symbol-address constructors ==============
-
 pub fn onbInstrLoadCStringAddress(dst: String, label: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadCStringAddress, dst: dst, label: label }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoadCStringAddress, dst: dst, label: label, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrLoadSymbolAddress(dst: String, symbol: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadSymbolAddress, dst: dst, symbol: symbol }
+    OnbInstr {kind: OnbInstrKind.OnbInstrLoadSymbolAddress, dst: dst, symbol: symbol, ..emptyOnbInstr()}
 }
-
 pub fn onbInstrBranchLink(symbol: String) -> OnbInstr {
-    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchLink, symbol: symbol }
+    OnbInstr {kind: OnbInstrKind.OnbInstrBranchLink, symbol: symbol, ..emptyOnbInstr()}
 }
-
 // === Phase 2d / 2c emit helpers ======================================
-
 // OnbBranchEmit bundles every per-instruction emit product:
 //   - words   : the encoded skeleton (placeholder for branches /
 //               adrp+add / bl, or final word for already-resolved
@@ -310,7 +259,6 @@ pub struct OnbBranchEmit {
     pub fixups: List<OnbBranchFixup>,
     pub relocs: List<OnbReloc>,
 }
-
 // onbEmitInstr produces the encoded word(s) plus any fixup records
 // for a single instruction at byte offset `codeOffset` (the offset
 // where the first word will land). For branch instructions the
@@ -330,22 +278,19 @@ pub fn onbEmitInstr(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
         OnbInstrKind.OnbInstrLoadCStringAddress -> onbEmitAdrpAddPair(instr.dst, instr.label, codeOffset),
         OnbInstrKind.OnbInstrLoadSymbolAddress -> onbEmitAdrpAddPair(instr.dst, instr.symbol, codeOffset),
         OnbInstrKind.OnbInstrBranchLink -> onbEmitBranchLinkPlaceholder(instr.symbol, codeOffset),
-        _ -> OnbBranchEmit { words: onbEncodeInstrWords(instr), fixups: [], relocs: [] },
+        _ -> OnbBranchEmit {words: onbEncodeInstrWords(instr), fixups: [], relocs: []},
     }
 }
-
 fn emptyBranchEmit() -> OnbBranchEmit {
-    OnbBranchEmit { words: [], fixups: [], relocs: [] }
+    OnbBranchEmit {words: [], fixups: [], relocs: []}
 }
-
 fn onbEmitBranchPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
     let mut words: List<Int> = []
     words.push(onbEncodeBranchPlaceholder())
     let mut fixups: List<OnbBranchFixup> = []
     fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupUncond))
-    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
+    OnbBranchEmit {words: words, fixups: fixups, relocs: []}
 }
-
 fn onbEmitBranchCondPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
     let mut words: List<Int> = []
     let mut fixups: List<OnbBranchFixup> = []
@@ -354,11 +299,11 @@ fn onbEmitBranchCondPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEm
             words.push(w)
             fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupCond))
         },
-        None -> {},
+        None -> {
+        },
     }
-    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
+    OnbBranchEmit {words: words, fixups: fixups, relocs: []}
 }
-
 fn onbEmitCbnzPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
     let mut words: List<Int> = []
     let mut fixups: List<OnbBranchFixup> = []
@@ -367,11 +312,11 @@ fn onbEmitCbnzPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
             words.push(w)
             fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupCbnz))
         },
-        None -> {},
+        None -> {
+        },
     }
-    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
+    OnbBranchEmit {words: words, fixups: fixups, relocs: []}
 }
-
 // onbEmitAdrpAddPair lays down the canonical adrp+add skeleton and
 // emits two relocs (PAGE21 + PageOff12) targeting the same symbol.
 // Used for both `LoadCStringAddress` (label) and
@@ -393,18 +338,19 @@ fn onbEmitAdrpAddPair(dst: String, symbol: String, codeOffset: Int) -> OnbBranch
             words.push(w)
             relocs.push(onbRelocPage21(codeOffset, symbol))
         },
-        None -> {},
+        None -> {
+        },
     }
     match addImm {
         Some(w) -> {
             words.push(w)
             relocs.push(onbRelocPageOff12(codeOffset + 4, symbol))
         },
-        None -> {},
+        None -> {
+        },
     }
-    OnbBranchEmit { words: words, fixups: [], relocs: relocs }
+    OnbBranchEmit {words: words, fixups: [], relocs: relocs}
 }
-
 // onbEmitBranchLinkPlaceholder emits `bl 0` + a Branch26 reloc.
 // The linker resolves the symbol and patches imm26 in place.
 fn onbEmitBranchLinkPlaceholder(symbol: String, codeOffset: Int) -> OnbBranchEmit {
@@ -412,9 +358,8 @@ fn onbEmitBranchLinkPlaceholder(symbol: String, codeOffset: Int) -> OnbBranchEmi
     let mut relocs: List<OnbReloc> = []
     words.push(onbEncodeBlPlaceholder())
     relocs.push(onbRelocBranch26(codeOffset, symbol))
-    OnbBranchEmit { words: words, fixups: [], relocs: relocs }
+    OnbBranchEmit {words: words, fixups: [], relocs: relocs}
 }
-
 // === Single-word encoder dispatch =====================================
 //
 // `onbEncodeInstr` mirrors the encoder switch in
@@ -452,25 +397,24 @@ pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
         OnbInstrKind.OnbInstrBranchLinkReg -> onbEncodeBlr(instr.src),
         OnbInstrKind.OnbInstrMovImm32 -> onbEncodeMovImm32Word(instr.dst, instr.imm),
         OnbInstrKind.OnbInstrMovImm64 -> None,
-        // Branch family is multi-step (placeholder word + fixup
-        // record) so the single-word path can't represent it. The
-        // higher-level emitter routes branches through
-        // `onbEmitInstr` which produces both a placeholder word
-        // and a fixup. Returning None here keeps the fast path
-        // closed.
         OnbInstrKind.OnbInstrBranch -> None,
         OnbInstrKind.OnbInstrBranchCond -> None,
         OnbInstrKind.OnbInstrBranchCondNotZero -> None,
-        // adrp+add pairs and bl-symbol calls produce multiple
-        // words plus reloc records — `onbEmitInstr` is the right
-        // entry point.
         OnbInstrKind.OnbInstrLoadCStringAddress -> None,
         OnbInstrKind.OnbInstrLoadSymbolAddress -> None,
         OnbInstrKind.OnbInstrBranchLink -> None,
         OnbInstrKind.OnbInstrInvalid -> None,
     }
 }
-
+// Branch family is multi-step (placeholder word + fixup
+// record) so the single-word path can't represent it. The
+// higher-level emitter routes branches through
+// `onbEmitInstr` which produces both a placeholder word
+// and a fixup. Returning None here keeps the fast path
+// closed.
+// adrp+add pairs and bl-symbol calls produce multiple
+// words plus reloc records — `onbEmitInstr` is the right
+// entry point.
 // === Multi-word encoder dispatch ======================================
 //
 // `onbEncodeInstrWords` returns the full word stream for any
@@ -486,7 +430,8 @@ pub fn onbEncodeInstrWords(instr: OnbInstr) -> List<Int> {
             let mut out: List<Int> = []
             match onbEncodeInstr(instr) {
                 Some(word) -> out.push(word),
-                None -> {},
+                None -> {
+                },
             }
             out
         },

@@ -1,6 +1,5 @@
 use std.testing
 use std.strings as harvestTestStrings
-
 /// testDiagHarvestResolvePhaseExamplesFireExpectedCode asserts that
 /// every Example: block belonging to a resolve-reachable phase
 /// (lex / parse / resolve) still fires its advertised code when the
@@ -25,24 +24,18 @@ fn testDiagHarvestResolvePhaseExamplesFireExpectedCode() {
         testing.fail("harvest mismatches:\n" + joined)
     }
 }
-
 /// testDiagHarvestCasesAreNonEmpty is a sanity check that the
 /// generated case list survives regeneration; an empty list would
 /// silently turn the harvest into a no-op.
 fn testDiagHarvestCasesAreNonEmpty() {
     testing.assert(!(diagHarvestCases().isEmpty()))
 }
-
 /// testDiagHarvestRunSkipsManifestScaffoldPhases proves the `skip`
 /// phase short-circuits the runner — without this the harvest would
 /// try to feed a TOML fragment into selfResolveSource and get a pile
 /// of unrelated lex errors.
 fn testDiagHarvestRunSkipsManifestScaffoldPhases() {
-    let synthetic = DiagHarvestCase {
-        code: "E2000",
-        example: "[[ not osty code ]]",
-        phase: "skip",
-    }
+    let synthetic = DiagHarvestCase {code: "E2000", example: "[[ not osty code ]]", phase: "skip"}
     let outcome = diagHarvestRun(synthetic)
     testing.assert(outcome.skipped)
     testing.assert(!(outcome.matched))

@@ -1,66 +1,55 @@
 use std.testing
-
 fn testSelectProfileNameReleaseWins() {
     let sel = selectProfileName("", true, "debug")
     testing.assertEq(sel.name, "release")
     testing.assertEq(sel.conflict, "")
 }
-
 fn testSelectProfileNameReleaseAgreesWithExplicitRelease() {
     let sel = selectProfileName("release", true, "")
     testing.assertEq(sel.name, "release")
     testing.assertEq(sel.conflict, "")
 }
-
 fn testSelectProfileNameReleaseConflictReportsUsage() {
     let sel = selectProfileName("debug", true, "")
     testing.assertEq(sel.name, "")
     testing.assertEq(sel.conflict, "--release conflicts with --profile debug")
 }
-
 fn testSelectProfileNameExplicitOverridesFallback() {
     let sel = selectProfileName("staging", false, "test")
     testing.assertEq(sel.name, "staging")
     testing.assertEq(sel.conflict, "")
 }
-
 fn testSelectProfileNameFallbackUsedWhenUnset() {
     let sel = selectProfileName("", false, "test")
     testing.assertEq(sel.name, "test")
     testing.assertEq(sel.conflict, "")
 }
-
 fn testSelectProfileNameUltimateDefaultIsDebug() {
     let sel = selectProfileName("", false, "")
     testing.assertEq(sel.name, "debug")
     testing.assertEq(sel.conflict, "")
 }
-
 fn testParseFeatureListSplitsAndTrims() {
     let feats = parseFeatureList("a, b ,c")
     testing.assertEq(feats[0], "a")
     testing.assertEq(feats[1], "b")
     testing.assertEq(feats[2], "c")
 }
-
 fn testParseFeatureListDropsEmpty() {
     let feats = parseFeatureList("a,,b, ,c")
     testing.assertEq(feats[0], "a")
     testing.assertEq(feats[1], "b")
     testing.assertEq(feats[2], "c")
 }
-
 fn testParseFeatureListEmptyInputReturnsEmpty() {
     let feats = parseFeatureList("")
     testing.assertEq(feats.len(), 0)
 }
-
 fn testParseFeatureListSingleElement() {
     let feats = parseFeatureList("a")
     testing.assertEq(feats[0], "a")
     testing.assertEq(feats.len(), 1)
 }
-
 fn testParseFeatureListWhitespaceOnlyIsEmpty() {
     let feats = parseFeatureList("  ")
     testing.assertEq(feats.len(), 0)

@@ -5,7 +5,6 @@
 // nodes in preorder by category. Consumers that just need "visit every expr /
 // stmt / pattern in source order" can reuse this without inventing their own
 // recursive descent.
-
 pub struct HirWalkOrder {
     pub fns: List<HirFnDecl>,
     pub structs: List<HirStructDecl>,
@@ -25,35 +24,14 @@ pub struct HirWalkOrder {
     pub typeParams: List<HirTypeParam>,
     pub captures: List<HirCapture>,
 }
-
 pub fn hirWalkModule(m: HirModule) -> HirWalkOrder {
     let out = hirWalkOrder()
     hirWalkVisitModule(out, m)
     out
 }
-
 fn hirWalkOrder() -> HirWalkOrder {
-    HirWalkOrder {
-        fns: [],
-        structs: [],
-        enums: [],
-        lets: [],
-        uses: [],
-        interfaces: [],
-        aliases: [],
-        params: [],
-        fields: [],
-        variants: [],
-        blocks: [],
-        stmts: [],
-        exprs: [],
-        patterns: [],
-        matchArms: [],
-        typeParams: [],
-        captures: [],
-    }
+    HirWalkOrder {fns: [], structs: [], enums: [], lets: [], uses: [], interfaces: [], aliases: [], params: [], fields: [], variants: [], blocks: [], stmts: [], exprs: [], patterns: [], matchArms: [], typeParams: [], captures: []}
 }
-
 fn hirWalkVisitModule(out: HirWalkOrder, m: HirModule) {
     for d in m.fns {
         hirWalkVisitFn(out, d)
@@ -80,7 +58,6 @@ fn hirWalkVisitModule(out: HirWalkOrder, m: HirModule) {
         hirWalkVisitStmt(out, s)
     }
 }
-
 fn hirWalkVisitFn(out: HirWalkOrder, d: HirFnDecl) {
     out.fns.push(d)
     for tp in d.generics {
@@ -91,7 +68,6 @@ fn hirWalkVisitFn(out: HirWalkOrder, d: HirFnDecl) {
     }
     hirWalkVisitBlock(out, d.body)
 }
-
 fn hirWalkVisitStruct(out: HirWalkOrder, d: HirStructDecl) {
     out.structs.push(d)
     for tp in d.generics {
@@ -104,7 +80,6 @@ fn hirWalkVisitStruct(out: HirWalkOrder, d: HirStructDecl) {
         hirWalkVisitFn(out, m)
     }
 }
-
 fn hirWalkVisitEnum(out: HirWalkOrder, d: HirEnumDecl) {
     out.enums.push(d)
     for tp in d.generics {
@@ -117,21 +92,18 @@ fn hirWalkVisitEnum(out: HirWalkOrder, d: HirEnumDecl) {
         hirWalkVisitFn(out, m)
     }
 }
-
 fn hirWalkVisitLetDecl(out: HirWalkOrder, d: HirLetDecl) {
     out.lets.push(d)
     if d.hasValue {
         hirWalkVisitExpr(out, d.value)
     }
 }
-
 fn hirWalkVisitUseDecl(out: HirWalkOrder, d: HirUseDecl) {
     out.uses.push(d)
     for bodyFn in d.goBodyFns {
         hirWalkVisitFn(out, bodyFn)
     }
 }
-
 fn hirWalkVisitInterface(out: HirWalkOrder, d: HirInterfaceDecl) {
     out.interfaces.push(d)
     for tp in d.generics {
@@ -141,14 +113,12 @@ fn hirWalkVisitInterface(out: HirWalkOrder, d: HirInterfaceDecl) {
         hirWalkVisitFn(out, m)
     }
 }
-
 fn hirWalkVisitAlias(out: HirWalkOrder, d: HirTypeAliasDecl) {
     out.aliases.push(d)
     for tp in d.generics {
         out.typeParams.push(tp)
     }
 }
-
 fn hirWalkVisitParam(out: HirWalkOrder, p: HirParam) {
     out.params.push(p)
     if hirParamIsDestructured(p) {
@@ -158,14 +128,12 @@ fn hirWalkVisitParam(out: HirWalkOrder, p: HirParam) {
         hirWalkVisitExpr(out, p.defaultValue)
     }
 }
-
 fn hirWalkVisitField(out: HirWalkOrder, f: HirField) {
     out.fields.push(f)
     if f.hasDefault {
         hirWalkVisitExpr(out, f.defaultValue)
     }
 }
-
 fn hirWalkVisitBlock(out: HirWalkOrder, b: HirBlock) {
     out.blocks.push(b)
     for s in b.stmts {
@@ -175,7 +143,6 @@ fn hirWalkVisitBlock(out: HirWalkOrder, b: HirBlock) {
         hirWalkVisitExpr(out, b.result)
     }
 }
-
 fn hirWalkVisitStmt(out: HirWalkOrder, s: HirStmt) {
     out.stmts.push(s)
     match s.kind {
@@ -236,10 +203,10 @@ fn hirWalkVisitStmt(out: HirWalkOrder, s: HirStmt) {
             hirWalkVisitExpr(out, s.chanChannel)
             hirWalkVisitExpr(out, s.chanValue)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirWalkVisitExpr(out: HirWalkOrder, e: HirExpr) {
     out.exprs.push(e)
     match e.kind {
@@ -355,10 +322,10 @@ fn hirWalkVisitExpr(out: HirWalkOrder, e: HirExpr) {
                 }
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirWalkVisitPattern(out: HirWalkOrder, p: HirPattern) {
     out.patterns.push(p)
     match p.kind {
@@ -402,10 +369,10 @@ fn hirWalkVisitPattern(out: HirWalkOrder, p: HirPattern) {
                 hirWalkVisitPattern(out, p.bindingChild[0])
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirWalkVisitMatchArm(out: HirWalkOrder, arm: HirMatchArm) {
     out.matchArms.push(arm)
     hirWalkVisitPattern(out, arm.pattern)
@@ -414,7 +381,6 @@ fn hirWalkVisitMatchArm(out: HirWalkOrder, arm: HirMatchArm) {
     }
     hirWalkVisitBlock(out, arm.body)
 }
-
 fn hirWalkFirstExpr(xs: List<HirExpr>) -> HirExpr {
     if xs.len() > 0 {
         xs[0]
@@ -422,7 +388,6 @@ fn hirWalkFirstExpr(xs: List<HirExpr>) -> HirExpr {
         hirExprInvalid()
     }
 }
-
 fn hirWalkFirstBlock(xs: List<HirBlock>) -> HirBlock {
     if xs.len() > 0 {
         xs[0]

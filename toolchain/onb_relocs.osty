@@ -17,29 +17,35 @@
 // walk; the Go-side Mach-O writer translates them to wire format.
 // (No need for an Osty-side wire encoder yet — the Mach-O writer
 // is firmly in the host-Go layer until Phase 6.)
-
 // === Reloc kind enum =================================================
 //
 // Three kinds cover every reloc ONB emits today. Adding a new kind
 // (e.g. GOT load, TLV access) requires both a new enum variant and
 // a matching `typ` byte in the Go-side wire writer.
 pub enum OnbRelocKind {
-    OnbRelocBranch26,    // bl Xd        — imm26 PC-relative, scaled by 4
-    OnbRelocPage21,      // adrp Xd      — imm21 PC-relative page address
-    OnbRelocPageOff12,   // add Xd, Xd, #imm12 PAGEOFF
+    OnbRelocBranch26,
+    OnbRelocPage21,
+    OnbRelocPageOff12,
 }
-
+// bl Xd        — imm26 PC-relative, scaled by 4
+// adrp Xd      — imm21 PC-relative page address
+// add Xd, Xd, #imm12 PAGEOFF
 // onbRelocKindMachoTyp maps the Osty enum to the Mach-O wire byte
 // that identifies the reloc type in the relocation entry header.
 // Mirror of `machoARM64Reloc*` constants in `internal/onb/macho.go`.
 pub fn onbRelocKindMachoTyp(kind: OnbRelocKind) -> Int {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if kind == OnbRelocKind.OnbRelocBranch26 { return 2 }
-    if kind == OnbRelocKind.OnbRelocPage21 { return 3 }
-    if kind == OnbRelocKind.OnbRelocPageOff12 { return 4 }
+    if kind == OnbRelocKind.OnbRelocBranch26 {
+        return 2
+    }
+    if kind == OnbRelocKind.OnbRelocPage21 {
+        return 3
+    }
+    if kind == OnbRelocKind.OnbRelocPageOff12 {
+        return 4
+    }
     0
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // === Reloc record =====================================================
 //
 // Mirror of `machoReloc`:
@@ -60,24 +66,20 @@ pub struct OnbReloc {
     pub pcrel: Bool,
     pub kind: OnbRelocKind,
 }
-
 pub fn onbReloc(codeOffset: Int, symbol: String, pcrel: Bool, kind: OnbRelocKind) -> OnbReloc {
-    OnbReloc { codeOffset: codeOffset, symbol: symbol, pcrel: pcrel, kind: kind }
+    OnbReloc {codeOffset: codeOffset, symbol: symbol, pcrel: pcrel, kind: kind}
 }
-
 // onbRelocPage21 builds the canonical PAGE21 reloc paired with an
 // adrp instruction at `codeOffset`. PC-relative.
 pub fn onbRelocPage21(codeOffset: Int, symbol: String) -> OnbReloc {
     onbReloc(codeOffset, symbol, true, OnbRelocKind.OnbRelocPage21)
 }
-
 // onbRelocPageOff12 builds the PageOff12 reloc paired with the
 // add instruction that follows an adrp. NOT PC-relative — the
 // linker fills the absolute low-12-bit offset.
 pub fn onbRelocPageOff12(codeOffset: Int, symbol: String) -> OnbReloc {
     onbReloc(codeOffset, symbol, false, OnbRelocKind.OnbRelocPageOff12)
 }
-
 // onbRelocBranch26 builds the bl reloc. PC-relative, scaled by 4.
 pub fn onbRelocBranch26(codeOffset: Int, symbol: String) -> OnbReloc {
     onbReloc(codeOffset, symbol, true, OnbRelocKind.OnbRelocBranch26)

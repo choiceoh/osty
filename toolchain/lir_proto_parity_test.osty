@@ -3075,7 +3075,6 @@ pub fn lirParityManualExternalMirFnDeclareFixture() -> LirParityFixture {
     lirParityFixture("external_mir_fn_declare", LirParityManualMIR, "/tmp/lir_proto_parity_external_mir_fn_declare.osty", "", "phase4-call", ["call", "external", "ffi"], [lirParityNeedle("declare ptr @go_open(ptr)", "external fn declared, not defined"), lirParityNeedle("define ", "but local function still defined separately")])
 }
 pub fn lirParityBuildExternalMirFnDeclareModule() -> MirModule {
-    // External FFI declare: `fn go_open(path: String) -> RawPtr`
     let mut goOpen = mirFunction("go_open", "RawPtr", mirNoSpan())
     let goRet = mirFunctionNewLocal(goOpen, "_return", "RawPtr", false, mirNoSpan())
     goOpen.returnLocal = goRet
@@ -3084,14 +3083,15 @@ pub fn lirParityBuildExternalMirFnDeclareModule() -> MirModule {
     goOpen.locals[goPath].isParam = true
     goOpen.params.push(goPath)
     goOpen.isExternal = true
-    // Local function that DOES have a body so the module still emits
-    // a `define` line (otherwise the declare would be unverifiable —
-    // a no-function module).
     let mut local = lirParityFunction("noop", "Unit")
     let entry = lirParityEntry(local)
     mirFunctionTerminate(local, entry, mirReturnTerm(mirNoSpan()))
     lirParityModule([goOpen, local])
 }
+// External FFI declare: `fn go_open(path: String) -> RawPtr`
+// Local function that DOES have a body so the module still emits
+// a `define` line (otherwise the declare would be unverifiable —
+// a no-function module).
 // Cross-module direct call: callee not in local MIR module.
 // Lookup miss → declare + call via inferred signature from operand
 // types + dest local.
@@ -3147,7 +3147,6 @@ pub fn lirParityManualMirGlobalWithInitCtorFixture() -> LirParityFixture {
     lirParityFixture("mir_global_with_init_ctor", LirParityManualMIR, "/tmp/lir_proto_parity_mir_global_with_init_ctor.osty", "", "phase5-globals", ["global", "init-ctor"], [lirParityNeedle("@counter = global i64 zeroinitializer", "global var"), lirParityNeedle("@llvm.global_ctors = appending global", "global_ctors registration"), lirParityNeedle("@__osty_init_globals", "ctor referenced in registration"), lirParityNeedle("define private void @__osty_init_globals()", "ctor body"), lirParityNeedle("call i64 @initCounter()", "ctor calls init"), lirParityNeedle("store i64 %vcounter, ptr @counter", "init result stored into global")])
 }
 pub fn lirParityBuildMirGlobalWithInitCtorModule() -> MirModule {
-    // Init function: returns Int.
     let mut initFn = mirFunction("initCounter", "Int", mirNoSpan())
     let initRet = mirFunctionNewLocal(initFn, "_return", "Int", false, mirNoSpan())
     initFn.returnLocal = initRet
@@ -3156,7 +3155,6 @@ pub fn lirParityBuildMirGlobalWithInitCtorModule() -> MirModule {
     initFn.entry = initEntry
     mirFunctionAppend(initFn, initEntry, mirAssignInstr(mirPlace(initRet), mirRVUse(mirOperandConst(mirConstInt(42, "Int"))), mirNoSpan()))
     mirFunctionTerminate(initFn, initEntry, mirReturnTerm(mirNoSpan()))
-    // User function so module isn't empty.
     let mut user = lirParityFunction("noop", "Unit")
     let userEntry = lirParityEntry(user)
     mirFunctionTerminate(user, userEntry, mirReturnTerm(mirNoSpan()))
@@ -3167,6 +3165,8 @@ pub fn lirParityBuildMirGlobalWithInitCtorModule() -> MirModule {
     m.globals.push(glob)
     m
 }
+// Init function: returns Int.
+// User function so module isn't empty.
 pub fn lirParityManualGlobalRefRValueLoadFixture() -> LirParityFixture {
     lirParityFixture("global_ref_rvalue_load", LirParityManualMIR, "/tmp/lir_proto_parity_global_ref_rvalue_load.osty", "", "phase5-globals", ["global", "globalref"], [lirParityNeedle("@counter = global i64 zeroinitializer", "global var"), lirParityNeedle("define i64 @readCounter()", "reader function"), lirParityNeedle("load i64, ptr @counter", "GlobalRefRV load"), lirParityNeedle("ret i64", "Int return")])
 }

@@ -8,7 +8,6 @@
 /// Osty is the owner of the encoding table and of the symbol-assembly
 /// format; when either needs to change, change it here first and then
 /// refresh the Go-side snapshot in internal/llvmgen/monomorph_snapshot.go.
-
 /// MonomorphRequest is the Osty-side projection of a single specialization
 /// request. Go assembles the type codes and package path; Osty only ever
 /// sees strings.
@@ -19,14 +18,12 @@ pub struct MonomorphRequest {
     pub paramTypeCodes: List<String>,
     pub returnTypeCode: String,
 }
-
 /// MonomorphMangled carries the final symbol string emitted into LLVM
 /// IR. Wrapped in a struct so the Go-side snapshot can add fields later
 /// (e.g. demangled hint) without changing the bridge signature.
 pub struct MonomorphMangled {
     pub symbol: String,
 }
-
 /// MonomorphTypeRequest is the struct/enum counterpart of MonomorphRequest.
 /// Go assembles the package name, the generic declaration's source name,
 /// and already-encoded type codes for each template argument; Osty only
@@ -37,7 +34,6 @@ pub struct MonomorphTypeRequest {
     pub typeName: String,
     pub typeArgCodes: List<String>,
 }
-
 /// monomorphPrimCode maps an Osty primitive source name to its Itanium
 /// ABI builtin-type code. Returns "" for non-primitives so callers can
 /// fall back to the nested / template encodings. The table mirrors
@@ -93,12 +89,6 @@ pub fn monomorphPrimCode(name: String) -> String {
     if name == "Unit" || name == "()" {
         return "v"
     }
-    // Osty string & byte slice are opaque aggregates at the IR level.
-    // The LLVM bridge needs their codes to be valid identifier chars
-    // (no `?` / `<` / `>`), otherwise a specialized Map<String, V>'s
-    // mangled name fails llvmIsIdent at emit time. Using the
-    // Itanium-style two-char identifiers keeps them unique from the
-    // single-letter primitive set.
     if name == "String" {
         return "Ss"
     }
@@ -107,14 +97,18 @@ pub fn monomorphPrimCode(name: String) -> String {
     }
     ""
 }
-
+// Osty string & byte slice are opaque aggregates at the IR level.
+// The LLVM bridge needs their codes to be valid identifier chars
+// (no `?` / `<` / `>`), otherwise a specialized Map<String, V>'s
+// mangled name fails llvmIsIdent at emit time. Using the
+// Itanium-style two-char identifiers keeps them unique from the
+// single-letter primitive set.
 /// monomorphIsPrim reports whether the given Osty source type name is
 /// in the primitive table and therefore encoded directly as a single
 /// letter code.
 pub fn monomorphIsPrim(name: String) -> Bool {
     monomorphPrimCode(name) != ""
 }
-
 /// monomorphLengthPrefix emits a `<len><text>` Itanium source-name
 /// component. Length is measured in UTF-8 bytes to match the ABI
 /// specification.
@@ -122,7 +116,6 @@ pub fn monomorphLengthPrefix(text: String) -> String {
     let byteLen = stringByteLength(text)
     "{byteLen}{text}"
 }
-
 /// monomorphNestedName wraps one or more `<len><name>` components in
 /// Itanium's `N...E` nested-name construct. The `components` list has
 /// already been assembled by the caller (Osty for simple cases, Go for
@@ -134,7 +127,6 @@ pub fn monomorphNestedName(components: List<String>) -> String {
     }
     "N{body}E"
 }
-
 /// monomorphBuiltinNested produces the `N4osty<len><name>E` encoding
 /// used for Osty prelude aggregates (String, List, Option, Result,
 /// Map, Set, Bytes, Tuple). Used as a nested qualifier only; template
@@ -144,7 +136,6 @@ pub fn monomorphBuiltinNested(name: String) -> String {
     let tail = monomorphLengthPrefix(name)
     "N{head}{tail}E"
 }
-
 /// monomorphBuiltinTemplate produces `N4osty<len><name>I<argCodes>E`
 /// for Osty prelude generic aggregates (List<T>, Option<T>, Tuple<...>
 /// etc.). `argCodes` is the comma-less concatenation of already-encoded
@@ -154,7 +145,6 @@ pub fn monomorphBuiltinTemplate(name: String, argCodes: String) -> String {
     let tail = monomorphLengthPrefix(name)
     "N{head}{tail}I{argCodes}EE"
 }
-
 /// monomorphUserNested produces the `N<pkg-len><pkg><name-len><name>E`
 /// encoding used for user-declared struct / enum / alias types in the
 /// module's package. Callers pass the already-lowered package name
@@ -164,7 +154,6 @@ pub fn monomorphUserNested(pkg: String, name: String) -> String {
     let tail = monomorphLengthPrefix(name)
     "N{head}{tail}E"
 }
-
 /// monomorphUserTemplateNested produces the
 /// `N<pkg-len><pkg><name-len><name>I<argCodes>EE` encoding for
 /// user-declared generic nominal types referenced inside other type
@@ -178,7 +167,6 @@ pub fn monomorphUserTemplateNested(pkg: String, name: String, argCodes: String) 
     let tail = monomorphLengthPrefix(name)
     "N{head}{tail}I{argCodes}EE"
 }
-
 /// monomorphTemplateArgs wraps a list of encoded type codes in the
 /// `I...E` template-argument bracket. Empty input returns "" — callers
 /// should therefore skip inserting template args when a function has no
@@ -193,7 +181,6 @@ pub fn monomorphTemplateArgs(codes: List<String>) -> String {
     }
     "I{body}E"
 }
-
 /// monomorphParamList concatenates encoded parameter type codes without
 /// separator (Itanium's `<param-types>`). Empty input returns "".
 pub fn monomorphParamList(codes: List<String>) -> String {
@@ -203,7 +190,6 @@ pub fn monomorphParamList(codes: List<String>) -> String {
     }
     body
 }
-
 /// monomorphMangleFn assembles the final `_Z…` symbol from its parts.
 /// Template arguments appear between the unqualified name and the
 /// parameter list, matching the Itanium C++ ABI
@@ -221,9 +207,8 @@ pub fn monomorphMangleFn(req: MonomorphRequest) -> MonomorphMangled {
     let targs = monomorphTemplateArgs(req.typeArgCodes)
     let params = monomorphParamList(req.paramTypeCodes)
     let symbol = "_Z{nameEncoded}{targs}{params}"
-    MonomorphMangled { symbol }
+    MonomorphMangled {symbol}
 }
-
 /// monomorphMangleFnName produces the `<name-encoded>` portion of a
 /// mangled function symbol. Kept public so Go-side monomorph tests can
 /// assert the split between name encoding and template-arg wrapping.
@@ -235,7 +220,6 @@ pub fn monomorphMangleFnName(pkg: String, name: String) -> String {
     let namePart = monomorphLengthPrefix(name)
     "N{pkgPart}{namePart}E"
 }
-
 /// monomorphMangleType assembles the final `_ZTS…` type-symbol for a
 /// generic struct or enum specialization. The `_ZTS` prefix is the
 /// Itanium ABI's "type-string" tag (§2.9.5): keeps nominal type symbols
@@ -249,9 +233,8 @@ pub fn monomorphMangleFnName(pkg: String, name: String) -> String {
 /// symbol in that case.
 pub fn monomorphMangleType(req: MonomorphTypeRequest) -> MonomorphMangled {
     let body = monomorphMangleTypeName(req.pkg, req.typeName, req.typeArgCodes)
-    MonomorphMangled { symbol: "_ZTS{body}" }
+    MonomorphMangled {symbol: "_ZTS{body}"}
 }
-
 /// monomorphMangleTypeName produces the `<nested-template-name>` portion
 /// of a type symbol (`N<pkgL><pkg><nameL><name>I<args>EE`). Kept public so
 /// Go-side tests can assert the split between `_ZTS` prefix and nested
@@ -262,7 +245,11 @@ pub fn monomorphMangleType(req: MonomorphTypeRequest) -> MonomorphMangled {
 /// points, and demanglers expect the package segment to be present.
 pub fn monomorphMangleTypeName(pkg: String, name: String, typeArgCodes: List<String>) -> String {
     let scope = pkg
-    let actualPkg = if scope == "" { "main" } else { scope }
+    let actualPkg = if scope == "" {
+        "main"
+    } else {
+        scope
+    }
     let pkgPart = monomorphLengthPrefix(actualPkg)
     let namePart = monomorphLengthPrefix(name)
     let mut args = ""
@@ -271,7 +258,6 @@ pub fn monomorphMangleTypeName(pkg: String, name: String, typeArgCodes: List<Str
     }
     "N{pkgPart}{namePart}I{args}EE"
 }
-
 /// monomorphDedupeKey returns a stable unique string for a specialization
 /// request. Used by the Go-side worklist to skip duplicate enqueues.
 /// The `\u{1f}` (Unit Separator) byte cannot appear in source identifiers
@@ -283,7 +269,6 @@ pub fn monomorphDedupeKey(fnName: String, pkg: String, typeArgCodes: List<String
     }
     key
 }
-
 /// monomorphTypeDedupeKey is the struct/enum counterpart of
 /// monomorphDedupeKey. The extra "type" tag segment ensures that a
 /// generic function and a generic struct sharing a source name (say,
@@ -296,7 +281,6 @@ pub fn monomorphTypeDedupeKey(typeName: String, pkg: String, typeArgCodes: List<
     }
     key
 }
-
 /// monomorphShouldInstantiate answers "should this call site be routed
 /// through the monomorph queue?". Returns false when the call has no
 /// type arguments (non-generic) or when the arg count mismatches the
@@ -305,7 +289,6 @@ pub fn monomorphTypeDedupeKey(typeName: String, pkg: String, typeArgCodes: List<
 pub fn monomorphShouldInstantiate(typeArgsLen: Int, fnGenericsLen: Int) -> Bool {
     typeArgsLen > 0 && typeArgsLen == fnGenericsLen
 }
-
 /// MonomorphMethodRequest drives Phase 4: the method-local portion of
 /// a specialization symbol. The owner prefix is NOT included here —
 /// the LLVM backend appends it automatically via `llvmMethodIRName`
@@ -316,7 +299,6 @@ pub struct MonomorphMethodRequest {
     pub methodName: String,
     pub typeArgCodes: List<String>,
 }
-
 /// monomorphMangleMethodName produces the method-local portion of a
 /// specialized method symbol. Template args use the same Itanium
 /// `I<codes>E` wrapper as free-fn symbols, preceded by `_Z` so the
@@ -330,15 +312,13 @@ pub fn monomorphMangleMethodName(methodName: String, typeArgCodes: List<String>)
     let targs = monomorphTemplateArgs(typeArgCodes)
     "{methodName}_Z{targs}"
 }
-
 /// monomorphMangleMethod wraps monomorphMangleMethodName in the shared
 /// MonomorphMangled return shape so Go callers see the same API as
 /// free-fn / type mangling.
 pub fn monomorphMangleMethod(req: MonomorphMethodRequest) -> MonomorphMangled {
     let symbol = monomorphMangleMethodName(req.methodName, req.typeArgCodes)
-    MonomorphMangled { symbol }
+    MonomorphMangled {symbol}
 }
-
 /// monomorphMethodDedupeKey scopes method specialization identity by
 /// owner (already mangled by the caller), method source name, and its
 /// concrete type-arg codes. The extra `method` segment keeps the key
@@ -350,7 +330,6 @@ pub fn monomorphMethodDedupeKey(ownerMangled: String, methodName: String, typeAr
     }
     key
 }
-
 /// stringByteLength returns the UTF-8 byte length of a string. Matches
 /// std.strings.len's implementation so the Itanium length prefix agrees
 /// with what a demangler expects.

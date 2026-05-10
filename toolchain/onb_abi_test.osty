@@ -1,13 +1,12 @@
 // onb_abi_test.osty — ABI predicate round-trip tests.
 use std.testing
-
 fn testOnbIsFloatAbiType() {
     testing.assert(onbIsFloatAbiType("Float"))
     testing.assert(onbIsFloatAbiType("Float64"))
     testing.assert(!onbIsFloatAbiType("Int"))
-    testing.assert(!onbIsFloatAbiType("Float32"))  // Phase A2 only handles 64-bit
+    testing.assert(!onbIsFloatAbiType("Float32"))
 }
-
+// Phase A2 only handles 64-bit
 fn testOnbIsScalarPrimitive() {
     testing.assert(onbIsScalarPrimitive("Int"))
     testing.assert(onbIsScalarPrimitive("Bool"))
@@ -17,7 +16,6 @@ fn testOnbIsScalarPrimitive() {
     testing.assert(!onbIsScalarPrimitive("List<Int>"))
     testing.assert(!onbIsScalarPrimitive("Point"))
 }
-
 fn testOnbIsClosureScalarType() {
     testing.assert(onbIsClosureEnvType("ClosureEnv"))
     testing.assert(onbIsFnTypeRepr("fn(Int) -> Int"))
@@ -27,7 +25,6 @@ fn testOnbIsClosureScalarType() {
     testing.assert(onbIsClosureScalarType("fn(Int, Float) -> Bool"))
     testing.assert(!onbIsClosureScalarType("Int"))
 }
-
 fn testOnbIsBuiltinPointerType() {
     testing.assert(onbIsBuiltinPointerType("List<Int>"))
     testing.assert(onbIsBuiltinPointerType("List<String>"))
@@ -38,10 +35,9 @@ fn testOnbIsBuiltinPointerType() {
     testing.assert(onbIsBuiltinPointerType("Handle"))
     testing.assert(!onbIsBuiltinPointerType("Int"))
     testing.assert(!onbIsBuiltinPointerType("Point"))
-    // No exact-match edge: "List" without args isn't a List<T>.
     testing.assert(!onbIsBuiltinPointerType("List"))
 }
-
+// No exact-match edge: "List" without args isn't a List<T>.
 fn testOnbIsAbiScalarType() {
     testing.assert(onbIsAbiScalarType("Int"))
     testing.assert(onbIsAbiScalarType("Bool"))
@@ -54,22 +50,18 @@ fn testOnbIsAbiScalarType() {
     testing.assert(onbIsAbiScalarType("Map<String, Int>"))
     testing.assert(!onbIsAbiScalarType("Point"))
 }
-
 fn testOnbAbiKindFor() {
     testing.assertEq(onbAbiKindFor("Int"), onbAbiKindI64())
     testing.assertEq(onbAbiKindFor("Bool"), onbAbiKindI1())
     testing.assertEq(onbAbiKindFor("Float"), onbAbiKindF64())
     testing.assertEq(onbAbiKindFor("Float64"), onbAbiKindF64())
     testing.assertEq(onbAbiKindFor("String"), onbAbiKindString())
-    // List / Map / closure are pointer-class.
     testing.assertEq(onbAbiKindFor("List<Int>"), onbAbiKindPtr())
     testing.assertEq(onbAbiKindFor("ClosureEnv"), onbAbiKindPtr())
     testing.assertEq(onbAbiKindFor("Point"), onbAbiKindPtr())
 }
-
+// List / Map / closure are pointer-class.
 fn testOnbIsAbiWordType() {
-    // Phase E approximation: scalar/pointer types are 1-word; user
-    // structs fall through (Slice F adds layout-aware refinement).
     testing.assert(onbIsAbiWordType("Int"))
     testing.assert(onbIsAbiWordType("List<Int>"))
     testing.assert(!onbIsAbiWordType("Point"))

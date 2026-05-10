@@ -9,27 +9,21 @@
 // Object-format scope: only Mach-O is mirrored here. ELF rendering
 // would add a parallel naming + section switch; ONB's production
 // ABI today is darwin/aarch64, so the Osty port stays focused.
-
 // === Target abstraction =============================================
 //
 // `OnbTarget` mirrors `internal/onb/onb.go`'s `Target` struct (just
 // the object-format axis since that's all `asm.go` reads).
-
 pub struct OnbTarget {
     pub triple: String,
     pub objectFormat: String,
 }
-
 pub fn onbTargetMachoArm64() -> OnbTarget {
-    OnbTarget { triple: "aarch64-apple-darwin", objectFormat: "mach-o" }
+    OnbTarget {triple: "aarch64-apple-darwin", objectFormat: "mach-o"}
 }
-
 pub fn onbTargetIsMacho(t: OnbTarget) -> Bool {
     t.objectFormat == "mach-o"
 }
-
 // === Naming helpers =================================================
-
 // onbAsmSymbolName prefixes function names with `_` on Mach-O so
 // `main` becomes `_main` (darwin's symbol mangling). ELF leaves
 // names bare. Mirror of `asmSymbolName`.
@@ -40,7 +34,6 @@ pub fn onbAsmSymbolName(target: OnbTarget, name: String) -> String {
         name
     }
 }
-
 // onbAsmCStringLabel prefixes c-string pool labels per the
 // platform's local-symbol convention. Mirror of `asmCStringLabel`.
 pub fn onbAsmCStringLabel(target: OnbTarget, label: String) -> String {
@@ -50,7 +43,6 @@ pub fn onbAsmCStringLabel(target: OnbTarget, label: String) -> String {
         ".L." + label
     }
 }
-
 // onbAsmBlockLabel produces a per-function block label so the
 // `b bbN` and `b.cond bbN` instructions don't collide across
 // functions. Mirror of `asmBlockLabel`.
@@ -62,9 +54,7 @@ pub fn onbAsmBlockLabel(target: OnbTarget, fnName: String, blockIdx: Int) -> Str
     }
     "{prefix}_{fnName}_bb{blockIdx}"
 }
-
 // === C-string escape ================================================
-
 // onbAsmCStringLiteral renders a String value as a quoted asm
 // directive payload (`"..."`). Non-printable bytes go through
 // the standard escape forms (`\n`, `\r`, `\t`, `\\`, `\"`) or
@@ -78,22 +68,17 @@ pub fn onbAsmCStringLiteral(s: String) -> String {
     let mut out = "\""
     for byte in s.bytes() {
         let c = byte.toInt()
-        if c == 0x5c {            // backslash
+        if c == 0x5c {
             out = out + "\\\\"
-        } else if c == 0x22 {     // double quote
+        } else if c == 0x22 {
             out = out + "\\\""
-        } else if c == 0x0a {     // \n
+        } else if c == 0x0a {
             out = out + "\\n"
-        } else if c == 0x0d {     // \r
+        } else if c == 0x0d {
             out = out + "\\r"
-        } else if c == 0x09 {     // \t
+        } else if c == 0x09 {
             out = out + "\\t"
         } else if c >= 0x20 && c <= 0x7e {
-            // Printable ASCII — push the byte directly. Osty
-            // doesn't have a byte-to-char primitive that's safe
-            // for arbitrary bytes, so we route through
-            // `onbAsmHexAsciiOrOctal` which handles the printable
-            // case + falls through to octal.
             out = out + onbAsmAsciiByteToString(c)
         } else {
             out = out + onbAsmOctalEscape(c)
@@ -101,7 +86,16 @@ pub fn onbAsmCStringLiteral(s: String) -> String {
     }
     out + "\""
 }
-
+// backslash
+// double quote
+// \n
+// \r
+// \t
+// Printable ASCII — push the byte directly. Osty
+// doesn't have a byte-to-char primitive that's safe
+// for arbitrary bytes, so we route through
+// `onbAsmHexAsciiOrOctal` which handles the printable
+// case + falls through to octal.
 // onbAsmAsciiByteToString renders a single printable ASCII byte
 // (0x20..0x7e) as its 1-char String. Uses a 95-char lookup string
 // indexed by `c - 0x20` — the order is the standard ASCII layout
@@ -115,7 +109,6 @@ fn onbAsmAsciiByteToString(c: Int) -> String {
     let table = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
     onbAsmStringCharAt(table, c - 0x20)
 }
-
 // onbAsmStringCharAt returns the i-th char of `s` as a 1-char
 // String. Used by the printable-ASCII lookup. Walks the string
 // once — Osty's String API today doesn't surface direct byte
@@ -131,7 +124,6 @@ fn onbAsmStringCharAt(s: String, i: Int) -> String {
     }
     out
 }
-
 // onbAsmOctalEscape renders a non-printable byte as `\NNN` (octal,
 // 3 digits). The aarch64 GAS / clang asm assembler accepts this
 // form across both Mach-O and ELF.
@@ -141,7 +133,6 @@ fn onbAsmOctalEscape(c: Int) -> String {
     let low = c % 8
     "\\{high}{mid}{low}"
 }
-
 // === Per-instruction rendering ====================================
 //
 // `onbAsmRenderInstr` writes the asm text for a single LIR
@@ -153,56 +144,127 @@ fn onbAsmOctalEscape(c: Int) -> String {
 // Note: prologue / epilogue rendering for `Ret` (the stp/ldp pair
 // + sp adjust) lives in the function-level renderer, not here —
 // the `Ret` instruction itself just emits `ret`.
-
 pub fn onbAsmRenderInstr(target: OnbTarget, instr: OnbInstr) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if instr.kind == OnbInstrKind.OnbInstrBrk { return "\tbrk #{instr.imm}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrRet { return "\tret\n" }
-    if instr.kind == OnbInstrKind.OnbInstrAddReg { return "\tadd {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrSubReg { return "\tsub {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrMulReg { return "\tmul {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrCmp { return "\tcmp {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrCset { return "\tcset {instr.dst}, {onbCondAsmName(instr.cond)}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrStore64Stack { return "\tstr {instr.src}, [sp, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrLoad64Stack { return "\tldr {instr.dst}, [sp, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrMovRegReg { return "\tmov {instr.dst}, {instr.src}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrLoadStackAddress { return "\tadd {instr.dst}, sp, #{instr.offset}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrLoadFromReg { return "\tldr {instr.dst}, [{instr.src}, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrStoreToReg { return "\tstr {instr.src}, [{instr.base}, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrLoadFloat64Stack { return "\tldr {instr.dst}, [sp, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrStoreFloat64Stack { return "\tstr {instr.src}, [sp, #{instr.offset}]\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFmovDFromX { return "\tfmov {instr.dst}, {instr.src}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFmovXFromD { return "\tfmov {instr.dst}, {instr.src}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFaddReg { return "\tfadd {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFsubReg { return "\tfsub {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFmulReg { return "\tfmul {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrFdivReg { return "\tfdiv {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrBranchLinkReg { return "\tblr {instr.src}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrMovImm32 { return "\tmovz {instr.dst}, #{instr.imm}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrMovImm64 { return "\t<MovImm64 multi-word; renderer needs onbAsmRenderMovImm64>\n" }
-    if instr.kind == OnbInstrKind.OnbInstrBranch { return "\tb <unresolved-target>\n" }
-    if instr.kind == OnbInstrKind.OnbInstrBranchCond { return "\tb.{onbCondAsmName(instr.cond)} <unresolved-target>\n" }
-    if instr.kind == OnbInstrKind.OnbInstrBranchCondNotZero { return "\tcbnz {instr.src}, <unresolved-target>\n" }
-    if instr.kind == OnbInstrKind.OnbInstrLoadCStringAddress { return onbAsmRenderLoadCStringAddress(target, instr) }
-    if instr.kind == OnbInstrKind.OnbInstrLoadSymbolAddress { return onbAsmRenderLoadSymbolAddress(target, instr) }
-    if instr.kind == OnbInstrKind.OnbInstrBranchLink { return "\tbl {onbAsmSymbolName(target, instr.symbol)}\n" }
-    if instr.kind == OnbInstrKind.OnbInstrInvalid { return "\t<invalid>\n" }
+    if instr.kind == OnbInstrKind.OnbInstrBrk {
+        return "\tbrk #{instr.imm}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrRet {
+        return "\tret\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrAddReg {
+        return "\tadd {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrSubReg {
+        return "\tsub {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrMulReg {
+        return "\tmul {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrCmp {
+        return "\tcmp {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrCset {
+        return "\tcset {instr.dst}, {onbCondAsmName(instr.cond)}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrStore64Stack {
+        return "\tstr {instr.src}, [sp, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoad64Stack {
+        return "\tldr {instr.dst}, [sp, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrMovRegReg {
+        return "\tmov {instr.dst}, {instr.src}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoadStackAddress {
+        return "\tadd {instr.dst}, sp, #{instr.offset}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoadFromReg {
+        return "\tldr {instr.dst}, [{instr.src}, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrStoreToReg {
+        return "\tstr {instr.src}, [{instr.base}, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoadFloat64Stack {
+        return "\tldr {instr.dst}, [sp, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrStoreFloat64Stack {
+        return "\tstr {instr.src}, [sp, #{instr.offset}]\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFmovDFromX {
+        return "\tfmov {instr.dst}, {instr.src}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFmovXFromD {
+        return "\tfmov {instr.dst}, {instr.src}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFaddReg {
+        return "\tfadd {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFsubReg {
+        return "\tfsub {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFmulReg {
+        return "\tfmul {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrFdivReg {
+        return "\tfdiv {instr.dst}, {instr.lhs}, {instr.rhs}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrBranchLinkReg {
+        return "\tblr {instr.src}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrMovImm32 {
+        return "\tmovz {instr.dst}, #{instr.imm}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrMovImm64 {
+        return "\t<MovImm64 multi-word; renderer needs onbAsmRenderMovImm64>\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrBranch {
+        return "\tb <unresolved-target>\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrBranchCond {
+        return "\tb.{onbCondAsmName(instr.cond)} <unresolved-target>\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrBranchCondNotZero {
+        return "\tcbnz {instr.src}, <unresolved-target>\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoadCStringAddress {
+        return onbAsmRenderLoadCStringAddress(target, instr)
+    }
+    if instr.kind == OnbInstrKind.OnbInstrLoadSymbolAddress {
+        return onbAsmRenderLoadSymbolAddress(target, instr)
+    }
+    if instr.kind == OnbInstrKind.OnbInstrBranchLink {
+        return "\tbl {onbAsmSymbolName(target, instr.symbol)}\n"
+    }
+    if instr.kind == OnbInstrKind.OnbInstrInvalid {
+        return "\t<invalid>\n"
+    }
     "\t<unknown>\n"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // onbCondAsmName returns the GAS mnemonic suffix for a condition
 // code. Mirror of `Cond.AsmName` in `internal/onb/lir.go`.
 pub fn onbCondAsmName(c: OnbCond) -> String {
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if c == OnbCond.OnbCondEq { return "eq" }
-    if c == OnbCond.OnbCondNe { return "ne" }
-    if c == OnbCond.OnbCondGe { return "ge" }
-    if c == OnbCond.OnbCondLt { return "lt" }
-    if c == OnbCond.OnbCondGt { return "gt" }
-    if c == OnbCond.OnbCondLe { return "le" }
+    if c == OnbCond.OnbCondEq {
+        return "eq"
+    }
+    if c == OnbCond.OnbCondNe {
+        return "ne"
+    }
+    if c == OnbCond.OnbCondGe {
+        return "ge"
+    }
+    if c == OnbCond.OnbCondLt {
+        return "lt"
+    }
+    if c == OnbCond.OnbCondGt {
+        return "gt"
+    }
+    if c == OnbCond.OnbCondLe {
+        return "le"
+    }
     "?"
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 // onbAsmRenderLoadCStringAddress emits the adrp/add pair for a
 // `__cstring` label. Mach-O uses `@PAGE`/`@PAGEOFF` suffixes; ELF
 // uses bare label / `:lo12:label`.
@@ -214,7 +276,6 @@ fn onbAsmRenderLoadCStringAddress(target: OnbTarget, instr: OnbInstr) -> String 
         "\tadrp {instr.dst}, {label}\n\tadd {instr.dst}, {instr.dst}, :lo12:{label}\n"
     }
 }
-
 // onbAsmRenderLoadSymbolAddress emits the adrp/add pair for a
 // non-cstring symbol (function or data). Same shape as the
 // cstring helper but routes the symbol through
@@ -227,9 +288,7 @@ fn onbAsmRenderLoadSymbolAddress(target: OnbTarget, instr: OnbInstr) -> String {
         "\tadrp {instr.dst}, {sym}\n\tadd {instr.dst}, {instr.dst}, :lo12:{sym}\n"
     }
 }
-
 // === Section / function rendering =================================
-
 // onbAsmRenderCStringSection renders the `__cstring` literal pool
 // at the end of the .s file. Mirror of `renderCStringSection`.
 pub fn onbAsmRenderCStringSection(target: OnbTarget, cstrings: List<OnbCStringLiteral>) -> String {

@@ -5,7 +5,6 @@
 ///
 /// Mirrored by `internal/runner/airepair_policy.go`. Keep the two
 /// in sync — the Osty file is the source of truth at review time.
-
 /// AiRepairModeResult is the normalised outcome of parsing an
 /// --airepair-mode string. `ok == false` signals an unknown mode
 /// so the host can emit its usage error.
@@ -13,13 +12,11 @@ pub struct AiRepairModeResult {
     pub mode: String,
     pub ok: Bool,
 }
-
 /// AiRepairCaptureModeResult is the same shape for --capture-if.
 pub struct AiRepairCaptureModeResult {
     pub mode: String,
     pub ok: Bool,
 }
-
 /// parseAiRepairMode accepts the flag value and returns the
 /// canonical mode name. Empty string and "auto" both resolve to
 /// "auto" so `--airepair-mode=` behaves as "omit the flag".
@@ -29,18 +26,17 @@ pub struct AiRepairCaptureModeResult {
 /// error 2.
 pub fn parseAiRepairMode(value: String) -> AiRepairModeResult {
     if value == "" || value == "auto" {
-        AiRepairModeResult { mode: "auto", ok: true }
+        AiRepairModeResult {mode: "auto", ok: true}
     } else if value == "rewrite" {
-        AiRepairModeResult { mode: "rewrite", ok: true }
+        AiRepairModeResult {mode: "rewrite", ok: true}
     } else if value == "parse" {
-        AiRepairModeResult { mode: "parse", ok: true }
+        AiRepairModeResult {mode: "parse", ok: true}
     } else if value == "frontend" {
-        AiRepairModeResult { mode: "frontend", ok: true }
+        AiRepairModeResult {mode: "frontend", ok: true}
     } else {
-        AiRepairModeResult { mode: "", ok: false }
+        AiRepairModeResult {mode: "", ok: false}
     }
 }
-
 /// parseAiRepairCaptureMode handles --capture-if. Empty string and
 /// "residual" both mean "capture when residual errors remain" so
 /// omitting the flag defaults to the conservative behaviour.
@@ -48,16 +44,15 @@ pub fn parseAiRepairMode(value: String) -> AiRepairModeResult {
 /// Known modes: residual, changed, always.
 pub fn parseAiRepairCaptureMode(value: String) -> AiRepairCaptureModeResult {
     if value == "" || value == "residual" {
-        AiRepairCaptureModeResult { mode: "residual", ok: true }
+        AiRepairCaptureModeResult {mode: "residual", ok: true}
     } else if value == "changed" {
-        AiRepairCaptureModeResult { mode: "changed", ok: true }
+        AiRepairCaptureModeResult {mode: "changed", ok: true}
     } else if value == "always" {
-        AiRepairCaptureModeResult { mode: "always", ok: true }
+        AiRepairCaptureModeResult {mode: "always", ok: true}
     } else {
-        AiRepairCaptureModeResult { mode: "", ok: false }
+        AiRepairCaptureModeResult {mode: "", ok: false}
     }
 }
-
 /// usesFrontEndAIRepair reports whether a subcommand should
 /// trigger AI-repair against the front-end diagnostics (parse +
 /// resolve + check) rather than just the parse/lex layer.
@@ -69,7 +64,6 @@ pub fn parseAiRepairCaptureMode(value: String) -> AiRepairCaptureModeResult {
 pub fn usesFrontEndAIRepair(cmd: String) -> Bool {
     cmd == "check" || cmd == "typecheck" || cmd == "resolve" || cmd == "lint" || cmd == "pipeline"
 }
-
 /// shouldCaptureAiRepair decides whether an airepair run warrants
 /// writing a capture artifact, given the resolved --capture-if
 /// mode and two facts from the repair result:

@@ -3,42 +3,34 @@
 // Counterpart to `internal/ir/reach.go`. HIR uses flat structs instead of
 // interface-based nodes, so the public result is a deduplicated List rather
 // than a Go map-set keyed by struct values.
-
 pub struct HirQualifiedRef {
     pub qualifier: String,
     pub name: String,
 }
-
 pub fn hirQualifiedRef(qualifier: String, name: String) -> HirQualifiedRef {
-    HirQualifiedRef { qualifier, name }
+    HirQualifiedRef {qualifier, name}
 }
-
 pub struct HirMethodRef {
     pub module: String,
     pub typeName: String,
     pub method: String,
 }
-
 pub fn hirMethodRef(module: String, typeName: String, method: String) -> HirMethodRef {
-    HirMethodRef { module, typeName, method }
+    HirMethodRef {module, typeName, method}
 }
-
 pub fn hirReach(m: HirModule) -> List<HirQualifiedRef> {
     let mut out: List<HirQualifiedRef> = []
     hirReachModule(out, m)
     out
 }
-
 pub fn hirReachMethods(m: HirModule) -> List<HirMethodRef> {
     let mut out: List<HirMethodRef> = []
     hirReachMethodsModule(out, m)
     out
 }
-
 // ====================================================================
 // Reach: free-function / module-qualified calls
 // ====================================================================
-
 fn hirReachModule(out: List<HirQualifiedRef>, m: HirModule) {
     for d in m.fns {
         hirReachBlock(out, d.body)
@@ -77,7 +69,6 @@ fn hirReachModule(out: List<HirQualifiedRef>, m: HirModule) {
         hirReachStmt(out, s)
     }
 }
-
 fn hirReachBlock(out: List<HirQualifiedRef>, b: HirBlock) {
     for s in b.stmts {
         hirReachStmt(out, s)
@@ -86,7 +77,6 @@ fn hirReachBlock(out: List<HirQualifiedRef>, b: HirBlock) {
         hirReachExpr(out, b.result)
     }
 }
-
 fn hirReachStmt(out: List<HirQualifiedRef>, s: HirStmt) {
     match s.kind {
         HirStmtBlock -> hirReachBlock(out, s.block),
@@ -149,10 +139,10 @@ fn hirReachStmt(out: List<HirQualifiedRef>, s: HirStmt) {
             hirReachExpr(out, s.chanChannel)
             hirReachExpr(out, s.chanValue)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachExpr(out: List<HirQualifiedRef>, e: HirExpr) {
     match e.kind {
         HirExprCall -> {
@@ -287,10 +277,10 @@ fn hirReachExpr(out: List<HirQualifiedRef>, e: HirExpr) {
                 }
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachPattern(out: List<HirQualifiedRef>, p: HirPattern) {
     match p.kind {
         HirPatLit -> {
@@ -333,10 +323,10 @@ fn hirReachPattern(out: List<HirQualifiedRef>, p: HirPattern) {
                 hirReachPattern(out, p.bindingChild[0])
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachMatchArm(out: List<HirQualifiedRef>, arm: HirMatchArm) {
     hirReachPattern(out, arm.pattern)
     if arm.hasGuard {
@@ -344,7 +334,6 @@ fn hirReachMatchArm(out: List<HirQualifiedRef>, arm: HirMatchArm) {
     }
     hirReachBlock(out, arm.body)
 }
-
 fn hirReachDecision(out: List<HirQualifiedRef>, n: HirDecisionNode) {
     match n.kind {
         HirDecisionBind -> {
@@ -378,23 +367,21 @@ fn hirReachDecision(out: List<HirQualifiedRef>, n: HirDecisionNode) {
                 hirReachDecision(out, n.switchDefault[0])
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachProjection(out: List<HirQualifiedRef>, p: HirProjection) {
     if p.base.len() > 0 {
         hirReachProjection(out, p.base[0])
     }
 }
-
 fn hirReachAdd(out: List<HirQualifiedRef>, ref: HirQualifiedRef) {
     if hirReachContains(out, ref) {
         return
     }
     out.push(ref)
 }
-
 fn hirReachContains(xs: List<HirQualifiedRef>, target: HirQualifiedRef) -> Bool {
     for x in xs {
         if x.qualifier == target.qualifier && x.name == target.name {
@@ -403,11 +390,9 @@ fn hirReachContains(xs: List<HirQualifiedRef>, target: HirQualifiedRef) -> Bool 
     }
     false
 }
-
 // ====================================================================
 // ReachMethods: stdlib-owned receiver method calls
 // ====================================================================
-
 fn hirReachMethodsModule(out: List<HirMethodRef>, m: HirModule) {
     for d in m.fns {
         hirReachMethodsBlock(out, d.body)
@@ -446,7 +431,6 @@ fn hirReachMethodsModule(out: List<HirMethodRef>, m: HirModule) {
         hirReachMethodsStmt(out, s)
     }
 }
-
 fn hirReachMethodsBlock(out: List<HirMethodRef>, b: HirBlock) {
     for s in b.stmts {
         hirReachMethodsStmt(out, s)
@@ -455,7 +439,6 @@ fn hirReachMethodsBlock(out: List<HirMethodRef>, b: HirBlock) {
         hirReachMethodsExpr(out, b.result)
     }
 }
-
 fn hirReachMethodsStmt(out: List<HirMethodRef>, s: HirStmt) {
     match s.kind {
         HirStmtBlock -> hirReachMethodsBlock(out, s.block),
@@ -509,10 +492,10 @@ fn hirReachMethodsStmt(out: List<HirMethodRef>, s: HirStmt) {
             hirReachMethodsExpr(out, s.chanChannel)
             hirReachMethodsExpr(out, s.chanValue)
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachMethodsExpr(out: List<HirMethodRef>, e: HirExpr) {
     if e.kind == HirExprMethod && e.methodReceiver.len() > 0 && e.methodName != "" {
         let recv = e.methodReceiver[0]
@@ -523,7 +506,6 @@ fn hirReachMethodsExpr(out: List<HirMethodRef>, e: HirExpr) {
     }
     hirReachExprAsMethods(out, e)
 }
-
 fn hirReachExprAsMethods(out: List<HirMethodRef>, e: HirExpr) {
     match e.kind {
         HirExprUnary -> hirReachMethodsExpr(out, hirReachFirstExpr(e.unaryChild)),
@@ -638,24 +620,22 @@ fn hirReachExprAsMethods(out: List<HirMethodRef>, e: HirExpr) {
                 }
             }
         },
-        _ -> {},
+        _ -> {
+        },
     }
 }
-
 fn hirReachMethodsMatchArm(out: List<HirMethodRef>, arm: HirMatchArm) {
     if arm.hasGuard {
         hirReachMethodsExpr(out, arm.guard)
     }
     hirReachMethodsBlock(out, arm.body)
 }
-
 fn hirReachMethodsAdd(out: List<HirMethodRef>, ref: HirMethodRef) {
     if hirReachMethodsContains(out, ref) {
         return
     }
     out.push(ref)
 }
-
 fn hirReachMethodsContains(xs: List<HirMethodRef>, target: HirMethodRef) -> Bool {
     for x in xs {
         if x.module == target.module && x.typeName == target.typeName && x.method == target.method {
@@ -664,7 +644,6 @@ fn hirReachMethodsContains(xs: List<HirMethodRef>, target: HirMethodRef) -> Bool
     }
     false
 }
-
 fn hirReachFirstExpr(xs: List<HirExpr>) -> HirExpr {
     if xs.len() > 0 {
         xs[0]
@@ -672,7 +651,6 @@ fn hirReachFirstExpr(xs: List<HirExpr>) -> HirExpr {
         hirExprInvalid()
     }
 }
-
 fn hirReachFirstBlock(xs: List<HirBlock>) -> HirBlock {
     if xs.len() > 0 {
         xs[0]

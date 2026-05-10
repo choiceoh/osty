@@ -18,9 +18,7 @@
 // runtime-symbol lookup (List/Map intrinsics) and field-offset
 // resolution that pull the slice's surface area past the 1k-line
 // budget.
-
 // === Result type ====================================================
-
 // OnbMaterialiseResult bundles every output of one operand
 // materialisation: the emitted instructions, the new state (the
 // cstring intern table may have grown), an `ok` flag, and an
@@ -33,17 +31,13 @@ pub struct OnbMaterialiseResult {
     pub ok: Bool,
     pub err: String,
 }
-
 pub fn onbMaterialiseOk(state: OnbLowerState, instrs: List<OnbInstr>) -> OnbMaterialiseResult {
-    OnbMaterialiseResult { instrs: instrs, state: state, ok: true, err: "" }
+    OnbMaterialiseResult {instrs: instrs, state: state, ok: true, err: ""}
 }
-
 pub fn onbMaterialiseErr(state: OnbLowerState, err: String) -> OnbMaterialiseResult {
-    OnbMaterialiseResult { instrs: [], state: state, ok: false, err: err }
+    OnbMaterialiseResult {instrs: [], state: state, ok: false, err: err}
 }
-
 // === Const materialisation ==========================================
-
 // onbMaterialiseIntConst lands a 64-bit integer immediate in `dst`
 // via the multi-word `MovImm64` opcode. The encoder later expands
 // it to a `movz/movk` chain.
@@ -52,17 +46,19 @@ pub fn onbMaterialiseIntConst(dst: String, value: Int) -> List<OnbInstr> {
     out.push(onbInstrMovImm64(dst, value))
     out
 }
-
 // onbMaterialiseBoolConst lands 0 or 1 in `dst`. Bool is one
 // 8-byte slot at the ABI level; the runtime treats nonzero as
 // true.
 pub fn onbMaterialiseBoolConst(dst: String, value: Bool) -> List<OnbInstr> {
-    let imm = if value { 1 } else { 0 }
+    let imm = if value {
+        1
+    } else {
+        0
+    }
     let mut out: List<OnbInstr> = []
     out.push(onbInstrMovImm64(dst, imm))
     out
 }
-
 // onbMaterialiseStringConst interns the literal value (or reuses
 // an existing entry) and emits the `adrp + add` pair that lands
 // `&__cstring[label]` in `dst`. Returns the rebuilt state along
@@ -74,9 +70,7 @@ pub fn onbMaterialiseStringConst(state: OnbLowerState, dst: String, value: Strin
     out.push(onbInstrLoadCStringAddress(dst, added.label))
     onbMaterialiseOk(added.state, out)
 }
-
 // === Place loads (no projections) ==================================
-
 // onbLoadPlaceIntoReg emits `ldr dst, [sp, #slot]` for a local
 // without projections. Mirror of the no-projection branch of
 // `loadPlaceIntoReg`. Projection-bearing places fall through to
@@ -94,7 +88,6 @@ pub fn onbLoadPlaceIntoReg(state: OnbLowerState, place: MirPlace, dst: String) -
     out.push(onbInstrLoad64Stack(dst, slot.offset))
     onbMaterialiseOk(state, out)
 }
-
 // onbLoadFloatPlaceIntoReg emits `ldr dst, [sp, #slot]` into a
 // d-register for a Float-typed local without projections. Mirror
 // of `loadFloatPlaceIntoReg`'s no-projection branch.
@@ -110,9 +103,7 @@ pub fn onbLoadFloatPlaceIntoReg(state: OnbLowerState, place: MirPlace, dst: Stri
     out.push(onbInstrLoadFloat64Stack(dst, slot.offset))
     onbMaterialiseOk(state, out)
 }
-
 // === Operand dispatch ===============================================
-
 // onbMaterialiseOperand routes a MirOperand to the right
 // materialisation branch. Mirror of `materialiseOperand` —
 // handles Const Int/Bool/String + Copy/Move of non-projected
@@ -134,7 +125,6 @@ pub fn onbMaterialiseOperand(state: OnbLowerState, op: MirOperand, dst: String) 
         _ -> onbMaterialiseErr(state, "operand kind invalid"),
     }
 }
-
 // onbMaterialiseFloatOperand routes Float-typed operands to a
 // d-register. Const FloatConst is deferred to Slice H (needs
 // floatText → IEEE 754 bit-pattern conversion); Copy/Move of a

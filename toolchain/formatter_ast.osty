@@ -1,5 +1,4 @@
 use std.strings as strings
-
 struct OstyAstFormatter {
     arena: AstArena,
     tokens: List<FrontToken>,
@@ -10,47 +9,25 @@ struct OstyAstFormatter {
     commentIdx: Int,
     leadingIdx: Int,
 }
-
-fn ostyAstFormatter(
-    arena: AstArena,
-    tokens: List<FrontToken>,
-    stream: FrontLexStream,
-    units: List<String>,
-) -> OstyAstFormatter {
-    OstyAstFormatter {
-        arena,
-        tokens,
-        stream,
-        units,
-        parts: [],
-        indent: 0,
-        commentIdx: 0,
-        leadingIdx: 0,
-    }
+fn ostyAstFormatter(arena: AstArena, tokens: List<FrontToken>, stream: FrontLexStream, units: List<String>) -> OstyAstFormatter {
+    OstyAstFormatter {arena, tokens, stream, units, parts: [], indent: 0, commentIdx: 0, leadingIdx: 0}
 }
-
 fn ostyAstOk(output: String) -> OstyFormatResult {
-    OstyFormatResult { ok: true, output, message: "" }
+    OstyFormatResult {ok: true, output, message: ""}
 }
-
 fn ostyAstErr(message: String) -> OstyFormatResult {
-    OstyFormatResult { ok: false, output: "", message }
+    OstyFormatResult {ok: false, output: "", message}
 }
-
 fn ostyAstDiagnosticText(stream: FrontLexStream) -> String {
     let mut lines: List<String> = []
     for diag in stream.diagnostics {
-        lines.push(
-            "{frontLexDiagnosticCodeName(diag.code)} at {diag.start.line}:{diag.start.column}",
-        )
+        lines.push("{frontLexDiagnosticCodeName(diag.code)} at {diag.start.line}:{diag.start.column}")
     }
     strings.join(lines, "\n")
 }
-
 fn ostyAstNode(f: OstyAstFormatter, idx: Int) -> AstNode {
     astArenaNodeAt(f.arena, idx)
 }
-
 fn ostyAstChildAt(node: AstNode, target: Int) -> Int {
     let mut idx = 0
     for child in node.children {
@@ -61,29 +38,24 @@ fn ostyAstChildAt(node: AstNode, target: Int) -> Int {
     }
     -1
 }
-
 fn ostyAstIndent(level: Int) -> String {
     if level <= 0 {
         return ""
     }
     strings.repeat("    ", level)
 }
-
 fn ostyAstPush(f: OstyAstFormatter, text: String) {
     if text != "" {
         f.parts.push(text)
     }
 }
-
 fn ostyAstPushLine(f: OstyAstFormatter, text: String) {
     ostyAstPush(f, text)
     f.parts.push("\n")
 }
-
 fn ostyAstFinish(f: OstyAstFormatter) -> String {
     strings.join(f.parts, "")
 }
-
 fn ostyAstRawTokenRange(f: OstyAstFormatter, start: Int, end: Int) -> String {
     if start < 0 || end <= start {
         return ""
@@ -92,15 +64,9 @@ fn ostyAstRawTokenRange(f: OstyAstFormatter, start: Int, end: Int) -> String {
     let last = frontLexTokenAt(f.stream, end - 1)
     frontLexemeFromUnits(f.units, first.start.offset, last.end.offset - first.start.offset)
 }
-
 fn ostyAstCommentText(f: OstyAstFormatter, comment: FrontComment) -> String {
-    frontLexemeFromUnits(
-        f.units,
-        comment.start.offset,
-        comment.end.offset - comment.start.offset,
-    )
+    frontLexemeFromUnits(f.units, comment.start.offset, comment.end.offset - comment.start.offset)
 }
-
 fn ostyAstEmitLeading(f: OstyAstFormatter, tokenStart: Int) {
     if tokenStart < 0 {
         return
@@ -115,18 +81,11 @@ fn ostyAstEmitLeading(f: OstyAstFormatter, tokenStart: Int) {
         ostyAstPushLine(f, ostyAstCommentText(f, comment))
         f.commentIdx = f.commentIdx + 1
     }
-
     let mut idx = f.leadingIdx
     for idx < tokenStart {
         let tok = frontTokenAtList(f.tokens, idx)
         if tok.kind == FrontHash && frontTokenAtList(f.tokens, idx + 1).kind == FrontLBracket {
-            let close = frontFindMatching(
-                f.tokens,
-                idx + 1,
-                tokenStart,
-                FrontLBracket,
-                FrontRBracket,
-            )
+            let close = frontFindMatching(f.tokens, idx + 1, tokenStart, FrontLBracket, FrontRBracket)
             ostyAstPushLine(f, ostyAstRawTokenRange(f, idx, close + 1))
             idx = close + 1
         } else {
@@ -135,7 +94,6 @@ fn ostyAstEmitLeading(f: OstyAstFormatter, tokenStart: Int) {
     }
     f.leadingIdx = tokenStart
 }
-
 pub fn ostyAstFormatSource(source: String) -> OstyFormatResult {
     let stream = frontendLexStream(source)
     if frontLexDiagnosticCount(stream) > 0 {
@@ -145,7 +103,6 @@ pub fn ostyAstFormatSource(source: String) -> OstyFormatResult {
     if astFileErrorCount(file) > 0 {
         return ostyAstErr(astFormatErrors(file))
     }
-
     let tokens = frontTokensFromSource(source, stream)
     let units = strings.split(source, "")
     let mut f = ostyAstFormatter(file.arena, tokens, stream, units)
@@ -157,27 +114,38 @@ pub fn ostyAstFormatSource(source: String) -> OstyFormatResult {
     }
     ostyAstOk(ostyAstFinish(f))
 }
-
 fn ostyAstDecl(f: OstyAstFormatter, idx: Int) -> String {
     let node = ostyAstNode(f, idx)
-    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
-    if node.kind == AstNFnDecl { return ostyAstFnDecl(f, node) }
-    if node.kind == AstNStructDecl { return ostyAstAggregateDecl(f, node, "struct") }
-    if node.kind == AstNEnumDecl { return ostyAstAggregateDecl(f, node, "enum") }
-    if node.kind == AstNInterfaceDecl { return ostyAstInterfaceDecl(f, node) }
-    if node.kind == AstNTypeAlias { return ostyAstTypeAliasDecl(f, node) }
-    if node.kind == AstNUseDecl { return ostyAstRawTokenRange(f, node.start, node.end) }
-    if node.kind == AstNLet { return ostyAstStmt(f, idx) }
+    if node.kind == AstNFnDecl {
+        return ostyAstFnDecl(f, node)
+    }
+    if node.kind == AstNStructDecl {
+        return ostyAstAggregateDecl(f, node, "struct")
+    }
+    if node.kind == AstNEnumDecl {
+        return ostyAstAggregateDecl(f, node, "enum")
+    }
+    if node.kind == AstNInterfaceDecl {
+        return ostyAstInterfaceDecl(f, node)
+    }
+    if node.kind == AstNTypeAlias {
+        return ostyAstTypeAliasDecl(f, node)
+    }
+    if node.kind == AstNUseDecl {
+        return ostyAstRawTokenRange(f, node.start, node.end)
+    }
+    if node.kind == AstNLet {
+        return ostyAstStmt(f, idx)
+    }
     ostyAstRawTokenRange(f, node.start, node.end)
 }
-
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn ostyAstVisibility(node: AstNode) -> String {
     if node.flags == 1 {
         return "pub "
     }
     ""
 }
-
 fn ostyAstGenericParams(f: OstyAstFormatter, params: List<Int>) -> String {
     let mut parts: List<String> = []
     for paramIdx in params {
@@ -193,20 +161,8 @@ fn ostyAstGenericParams(f: OstyAstFormatter, params: List<Int>) -> String {
     }
     strings.join(["<", strings.join(parts, ", "), ">"], "")
 }
-
 fn ostyAstFnDecl(f: OstyAstFormatter, node: AstNode) -> String {
-    let mut head = strings.join(
-        [
-            ostyAstVisibility(node),
-            "fn ",
-            node.text,
-            ostyAstGenericParams(f, node.children2),
-            "(",
-            ostyAstParamList(f, node.children),
-            ")",
-        ],
-        "",
-    )
+    let mut head = strings.join([ostyAstVisibility(node), "fn ", node.text, ostyAstGenericParams(f, node.children2), "(", ostyAstParamList(f, node.children), ")"], "")
     if node.left >= 0 {
         head = strings.join([head, " -> ", ostyAstType(f, node.left)], "")
     }
@@ -215,7 +171,6 @@ fn ostyAstFnDecl(f: OstyAstFormatter, node: AstNode) -> String {
     }
     head
 }
-
 fn ostyAstParamList(f: OstyAstFormatter, params: List<Int>) -> String {
     let mut parts: List<String> = []
     for paramIdx in params {
@@ -223,7 +178,6 @@ fn ostyAstParamList(f: OstyAstFormatter, params: List<Int>) -> String {
     }
     strings.join(parts, ", ")
 }
-
 fn ostyAstParam(f: OstyAstFormatter, idx: Int) -> String {
     let node = ostyAstNode(f, idx)
     let mut text = ""
@@ -240,23 +194,9 @@ fn ostyAstParam(f: OstyAstFormatter, idx: Int) -> String {
     }
     text
 }
-
 fn ostyAstAggregateDecl(f: OstyAstFormatter, node: AstNode, keyword: String) -> String {
     let mut lines: List<String> = []
-    lines.push(
-        strings.join(
-            [
-                ostyAstVisibility(node),
-                keyword,
-                " ",
-                node.text,
-                ostyAstGenericParams(f, node.children2),
-                " ",
-                r"{",
-            ],
-            "",
-        ),
-    )
+    lines.push(strings.join([ostyAstVisibility(node), keyword, " ", node.text, ostyAstGenericParams(f, node.children2), " ", r"{"], ""))
     let saved = f.indent
     f.indent = 1
     for memberIdx in node.children {
@@ -280,7 +220,6 @@ fn ostyAstAggregateDecl(f: OstyAstFormatter, node: AstNode, keyword: String) -> 
     lines.push(r"}")
     strings.join(lines, "\n")
 }
-
 fn ostyAstFieldMember(f: OstyAstFormatter, node: AstNode) -> String {
     let mut text = strings.join([ostyAstVisibility(node), node.text, ": ", ostyAstType(f, node.right)], "")
     if node.left >= 0 {
@@ -288,7 +227,6 @@ fn ostyAstFieldMember(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([text, ","], "")
 }
-
 fn ostyAstVariant(f: OstyAstFormatter, node: AstNode) -> String {
     let mut text = node.text
     if node.children.len() > 0 {
@@ -296,7 +234,6 @@ fn ostyAstVariant(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([text, ","], "")
 }
-
 fn ostyAstAnnotationLines(f: OstyAstFormatter, extraIdx: Int) -> List<String> {
     let mut lines: List<String> = []
     if extraIdx < 0 {
@@ -318,7 +255,6 @@ fn ostyAstAnnotationLines(f: OstyAstFormatter, extraIdx: Int) -> List<String> {
     }
     lines
 }
-
 fn ostyAstInterfaceDecl(f: OstyAstFormatter, node: AstNode) -> String {
     let mut head = strings.join([ostyAstVisibility(node), "interface ", node.text], "")
     if node.children2.len() > 0 {
@@ -338,25 +274,12 @@ fn ostyAstInterfaceDecl(f: OstyAstFormatter, node: AstNode) -> String {
     lines.push(r"}")
     strings.join(lines, "\n")
 }
-
 fn ostyAstTypeAliasDecl(f: OstyAstFormatter, node: AstNode) -> String {
-    strings.join(
-        [
-            ostyAstVisibility(node),
-            "type ",
-            node.text,
-            ostyAstGenericParams(f, node.children),
-            " = ",
-            ostyAstType(f, node.left),
-        ],
-        "",
-    )
+    strings.join([ostyAstVisibility(node), "type ", node.text, ostyAstGenericParams(f, node.children), " = ", ostyAstType(f, node.left)], "")
 }
-
 fn ostyAstBlock(f: OstyAstFormatter, idx: Int) -> String {
     ostyAstBlockFromNode(f, ostyAstNode(f, idx))
 }
-
 fn ostyAstBlockFromNode(f: OstyAstFormatter, node: AstNode) -> String {
     let base = f.indent
     let mut lines: List<String> = [r"{"]
@@ -369,7 +292,6 @@ fn ostyAstBlockFromNode(f: OstyAstFormatter, node: AstNode) -> String {
     lines.push(strings.join([ostyAstIndent(base), r"}"], ""))
     strings.join(lines, "\n")
 }
-
 fn ostyAstStmt(f: OstyAstFormatter, idx: Int) -> String {
     let node = ostyAstNode(f, idx)
     match node.kind {
@@ -385,16 +307,12 @@ fn ostyAstStmt(f: OstyAstFormatter, idx: Int) -> String {
         AstNContinue -> "continue",
         AstNDefer -> strings.join(["defer ", ostyAstExpr(f, node.left)], ""),
         AstNFor -> ostyAstForStmt(f, node),
-        AstNAssign -> strings.join(
-            [ostyAstExpr(f, node.left), " ", frontTokenKindName(node.op), " ", ostyAstExpr(f, node.right)],
-            "",
-        ),
+        AstNAssign -> strings.join([ostyAstExpr(f, node.left), " ", frontTokenKindName(node.op), " ", ostyAstExpr(f, node.right)], ""),
         AstNChanSend -> strings.join([ostyAstExpr(f, node.left), " <- ", ostyAstExpr(f, node.right)], ""),
         AstNExprStmt -> ostyAstExpr(f, node.left),
         _ -> ostyAstExpr(f, idx),
     }
 }
-
 fn ostyAstLetStmt(f: OstyAstFormatter, node: AstNode) -> String {
     let mut text = "let "
     if node.flags == 1 {
@@ -410,40 +328,18 @@ fn ostyAstLetStmt(f: OstyAstFormatter, node: AstNode) -> String {
     }
     text
 }
-
 fn ostyAstForStmt(f: OstyAstFormatter, node: AstNode) -> String {
     if node.text == "infinite" {
         return strings.join(["for ", ostyAstBlock(f, node.right)], "")
     }
     if node.text == "forlet" {
-        return strings.join(
-            [
-                "for let ",
-                ostyAstPattern(f, ostyAstChildAt(node, 0)),
-                " = ",
-                ostyAstExpr(f, node.left),
-                " ",
-                ostyAstBlock(f, node.right),
-            ],
-            "",
-        )
+        return strings.join(["for let ", ostyAstPattern(f, ostyAstChildAt(node, 0)), " = ", ostyAstExpr(f, node.left), " ", ostyAstBlock(f, node.right)], "")
     }
     if node.text == "forin" {
-        return strings.join(
-            [
-                "for ",
-                ostyAstPattern(f, ostyAstChildAt(node, 0)),
-                " in ",
-                ostyAstExpr(f, ostyAstChildAt(node, 1)),
-                " ",
-                ostyAstBlock(f, node.right),
-            ],
-            "",
-        )
+        return strings.join(["for ", ostyAstPattern(f, ostyAstChildAt(node, 0)), " in ", ostyAstExpr(f, ostyAstChildAt(node, 1)), " ", ostyAstBlock(f, node.right)], "")
     }
     strings.join(["for ", ostyAstExpr(f, node.left), " ", ostyAstBlock(f, node.right)], "")
 }
-
 fn ostyAstTypeList(f: OstyAstFormatter, nodes: List<Int>, sep: String) -> String {
     let mut parts: List<String> = []
     for idx in nodes {
@@ -451,7 +347,6 @@ fn ostyAstTypeList(f: OstyAstFormatter, nodes: List<Int>, sep: String) -> String
     }
     strings.join(parts, sep)
 }
-
 fn ostyAstType(f: OstyAstFormatter, idx: Int) -> String {
     if idx < 0 {
         return "()"
@@ -476,7 +371,6 @@ fn ostyAstType(f: OstyAstFormatter, idx: Int) -> String {
     }
     text
 }
-
 fn ostyAstPattern(f: OstyAstFormatter, idx: Int) -> String {
     if idx < 0 {
         return ""
@@ -520,7 +414,6 @@ fn ostyAstPattern(f: OstyAstFormatter, idx: Int) -> String {
     }
     node.text
 }
-
 fn ostyAstPatternList(f: OstyAstFormatter, nodes: List<Int>) -> String {
     let mut parts: List<String> = []
     for idx in nodes {
@@ -528,7 +421,6 @@ fn ostyAstPatternList(f: OstyAstFormatter, nodes: List<Int>) -> String {
     }
     strings.join(parts, ", ")
 }
-
 fn ostyAstStructPattern(f: OstyAstFormatter, node: AstNode) -> String {
     let mut fields: List<String> = []
     for fieldIdx in node.children {
@@ -547,23 +439,23 @@ fn ostyAstStructPattern(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([node.text, " ", r"{", " ", strings.join(fields, ", "), " ", r"}"], "")
 }
-
 fn ostyAstStructPatternField(f: OstyAstFormatter, node: AstNode) -> String {
     if node.left >= 0 {
         return strings.join([node.text, ": ", ostyAstPattern(f, node.left)], "")
     }
     node.text
 }
-
 fn ostyAstRangePattern(f: OstyAstFormatter, node: AstNode) -> String {
-    let op = if node.flags == 1 { "..=" } else { ".." }
+    let op = if node.flags == 1 {
+        "..="
+    } else {
+        ".."
+    }
     strings.join([ostyAstPattern(f, node.left), op, ostyAstPattern(f, node.right)], "")
 }
-
 fn ostyAstExpr(f: OstyAstFormatter, idx: Int) -> String {
     ostyAstExprPrec(f, idx, 0)
 }
-
 fn ostyAstExprPrec(f: OstyAstFormatter, idx: Int, parentPrec: Int) -> String {
     if idx < 0 {
         return ""
@@ -576,7 +468,6 @@ fn ostyAstExprPrec(f: OstyAstFormatter, idx: Int, parentPrec: Int) -> String {
     }
     text
 }
-
 fn ostyAstExprPrecValue(node: AstNode) -> Int {
     if node.kind == AstNBinary {
         return astInfixLBP(node.op)
@@ -589,7 +480,6 @@ fn ostyAstExprPrecValue(node: AstNode) -> Int {
     }
     15
 }
-
 fn ostyAstExprBare(f: OstyAstFormatter, node: AstNode) -> String {
     match node.kind {
         AstNIdent -> node.text,
@@ -606,10 +496,7 @@ fn ostyAstExprBare(f: OstyAstFormatter, node: AstNode) -> String {
         AstNField -> ostyAstFieldExpr(f, node),
         AstNIndex -> strings.join([ostyAstExprPrec(f, node.left, 15), "[", ostyAstExpr(f, node.right), "]"], ""),
         AstNQuestion -> strings.join([ostyAstExprPrec(f, node.left, 15), "?"], ""),
-        AstNTurbofish -> strings.join(
-            [ostyAstExprPrec(f, node.left, 15), "::<", ostyAstTypeList(f, node.children, ", "), ">"],
-            "",
-        ),
+        AstNTurbofish -> strings.join([ostyAstExprPrec(f, node.left, 15), "::<", ostyAstTypeList(f, node.children, ", "), ">"], ""),
         AstNList -> strings.join(["[", ostyAstExprList(f, node.children), "]"], ""),
         AstNTuple -> strings.join(["(", ostyAstExprList(f, node.children), ")"], ""),
         AstNMap -> ostyAstMapExpr(f, node),
@@ -623,26 +510,18 @@ fn ostyAstExprBare(f: OstyAstFormatter, node: AstNode) -> String {
         _ -> ostyAstRawTokenRange(f, node.start, node.end),
     }
 }
-
 fn ostyAstBinaryExpr(f: OstyAstFormatter, node: AstNode) -> String {
     let prec = astInfixLBP(node.op)
-    strings.join(
-        [
-            ostyAstExprPrec(f, node.left, prec),
-            " ",
-            frontTokenKindName(node.op),
-            " ",
-            ostyAstExprPrec(f, node.right, prec + 1),
-        ],
-        "",
-    )
+    strings.join([ostyAstExprPrec(f, node.left, prec), " ", frontTokenKindName(node.op), " ", ostyAstExprPrec(f, node.right, prec + 1)], "")
 }
-
 fn ostyAstFieldExpr(f: OstyAstFormatter, node: AstNode) -> String {
-    let op = if node.flags == 1 { "?." } else { "." }
+    let op = if node.flags == 1 {
+        "?."
+    } else {
+        "."
+    }
     strings.join([ostyAstExprPrec(f, node.left, 15), op, node.text], "")
 }
-
 fn ostyAstExprList(f: OstyAstFormatter, nodes: List<Int>) -> String {
     let mut parts: List<String> = []
     for idx in nodes {
@@ -650,9 +529,12 @@ fn ostyAstExprList(f: OstyAstFormatter, nodes: List<Int>) -> String {
     }
     strings.join(parts, ", ")
 }
-
 fn ostyAstRangeExpr(f: OstyAstFormatter, node: AstNode) -> String {
-    let op = if node.flags == 1 { "..=" } else { ".." }
+    let op = if node.flags == 1 {
+        "..="
+    } else {
+        ".."
+    }
     let mut left = ""
     if node.left >= 0 {
         left = ostyAstExprPrec(f, node.left, 6)
@@ -663,7 +545,6 @@ fn ostyAstRangeExpr(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([left, op, right], "")
 }
-
 fn ostyAstMapExpr(f: OstyAstFormatter, node: AstNode) -> String {
     if node.flags == 1 {
         return r"{:}"
@@ -677,7 +558,6 @@ fn ostyAstMapExpr(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([r"{", strings.join(parts, ", "), r"}"], "")
 }
-
 fn ostyAstChildAtVals(values: List<Int>, target: Int) -> Int {
     let mut idx = 0
     for value in values {
@@ -688,7 +568,6 @@ fn ostyAstChildAtVals(values: List<Int>, target: Int) -> Int {
     }
     -1
 }
-
 fn ostyAstStructLitExpr(f: OstyAstFormatter, node: AstNode) -> String {
     let mut fields: List<String> = []
     for fieldIdx in node.children {
@@ -704,20 +583,10 @@ fn ostyAstStructLitExpr(f: OstyAstFormatter, node: AstNode) -> String {
     }
     strings.join([ostyAstExpr(f, node.left), " ", r"{", strings.join(fields, ", "), r"}"], "")
 }
-
 fn ostyAstIfExpr(f: OstyAstFormatter, node: AstNode) -> String {
     let mut head = "if "
     if node.flags == 1 {
-        head = strings.join(
-            [
-                head,
-                "let ",
-                ostyAstPattern(f, ostyAstChildAt(node, 1)),
-                " = ",
-                ostyAstExpr(f, node.left),
-            ],
-            "",
-        )
+        head = strings.join([head, "let ", ostyAstPattern(f, ostyAstChildAt(node, 1)), " = ", ostyAstExpr(f, node.left)], "")
     } else {
         head = strings.join([head, ostyAstExpr(f, node.left)], "")
     }
@@ -733,13 +602,10 @@ fn ostyAstIfExpr(f: OstyAstFormatter, node: AstNode) -> String {
     }
     text
 }
-
 fn ostyAstMatchExpr(f: OstyAstFormatter, node: AstNode) -> String {
     let base = f.indent
     let saved = f.indent
-    let mut lines: List<String> = [
-        strings.join(["match ", ostyAstExpr(f, node.left), " ", r"{"], ""),
-    ]
+    let mut lines: List<String> = [strings.join(["match ", ostyAstExpr(f, node.left), " ", r"{"], "")]
     f.indent = base + 1
     for armIdx in node.children {
         lines.push(strings.join([ostyAstIndent(base + 1), ostyAstMatchArm(f, armIdx), ","], ""))
@@ -748,7 +614,6 @@ fn ostyAstMatchExpr(f: OstyAstFormatter, node: AstNode) -> String {
     lines.push(strings.join([ostyAstIndent(base), r"}"], ""))
     strings.join(lines, "\n")
 }
-
 fn ostyAstMatchArm(f: OstyAstFormatter, idx: Int) -> String {
     let node = ostyAstNode(f, idx)
     let mut text = ostyAstPattern(f, node.left)
@@ -758,7 +623,6 @@ fn ostyAstMatchArm(f: OstyAstFormatter, idx: Int) -> String {
     }
     strings.join([text, " -> ", ostyAstExpr(f, node.right)], "")
 }
-
 fn ostyAstClosureExpr(f: OstyAstFormatter, node: AstNode) -> String {
     let mut text = ""
     if node.children.len() == 0 {

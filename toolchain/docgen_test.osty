@@ -1,13 +1,10 @@
 use std.testing
-
 use std.strings as docTestStrings
-
 fn assertSelfDocContains(output: String, text: String) {
     if !(docTestStrings.contains(output, text)) {
         testing.fail("missing {text} in {output}")
     }
 }
-
 fn testSelfDocGenExtractsPublicSurface() {
     let source = r"""
         /// Adds numbers.
@@ -53,7 +50,6 @@ fn testSelfDocGenExtractsPublicSurface() {
         /// Maximum user count.
         pub let maxUsers: Int = 10
         """
-
     let pkg = selfDocFromSource("demo", "lib.osty", source)
     testing.assertEq(selfDocPackageDeclCount(pkg), 6)
     testing.assert(selfDocPackageHasDecl(pkg, "add", "function"))
@@ -63,19 +59,16 @@ fn testSelfDocGenExtractsPublicSurface() {
     testing.assert(selfDocPackageHasDecl(pkg, "Names", "type"))
     testing.assert(selfDocPackageHasDecl(pkg, "maxUsers", "constant"))
     testing.assert(!(selfDocPackageHasDecl(pkg, "hidden", "function")))
-
     let user = selfDocPackageDeclNamed(pkg, "User")
     testing.assertEq(selfDocFieldCount(user.fields), 1)
     testing.assertEq(selfDocMethodCount(user.methods), 1)
     testing.assertEq(user.fields[0].name, "name")
     testing.assertEq(user.fields[0].doc, "User name.")
-
     let lookup = selfDocPackageDeclNamed(pkg, "Lookup")
     testing.assertEq(selfDocVariantCount(lookup.variants), 2)
     testing.assertEq(selfDocMethodCount(lookup.methods), 1)
     testing.assertEq(lookup.variants[0].payload[0], "T")
 }
-
 fn testSelfDocGenRendersMarkdownAndSections() {
     let source = r"""
         /// Adds two numbers.
@@ -91,7 +84,6 @@ fn testSelfDocGenRendersMarkdownAndSections() {
             return left + right
         }
         """
-
     let pkg = selfDocFromSource("math", "math.osty", source)
     let markdown = selfDocRenderMarkdown(pkg)
     assertSelfDocContains(markdown, "# Package `math`")
@@ -104,12 +96,10 @@ fn testSelfDocGenRendersMarkdownAndSections() {
     assertSelfDocContains(markdown, "the sum.")
     assertSelfDocContains(markdown, "```osty\nlet value = add(1, 2)\n```")
     assertSelfDocContains(markdown, "- `subtract`")
-
     let report = selfDocVerifyExamples(pkg)
     testing.assertEq(report.examples, 1)
     testing.assertEq(report.failures, 0)
 }
-
 fn testSelfDocGenRendersReferences() {
     let source = r"""
         /// A user.
@@ -127,15 +117,12 @@ fn testSelfDocGenRendersReferences() {
             }
         }
         """
-
     let pkg = selfDocFromSource("refs", "refs.osty", source)
     let markdown = selfDocRenderMarkdown(pkg)
     assertSelfDocContains(markdown, "_References: [`User`](#struct-user)_")
-
     let html = selfDocRenderHTML(pkg)
     assertSelfDocContains(html, "<a href=\"#struct-user\">User</a>")
 }
-
 fn testSelfDocGenReportsBrokenExamples() {
     let source = r"""
         /// Broken example.
@@ -145,7 +132,6 @@ fn testSelfDocGenReportsBrokenExamples() {
         """
     let pkg = selfDocFromSource("broken", "broken.osty", source)
     let report = selfDocVerifyExamples(pkg)
-
     testing.assertEq(report.examples, 1)
     testing.assertEq(report.failures, 1)
     assertSelfDocContains(report.firstFailure, "broken.osty")
