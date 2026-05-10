@@ -116,7 +116,17 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		}
 		totalFns++
 		oneFn := *entry.MIR
-		oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
+		// When auditing the toolchain's own `main` function, don't
+		// inject a synthetic `main` alongside — LLVM rejects two
+		// `define i32 @main()` blocks with `invalid redefinition of
+		// function 'main'`. The real `main` already satisfies stage0's
+		// `module has no main` guard. For every other function, inject
+		// the synthetic main so stage0 doesn't decline the module.
+		if fn.Name == "main" {
+			oneFn.Functions = []*mir.Function{fn}
+		} else {
+			oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
+		}
 		irBytes, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"})
 		if err == nil {
 			if clangVerify {
@@ -266,7 +276,14 @@ func TestStage0ToolchainAudit(t *testing.T) {
 				continue
 			}
 			oneFn := *entry.MIR
-			oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
+			// Same redefinition guard as the main loop above —
+			// auditing `main` itself must not inject a second
+			// synthetic `main` into the module.
+			if fn.Name == "main" {
+				oneFn.Functions = []*mir.Function{fn}
+			} else {
+				oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
+			}
 			_, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"})
 			if err == nil {
 				continue
