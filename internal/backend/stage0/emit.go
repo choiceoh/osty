@@ -14947,12 +14947,36 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 		}
 		out.WriteString(") {\n")
 	}
+	// LLVM rule: the FIRST basic block in a function may not have
+	// predecessors. When the source MIR's entry block is the target
+	// of a backedge (loop continue, while-style structure), emitting
+	// it as the LLVM `entry:` block violates the rule.
+	//
+	// Fix: emit a synthetic prelude block (`stage0.prelude:`) FIRST.
+	// It holds the allocas and unconditionally branches to the
+	// original entry. The block named `entry` is no longer the
+	// function's first block — LLVM treats whatever appears first
+	// as the entry, so `stage0.prelude` becomes the actual entry
+	// and the user's `entry` block becomes a regular block that's
+	// allowed to have predecessors.
+	//
+	// Pre-rendered `pat.blockBodies` strings reference `%entry` for
+	// branches to the user's first block; we keep those intact by
+	// not renaming it.
+	splitEntry := genericEntryHasPredecessors(fn)
+	if splitEntry {
+		out.WriteString("stage0.prelude:\n")
+		for _, sd := range pat.stackDecls {
+			fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+		}
+		fmt.Fprintf(out, "  br label %%%s\n\n", genericBlockLabel(fn, fn.Entry))
+	}
 	for i, id := range pat.blockOrder {
 		if i > 0 {
 			out.WriteString("\n")
 		}
 		fmt.Fprintf(out, "%s:\n", genericBlockLabel(fn, id))
-		if id == fn.Entry {
+		if id == fn.Entry && !splitEntry {
 			for _, sd := range pat.stackDecls {
 				fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
 			}
@@ -14961,6 +14985,33 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 	}
 	out.WriteString("}\n\n")
 	return nil
+}
+
+// genericEntryHasPredecessors reports whether any block in fn
+// branches (Goto, Branch then/else) to the function's entry block.
+// LLVM's IR validator rejects functions whose first basic block has
+// predecessors; emitGenericScalarCFG inserts a synthetic prelude
+// block before the entry when this returns true.
+func genericEntryHasPredecessors(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		switch term := bb.Term.(type) {
+		case *mir.GotoTerm:
+			if term.Target == fn.Entry {
+				return true
+			}
+		case *mir.BranchTerm:
+			if term.Then == fn.Entry || term.Else == fn.Entry {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func genericBlockLabel(fn *mir.Function, id mir.BlockID) string {
