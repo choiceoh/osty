@@ -165,11 +165,13 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 			emittedMain = true
 		}
 	}
-	if listAll && len(declines) > 0 {
-		// Return a single aggregated error so the dispatcher's warning
-		// chain shows every blocking site in one build round-trip.
-		return nil, fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
-	}
+	// Aggregated-declines path is taken on `OSTY_STAGE0_LIST_ALL_DECLINES=1`
+	// when at least one function declined. We still build the (partial)
+	// IR and return it alongside the error so callers that want to
+	// validate emit-correctness on the surviving functions (e.g. the
+	// audit harness's module-level clang verify) can do so. Pre-existing
+	// callers that ignore bytes on err == non-nil are unaffected.
+	aggregated := listAll && len(declines) > 0
 	if !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
@@ -182,6 +184,12 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		out.WriteString("\n")
 	}
 	out.WriteString(fnBodies.String())
+	if aggregated {
+		// Return partial IR + aggregated declines error so audit
+		// callers can clang-verify whatever did emit while still
+		// surfacing the full decline list.
+		return []byte(out.String()), fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
+	}
 	return []byte(out.String()), nil
 }
 
@@ -7467,6 +7475,10 @@ func emitWhileExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, retLocal mir.Local
 // AssignInstrs are rendered with stack-aware reads / writes; storage
 // markers are skipped.
 func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr) bool {
+	targetFn := ""
+	if ctx.fn != nil && (ctx.fn.Name == "Runner__Run" || strings.HasPrefix(ctx.fn.Name, "Runner__check") || ctx.fn.Name == "resolveFixtureCases") {
+		targetFn = ctx.fn.Name
+	}
 	switch step := instr.(type) {
 	case *mir.AssignInstr:
 		return emitWhileAssign(ctx, out, step)
@@ -7476,6 +7488,9 @@ func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr)
 		return emitWhileIntrinsic(ctx, out, step)
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 		return true
+	}
+	if targetFn != "" {
+		fmt.Printf("[emitWhileStep %s] reject instr %T at line %d\n", targetFn, instr, 1)
 	}
 	return false
 }
@@ -12812,8 +12827,15 @@ type genericCFGPattern struct {
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
+	targetFn := ""
+	if fn.Name == "Runner__Run" || strings.HasPrefix(fn.Name, "Runner__check") || fn.Name == "resolveFixtureCases" {
+		targetFn = fn.Name
+	}
 	pat := genericCFGPattern{blockBodies: map[mir.BlockID]string{}}
 	if fn == nil || len(fn.Blocks) == 0 {
+		if targetFn != "" {
+			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 1)
+		}
 		return pat, false
 	}
 	pat.returnsVoid = isUnitType(fn.ReturnType)
@@ -12824,6 +12846,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			// that we can handle via sret.
 			typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
 			if !ok {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 2)
+				}
 				return pat, false
 			}
 			pat.aggRetTypeName = typeName
@@ -12832,9 +12857,15 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		}
 	}
 	if len(fn.Blocks) == 1 && !genericSingleBlockHasExtendedSurface(fn, fn.Blocks[0]) {
+		if targetFn != "" {
+			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 3)
+		}
 		return pat, false
 	}
 	if len(fn.Params) > 48 {
+		if targetFn != "" {
+			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 4)
+		}
 		return pat, false
 	}
 
@@ -12843,10 +12874,16 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
+			if targetFn != "" {
+				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 5)
+			}
 			return pat, false
 		}
 		pt := mctx.scalarFromType(loc.Type, true)
 		if pt == scalarUnknown {
+			if targetFn != "" {
+				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 6)
+			}
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
@@ -12875,6 +12912,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if !genericLocalUsedOutsideUnreachableBlocks(fn, l.ID) {
 				continue
 			}
+			if targetFn != "" {
+				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 7)
+			}
 			return pat, false
 		}
 		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
@@ -12896,6 +12936,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	}
 	if !pat.returnsVoid {
 		if _, ok := stack[fn.ReturnLocal]; !ok {
+			if targetFn != "" {
+				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 8)
+			}
 			return pat, false
 		}
 	}
@@ -12939,6 +12982,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 			} else {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 9)
+				}
 				return pat, false
 			}
 		} else if exitID, localID, ok := genericInferOpaqueAccumulatorSyntheticReturn(fn, mctx, pat.retType); ok {
@@ -12965,6 +13011,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 				} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 					pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 				} else {
+					if targetFn != "" {
+						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 10)
+					}
 					return pat, false
 				}
 			}
@@ -12972,6 +13021,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 			} else {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 11)
+				}
 				return pat, false
 			}
 		}
@@ -12979,15 +13031,24 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
 	for _, bb := range blocks {
 		if bb == nil {
+			if targetFn != "" {
+				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 12)
+			}
 			return pat, false
 		}
 		var body strings.Builder
 		if ii, ok := pat.syntheticIntrinsicReturns[bb.ID]; ok {
 			if !emitSyntheticDiscardedIntrinsicReturn(ctx, &body, bb, ii, pat.retType) {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 13)
+				}
 				return pat, false
 			}
 		} else if call, ok := pat.syntheticCallReturns[bb.ID]; ok {
 			if !emitSyntheticDiscardedCallReturn(ctx, &body, bb, call, pat.retType) {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 14)
+				}
 				return pat, false
 			}
 		} else if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
@@ -12997,12 +13058,18 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			// in unreachable sinks are skipped.
 			for _, instr := range bb.Instrs {
 				if !emitWhileStepInUnreachable(ctx, &body, instr) {
+					if targetFn != "" {
+						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 15)
+					}
 					return pat, false
 				}
 			}
 		} else {
 			for _, instr := range bb.Instrs {
 				if !emitWhileStep(ctx, &body, instr) {
+					if targetFn != "" {
+						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 16)
+					}
 					return pat, false
 				}
 			}
@@ -13010,12 +13077,18 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		if localID, ok := pat.syntheticReturns[bb.ID]; ok {
 			binding, ok := ctx.bindings[localID]
 			if !ok || !binding.defined || binding.ty != pat.retType {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 17)
+				}
 				return pat, false
 			}
 			expr := binding.expr
 			if binding.isStack {
 				loaded, ty, ok := loadFromStack(ctx, &body, localID)
 				if !ok || ty != pat.retType {
+					if targetFn != "" {
+						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 18)
+					}
 					return pat, false
 				}
 				expr = loaded
@@ -13023,16 +13096,25 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			fmt.Fprintf(&body, "  ret %s %s\n", pat.retType.llvm(), expr)
 		} else if join, ok := pat.syntheticStringJoins[bb.ID]; ok {
 			if !emitSyntheticStringJoinReturn(ctx, &body, join) {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 19)
+				}
 				return pat, false
 			}
 		} else if optID, ok := pat.syntheticStringCoalesces[bb.ID]; ok {
 			if !emitSyntheticStringCoalesceReturn(ctx, &body, optID) {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 20)
+				}
 				return pat, false
 			}
 		} else if _, ok := pat.syntheticIntrinsicReturns[bb.ID]; ok {
 		} else if _, ok := pat.syntheticCallReturns[bb.ID]; ok {
 		} else {
 			if !emitGenericTerm(ctx, &body, bb.Term, pat.retType, pat.returnsVoid) {
+				if targetFn != "" {
+					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 21)
+				}
 				return pat, false
 			}
 		}

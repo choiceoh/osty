@@ -66,7 +66,7 @@ func InspectRecordsFromSelfhost(src []byte, recs []api.InspectRecord) []InspectR
 		var typ types.Type
 		if rec.Type != nil {
 			typeName = rec.Type.String()
-			typ = typeReprToType(rec.Type, nil)
+			typ = typeReprToType(rec.Type)
 		}
 		out = append(out, InspectRecord{
 			Pos:      span.Start,

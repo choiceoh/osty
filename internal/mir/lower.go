@@ -1694,6 +1694,13 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		bs.lowerForInCountableIterator(f, iterT)
 		return
 	}
+	// If the iterable type is already an error type, the front end
+	// has already reported the real diagnostic; silence the MIR
+	// note to avoid a misleading duplicate "unsupported iterable"
+	// that inflates MIR coverage failures.
+	if isPoisonType(iterT) {
+		return
+	}
 	if !bs.l.isListType(iterT) {
 		bs.l.noteIssue("for-in over unsupported iterable type not lowered to MIR: %s", typeString(iterT))
 		return
