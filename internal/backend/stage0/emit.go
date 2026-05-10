@@ -212,6 +212,17 @@ type moduleCtx struct {
 	// to extraDecls already, so multiple functions referencing the
 	// same struct don't duplicate the type definition.
 	emittedStructs map[string]bool
+	// definedFnSyms records the symbol name of every non-external,
+	// non-intrinsic function that will be `define`d in this module's
+	// `fnBodies` section (assuming it doesn't decline). When a caller
+	// also wants to emit a forward `declare <ret> @sym(...)` for the
+	// same symbol, that declaration must be suppressed: clang's IR
+	// parser rejects `declare` followed by `define` of the same name
+	// as `error: invalid redefinition of function ...` even when the
+	// signatures match (`llvm-as` would accept it; clang is stricter).
+	// Pre-scanned from `module.Functions` once in `newModuleCtx` so
+	// all `declare*FunctionPrototype` helpers can do an O(1) lookup.
+	definedFnSyms map[string]bool
 	// tuplePool maps a tuple's canonical key (the comma-separated
 	// list of LLVM scalar mnemonics) to its synthetic LLVM type
 	// name. Tuples don't carry a user-visible Osty name so stage0
@@ -222,11 +233,23 @@ type moduleCtx struct {
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
+	defined := map[string]bool{}
+	if module != nil {
+		for _, fn := range module.Functions {
+			if fn == nil || fn.IsExternal || fn.IsIntrinsic {
+				continue
+			}
+			if fn.Name != "" {
+				defined[fn.Name] = true
+			}
+		}
+	}
 	return &moduleCtx{
 		module:         module,
 		extraDecls:     &strings.Builder{},
 		stringPool:     map[string]string{},
 		emittedStructs: map[string]bool{},
+		definedFnSyms:  defined,
 		tuplePool:      map[string]string{},
 	}
 }
@@ -1312,7 +1335,7 @@ func classifyDiscardedValueIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInst
 		return "", false
 	}
 	declareRuntimePrototype(mctx, spec.symbol, spec.ret, args)
-	return prelude + renderDiscardValueCallLine(spec.symbol, spec.ret, args), true
+	return prelude + renderDiscardValueCallLine(mctx, spec.symbol, spec.ret, args), true
 }
 
 func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
@@ -1987,7 +2010,7 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 				return "", false
 			}
 			declareFunctionPrototype(mctx, ref.Symbol, retType, args)
-			return resolved.prelude + renderDiscardValueCallLine(ref.Symbol, retType, args), true
+			return resolved.prelude + renderDiscardValueCallLine(mctx, ref.Symbol, retType, args), true
 		}
 		declareVoidFunctionPrototype(mctx, ref.Symbol, args)
 		return resolved.prelude + renderVoidCallLine(ref.Symbol, args), true
@@ -2025,6 +2048,12 @@ func declareFunctionPrototype(mctx *moduleCtx, symbol string, retType scalarType
 	if mctx == nil || symbol == "" {
 		return
 	}
+	if mctx.definedFnSyms[symbol] {
+		// Skip — the function is `define`d in this same module. clang's
+		// IR parser rejects `declare` + `define` for the same symbol
+		// even when signatures match.
+		return
+	}
 	key := "__stage0.fn_decl." + symbol
 	if mctx.emittedStructs == nil {
 		mctx.emittedStructs = map[string]bool{}
@@ -2047,6 +2076,10 @@ func declareFunctionPrototypeLLVM(mctx *moduleCtx, symbol string, retLLVM string
 	if mctx == nil || symbol == "" || retLLVM == "" {
 		return
 	}
+	if mctx.definedFnSyms[symbol] {
+		// See declareFunctionPrototype — skip declares for in-module defines.
+		return
+	}
 	key := "__stage0.fn_decl." + symbol
 	if mctx.emittedStructs == nil {
 		mctx.emittedStructs = map[string]bool{}
@@ -2067,6 +2100,10 @@ func declareFunctionPrototypeLLVM(mctx *moduleCtx, symbol string, retLLVM string
 
 func declareVoidFunctionPrototype(mctx *moduleCtx, symbol string, args []callArg) {
 	if mctx == nil || symbol == "" {
+		return
+	}
+	if mctx.definedFnSyms[symbol] {
+		// See declareFunctionPrototype — skip declares for in-module defines.
 		return
 	}
 	key := "__stage0.fn_decl." + symbol
@@ -2100,9 +2137,24 @@ func renderVoidCallLine(symbol string, args []callArg) string {
 	return b.String()
 }
 
-func renderDiscardValueCallLine(symbol string, retType scalarType, args []callArg) string {
+func renderDiscardValueCallLine(mctx *moduleCtx, symbol string, retType scalarType, args []callArg) string {
+	// Capture the discarded result into a named SSA register so it
+	// doesn't consume an anonymous slot. Without this prefix LLVM
+	// auto-numbers the value as the next %N, which collides with any
+	// later explicit `%N = ...` in the same function — surfaces as
+	// `error: instruction expected to be numbered '%X' or greater`.
+	// Same pattern as the cluster-1 SSA-collision fix; this site was
+	// missed because the rendered line never threaded `mctx`.
+	discardReg := ""
+	if mctx != nil {
+		discardReg = mctx.freshTempName("discard")
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "  call %s @%s(", retType.llvm(), symbol)
+	if discardReg != "" {
+		fmt.Fprintf(&b, "  %s = call %s @%s(", discardReg, retType.llvm(), symbol)
+	} else {
+		fmt.Fprintf(&b, "  call %s @%s(", retType.llvm(), symbol)
+	}
 	for i, a := range args {
 		if i > 0 {
 			b.WriteString(", ")
@@ -7824,7 +7876,7 @@ func emitWhileDiscardedValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builde
 		return false
 	}
 	declareRuntimePrototype(ctx.mctx, spec.symbol, spec.ret, args)
-	out.WriteString(renderDiscardValueCallLine(spec.symbol, spec.ret, args))
+	out.WriteString(renderDiscardValueCallLine(ctx.mctx, spec.symbol, spec.ret, args))
 	return true
 }
 
@@ -9634,7 +9686,7 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 				return false
 			}
 			declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
-			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
+			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
 			return true
 		}
 	} else {
@@ -9651,7 +9703,7 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 				return false
 			}
 			declareFunctionPrototype(ctx.mctx, ref.Symbol, retType, args)
-			out.WriteString(renderDiscardValueCallLine(ref.Symbol, retType, args))
+			out.WriteString(renderDiscardValueCallLine(ctx.mctx, ref.Symbol, retType, args))
 			return true
 		}
 	}
