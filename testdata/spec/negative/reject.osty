@@ -45,6 +45,11 @@ use go "net/http" { fn Get(u: String) -> String { "x" } }
 use a/b.c
 // === END
 
+// ---- follow-on recovery diagnostics (E0105 / E0100) ----
+// These cases pin diagnostics that commonly appear after the parser
+// has already taken one recovery step, so the corpus tracks both the
+// primary syntax complaint and the shape of the follow-on fallout.
+
 // === CASE: E0105 === `} else` across newline
 fn f() -> Int {
     if cond() {
@@ -55,6 +60,28 @@ fn f() -> Int {
     }
 }
 fn cond() -> Bool { false }
+// === END
+
+// === CASE: E0100 === top-level `}` follow-on after `} else` newline recovery
+fn followOnDeclAfterElseNewline() -> Int {
+    if condFollowOn() {
+        1
+    }
+    else {
+        2
+    }
+}
+fn condFollowOn() -> Bool { false }
+// === END
+
+// === CASE: E0100 === top-level `}` follow-on after broken match-arm assignment body
+fn followOnDeclAfterMatchAssign(x: Int) {
+    match x {
+        0 -> out.path =
+        _ -> 1,
+    }
+    let z = 2
+}
 // === END
 
 // === CASE: E0106 === non-literal default value
