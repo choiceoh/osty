@@ -1375,7 +1375,18 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
             p.noStructLit = pv
         }
         let _ = opExpect(p, FrontArrow)
-        let body = opParseMatchArmBody(p)
+        let bodyStart = p.pos
+        let mut body = opParseMatchArmBody(p)
+        let mut recoveredNextArm = false
+        if opAt(p, FrontArrow) {
+            opErrorFull(p, "expected match arm body before `->`", "supply an expression after `->` or remove the broken arm", "", "E0204")
+            p.pos = bodyStart
+            let mut errNode = emptyAstNode(AstNError)
+            errNode.start = bodyStart
+            errNode.end = bodyStart
+            body = opAddNode(p, errNode)
+            recoveredNextArm = true
+        }
         let mut armNode = emptyAstNode(AstNMatchArm)
         armNode.left = pat
         armNode.right = body
@@ -1384,6 +1395,9 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
         armNode.end = p.pos
         arms.push(opAddNode(p, armNode))
         opSkipNewlines(p)
+        if recoveredNextArm {
+            continue
+        }
         if !(opEat(p, FrontComma)) {
             break
         }

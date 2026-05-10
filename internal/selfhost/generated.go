@@ -21006,9 +21006,23 @@ func opParseMatchExpr(p *OstyParser) int {
 		}
 		// Osty: /tmp/selfhost_merged.osty:7772:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))
+		bodyStart := p.pos
+		_ = bodyStart
 		// Osty: /tmp/selfhost_merged.osty:7773:9
 		body := opParseMatchArmBody(p)
 		_ = body
+		recoveredNextArm := false
+		_ = recoveredNextArm
+		if ostyEqual(opPeek(p).kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
+			opErrorFull(p, "expected match arm body before `->`", "supply an expression after `->` or remove the broken arm", "", "E0204")
+			p.pos = bodyStart
+			errNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
+			_ = errNode
+			errNode.start = bodyStart
+			errNode.end = bodyStart
+			body = opAddNode(p, errNode)
+			recoveredNextArm = true
+		}
 		// Osty: /tmp/selfhost_merged.osty:7774:9
 		armNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMatchArm{}))
 		_ = armNode
@@ -21026,6 +21040,9 @@ func opParseMatchExpr(p *OstyParser) int {
 		func() struct{} { arms = append(arms, opAddNode(p, armNode)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:7781:9
 		opSkipNewlines(p)
+		if recoveredNextArm {
+			continue
+		}
 		// Osty: /tmp/selfhost_merged.osty:7782:9
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
 			// Osty: /tmp/selfhost_merged.osty:7782:38
