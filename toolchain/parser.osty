@@ -1932,8 +1932,8 @@ fn opParseStmt(p: OstyParser) -> Int {
             labelIdx = opParseLabelNode(p)
         }
         let mut valueIdx = 0 - 1
-        if astStartsExpr(opPeek(p).kind) && opPeek(p).kind != FrontNewline {
-            valueIdx = opParseExpr(p)
+        if !(opAt(p, FrontNewline)) && !(opAt(p, FrontEOF)) && !(opAt(p, FrontRBrace)) {
+            valueIdx = opParseRequiredExpr(p)
         }
         let mut n = emptyAstNode(AstNBreak)
         n.left = valueIdx
@@ -2054,7 +2054,7 @@ fn opParseReturnStmt(p: OstyParser) -> Int {
 fn opParseDeferStmt(p: OstyParser) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
-    let expr = opParseExpr(p)
+    let expr = opParseRequiredExpr(p)
     let mut n = emptyAstNode(AstNDefer)
     n.left = expr
     n.start = start
