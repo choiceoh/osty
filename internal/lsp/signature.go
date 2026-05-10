@@ -3,8 +3,8 @@ package lsp
 import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
-	"github.com/osty/osty/internal/types"
 )
 
 // handleSignatureHelp answers `textDocument/signatureHelp`. The
@@ -99,32 +99,36 @@ func buildSignatureInfo(call *ast.CallExpr, doc *document) (SignatureInformation
 		return info, true
 	}
 	a := doc.analysis
-	if a == nil || a.check == nil {
+	if a == nil {
 		return SignatureInformation{}, false
 	}
 	sym, fnDecl := calleeSymbol(call, a)
 	if sym == nil {
 		return SignatureInformation{}, false
 	}
-	t := a.check.LookupSymType(sym)
-	fnType, ok := t.(*types.FnType)
-	if !ok {
+	var fnTypeRepr *api.TypeRepr
+	if a.semantic != nil {
+		if cs := a.semantic.CheckedSymbolAt(a.sourcePath, sym.Pos.Offset); cs != nil && cs.Type != nil && cs.Type.Kind == "fn" {
+			fnTypeRepr = cs.Type
+		}
+	}
+	if fnTypeRepr == nil {
 		return SignatureInformation{}, false
 	}
 	// Build param labels. Names come from the AST decl when we have
 	// it; otherwise fall back to `argN` placeholders so the shape is
 	// still useful.
-	paramNames := parameterNames(fnDecl, len(fnType.Params))
-	params := make([]LSPSignatureParam, 0, len(fnType.Params))
-	for i, pt := range fnType.Params {
+	paramNames := parameterNames(fnDecl, len(fnTypeRepr.Args))
+	params := make([]LSPSignatureParam, 0, len(fnTypeRepr.Args))
+	for i := range fnTypeRepr.Args {
 		params = append(params, LSPSignatureParam{
 			Name:     paramNames[i],
-			TypeName: pt.String(),
+			TypeName: fnTypeRepr.Args[i].String(),
 		})
 	}
 	returnType := ""
-	if fnType.Return != nil && !types.IsUnit(fnType.Return) {
-		returnType = fnType.Return.String()
+	if fnTypeRepr.Return != nil && fnTypeRepr.Return.Kind != "unit" {
+		returnType = fnTypeRepr.Return.String()
 	}
 	rendered := LSPBuildSignatureText(sym.Name, params, returnType)
 	paramInfo := make([]ParameterInformation, 0, len(rendered.ParameterLabels))

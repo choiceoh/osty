@@ -2,11 +2,11 @@
 
 - **Scope**: Native LLVM backend migration history and plan
 - **Type**: Plan
-> **Status (2026-04-29): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
-> 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
-> 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, phase
-> 설명은 당시 시점의 기준이다. 현재 pass/fail 상태는 바로 아래 동기화 노트가
-> 기준이다.
+  > **Status (2026-04-29): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
+  > 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
+  > 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, phase
+  > 설명은 당시 시점의 기준이다. 현재 pass/fail 상태는 바로 아래 동기화 노트가
+  > 기준이다.
 
 이 문서는 Osty의 실행 백엔드를 현재 Go transpiler 중심 구조에서 LLVM 기반
 네이티브 백엔드로 옮기기 위한 이주 계획이다. 목표는 기존 Go 백엔드를 즉시
@@ -41,33 +41,33 @@ cover하지 못하는 source shape 기준으로 본다.
 
 ### Tier A — 核 toolchain (`lexer → parser → check → ir → llvmgen`) 자가 컴파일 blocker
 
-| 기능 | 현재 상태 | 현재 증거 | 다음 초점 |
-|---|---|---|---|
-| `List<T>` literal + 메서드 lowering | 🟡 기본 literal/intrinsic 경로는 있음 | README status + green front-end tests | whole-toolchain native probe에서 residual collection helper shape 확인 |
-| `Map<K,V>` literal + 메서드 lowering | 🔴 `Map.update` 전용 locked lowering 회귀 | `TestPhase2gUpdateUserCallsiteKeepsLockedLowering` | `get + callback + insert`를 `osty_rt_map_lock/unlock` 안에 유지 |
-| Optional aggregate lowering | 🔴 struct payload `?` / `?.field` 미커버 | `TestNativeOwnedModuleEntryOptionalQuestionStructBatch`, `TestNativeOwnedModuleEntryOptionalFieldBatch` | `%Struct` load/extract + null phi shape |
-| Generic / interface call lowering | 🟡 generic method turbofish는 MIR/LLVM 회귀로 잠김; interface boxing/dispatch 미커버 | `TestLowerGenericOwnerMethodTurbofishUsesMonomorphizedSymbol`, `TestLLVMBackendBinaryRunsGenericOwnerMethodTurbofish`, interface dispatch tests | `%osty.iface` boxing, vtable indirect call args |
-| Pattern lowering | 🔴 nested binding/destructuring 미커버 | `TestRunCoversNestedStructBindingPattern`, `TestTryGenerateNativeOwnedModuleCoversNestedStructBindingPattern` | recursive `extractvalue` plus `name @ pattern` alias |
-| Multi-file package emit + link | 🟡 native self-compile/link gate는 아직 최종 green 아님 | short-suite backend gaps block merged native confidence | P0 native shape failures 해소 후 merged toolchain probe 재측정 |
-| `String` / `std.strings` surface | 🟡 runtime-backed paths expanded; pure-body coverage는 계속 추적 | previous `String.bytes()` / `String.chars()` walls are closed | pure Osty helper bodies and remaining ABI edge cases |
+| 기능                                 | 현재 상태                                                                            | 현재 증거                                                                                                                                       | 다음 초점                                                              |
+| ------------------------------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `List<T>` literal + 메서드 lowering  | 🟡 기본 literal/intrinsic 경로는 있음                                                | README status + green front-end tests                                                                                                           | whole-toolchain native probe에서 residual collection helper shape 확인 |
+| `Map<K,V>` literal + 메서드 lowering | 🔴 `Map.update` 전용 locked lowering 회귀                                            | `TestPhase2gUpdateUserCallsiteKeepsLockedLowering`                                                                                              | `get + callback + insert`를 `osty_rt_map_lock/unlock` 안에 유지        |
+| Optional aggregate lowering          | 🔴 struct payload `?` / `?.field` 미커버                                             | `TestNativeOwnedModuleEntryOptionalQuestionStructBatch`, `TestNativeOwnedModuleEntryOptionalFieldBatch`                                         | `%Struct` load/extract + null phi shape                                |
+| Generic / interface call lowering    | 🟡 generic method turbofish는 MIR/LLVM 회귀로 잠김; interface boxing/dispatch 미커버 | `TestLowerGenericOwnerMethodTurbofishUsesMonomorphizedSymbol`, `TestLLVMBackendBinaryRunsGenericOwnerMethodTurbofish`, interface dispatch tests | `%osty.iface` boxing, vtable indirect call args                        |
+| Pattern lowering                     | 🔴 nested binding/destructuring 미커버                                               | `TestRunCoversNestedStructBindingPattern`, `TestTryGenerateNativeOwnedModuleCoversNestedStructBindingPattern`                                   | recursive `extractvalue` plus `name @ pattern` alias                   |
+| Multi-file package emit + link       | 🟡 native self-compile/link gate는 아직 최종 green 아님                              | short-suite backend gaps block merged native confidence                                                                                         | P0 native shape failures 해소 후 merged toolchain probe 재측정         |
+| `String` / `std.strings` surface     | 🟡 runtime-backed paths expanded; pure-body coverage는 계속 추적                     | previous `String.bytes()` / `String.chars()` walls are closed                                                                                   | pure Osty helper bodies and remaining ABI edge cases                   |
 
 ### Tier B — pkgmgr (`semver`, `manifest`, `registry`, `solve`, `pkgmgr`) 자가 컴파일 blocker
 
-| 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
-|---|---|---|---|
-| `String` payload enum (`PreText(String)`) | `semver.osty:5` | ✅ lowered — `SemPreIdent` 전 variant가 정상 lower. 회귀 커버 `TestGenerateResultQuestionExprEnumPayload` | Phase 54-63 완료 |
-| `Result<T, String>` ABI | semver_parse, manifest_validation | ✅ lowered — scalar / struct payload / tag+ptr payload enum 모두 `{i64 tag, T ok, E err}` 3필드 struct로 일관. 회귀 커버 `TestGenerateResultQuestionExpr{Int,Struct,EnumPayload}` | Phase 74 완료 |
-| `?` 전파 (Result) | `semver_parse.osty` 8곳 | ✅ lowered — `emitQuestionExprResult`가 Ok/Err 양쪽 브랜치를 phi+early-return으로 낮춤. struct/enum 페이로드 포함 전 shape가 회귀 테스트로 봉쇄 | Phase 74 완료 |
-| struct/enum 복합 payload (`Ok(SemVersion)`, `Ok(SemPreIdent)`) | semver_parse, manifest_validation | ✅ lowered — `insertvalue`/`extractvalue` + `<Type> zeroinitializer` 경로로 자동 처리. `TestGenerateResultQuestionExprStruct`로 회귀 봉쇄 | Phase 74 완료 |
-| List<String> + mutable-binding source-type tracking | `pkgmgr.osty:selfPkgRegistryYankRequest` 등 | ✅ lowered — StringLit / runtime concat / interpolated String / phi-merge가 sourceType을 `String`으로 유지해 list-literal emitter가 mixed-ptr false-positive를 내지 않음. 회귀 커버 `TestListLiteralMixedPtrStringSourceTracking` (이 PR), `TestStringLetMutInferredSourceType` / `TestStdStringsJoinNestedInListLiteral` (#438, #441) | (#438, 이 PR) |
+| 기능                                                           | 非-test 사용                                | 현재 상태                                                                                                                                                                                                                                                                                                                              | 관련 phase       |
+| -------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `String` payload enum (`PreText(String)`)                      | `semver.osty:5`                             | ✅ lowered — `SemPreIdent` 전 variant가 정상 lower. 회귀 커버 `TestGenerateResultQuestionExprEnumPayload`                                                                                                                                                                                                                              | Phase 54-63 완료 |
+| `Result<T, String>` ABI                                        | semver_parse, manifest_validation           | ✅ lowered — scalar / struct payload / tag+ptr payload enum 모두 `{i64 tag, T ok, E err}` 3필드 struct로 일관. 회귀 커버 `TestGenerateResultQuestionExpr{Int,Struct,EnumPayload}`                                                                                                                                                      | Phase 74 완료    |
+| `?` 전파 (Result)                                              | `semver_parse.osty` 8곳                     | ✅ lowered — `emitQuestionExprResult`가 Ok/Err 양쪽 브랜치를 phi+early-return으로 낮춤. struct/enum 페이로드 포함 전 shape가 회귀 테스트로 봉쇄                                                                                                                                                                                        | Phase 74 완료    |
+| struct/enum 복합 payload (`Ok(SemVersion)`, `Ok(SemPreIdent)`) | semver_parse, manifest_validation           | ✅ lowered — `insertvalue`/`extractvalue` + `<Type> zeroinitializer` 경로로 자동 처리. `TestGenerateResultQuestionExprStruct`로 회귀 봉쇄                                                                                                                                                                                              | Phase 74 완료    |
+| List<String> + mutable-binding source-type tracking            | `pkgmgr.osty:selfPkgRegistryYankRequest` 등 | ✅ lowered — StringLit / runtime concat / interpolated String / phi-merge가 sourceType을 `String`으로 유지해 list-literal emitter가 mixed-ptr false-positive를 내지 않음. 회귀 커버 `TestListLiteralMixedPtrStringSourceTracking` (이 PR), `TestStringLetMutInferredSourceType` / `TestStdStringsJoinNestedInListLiteral` (#438, #441) | (#438, 이 PR)    |
 
 ### 非-blocker (당초 Tier B 오판 항목)
 
-| 기능 | 非-test 사용 | 이유 |
-|---|---|---|
-| `defer` | 0건 | 核/pkgmgr 모두 쓰지 않음. AST formatter/lexer test에만 문자열로 등장. 구현 우선순위 최저. |
-| multi-field payload enum (`Node.BinOp(lhs, op, rhs)` 패턴) | 0건 | [core.osty](toolchain/core.osty:38), [ir.osty](toolchain/ir.osty:1)가 **arena + kind discriminator** 설계를 채택해 페이로드 enum 회피. `CoreNode` 단일 struct + flat `CoreKind` enum으로 모든 AST/IR 노드 표현. |
-| 재귀 페이로드 enum | 0건 | 위와 같은 이유로 회피됨. arena index(`CoreIdx = Int`)로 recursion 구현. |
+| 기능                                                       | 非-test 사용 | 이유                                                                                                                                                                                                            |
+| ---------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defer`                                                    | 0건          | 核/pkgmgr 모두 쓰지 않음. AST formatter/lexer test에만 문자열로 등장. 구현 우선순위 최저.                                                                                                                       |
+| multi-field payload enum (`Node.BinOp(lhs, op, rhs)` 패턴) | 0건          | [core.osty](toolchain/core.osty:38), [ir.osty](toolchain/ir.osty:1)가 **arena + kind discriminator** 설계를 채택해 페이로드 enum 회피. `CoreNode` 단일 struct + flat `CoreKind` enum으로 모든 AST/IR 노드 표현. |
+| 재귀 페이로드 enum                                         | 0건          | 위와 같은 이유로 회피됨. arena index(`CoreIdx = Int`)로 recursion 구현.                                                                                                                                         |
 
 당초 CLAUDE.md 부록 A의 canonical 예시(Rust-like `Node.IntLit(val)` 페이로드 enum)를
 실제 구현으로 착각한 plan은 이 섹션으로 교정한다. arena+kind 설계는
@@ -342,8 +342,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     interface를 `%osty.iface`로 반환, `emitLet`의 concrete→interface
     경로에서 boxing (alloca + insertvalue 2회), `emitInterfaceMethodCall`
     이 수신자가 `%osty.iface`인 call을 vtable extractvalue + getelementptr
-    + indirect call로 낮춘다.
-    smoke: `TestGenerateModuleInterfaceBoxingDispatch`.
+    - indirect call로 낮춘다.
+      smoke: `TestGenerateModuleInterfaceBoxingDispatch`.
   - Phase 6c(interface method의 non-self 인자): `methodDecl.Params`의
     user-facing 파라미터를 `llvmType`으로 개별 lower하고 `emitExpr`로
     argument value를 만들어 indirect call에 `ptr %data, <argTyp> %arg…`
@@ -451,24 +451,24 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 
 ## 타입/값 lowering 초안
 
-| Osty | LLVM 표현 초안 | 비고 |
-|---|---|---|
-| `Int` | target word 또는 고정 `i64` 중 결정 필요 | 현재 Go `int` 의미와 cross-target 안정성 중 선택 |
-| `Int8..UInt64` | `i8..i64` | signedness는 operation에서 표현 |
-| `Bool` | `i1` in SSA, ABI는 `i8` 가능 | runtime ABI에서 고정 |
-| `Char` | `i32` | Unicode scalar value |
-| `Byte` | `i8` | `UInt8`과 alias 여부 명시 필요 |
-| `Float/Float32/Float64` | `double/float/double` | `Float`는 현재 단계에서 `double` 하위집합으로 다루고, `Float32`/`Float64` 정책은 후속 단계 |
-| `String` | `%osty.string` | pointer+len 또는 fat value |
-| `Bytes` | `%osty.bytes` | pointer+len+cap 또는 runtime-owned buffer |
-| `List<T>` | `%osty.list` + element descriptor | monomorphized typed list와 erased list 중 선택 |
-| `Option<T>` | tagged payload | nullable pointer optimization은 후순위 |
-| `Result<T,E>` | tagged payload | Go backend의 `Value/Error/IsOk`와 semantic parity |
-| `struct` | named LLVM struct | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work |
-| `enum` | `i64` tag for bare variants, `%Enum = { i64, i64 }` for single-`Int` payload subset, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; Phase 42-45 adds conservative single-`Int` tagged payload; broader payload layouts are later |
-| `match` | enum-tag switch/branch lowering | Phase 38-41 covers payload-free match expressions; Phase 42-45 adds `match` binding for single-`Int` payload enums |
-| closure | fn pointer + env pointer | capture lifetime/ownership 필요 |
-| interface | data pointer + vtable pointer | vtable generation은 Phase 5+ |
+| Osty                    | LLVM 표현 초안                                                                                                    | 비고                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Int`                   | target word 또는 고정 `i64` 중 결정 필요                                                                          | 현재 Go `int` 의미와 cross-target 안정성 중 선택                                                                                                    |
+| `Int8..UInt64`          | `i8..i64`                                                                                                         | signedness는 operation에서 표현                                                                                                                     |
+| `Bool`                  | `i1` in SSA, ABI는 `i8` 가능                                                                                      | runtime ABI에서 고정                                                                                                                                |
+| `Char`                  | `i32`                                                                                                             | Unicode scalar value                                                                                                                                |
+| `Byte`                  | `i8`                                                                                                              | `UInt8`과 alias 여부 명시 필요                                                                                                                      |
+| `Float/Float32/Float64` | `double/float/double`                                                                                             | `Float`는 현재 단계에서 `double` 하위집합으로 다루고, `Float32`/`Float64` 정책은 후속 단계                                                          |
+| `String`                | `%osty.string`                                                                                                    | pointer+len 또는 fat value                                                                                                                          |
+| `Bytes`                 | `%osty.bytes`                                                                                                     | pointer+len+cap 또는 runtime-owned buffer                                                                                                           |
+| `List<T>`               | `%osty.list` + element descriptor                                                                                 | monomorphized typed list와 erased list 중 선택                                                                                                      |
+| `Option<T>`             | tagged payload                                                                                                    | nullable pointer optimization은 후순위                                                                                                              |
+| `Result<T,E>`           | tagged payload                                                                                                    | Go backend의 `Value/Error/IsOk`와 semantic parity                                                                                                   |
+| `struct`                | named LLVM struct                                                                                                 | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work                                                      |
+| `enum`                  | `i64` tag for bare variants, `%Enum = { i64, i64 }` for single-`Int` payload subset, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; Phase 42-45 adds conservative single-`Int` tagged payload; broader payload layouts are later |
+| `match`                 | enum-tag switch/branch lowering                                                                                   | Phase 38-41 covers payload-free match expressions; Phase 42-45 adds `match` binding for single-`Int` payload enums                                  |
+| closure                 | fn pointer + env pointer                                                                                          | capture lifetime/ownership 필요                                                                                                                     |
+| interface               | data pointer + vtable pointer                                                                                     | vtable generation은 Phase 5+                                                                                                                        |
 
 ### Phase 38-41. Payload-free enum match expressions
 
@@ -573,7 +573,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - `string_payload_mut_print.osty`를 추가해 mutable local `Text("payload string")`
   업데이트와 `Text(s)`/`Empty` 분기를 검증한다.
 - `string_payload_reversed_match_print.osty`를 추가해 `Empty -> ...`, `Text(s) ->
-  ...` 순서의 two-arm match를 검증한다.
+...` 순서의 two-arm match를 검증한다.
 - `string_payload_wildcard_print.osty`를 추가해 `Text(_)` 와일드카드 match arm을
   검증한다.
 - `LLVM_BACKEND_CORPUS.md`에 Phase 54~63 항목을 추가하고 expected stdout과
@@ -722,8 +722,8 @@ match 분해)를 추가한다.
 
 ### 1개 bootstrap-only 파일
 
-| 파일 | FFI | 역할 | native 대체 경로 |
-|---|---|---|---|
+| 파일                | FFI                          | 역할                                                    | native 대체 경로                                                                                                                                               |
+| ------------------- | ---------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `toolchain/ci.osty` | `use runtime.cihost as host` | CI 드라이버 (format/lint/snapshot/manifest 호스트 호출) | 실제 호스트 I/O(FS/process)라 `std.strings`로 접힐 수 없음. `runtime.cabi.<lib>` 또는 새 `runtime.ci.*` 서페이스 정의 + `osty_rt_ci_*` 런타임 ABI 추가 후 포팅 |
 
 ### 분류 규칙
@@ -767,17 +767,17 @@ astbridge는 한 방에 제거하지 않고 `*ast.File` 소비자들이 AstArena
 
 CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패키지 + workspace** happy path 에서 완료됐다. `--legacy` check/typecheck escape hatch 는 제거됐고, `--native` 는 no-op 으로만 남았다. in-process 회귀 테스트는 native/default 경로가 `astLowerPublicFile` 호출을 트리거하지 않는지 `selfhost.AstbridgeLowerCount` 로 pin 한다.
 
-| CLI 경로 | Warm astbridge bumps | 회귀 테스트 |
-|---|---|---|
-| `osty resolve FILE` (기본 native) | 0 | `TestRunResolveFileHappyPathIsAstbridgeFree` |
-| `osty resolve DIR` (기본 native) | 0 | `TestRunResolvePackageHappyPathIsAstbridgeFree` |
-| `osty check --native FILE` | 0 | `TestRunCheckFileNativeIsAstbridgeFree` |
-| `osty check --native DIR` | 0 | `TestRunCheckPackageNativeIsAstbridgeFree` |
-| `osty check --native WORKSPACE` | 0 | `TestRunCheckWorkspaceNativeIsAstbridgeFree` |
-| `osty check FILE` (default) | 0 | `TestRunCheckFileDefaultPathIsAstbridgeFree` |
-| `osty typecheck --native FILE` | 0 | `TestRunTypecheckFileNativeIsAstbridgeFree` |
-| `osty typecheck --native DIR` | 0 | `TestRunTypecheckPackageNativeIsAstbridgeFree` |
-| `osty typecheck --native WORKSPACE` | 0 | `TestRunTypecheckWorkspaceNativeIsAstbridgeFree` |
+| CLI 경로                            | Warm astbridge bumps | 회귀 테스트                                      |
+| ----------------------------------- | -------------------- | ------------------------------------------------ |
+| `osty resolve FILE` (기본 native)   | 0                    | `TestRunResolveFileHappyPathIsAstbridgeFree`     |
+| `osty resolve DIR` (기본 native)    | 0                    | `TestRunResolvePackageHappyPathIsAstbridgeFree`  |
+| `osty check --native FILE`          | 0                    | `TestRunCheckFileNativeIsAstbridgeFree`          |
+| `osty check --native DIR`           | 0                    | `TestRunCheckPackageNativeIsAstbridgeFree`       |
+| `osty check --native WORKSPACE`     | 0                    | `TestRunCheckWorkspaceNativeIsAstbridgeFree`     |
+| `osty check FILE` (default)         | 0                    | `TestRunCheckFileDefaultPathIsAstbridgeFree`     |
+| `osty typecheck --native FILE`      | 0                    | `TestRunTypecheckFileNativeIsAstbridgeFree`      |
+| `osty typecheck --native DIR`       | 0                    | `TestRunTypecheckPackageNativeIsAstbridgeFree`   |
+| `osty typecheck --native WORKSPACE` | 0                    | `TestRunTypecheckWorkspaceNativeIsAstbridgeFree` |
 
 이 회귀 넷은 네이티브 경로 비용 누출을 잡는다. 예: fallback이 `EnsureFiles`를 부당하게 발동해 astbridge bump 가 생기면 즉시 실패한다.
 
@@ -793,9 +793,9 @@ CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패�
 **남아있는 작업**:
 
 1. **~~Workspace `--native`~~** — ✅ 완료. `selfhostPackageCheckInput` + `selfhostPackageImportSurfaces` 전부 `selfhost.PackageImportSurface(alias, runs)` (arena-direct) 로 포팅됨. `internal/selfhost/import_surface_arena.go` 가 arena walker를 hold. `PackageCheckFile.File *ast.File` / `SourceMap` 필드 + `selfhostBuildPackageAstDirect` / `selfhostPackageFileLowerer` (구 `package_ast_lower.go` ~1850 LOC) 동시 제거. `CheckPackageStructured` / `ResolvePackageStructured` 가 단일 re-parse path 로 단순화.
-2. **`osty lint` AstArena 포팅** — lint engine이 `*resolve.Result`의 포인터 아이덴티티 맵(`Refs map[*ast.Ident]*Symbol`)에 깊이 의존. identity 모델 재설계 선행.
+2. **~~`osty lint` AstArena 포팅~~** — ✅ 완료. lint engine은 이미 `selfhost.LintDiagnostics(src)` 경로로 완전 포팅됨. `File()` / `Package()` 모두 `*ast.File`, `*resolve.Result`, `*check.Result`를 무시하고 raw source만 사용. lint 패키지 내에 ast.File 필드 접근 없음.
 3. **LSP / formatter / bootstrap-gen** — 모두 `*ast.File` 포인터 기반. 각자의 identity 모델 포팅 필요.
-4. **ABI 경로** — `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 완전 제거는 위 2·3 소비자들이 AstArena 경로로 전환된 후.
+4. **ABI 경로** — `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 완전 제거는 위 3 소비자들이 AstArena 경로로 전환된 후.
 
 **중요한 설계 결정 (PR #641)**: native 경로에서 empty 결과를 신호로 Go fallback을 발동시키면 안 된다. "native가 빈 결과를 반환 = 성공적으로 ref 없음 확인"이지 "native가 실패함"이 아니다. fallback은 실제 에러 때만 트리거해야 한다. 이 규칙은 `runResolvePackageInner`의 `nativeErrored` 플래그로 현재 구현됨.
 
@@ -830,15 +830,15 @@ CLAUDE.md 호스트 경계 규칙상 `use go`는 특별 허가 영역(`cmd/*`, I
 
 ## 리스크와 대응
 
-| 리스크 | 영향 | 대응 |
-|---|---|---|
-| IR가 backend 계약으로 부족함 | LLVM backend가 AST/checker에 다시 결합 | Phase 2에서 IR gap을 먼저 닫고 `llvmgen` dependency를 제한 |
-| Runtime ABI가 늦게 정해짐 | helper가 backend별로 갈라짐 | Phase 4 전에 string/list/result 최소 ABI부터 문서화 |
-| Go FFI와 native FFI 의미 차이 | 사용자 코드가 backend별로 다르게 동작 | Go FFI는 backend capability로 진단하고 native FFI를 별도 설계 |
-| target triple/profile 모델 충돌 | cross compile UX 혼란 | Go target과 LLVM target을 manifest에서 분리하거나 명시 mapping |
-| source mapping 품질 저하 | LLVM 에러 디버깅 어려움 | 초기부터 source anchor를 IR/LLVM에 싣고 CLI report를 backend-neutral화 |
-| stdlib porting 범위 과대 | migration이 끝나지 않음 | module별 support matrix와 staged parity gate 운영 |
-| CI 시간이 증가 | PR feedback 저하 | LLVM job은 smoke부터 시작하고 full parity는 nightly/manual로 분리 |
+| 리스크                          | 영향                                   | 대응                                                                   |
+| ------------------------------- | -------------------------------------- | ---------------------------------------------------------------------- |
+| IR가 backend 계약으로 부족함    | LLVM backend가 AST/checker에 다시 결합 | Phase 2에서 IR gap을 먼저 닫고 `llvmgen` dependency를 제한             |
+| Runtime ABI가 늦게 정해짐       | helper가 backend별로 갈라짐            | Phase 4 전에 string/list/result 최소 ABI부터 문서화                    |
+| Go FFI와 native FFI 의미 차이   | 사용자 코드가 backend별로 다르게 동작  | Go FFI는 backend capability로 진단하고 native FFI를 별도 설계          |
+| target triple/profile 모델 충돌 | cross compile UX 혼란                  | Go target과 LLVM target을 manifest에서 분리하거나 명시 mapping         |
+| source mapping 품질 저하        | LLVM 에러 디버깅 어려움                | 초기부터 source anchor를 IR/LLVM에 싣고 CLI report를 backend-neutral화 |
+| stdlib porting 범위 과대        | migration이 끝나지 않음                | module별 support matrix와 staged parity gate 운영                      |
+| CI 시간이 증가                  | PR feedback 저하                       | LLVM job은 smoke부터 시작하고 full parity는 nightly/manual로 분리      |
 
 ## 의사결정이 필요한 항목
 

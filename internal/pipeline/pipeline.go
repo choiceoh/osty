@@ -548,7 +548,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- lint ---
 	t0 = time.Now()
-	lr := lint.File(file, src, res, chk)
+	lr := lint.Source(src)
 	r.Lint = lr
 	r.AllDiags = append(r.AllDiags, lr.Diags...)
 	emit(Stage{
@@ -725,14 +725,7 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	t0 = time.Now()
 	var lintDiags []*diag.Diagnostic
 	for _, pf := range pkg.Files {
-		fileRes := &resolve.Result{
-			RefsByID:      pf.RefsByID,
-			TypeRefsByID:  pf.TypeRefsByID,
-			RefIdents:     pf.RefIdents,
-			TypeRefIdents: pf.TypeRefIdents,
-			FileScope:     pf.FileScope,
-		}
-		lr := lint.File(pf.File, pf.Source, fileRes, chk)
+		lr := lint.Source(pf.Source)
 		lintDiags = append(lintDiags, lr.Diags...)
 	}
 	r.AllDiags = append(r.AllDiags, lintDiags...)
@@ -949,14 +942,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 			continue
 		}
 		for _, pf := range pkg.Files {
-			fileRes := &resolve.Result{
-				RefsByID:      pf.RefsByID,
-				TypeRefsByID:  pf.TypeRefsByID,
-				RefIdents:     pf.RefIdents,
-				TypeRefIdents: pf.TypeRefIdents,
-				FileScope:     pf.FileScope,
-			}
-			lr := lint.File(pf.File, pf.Source, fileRes, cr)
+			lr := lint.Source(pf.Source)
 			lintDiags = append(lintDiags, lr.Diags...)
 		}
 	}

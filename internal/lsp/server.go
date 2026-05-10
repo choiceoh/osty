@@ -495,7 +495,7 @@ func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
 	lspMaterializeNativePackageFiles(pkg)
 	pr := resolve.ResolvePackage(pkg, s.prelude)
 	chk := check.Package(pkg, pr, lspCheckOpts(nil))
-	lr := lint.Package(pkg, pr, chk)
+	lr := lint.Package(pkg)
 	a := analysisForFileInPackage(pkg, pr, chk, lr, path, src)
 	if a != nil {
 		a.packages = []*resolve.Package{pkg}
@@ -757,7 +757,7 @@ func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAn
 	// for the diagnostics we publish to the editor, and linting every
 	// package on every keystroke is too expensive.
 	pr := rw.ResultByDir(dir)
-	lr := lint.Package(pkg, pr, chk)
+	lr := lint.Package(pkg)
 
 	allDiags := collectDiagsForFile(pkg, pr, chk, lr, pf)
 
@@ -817,7 +817,7 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 				// the diagnostics we publish to the editor, and
 				// linting every package in the workspace on every
 				// keystroke is too expensive.
-				lr := lint.Package(pkg, resolved[pkgPath], checks[pkgPath])
+				lr := lint.Package(pkg)
 				a := analysisForFileInPackage(
 					pkg,
 					resolved[pkgPath],

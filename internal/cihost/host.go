@@ -282,7 +282,7 @@ func CheckLint(m *manifest.Manifest, packages []*resolve.Package, results []*res
 			pr = resolve.ResolvePackageDefault(pkg)
 		}
 		chk := check.Package(pkg, pr, opts)
-		lr := lint.Package(pkg, pr, chk)
+		lr := lint.Package(pkg)
 		if cfg != nil {
 			lr = cfg.Apply(lr)
 		}

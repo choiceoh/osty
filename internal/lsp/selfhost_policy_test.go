@@ -32,7 +32,7 @@ func TestCompletionItemUsesSelfHostedPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			got := completionItemFromSym(tt.label, &resolve.Symbol{Kind: tt.kind}, nil)
+			got := completionItemFromSym(tt.label, &resolve.Symbol{Kind: tt.kind}, nil, "")
 			if got.Kind != tt.wantKind {
 				t.Fatalf("kind = %d, want %d", got.Kind, tt.wantKind)
 			}
@@ -359,7 +359,7 @@ func TestSignatureTypeParsingUsesSelfHostedPolicy(t *testing.T) {
 }
 
 func TestHoverMarkdownWrapsSelfHostedPolicy(t *testing.T) {
-	view := hoverSymbolView(&resolve.Symbol{Name: "User", Kind: resolve.SymStruct}, "", nil)
+	view := hoverSymbolView(&resolve.Symbol{Name: "User", Kind: resolve.SymStruct}, "", nil, "")
 	if !view.HasSym || view.Kind != "struct" || view.Name != "User" {
 		t.Fatalf("view = %+v", view)
 	}
@@ -368,7 +368,7 @@ func TestHoverMarkdownWrapsSelfHostedPolicy(t *testing.T) {
 		t.Fatalf("hover markdown = %q, want %q", got, want)
 	}
 
-	fallback := selfhost.LSPHoverMarkdown(hoverSymbolView(nil, "raw", nil))
+	fallback := selfhost.LSPHoverMarkdown(hoverSymbolView(nil, "raw", nil, ""))
 	if want := "```osty\nraw\n```"; fallback != want {
 		t.Fatalf("fallback markdown = %q, want %q", fallback, want)
 	}
