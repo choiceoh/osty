@@ -11116,6 +11116,30 @@ func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 // intrinsics (string_byte_len, list_len, etc.) by delegating to
 // classifyIntrinsicValueStep for the latter.
 func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
+	// IntrinsicStringConcat: delegate to the while-loop emitter so
+	// stack-backed string accumulators (e.g. `let mut out = ""; for ...
+	// { out = "{out}{f(x)}" }`) get a `load` for `out` rather than
+	// having the `osty_rt_strings_Concat` runtime call see the slot
+	// pointer raw. The shared sequential classifier
+	// (`classifyStringConcatIntrinsic`) routes through
+	// `resolveOperandWithPrelude` → `resolveOperand`, which does not
+	// load from `isStack` bindings, so it would emit
+	// `call  @osty_rt_strings_Concat(ptr %out.slot, ptr %lower)` —
+	// missing return type AND passing the slot pointer. The
+	// while-loop variant (`emitWhileStringConcatIntrinsic`) uses
+	// `stringConcatWhileArg` → `resolveOperandWithLoad` and emits
+	// the call line directly with a literal `ptr` return type.
+	if ii.Dest != nil && !ii.Dest.HasProjections() && ii.Kind == mir.IntrinsicStringConcat {
+		destLocal := lookupLocal(ctx.fn, ii.Dest.Local)
+		if destLocal == nil {
+			return false
+		}
+		destType := ctx.mctx.scalarFromType(destLocal.Type, true)
+		if destType == scalarUnknown {
+			return false
+		}
+		return emitWhileStringConcatIntrinsic(ctx, out, ii, ii.Dest.Local, destType)
+	}
 	// Value-returning intrinsic: delegate to the shared sequential classifier,
 	// then bind the result in the while-loop context.
 	if ii.Dest != nil {
