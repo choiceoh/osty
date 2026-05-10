@@ -29113,3 +29113,137 @@ void *osty_rt_keychain_delete(const char *service, const char *account) {
     return osty_rt_keychain_unavailable_error("runtime.keychain.delete.unavailable");
 #endif
 }
+
+/* ============================================================
+ * runtime.cihost stubs — host-only Go bridges
+ *
+ * The \`toolchain/ci.osty\` module calls into \`runtime.cihost\`
+ * functions that only exist in the Go host layer.  When osty-self
+ * is compiled to a native binary those symbols are undefined.
+ * These stubs satisfy the linker.  They are never executed on the
+ * self-host paths (ci.osty is dead code in the osty-self binary),
+ * so every stub returns a safe zero value.
+ * ============================================================ */
+
+#if defined(__GNUC__) || defined(__clang__)
+
+static void *runtime_cihost_empty_string(void) {
+    return osty_rt_string_dup_site("", 0, "runtime.cihost.stub");
+}
+
+static void *runtime_cihost_empty_list(void) {
+    return osty_rt_list_new();
+}
+
+/* --- Bool returning --- */
+bool runtime_cihost_KeepAlive(void) __asm__("runtime.cihost.KeepAlive");
+bool runtime_cihost_KeepAlive(void) { return false; }
+
+bool runtime_cihost_HasManifest(void *manifest) __asm__("runtime.cihost.HasManifest");
+bool runtime_cihost_HasManifest(void *manifest) { (void)manifest; return false; }
+
+bool runtime_cihost_HasWorkspace(void *manifest) __asm__("runtime.cihost.HasWorkspace");
+bool runtime_cihost_HasWorkspace(void *manifest) { (void)manifest; return false; }
+
+bool runtime_cihost_HasDependencies(void *manifest) __asm__("runtime.cihost.HasDependencies");
+bool runtime_cihost_HasDependencies(void *manifest) { (void)manifest; return false; }
+
+/* --- ptr returning, no args --- */
+void *runtime_cihost_NowUTC(void) __asm__("runtime.cihost.NowUTC");
+void *runtime_cihost_NowUTC(void) { return NULL; }
+
+void *runtime_cihost_EmptyDiagnostics(void) __asm__("runtime.cihost.EmptyDiagnostics");
+void *runtime_cihost_EmptyDiagnostics(void) { return runtime_cihost_empty_list(); }
+
+void *runtime_cihost_EmptyPackages(void) __asm__("runtime.cihost.EmptyPackages");
+void *runtime_cihost_EmptyPackages(void) { return runtime_cihost_empty_list(); }
+
+void *runtime_cihost_EmptyPackageResults(void) __asm__("runtime.cihost.EmptyPackageResults");
+void *runtime_cihost_EmptyPackageResults(void) { return runtime_cihost_empty_list(); }
+
+/* --- ptr returning, ptr args --- */
+void *runtime_cihost_DiagnosticSeverity(void *d) __asm__("runtime.cihost.DiagnosticSeverity");
+void *runtime_cihost_DiagnosticSeverity(void *d) { (void)d; return runtime_cihost_empty_string(); }
+
+void *runtime_cihost_Synthetic(void *severity, void *code, void *msg) __asm__("runtime.cihost.Synthetic");
+void *runtime_cihost_Synthetic(void *severity, void *code, void *msg) {
+    (void)severity; (void)code; (void)msg; return NULL;
+}
+
+void *runtime_cihost_LoadRunnerState(void *root, void *manifest) __asm__("runtime.cihost.LoadRunnerState");
+void *runtime_cihost_LoadRunnerState(void *root, void *manifest) {
+    (void)root; (void)manifest; return NULL;
+}
+
+void *runtime_cihost_OstyFiles(void *root, void *packages) __asm__("runtime.cihost.OstyFiles");
+void *runtime_cihost_OstyFiles(void *root, void *packages) {
+    (void)root; (void)packages; return runtime_cihost_empty_list();
+}
+
+void *runtime_cihost_CheckFormat(void *root, void *files) __asm__("runtime.cihost.CheckFormat");
+void *runtime_cihost_CheckFormat(void *root, void *files) {
+    (void)root; (void)files; return NULL;
+}
+
+void *runtime_cihost_CheckLint(void *manifest, void *packages, void *results) __asm__("runtime.cihost.CheckLint");
+void *runtime_cihost_CheckLint(void *manifest, void *packages, void *results) {
+    (void)manifest; (void)packages; (void)results; return NULL;
+}
+
+void *runtime_cihost_ManifestCoreOf(void *manifest) __asm__("runtime.cihost.ManifestCoreOf");
+void *runtime_cihost_ManifestCoreOf(void *manifest) { (void)manifest; return NULL; }
+
+void *runtime_cihost_WorkspaceMembers(void *manifest) __asm__("runtime.cihost.WorkspaceMembers");
+void *runtime_cihost_WorkspaceMembers(void *manifest) { (void)manifest; return runtime_cihost_empty_list(); }
+
+void *runtime_cihost_DependencyCoreRows(void *manifest) __asm__("runtime.cihost.DependencyCoreRows");
+void *runtime_cihost_DependencyCoreRows(void *manifest) { (void)manifest; return runtime_cihost_empty_list(); }
+
+void *runtime_cihost_CheckWorkspaceMemberPaths(void *root, void *members) __asm__("runtime.cihost.CheckWorkspaceMemberPaths");
+void *runtime_cihost_CheckWorkspaceMemberPaths(void *root, void *members) {
+    (void)root; (void)members; return runtime_cihost_empty_list();
+}
+
+void *runtime_cihost_CheckLockfile(void *root, void *manifest) __asm__("runtime.cihost.CheckLockfile");
+void *runtime_cihost_CheckLockfile(void *root, void *manifest) {
+    (void)root; (void)manifest; return NULL;
+}
+
+void *runtime_cihost_CheckReleaseLockfile(void *root, void *manifest) __asm__("runtime.cihost.CheckReleaseLockfile");
+void *runtime_cihost_CheckReleaseLockfile(void *root, void *manifest) {
+    (void)root; (void)manifest; return runtime_cihost_empty_list();
+}
+
+void *runtime_cihost_ReadSnapshotHost(void *path) __asm__("runtime.cihost.ReadSnapshotHost");
+void *runtime_cihost_ReadSnapshotHost(void *path) { (void)path; return NULL; }
+
+void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) __asm__("runtime.cihost.WriteSnapshotHost");
+void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) {
+    (void)path; (void)snapshot; return runtime_cihost_empty_string();
+}
+
+void *runtime_cihost_NewSingleSnapshotHost(void *pkg, void *version, void *edition) __asm__("runtime.cihost.NewSingleSnapshotHost");
+void *runtime_cihost_NewSingleSnapshotHost(void *pkg, void *version, void *edition) {
+    (void)pkg; (void)version; (void)edition; return NULL;
+}
+
+void *runtime_cihost_NewWorkspaceSnapshotHost(void *packages, void *version, void *edition) __asm__("runtime.cihost.NewWorkspaceSnapshotHost");
+void *runtime_cihost_NewWorkspaceSnapshotHost(void *packages, void *version, void *edition) {
+    (void)packages; (void)version; (void)edition; return NULL;
+}
+
+void *runtime_cihost_CapturePackageHost(void *pkg) __asm__("runtime.cihost.CapturePackageHost");
+void *runtime_cihost_CapturePackageHost(void *pkg) { (void)pkg; return runtime_cihost_empty_list(); }
+
+void *runtime_cihost_CompareSnapshots(void *baseline, void *current) __asm__("runtime.cihost.CompareSnapshots");
+void *runtime_cihost_CompareSnapshots(void *baseline, void *current) {
+    (void)baseline; (void)current; return NULL;
+}
+
+/* --- Int arg --- */
+void *runtime_cihost_CheckPolicyFileSizes(void *root, void *files, int64_t maxFileBytes) __asm__("runtime.cihost.CheckPolicyFileSizes");
+void *runtime_cihost_CheckPolicyFileSizes(void *root, void *files, int64_t maxFileBytes) {
+    (void)root; (void)files; (void)maxFileBytes; return runtime_cihost_empty_list();
+}
+
+#endif /* defined(__GNUC__) || defined(__clang__) */
