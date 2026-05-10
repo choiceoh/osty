@@ -4191,10 +4191,33 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	bs.emit(&StorageLiveInstr{Local: scrutLocal, SpanV: ife.SpanV})
 	bs.lowerExprInto(scrut, scrutLocal, scrutT)
 
-	vp, ok := ife.Pattern.(*ir.VariantPat)
-	if !ok {
+	// Dispatch based on pattern kind.
+	switch p := ife.Pattern.(type) {
+	case *ir.VariantPat:
+		bs.lowerIfLetVariant(ife, dest, destT, scrutLocal, scrutT, p)
+		bs.popScope()
+		return
+	case *ir.WildPat, *ir.IdentPat, *ir.TuplePat, *ir.StructPat, *ir.BindingPat:
+		// Irrefutable patterns always match — execute the then branch
+		// and bind the pattern against the scrutinee local.
+		bs.bindPattern(ife.Pattern, Place{Local: scrutLocal}, scrutT, ife.SpanV)
+		bs.pushScope()
+		bs.pushDeferScope()
+		for _, s := range ife.Then.Stmts {
+			bs.lowerStmt(s)
+		}
+		if ife.Then.Result != nil {
+			bs.lowerExprIntoPlace(ife.Then.Result, dest, destT)
+		}
+		bs.replayTopFrame(ife.Then.SpanV)
+		bs.popDeferScope()
+		bs.popScope()
+		bs.popScope()
+		return
+	default:
+		// Refutable patterns (LitPat, RangePat, OrPat) not yet supported
+		// for if-let. Fall back to the else branch.
 		bs.l.noteIssue("if-let with non-variant pattern not lowered to MIR: %T", ife.Pattern)
-		// Always take the else branch to stay conservative.
 		if ife.Else != nil {
 			bs.pushScope()
 			bs.pushDeferScope()
@@ -4211,6 +4234,11 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 		bs.popScope()
 		return
 	}
+}
+
+// lowerIfLetVariant handles the VariantPat case for if-let: emit a
+// discriminant check, branch to then/else, and bind payload elements.
+func (bs *bodyState) lowerIfLetVariant(ife *ir.IfLetExpr, dest Place, destT Type, scrutLocal LocalID, scrutT Type, vp *ir.VariantPat) {
 	varIdx := bs.l.variantIndexByName(scrutT, vp.Variant)
 	disc := bs.freshTemp(TInt, ife.SpanV)
 	bs.emit(&AssignInstr{
@@ -4264,7 +4292,6 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
 	bs.cur = merge
-	bs.popScope()
 }
 
 // lowerMatchExprIntoPlace routes through the generic matcher.
