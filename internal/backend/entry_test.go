@@ -88,3 +88,142 @@ func TestLowerEntryMIRAcceptsIfLetIrrefutable(t *testing.T) {
 		t.Fatal("entry.MIR is nil after lowering")
 	}
 }
+
+// TestLowerEntryMIRAcceptsIfLetLitPat tests that if-let with a LitPat
+// lowers correctly: compare scrutinee == literal, then branch accordingly.
+func TestLowerEntryMIRAcceptsIfLetLitPat(t *testing.T) {
+	ifLet := &ir.IfLetExpr{
+		Pattern:   &ir.LitPat{Value: &ir.IntLit{Text: "42", T: ir.TInt}},
+		Scrutinee: &ir.IntLit{Text: "42", T: ir.TInt},
+		Then: &ir.Block{
+			Stmts: []ir.Stmt{},
+			Result: &ir.IntLit{Text: "1", T: ir.TInt},
+		},
+		Else: &ir.Block{
+			Result: &ir.IntLit{Text: "0", T: ir.TInt},
+		},
+		T:     ir.TInt,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TInt,
+				Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: ifLet}}},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil")
+	}
+}
+
+// TestLowerEntryMIRAcceptsIfLetRangePat tests that if-let with a RangePat
+// lowers correctly: emit range bound checks.
+func TestLowerEntryMIRAcceptsIfLetRangePat(t *testing.T) {
+	ifLet := &ir.IfLetExpr{
+		Pattern: &ir.RangePat{
+			Low:       &ir.IntLit{Text: "0", T: ir.TInt},
+			High:      &ir.IntLit{Text: "10", T: ir.TInt},
+			Inclusive: true,
+		},
+		Scrutinee: &ir.IntLit{Text: "5", T: ir.TInt},
+		Then: &ir.Block{
+			Result: &ir.IntLit{Text: "1", T: ir.TInt},
+		},
+		Else: &ir.Block{
+			Result: &ir.IntLit{Text: "0", T: ir.TInt},
+		},
+		T:     ir.TInt,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TInt,
+				Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: ifLet}}},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil")
+	}
+}
+
+// TestLowerEntryMIRAcceptsIfLetOrPat tests that if-let with an OrPat
+// lowers correctly: test each literal alternative in sequence.
+func TestLowerEntryMIRAcceptsIfLetOrPat(t *testing.T) {
+	ifLet := &ir.IfLetExpr{
+		Pattern: &ir.OrPat{
+			Alts: []ir.Pattern{
+				&ir.LitPat{Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+				&ir.LitPat{Value: &ir.IntLit{Text: "2", T: ir.TInt}},
+			},
+		},
+		Scrutinee: &ir.IntLit{Text: "2", T: ir.TInt},
+		Then: &ir.Block{
+			Result: &ir.IntLit{Text: "1", T: ir.TInt},
+		},
+		Else: &ir.Block{
+			Result: &ir.IntLit{Text: "0", T: ir.TInt},
+		},
+		T:     ir.TInt,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TInt,
+				Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: ifLet}}},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil")
+	}
+}
