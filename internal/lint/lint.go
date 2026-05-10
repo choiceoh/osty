@@ -9,8 +9,6 @@
 package lint
 
 import (
-	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
@@ -30,13 +28,6 @@ func Source(src []byte) *Result {
 	return result
 }
 
-// File runs the self-hosted lint pass over one source file. The AST / resolve /
-// check inputs are retained for compatibility with older front-end call sites,
-// but lint no longer treats the public Go AST as an authority input.
-func File(_ *ast.File, src []byte, _ *resolve.Result, _ *check.Result) *Result {
-	return Source(src)
-}
-
 // mergeSelfhostLint appends diagnostics from the Osty-authored lint pass
 // (toolchain/lint.osty). #[allow(...)] suppression is handled inside the
 // self-hosted pass; project-level allow/deny config is applied by Config.Apply.
@@ -53,9 +44,7 @@ func mergeSelfhostLint(result *Result, src []byte) {
 }
 
 // Package runs lint over every file in pkg as one analysis unit.
-func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result) *Result {
-	_ = pr
-	_ = chk
+func Package(pkg *resolve.Package) *Result {
 	if pkg == nil {
 		return &Result{}
 	}

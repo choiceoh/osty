@@ -60,7 +60,7 @@ func TestLintPackageNativeDiagnosticsIsAstbridgeFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lintNativePackageDiagnostics: %v", err)
 	}
-	lintDiags := lint.Package(pkg, nil, nil).Diags
+	lintDiags := lint.Package(pkg).Diags
 	if hasError(append(frontendDiags, lintDiags...)) {
 		t.Fatalf("clean package produced diagnostics: frontend=%#v lint=%#v", frontendDiags, lintDiags)
 	}

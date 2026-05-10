@@ -94,7 +94,7 @@ func runLintLoadedPackage(
 	cfg lint.Config,
 	hasCfg bool,
 ) lintPackageOutcome {
-	lr := lint.Package(pkg, nil, nil)
+	lr := lint.Package(pkg)
 	if hasCfg {
 		lr = cfg.Apply(lr)
 	}
