@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -67,10 +68,35 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		count int
 	}
 	tally := map[string]int{}
+	emitBrokenTally := map[string]int{}
+	emitBrokenSamples := map[string]string{} // first sample per fingerprint
+	emitBrokenFunctions := []string{}        // names that emitted but clang rejected
 	totalFns := 0
 	covered := 0
+	emitBroken := 0
 	skipped := 0
 	filterFn := os.Getenv("OSTY_STAGE0_AUDIT_FN")
+	clangVerify := stage0AuditClangVerifyEnabled()
+	clangPath := ""
+	clangTmpDir := ""
+	if clangVerify {
+		if p, err := exec.LookPath("clang"); err == nil {
+			clangPath = p
+		} else {
+			t.Logf("OSTY_STAGE0_AUDIT_CLANG_VERIFY=1 set but clang not found in PATH (%v); skipping IR validation", err)
+			clangVerify = false
+		}
+		if clangVerify {
+			tmp, err := os.MkdirTemp("", "stage0-audit-clang-*")
+			if err != nil {
+				t.Logf("OSTY_STAGE0_AUDIT_CLANG_VERIFY=1 set but TempDir failed (%v); skipping IR validation", err)
+				clangVerify = false
+			} else {
+				clangTmpDir = tmp
+				defer os.RemoveAll(clangTmpDir)
+			}
+		}
+	}
 	for _, fn := range entry.MIR.Functions {
 		if fn == nil || fn.IsExternal || fn.IsIntrinsic {
 			continue
@@ -90,8 +116,20 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		totalFns++
 		oneFn := *entry.MIR
 		oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
-		_, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"})
+		irBytes, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"})
 		if err == nil {
+			if clangVerify {
+				if reason := runStage0AuditClangVerify(clangPath, clangTmpDir, fn.Name, irBytes); reason != "" {
+					emitBroken++
+					key := normalizeClangDiagnostic(reason)
+					emitBrokenTally[key]++
+					if _, seen := emitBrokenSamples[key]; !seen {
+						emitBrokenSamples[key] = reason
+					}
+					emitBrokenFunctions = append(emitBrokenFunctions, fn.Name)
+					continue
+				}
+			}
 			covered++
 			continue
 		}
@@ -103,8 +141,47 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	}
 	t.Logf("(skipped %d functions whose front-end MIR is UnreachableTerm-only)", skipped)
 
-	t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%)",
-		covered, totalFns, 100.0*float64(covered)/float64(totalFns))
+	if clangVerify {
+		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%) — %d emit-broken (clang rejected)",
+			covered, totalFns, 100.0*float64(covered)/float64(totalFns), emitBroken)
+		if emitBroken > 0 {
+			emitBuckets := make([]bucket, 0, len(emitBrokenTally))
+			for k, v := range emitBrokenTally {
+				emitBuckets = append(emitBuckets, bucket{k, v})
+			}
+			sort.Slice(emitBuckets, func(i, j int) bool {
+				if emitBuckets[i].count != emitBuckets[j].count {
+					return emitBuckets[i].count > emitBuckets[j].count
+				}
+				return emitBuckets[i].key < emitBuckets[j].key
+			})
+			t.Logf("emit-broken clang diagnostics (top 10):")
+			for i, b := range emitBuckets {
+				if i >= 10 {
+					break
+				}
+				t.Logf("  %4d  %s", b.count, b.key)
+				if sample := emitBrokenSamples[b.key]; sample != "" && sample != b.key {
+					// Show one verbatim sample so the bucket is debuggable.
+					trimmed := strings.TrimSpace(sample)
+					if len(trimmed) > 400 {
+						trimmed = trimmed[:400] + "…"
+					}
+					t.Logf("       sample: %s", trimmed)
+				}
+			}
+			if len(emitBrokenFunctions) > 0 {
+				limit := 20
+				if len(emitBrokenFunctions) < limit {
+					limit = len(emitBrokenFunctions)
+				}
+				t.Logf("emit-broken function names (first %d): %s", limit, strings.Join(emitBrokenFunctions[:limit], ", "))
+			}
+		}
+	} else {
+		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%)",
+			covered, totalFns, 100.0*float64(covered)/float64(totalFns))
+	}
 
 	buckets := make([]bucket, 0, len(tally))
 	for k, v := range tally {
@@ -445,3 +522,120 @@ func syntheticEmptyMain() *mir.Function {
 
 // fmt-import side import (kept so this file compiles when only using mir).
 var _ = fmt.Sprintf
+
+// stage0AuditClangVerifyEnabled reports whether the audit should run
+// each per-function emitted IR through `clang -c` to catch malformed
+// LLVM IR that the audit-time matchers miss (e.g. `use of undefined
+// value`, `expected type`, dropped instructions). Default: off, since
+// it adds ~200ms per function (≈10 min for a 3000-fn toolchain).
+func stage0AuditClangVerifyEnabled() bool {
+	switch strings.TrimSpace(os.Getenv("OSTY_STAGE0_AUDIT_CLANG_VERIFY")) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// runStage0AuditClangVerify writes the emitted IR to a per-function
+// .ll file under tmpDir and runs `clang -c -o /dev/null <file>`.
+// Returns "" on success or the captured stderr (truncated) when
+// clang rejects the IR.
+//
+// We deliberately use `-c` (compile-only, no linking) so the audit
+// catches IR-level bugs (malformed SSA, missing types) without
+// dragging in runtime libraries. The synthetic `main` keeps stage0's
+// `module has no main` guard happy; clang doesn't care about
+// `main`'s body for a `-c` invocation.
+func runStage0AuditClangVerify(clangPath, tmpDir, fnName string, ir []byte) string {
+	if clangPath == "" || tmpDir == "" {
+		return ""
+	}
+	// Sanitize filename — function names contain characters legal in
+	// LLVM IR but illegal as filenames on some hosts.
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '_', r == '-', r == '.':
+			return r
+		}
+		return '_'
+	}, fnName)
+	if safe == "" {
+		safe = "fn"
+	}
+	llPath := filepath.Join(tmpDir, safe+".ll")
+	if err := os.WriteFile(llPath, ir, 0o600); err != nil {
+		return fmt.Sprintf("write IR file: %v", err)
+	}
+	defer os.Remove(llPath)
+	cmd := exec.Command(clangPath, "-c", "-o", os.DevNull, llPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return ""
+	}
+	combined := strings.TrimSpace(string(out))
+	if combined == "" {
+		combined = err.Error()
+	}
+	return combined
+}
+
+// normalizeClangDiagnostic collapses per-call-site clang error
+// messages into a stable bucket key so the audit histogram can group
+// like-shaped failures. Strips file paths, line/column numbers, and
+// per-symbol identifiers; keeps the diagnostic kind ("use of undefined
+// value", "expected type", "instruction expected to be numbered",
+// etc.).
+func normalizeClangDiagnostic(diag string) string {
+	for _, line := range strings.Split(diag, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "command:") {
+			continue
+		}
+		// Lines look like: "<file>:<line>:<col>: error: <msg>"
+		if idx := strings.Index(line, "error: "); idx >= 0 {
+			msg := strings.TrimSpace(line[idx+len("error: "):])
+			// Drop quoted identifiers / numbers so similar shapes
+			// share a bucket. e.g. "'%11'" → "'<id>'".
+			normalized := normalizeClangDiagIdentifiers(msg)
+			return normalized
+		}
+		if strings.HasPrefix(line, "error: ") {
+			return normalizeClangDiagIdentifiers(strings.TrimSpace(line[len("error: "):]))
+		}
+	}
+	// Fallback: first non-empty line.
+	for _, line := range strings.Split(diag, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return normalizeClangDiagIdentifiers(line)
+		}
+	}
+	return "(empty)"
+}
+
+func normalizeClangDiagIdentifiers(msg string) string {
+	// '%11' / '%foo' → '<id>'
+	var b strings.Builder
+	i := 0
+	for i < len(msg) {
+		c := msg[i]
+		if c == '\'' {
+			// Find matching close quote.
+			j := i + 1
+			for j < len(msg) && msg[j] != '\'' {
+				j++
+			}
+			if j < len(msg) {
+				b.WriteString("'<id>'")
+				i = j + 1
+				continue
+			}
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
