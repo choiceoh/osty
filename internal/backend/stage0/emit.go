@@ -15071,12 +15071,39 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 		}
 		out.WriteString(") {\n")
 	}
+	// LLVM rule: the FIRST basic block in a function may not have
+	// predecessors. When the source MIR's entry block is the target
+	// of a backedge (`br label %entry` from a loop body), emitting it
+	// as the LLVM `entry:` block fails the IR verifier with
+	// `error: invalid LLVM IR input: Entry block to function must not
+	// have predecessors!`.
+	//
+	// Fix: emit a synthetic `stage0.prelude:` block FIRST that holds
+	// the function's allocas and unconditionally branches to the
+	// original entry. LLVM treats whatever appears first as the entry,
+	// so `stage0.prelude` becomes the actual entry; the user's
+	// `entry:` block is now a regular block that's allowed to have
+	// predecessors. Pre-rendered `pat.blockBodies` keeps `br label
+	// %entry` references intact (no renaming required).
+	//
+	// (This re-applies the cluster-2 fix from PR #1594, which was
+	// lost in a subsequent emit-restructuring commit. Surfaced again
+	// once the 8-commit fix chain in this PR cleared the parse-level
+	// errors and let LLVM's IR verifier run on the toolchain module.)
+	splitEntry := genericEntryHasPredecessors(fn)
+	if splitEntry {
+		out.WriteString("stage0.prelude:\n")
+		for _, sd := range pat.stackDecls {
+			fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+		}
+		fmt.Fprintf(out, "  br label %%%s\n\n", genericBlockLabel(fn, fn.Entry))
+	}
 	for i, id := range pat.blockOrder {
 		if i > 0 {
 			out.WriteString("\n")
 		}
 		fmt.Fprintf(out, "%s:\n", genericBlockLabel(fn, id))
-		if id == fn.Entry {
+		if id == fn.Entry && !splitEntry {
 			for _, sd := range pat.stackDecls {
 				fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
 			}
@@ -15085,6 +15112,33 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 	}
 	out.WriteString("}\n\n")
 	return nil
+}
+
+// genericEntryHasPredecessors reports whether any block in fn
+// branches (Goto, Branch.Then, Branch.Else) to the function's entry
+// block. LLVM's IR validator rejects functions whose first basic
+// block has predecessors; this predicate guards `emitGenericScalarCFG`
+// into the synthetic-prelude form when needed.
+func genericEntryHasPredecessors(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		switch t := bb.Term.(type) {
+		case *mir.GotoTerm:
+			if t.Target == fn.Entry {
+				return true
+			}
+		case *mir.BranchTerm:
+			if t.Then == fn.Entry || t.Else == fn.Entry {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func genericBlockLabel(fn *mir.Function, id mir.BlockID) string {
