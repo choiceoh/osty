@@ -92,3 +92,33 @@ func growInts(p *[]int, n int) []int {
 	}
 	return s
 }
+
+func suggestFromList(name string, candidates []string) string {
+	best := ""
+	bestDist := 3
+	nameLen := len(name)
+	var buf1, buf2 []int
+	for _, candidate := range candidates {
+		diff := len(candidate) - nameLen
+		if diff > bestDist-1 || -diff > bestDist-1 {
+			continue
+		}
+		dist := levenshteinBounded(name, candidate, bestDist, &buf1, &buf2)
+		if dist < bestDist {
+			best = candidate
+			bestDist = dist
+			if bestDist == 1 {
+				return best
+			}
+		}
+	}
+	return best
+}
+
+func didYouMeanHintFromList(name string, candidates []string) string {
+	suggestion := suggestFromList(name, candidates)
+	if suggestion == "" {
+		return ""
+	}
+	return "did you mean `" + suggestion + "`?"
+}

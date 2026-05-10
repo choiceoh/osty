@@ -2206,7 +2206,11 @@ fn srCheckCfgArg(file: AstFile, argIdx: Int, result: SelfResolveResult) -> SelfR
     if view.key == "os" || view.key == "arch" || view.key == "target" || view.key == "feature" {
         return out
     }
-    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0405", "unknown cfg key `" + view.key + "`", "cfg", view.start, view.end, -1, "v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`"))
+    let mut hint = srDidYouMeanHint(view.key, srCfgKeys())
+    if hint == "" {
+        hint = "v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`"
+    }
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0405", "unknown cfg key `" + view.key + "`", "cfg", view.start, view.end, -1, hint))
     out
 }
 /// srCfgDeclPasses decides whether a decl survives the `#[cfg(...)]`
@@ -2795,6 +2799,9 @@ fn srJSONArgKeys() -> List<String> {
 }
 fn srDeprecatedArgKeys() -> List<String> {
     ["since", "use", "message"]
+}
+fn srCfgKeys() -> List<String> {
+    ["os", "target", "arch", "feature"]
 }
 /// srSuggestFromList finds the closest candidate (Levenshtein distance
 /// < 3) from a fixed list. Returns "" if nothing is within reach. This
