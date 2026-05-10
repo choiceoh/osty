@@ -322,6 +322,16 @@ fn recoverElseBranch() {
 }
 // === END
 
+// === CASE: E0204 === malformed match arm body recovers to the next arm
+fn recoverMatchArm(x: Int) {
+    match x {
+        0 ->
+        _ -> 1,
+    }
+    let z = 2
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

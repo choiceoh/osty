@@ -126,3 +126,51 @@ fn f() {
 		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", letStmt.Pattern)
 	}
 }
+
+func TestParseMatchRecoveryPreservesNextArmAndTrailingStmt(t *testing.T) {
+	src := []byte(`fn f(x: Int) {
+    match x {
+        0 ->
+        _ -> 1,
+    }
+    let z = 2
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want exactly one recovery diagnostic", result.Diagnostics)
+	}
+	if got := result.Diagnostics[0].Code; got != "E0204" {
+		t.Fatalf("first diagnostic code = %q, want E0204", got)
+	}
+	if result.File == nil || len(result.File.Decls) != 1 {
+		t.Fatalf("parsed file = %#v, want single function declaration", result.File)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 2 {
+		t.Fatalf("decl[0] = %#v, want function with match expr and trailing let", result.File.Decls[0])
+	}
+	stmt, ok := fn.Body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want expression statement", fn.Body.Stmts[0])
+	}
+	match, ok := stmt.X.(*ast.MatchExpr)
+	if !ok || len(match.Arms) != 2 {
+		t.Fatalf("stmt[0].X = %#v, want match expression with two arms", stmt.X)
+	}
+	if match.Arms[0].Body != nil {
+		t.Fatalf("arm[0].Body = %#v, want nil body placeholder after recovery", match.Arms[0].Body)
+	}
+	if lit, ok := match.Arms[1].Body.(*ast.IntLit); !ok || lit.Text != "1" {
+		t.Fatalf("arm[1].Body = %#v, want preserved second arm body `1`", match.Arms[1].Body)
+	}
+	letStmt, ok := fn.Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("stmt[1] = %#v, want trailing let statement", fn.Body.Stmts[1])
+	}
+	pat, ok := letStmt.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("stmt[1] pattern = %#v, want let z = 2", letStmt.Pattern)
+	}
+}
