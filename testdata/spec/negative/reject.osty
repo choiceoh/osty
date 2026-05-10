@@ -452,6 +452,44 @@ fn recoverLabeledBreakValue() {
 }
 // === END
 
+// === CASE: E0204 === malformed continue suffix recovers to the next statement
+fn recoverContinueSuffix() {
+    for i in 0..10 {
+        continue +
+        let z = 2
+    }
+}
+// === END
+
+// === CASE: E0204 === malformed labeled continue suffix recovers to the next statement
+fn recoverLabeledContinueSuffix() {
+    'outer: for i in 0..10 {
+        continue 'outer +
+        let z = 2
+    }
+}
+// === END
+
+// === CASE: E0204 === malformed deferred block body recovers to the next statement
+fn recoverDeferBlock() {
+    defer {
+        let x =
+    }
+    let z = 2
+}
+// === END
+
+// === CASE: E0204 === malformed if-let scrutinee recovers before `else`
+fn recoverIfLetElse() {
+    if let value = + {
+        1
+    } else {
+        2
+    }
+    let z = 2
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
