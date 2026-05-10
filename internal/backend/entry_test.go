@@ -46,3 +46,45 @@ func TestLowerEntryMIRAcceptsRangeLitValuePosition(t *testing.T) {
 		t.Fatal("entry.MIR is nil after lowering")
 	}
 }
+
+// TestLowerEntryMIRAcceptsIfLetIrrefutable tests that if-let with an
+// irrefutable pattern (IdentPat, TuplePat, StructPat) lowers without
+// emitting MIR coverage issues.
+func TestLowerEntryMIRAcceptsIfLetIrrefutable(t *testing.T) {
+	// if-let with an IdentPat: always matches.
+	ifLetIdent := &ir.IfLetExpr{
+		Pattern:   &ir.IdentPat{Name: "x"},
+		Scrutinee: &ir.IntLit{Text: "42", T: ir.TInt},
+		Then: &ir.Block{
+			Result: &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt},
+		},
+		T:     ir.TInt,
+		SpanV: ir.Span{Start: ir.Pos{Line: 1, Column: 1, Offset: 0}, End: ir.Pos{Line: 1, Column: 20, Offset: 19}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TInt,
+				Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: ifLetIdent}}},
+			},
+		},
+	}
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
+	if err != nil {
+		t.Fatalf("LowerEntryMIR: %v", err)
+	}
+	if len(entry.MIRIssues) > 0 {
+		for _, iss := range entry.MIRIssues {
+			t.Errorf("unexpected MIR issue: %s", iss.Error())
+		}
+	}
+	if entry.MIR == nil {
+		t.Fatal("entry.MIR is nil after lowering")
+	}
+}
