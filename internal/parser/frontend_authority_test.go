@@ -77,6 +77,120 @@ fn update(value: String?) {
 	}
 }
 
+// --- Follow-on recovery parity tests ---
+// Keep these tests in the same axis/ordinal order as the follow-on
+// recovery diagnostics matrix in `testdata/spec/negative/reject.osty`.
+
+// Axis A — newline-else fallout.
+
+func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
+	src := []byte(`fn rfA1ElseNewlinePrimary() -> Int {
+    if rfA1Cond() {
+        1
+    }
+    else {
+        2
+    }
+}
+fn rfA1Cond() -> Bool { false }
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 3 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want three follow-on diagnostics", result.Diagnostics)
+	}
+	want := map[string]bool{"E0105": false, "E0204": false, "E0100": false}
+	for _, d := range result.Diagnostics {
+		if _, ok := want[d.Code]; ok {
+			want[d.Code] = true
+		}
+	}
+	for code, seen := range want {
+		if !seen {
+			t.Fatalf("diagnostics = %#v, want code %s", result.Diagnostics, code)
+		}
+	}
+	if result.File == nil || len(result.File.Decls) != 2 {
+		t.Fatalf("parsed file = %#v, want primary fn plus preserved helper fn", result.File)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("decl[0] = %#v, want primary fn with one recovered if stmt", result.File.Decls[0])
+	}
+	stmt, ok := fn.Body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want expression statement", fn.Body.Stmts[0])
+	}
+	ifExpr, ok := stmt.X.(*ast.IfExpr)
+	if !ok || ifExpr.Else != nil {
+		t.Fatalf("stmt[0].X = %#v, want if expr with nil else after follow-on recovery", stmt.X)
+	}
+	helper, ok := result.File.Decls[1].(*ast.FnDecl)
+	if !ok || helper.Name != "rfA1Cond" {
+		t.Fatalf("decl[1] = %#v, want preserved helper fn rfA1Cond", result.File.Decls[1])
+	}
+}
+
+// Axis B — declaration-layer fallout after expression recovery.
+
+func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
+	src := []byte(`fn rfB1MatchAssignTopLevelDecl(x: Int) {
+    match x {
+        0 -> out.path =
+        _ -> 1,
+    }
+    let z = 2
+}
+`)
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) != 5 {
+		t.Fatalf("ParseDetailed diagnostics = %#v, want five follow-on diagnostics", result.Diagnostics)
+	}
+	hasE0100 := false
+	hasArmRecovery := false
+	for _, d := range result.Diagnostics {
+		if d.Code == "E0100" {
+			hasE0100 = true
+		}
+		if d.Code == "E0204" && d.Message == "expected match arm body before `->`" {
+			hasArmRecovery = true
+		}
+	}
+	if !hasE0100 || !hasArmRecovery {
+		t.Fatalf("diagnostics = %#v, want E0100 plus match-arm follow-on recovery", result.Diagnostics)
+	}
+	if result.File == nil || len(result.File.Decls) != 1 {
+		t.Fatalf("parsed file = %#v, want one damaged function decl", result.File)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok || fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("decl[0] = %#v, want one recovered match stmt in fn body", result.File.Decls[0])
+	}
+	stmt, ok := fn.Body.Stmts[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("stmt[0] = %#v, want expression statement", fn.Body.Stmts[0])
+	}
+	match, ok := stmt.X.(*ast.MatchExpr)
+	if !ok || len(match.Arms) != 2 {
+		t.Fatalf("stmt[0].X = %#v, want recovered match with two damaged arms", stmt.X)
+	}
+	if match.Arms[0].Body != nil || match.Arms[1].Body != nil {
+		t.Fatalf("match arms = %#v, want both arm bodies nil after declaration-layer drift", match.Arms)
+	}
+	if len(result.File.Stmts) != 1 {
+		t.Fatalf("top-level stmts = %#v, want trailing let to drift to file scope", result.File.Stmts)
+	}
+	topLet, ok := result.File.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("file stmt[0] = %#v, want top-level let z after fallout", result.File.Stmts[0])
+	}
+	pat, ok := topLet.Pattern.(*ast.IdentPat)
+	if !ok || pat.Name != "z" {
+		t.Fatalf("file stmt[0] pattern = %#v, want let z = 2", topLet.Pattern)
+	}
+}
+
 // --- Recovery matrix parity tests ---
 // Axis parity rule with `testdata/spec/negative/reject.osty`:
 //   - axis letters and their order must match the corpus sections
