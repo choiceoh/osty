@@ -1357,11 +1357,16 @@ func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 	}
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := mctx.freshTempName("stderr")
+		// fprintf returns i32; capture into a named SSA so its result
+		// doesn't consume an anonymous slot (cluster-1 SSA collision).
+		fprintfDiscard := mctx.freshTempName("discard")
 		return prelude +
 			fmt.Sprintf("  %s = load ptr, ptr @stderr\n", stderrReg) +
-			fmt.Sprintf("  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr), true
+			fmt.Sprintf("  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", fprintfDiscard, stderrReg, fmtGlobal, argTy, expr), true
 	}
-	return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr), true
+	// printf returns i32 — same SSA-capture pattern.
+	printfDiscard := mctx.freshTempName("discard")
+	return prelude + fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", printfDiscard, fmtGlobal, argTy, expr), true
 }
 
 func printFormatFor(kind mir.IntrinsicKind, ty scalarType) (string, string, bool) {
@@ -2589,6 +2594,7 @@ func classifyStringConcatIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, des
 			prelude:    prelude.String(),
 			callSymbol: "osty_rt_strings_Concat",
 			callArgs:   args,
+			resultType: destType,
 		}, destID, destType, true
 	}
 	return pendingInstr{
@@ -7906,11 +7912,13 @@ func emitWhilePrintIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 	}
 	if isStderrPrintIntrinsic(ii.Kind) {
 		stderrReg := ctx.mctx.freshTempName("stderr")
+		fprintfDiscard := ctx.mctx.freshTempName("discard")
 		fmt.Fprintf(out, "  %s = load ptr, ptr @stderr\n", stderrReg)
-		fmt.Fprintf(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr)
+		fmt.Fprintf(out, "  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", fprintfDiscard, stderrReg, fmtGlobal, argTy, expr)
 		return true
 	}
-	fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr)
+	printfDiscard := ctx.mctx.freshTempName("discard")
+	fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", printfDiscard, fmtGlobal, argTy, expr)
 	return true
 }
 
@@ -11121,10 +11129,12 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		}
 		switch ty {
 		case scalarInt:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
+			printfDiscard := ctx.mctx.freshTempName("discard")
+			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", printfDiscard, expr)
 			return true
 		case scalarString:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
+			printfDiscard := ctx.mctx.freshTempName("discard")
+			fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", printfDiscard, expr)
 			return true
 		}
 		return false
