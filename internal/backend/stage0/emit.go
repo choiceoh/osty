@@ -7376,6 +7376,11 @@ type whileLoopEmitCtx struct {
 	mctx       *moduleCtx
 	nextSSA    *int
 	aggregates map[mir.LocalID]aggregateBinding
+
+	// aggRetSRet is true when the function uses sret for aggregate
+	// return. In this mode, the return local is a ptr sret slot and
+	// AggregateRV writes go through the enum/struct aggregate emitter.
+	aggRetSRet bool
 }
 
 // emitWhileBlock walks an entry / body block and returns the rendered
@@ -8524,6 +8529,27 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 	if isUnitType(destLocal.Type) {
 		return true
 	}
+
+	// Aggregate return local: dest is an opaque-ptr sret slot.
+	// Handle AggregateRV writes by emitting the aggregate value
+	// and storing it to the sret pointer.
+	if ctx.aggRetSRet && destID == ctx.fn.ReturnLocal {
+		sd, ok := ctx.stack[destID]
+		if !ok || sd.ty != scalarOpaquePtr {
+			return false
+		}
+		agg, ok := ai.Src.(*mir.AggregateRV)
+		if !ok {
+			return false
+		}
+		expr, ty, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		fmt.Fprintf(out, "  store ptr %s, ptr %%%s\n", expr, sd.name)
+		return true
+	}
+
 	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
 	if destType == scalarUnknown {
 		return false
@@ -8827,6 +8853,21 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 	}
 	left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
 	if !ok || leftTy != operandType {
+		// Byte → Int promotion: if both operands are byte and result is int,
+		// extend both to i64 then perform the int operation.
+		if ok && leftTy == scalarByte && operandType == scalarInt && destType == scalarInt {
+			right, rightTy, okR := resolveOperandWithLoad(ctx, out, bin.Right)
+			if !okR || rightTy != scalarByte {
+				return "", scalarUnknown, false
+			}
+			extLeft := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = zext i8 %s to i64\n", extLeft, left)
+			extRight := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = zext i8 %s to i64\n", extRight, right)
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = %s i64 %s, %s\n", reg, llvmOp, extLeft, extRight)
+			return reg, scalarInt, true
+		}
 		if ok && leftTy == scalarFloat && operandType == scalarInt {
 			llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
 			if llvmOp2 == "" || resultType2 != destType {
@@ -9193,6 +9234,32 @@ func emitWhileResultAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder,
 	payloadTy, okTy, errTy, payloadIndex, ok := resultVariantPayloadScalar(agg.T, agg.VariantIdx, ctx.mctx)
 	if !ok {
 		return "", scalarUnknown, false
+	}
+	// Unit Ok variant: no payload fields.
+	if len(agg.Fields) == 0 && agg.VariantIdx == 0 {
+		okTy2, _, ok2 := resultPayloadScalars(agg.T, ctx.mctx)
+		if !ok2 {
+			return "", scalarUnknown, false
+		}
+		// Check that Ok type is unit.
+		if named, ok := agg.T.(*ir.NamedType); ok && len(named.Args) >= 1 && !isUnitType(named.Args[0]) {
+			return "", scalarUnknown, false
+		}
+		typeName, ok := ctx.mctx.emitResultBoxDef(okTy2, errTy)
+		if !ok {
+			return "", scalarUnknown, false
+		}
+		sizePtr := freshReg(ctx)
+		size := freshReg(ctx)
+		obj := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+		fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+		declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+		fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+		tagSlot := ctx.mctx.freshTempName("result.tag.slot")
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+		fmt.Fprintf(out, "  store i64 0, ptr %s\n", tagSlot)
+		return obj, scalarOpaquePtr, true
 	}
 	if len(agg.Fields) != 1 {
 		return "", scalarUnknown, false
@@ -12087,7 +12154,9 @@ func operandIsFnConst(op mir.Operand) bool {
 // (typeName, fieldTypes) pair when the type is an aggregate stage0
 // can lower. Struct types use the source name and emit their type
 // definition through emitStructDef; tuple types use a synthetic
-// `.tuple.<N>` id allocated by mctx.internTupleType.
+// `.tuple.<N>` id allocated by mctx.internTupleType; payloadful
+// enum types use a synthetic struct with discriminant + all variant
+// payload fields.
 func classifyAggregateReturnType(retT mir.Type, mctx *moduleCtx) (string, []scalarType, bool) {
 	switch t := retT.(type) {
 	case *ir.NamedType:
@@ -12095,11 +12164,16 @@ func classifyAggregateReturnType(retT mir.Type, mctx *moduleCtx) (string, []scal
 			return "", nil, false
 		}
 		fields, ok := mctx.lookupStructFields(t.Name)
-		if !ok {
-			return "", nil, false
+		if ok {
+			mctx.emitStructDef(t.Name, fields)
+			return t.Name, fields, true
 		}
-		mctx.emitStructDef(t.Name, fields)
-		return t.Name, fields, true
+		// Not a struct — try enum layout.
+		if efields, ok := classifyEnumReturnTypeFromLayout(t.Name, mctx); ok {
+			return t.Name, efields, true
+		}
+		// Builtin enum (Result/Option) — synthesize from type args.
+		return classifyBuiltinEnumReturnTypeFromNamed(t, mctx)
 	case *ir.TupleType:
 		if t == nil {
 			return "", nil, false
@@ -12114,6 +12188,65 @@ func classifyAggregateReturnType(retT mir.Type, mctx *moduleCtx) (string, []scal
 		}
 		name := mctx.internTupleType(fields)
 		return name, fields, true
+	}
+	return "", nil, false
+}
+
+// classifyEnumReturnTypeFromLayout looks up the enum in Layouts.Enums
+// and builds a synthetic struct layout from its variant payloads.
+func classifyEnumReturnTypeFromLayout(name string, mctx *moduleCtx) ([]scalarType, bool) {
+	if mctx == nil || mctx.module == nil || mctx.module.Layouts == nil {
+		return nil, false
+	}
+	layout := mctx.module.Layouts.Enums[name]
+	if layout == nil || len(layout.Variants) == 0 {
+		return nil, false
+	}
+	fields := []scalarType{scalarInt} // discriminant
+	for _, v := range layout.Variants {
+		for _, pf := range v.Payload {
+			st := mctx.scalarFromType(pf.Type, true)
+			if st == scalarUnknown {
+				return nil, false
+			}
+			fields = append(fields, st)
+		}
+	}
+	mctx.emitStructDef(name, fields)
+	return fields, true
+}
+
+// classifyBuiltinEnumReturnTypeFromNamed synthesizes aggregate return
+// types for builtin enums (Result, Option) from the NamedType's type
+// arguments.
+func classifyBuiltinEnumReturnTypeFromNamed(t *ir.NamedType, mctx *moduleCtx) (string, []scalarType, bool) {
+	if t == nil || t.Name == "" {
+		return "", nil, false
+	}
+	switch t.Name {
+	case "Result":
+		if len(t.Args) < 2 {
+			return "", nil, false
+		}
+		okST := mctx.scalarFromType(t.Args[0], true)
+		errST := mctx.scalarFromType(t.Args[1], true)
+		if okST == scalarUnknown || errST == scalarUnknown {
+			return "", nil, false
+		}
+		fields := []scalarType{scalarInt, okST, errST}
+		mctx.emitStructDef(t.Name, fields)
+		return t.Name, fields, true
+	case "Option":
+		if len(t.Args) < 1 {
+			return "", nil, false
+		}
+		innerST := mctx.scalarFromType(t.Args[0], true)
+		if innerST == scalarUnknown {
+			return "", nil, false
+		}
+		fields := []scalarType{scalarInt, innerST}
+		mctx.emitStructDef(t.Name, fields)
+		return t.Name, fields, true
 	}
 	return "", nil, false
 }
@@ -12573,6 +12706,14 @@ type genericCFGPattern struct {
 	syntheticIntrinsicReturns map[mir.BlockID]*mir.IntrinsicInstr
 	syntheticCallReturns      map[mir.BlockID]*mir.CallInstr
 	syntheticXReturns         map[mir.BlockID]PayloadType
+
+	// aggRetTypeName and aggRetFieldTypes are set when the function's
+	// return type is an aggregate (enum/struct/tuple) that stage0 can
+	// lower via sret. The function signature becomes
+	//   define void @fn(%struct.Name* sret(%struct.Name), ...)
+	// and each block returns void.
+	aggRetTypeName   string
+	aggRetFieldTypes []scalarType
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
@@ -12584,7 +12725,15 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	if !pat.returnsVoid {
 		pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 		if pat.retType == scalarUnknown {
-			return pat, false
+			// Check if the return type is an aggregate (enum/struct/tuple)
+			// that we can handle via sret.
+			typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
+			if !ok {
+				return pat, false
+			}
+			pat.aggRetTypeName = typeName
+			pat.aggRetFieldTypes = fieldTypes
+			pat.returnsVoid = true // sret functions return void
 		}
 	}
 	if len(fn.Blocks) == 1 && !genericSingleBlockHasExtendedSurface(fn, fn.Blocks[0]) {
@@ -12623,6 +12772,11 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if tupleTy, ok := l.Type.(*ir.TupleType); ok && tupleTy != nil && genericTupleLocalIsAggregateOnly(fn, l.ID) {
 				continue
 			}
+			// Aggregate return local: skip scalar stack allocation;
+			// the sret path handles it through the aggregates map.
+			if pat.aggRetTypeName != "" && l.ID == fn.ReturnLocal {
+				continue
+			}
 			if !genericLocalUsedOutsideUnreachableBlocks(fn, l.ID) {
 				continue
 			}
@@ -12654,6 +12808,15 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		mctx:       mctx,
 		nextSSA:    &nextSSA,
 		aggregates: map[mir.LocalID]aggregateBinding{},
+	}
+	// Aggregate return: the return local is an sret destination.
+	// Bind it as an opaque-ptr stack slot so emitWhileAssign can write
+	// the aggregate value via the sret pointer.
+	if pat.aggRetTypeName != "" {
+		sretName := "sret.result"
+		ctx.stack[fn.ReturnLocal] = stackDecl{id: fn.ReturnLocal, name: sretName, ty: scalarOpaquePtr}
+		ctx.bindings[fn.ReturnLocal] = localBinding{expr: "%" + sretName, ty: scalarOpaquePtr, defined: true, isStack: true}
+		ctx.aggRetSRet = true
 	}
 
 	blocks := genericBlockOrder(fn)
@@ -14496,14 +14659,24 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 	if !pat.returnsVoid {
 		retLLVM = pat.retType.llvm()
 	}
-	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
-	for i, name := range pat.paramNames {
-		if i > 0 {
-			out.WriteString(", ")
+
+	if pat.aggRetTypeName != "" {
+		// Aggregate return: emit sret parameter.
+		fmt.Fprintf(out, "define void @%s(ptr sret(%%%s) %%sret.result", fn.Name, pat.aggRetTypeName)
+		for i, name := range pat.paramNames {
+			fmt.Fprintf(out, ", %s %%%s", pat.paramTypes[i].llvm(), name)
 		}
-		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+		out.WriteString(") {\n")
+	} else {
+		fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+		for i, name := range pat.paramNames {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+		}
+		out.WriteString(") {\n")
 	}
-	out.WriteString(") {\n")
 	for i, id := range pat.blockOrder {
 		if i > 0 {
 			out.WriteString("\n")

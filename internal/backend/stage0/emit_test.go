@@ -6683,3 +6683,75 @@ func TestStage0ListAllDeclinesSkipsAggregationOnCleanModule(t *testing.T) {
 		t.Fatalf("expected normal main emission with env var on:\n%s", got)
 	}
 }
+
+
+func TestStage0GenericCFGResultEnumReturn(t *testing.T) {
+	t.Parallel()
+	resultIntString := &ir.NamedType{Name: "Result", Builtin: true, Args: []ir.Type{ir.TInt, ir.TString}}
+	fn := &mir.Function{
+		Name:        "hexDigit",
+		ReturnType:  resultIntString,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: resultIntString, IsReturn: true},
+			{ID: 1, Name: "x", Type: ir.TInt, IsParam: true},
+			{ID: 2, Type: ir.TBool},
+			{ID: 3, Type: ir.TBool},
+			{ID: 4, Name: "n", Type: ir.TInt},
+		},
+		Params: []mir.LocalID{1},
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(3, binaryRV(mir.BinGeq, paramCopy(1, ir.TInt), intConst(0), ir.TBool)),
+				},
+				Term: &mir.BranchTerm{Then: 1, Else: 2, Cond: localCopy(3, ir.TBool)},
+			},
+			{
+				ID: 1,
+				Instrs: []mir.Instr{
+					assign(2, binaryRV(mir.BinLeq, paramCopy(1, ir.TInt), intConst(9), ir.TBool)),
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					assign(2, useRV(&mir.ConstOp{Const: &mir.BoolConst{}, T: ir.TBool})),
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID: 3,
+				Term: &mir.BranchTerm{Then: 4, Else: 5, Cond: localCopy(2, ir.TBool)},
+			},
+			{
+				ID: 4,
+				Instrs: []mir.Instr{
+					assign(4, binaryRV(mir.BinSub, paramCopy(1, ir.TInt), intConst(0), ir.TInt)),
+					assign(0, &mir.AggregateRV{Kind: mir.AggEnumVariant, VariantIdx: 0, Fields: []mir.Operand{localCopy(4, ir.TInt)}, T: resultIntString}),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+			{
+				ID: 5,
+				Instrs: []mir.Instr{
+					assign(0, &mir.AggregateRV{Kind: mir.AggEnumVariant, VariantIdx: 1, Fields: []mir.Operand{stringConst("err")}, T: resultIntString}),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define ptr @hexDigit(i64 %x)",
+		"osty_rt_stage0_alloc",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
