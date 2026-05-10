@@ -1117,7 +1117,10 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, symbol, setExpr, elemTy.llvm(), elemExpr), true
+		// Capture into a named SSA so the i1 result doesn't consume
+		// an anonymous slot — see renderDiscardValueCallLine.
+		discardReg := mctx.freshTempName("discard")
+		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, discardReg, symbol, setExpr, elemTy.llvm(), elemExpr), true
 	case mir.IntrinsicMapRemove:
 		if len(ii.Args) != 2 {
 			return "", false
@@ -1136,7 +1139,9 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		args := []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
-		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, symbol, mapExpr, keyTy.llvm(), keyExpr), true
+		// Same SSA-capture pattern as the SetRemove case above.
+		discardReg := mctx.freshTempName("discard")
+		return fmt.Sprintf("%s%s  %s = call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, discardReg, symbol, mapExpr, keyTy.llvm(), keyExpr), true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
 			return "", false
@@ -7709,7 +7714,8 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}})
-		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, setExpr, elemTy.llvm(), elemExpr)
+		discardReg := ctx.mctx.freshTempName("discard")
+		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", discardReg, symbol, setExpr, elemTy.llvm(), elemExpr)
 		return true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
@@ -7754,7 +7760,8 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}})
-		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr)
+		discardReg := ctx.mctx.freshTempName("discard")
+		fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s)\n", discardReg, symbol, mapExpr, keyTy.llvm(), keyExpr)
 		return true
 	case mir.IntrinsicMapClear:
 		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_map_clear")
