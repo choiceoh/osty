@@ -165,6 +165,91 @@ func requireIdentPatName(t *testing.T, pat ast.Pattern, want string, context str
 	}
 }
 
+const (
+	fixtureTrailingLet4 = "    let z = 2\n"
+	fixtureTrailingLet8 = "        let z = 2\n"
+)
+
+func fixtureFn(body string) []byte {
+	return []byte("fn f() {\n" + body + "}\n")
+}
+
+func fixtureFnWithTrailingLet(body string) []byte {
+	return fixtureFn(body + fixtureTrailingLet4)
+}
+
+func fixtureLoopFnWithTrailingLet(body string) []byte {
+	return fixtureFn("    for i in 0..10 {\n" + body + fixtureTrailingLet8 + "    }\n")
+}
+
+func fixtureLabeledLoopFnWithTrailingLet(label string, body string) []byte {
+	return fixtureFn("    '" + label + ": for i in 0..10 {\n" + body + fixtureTrailingLet8 + "    }\n")
+}
+
+func fixtureFollowOnElseNewline(fnName string, condName string) []byte {
+	return []byte("fn " + fnName + "() -> Int {\n" +
+		"    if " + condName + "() {\n" +
+		"        1\n" +
+		"    }\n" +
+		"    else {\n" +
+		"        2\n" +
+		"    }\n" +
+		"}\n" +
+		"fn " + condName + "() -> Bool { false }\n")
+}
+
+func fixtureMatchAssignTopLevelDecl(fnName string) []byte {
+	return []byte("fn " + fnName + "(x: Int) {\n" +
+		"    match x {\n" +
+		"        0 -> out.path =\n" +
+		"        _ -> 1,\n" +
+		"    }\n" +
+		fixtureTrailingLet4 +
+		"}\n")
+}
+
+func fixtureIfThenMissingRhs(condName string) []byte {
+	return []byte("fn " + condName + "() -> Bool { false }\n\n" +
+		"fn f() {\n" +
+		"    if " + condName + "() {\n" +
+		"        let x =\n" +
+		"    } else {\n" +
+		"        let y = 1\n" +
+		"    }\n" +
+		fixtureTrailingLet4 +
+		"}\n")
+}
+
+func fixtureMatchArmMissingBody() []byte {
+	return []byte("fn f(x: Int) {\n" +
+		"    match x {\n" +
+		"        0 ->\n" +
+		"        _ -> 1,\n" +
+		"    }\n" +
+		fixtureTrailingLet4 +
+		"}\n")
+}
+
+func fixtureDeferBlockMalformedBody() []byte {
+	return []byte("fn f() {\n" +
+		"    defer {\n" +
+		"        let x =\n" +
+		"    }\n" +
+		fixtureTrailingLet4 +
+		"}\n")
+}
+
+func fixtureIfLetMalformedScrutinee() []byte {
+	return []byte("fn f() {\n" +
+		"    if let value = + {\n" +
+		"        1\n" +
+		"    } else {\n" +
+		"        2\n" +
+		"    }\n" +
+		fixtureTrailingLet4 +
+		"}\n")
+}
+
 // --- Baseline authority tests ---
 
 func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *testing.T) {
@@ -229,16 +314,7 @@ fn update(value: String?) {
 // Axis A — newline-else fallout.
 
 func TestParseFollowOnRecoveryA1ElseNewlinePrimary(t *testing.T) {
-	src := []byte(`fn rfA1ElseNewlinePrimary() -> Int {
-    if rfA1Cond() {
-        1
-    }
-    else {
-        2
-    }
-}
-fn rfA1Cond() -> Bool { false }
-`)
+	src := fixtureFollowOnElseNewline("rfA1ElseNewlinePrimary", "rfA1Cond")
 
 	result := ParseDetailed(src)
 	requireParseDiagnosticCodes(t, result, "E0105", "E0204", "E0100")
@@ -257,14 +333,7 @@ fn rfA1Cond() -> Bool { false }
 // Axis B — declaration-layer fallout after expression recovery.
 
 func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
-	src := []byte(`fn rfB1MatchAssignTopLevelDecl(x: Int) {
-    match x {
-        0 -> out.path =
-        _ -> 1,
-    }
-    let z = 2
-}
-`)
+	src := fixtureMatchAssignTopLevelDecl("rfB1MatchAssignTopLevelDecl")
 
 	result := ParseDetailed(src)
 	requireParseDiagnosticCount(t, result, 5, "follow-on diagnostics")
@@ -300,17 +369,7 @@ func TestParseFollowOnRecoveryB1MatchAssignTopLevelDecl(t *testing.T) {
 // Axis A — branch / arm continuity.
 
 func TestParseRecoveryA1IfThenPreservesElseAndTrailingStmt(t *testing.T) {
-	src := []byte(`fn cond() -> Bool { false }
-
-fn f() {
-    if cond() {
-        let x =
-    } else {
-        let y = 1
-    }
-    let z = 2
-}
-`)
+	src := fixtureIfThenMissingRhs("cond")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -332,14 +391,7 @@ fn f() {
 }
 
 func TestParseRecoveryA2MatchArmPreservesNextArmAndTrailingStmt(t *testing.T) {
-	src := []byte(`fn f(x: Int) {
-    match x {
-        0 ->
-        _ -> 1,
-    }
-    let z = 2
-}
-`)
+	src := fixtureMatchArmMissingBody()
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -362,11 +414,7 @@ func TestParseRecoveryA2MatchArmPreservesNextArmAndTrailingStmt(t *testing.T) {
 // Axis B — required-rhs / next-statement boundary.
 
 func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    let x =
-    let z = 2
-}
-`)
+	src := fixtureFnWithTrailingLet("    let x =\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -380,11 +428,7 @@ func TestParseRecoveryB1LetMissingInitPreservesFollowingStmt(t *testing.T) {
 }
 
 func TestParseRecoveryB3AssignMissingRhsPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    x =
-    let z = 2
-}
-`)
+	src := fixtureFnWithTrailingLet("    x =\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -398,11 +442,7 @@ func TestParseRecoveryB3AssignMissingRhsPreservesFollowingStmt(t *testing.T) {
 }
 
 func TestParseRecoveryB6ReturnMalformedExprPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    return +
-    let z = 2
-}
-`)
+	src := fixtureFnWithTrailingLet("    return +\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -416,11 +456,7 @@ func TestParseRecoveryB6ReturnMalformedExprPreservesFollowingStmt(t *testing.T) 
 }
 
 func TestParseRecoveryB7ChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    ch <-
-    let z = 2
-}
-`)
+	src := fixtureFnWithTrailingLet("    ch <-\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -434,11 +470,7 @@ func TestParseRecoveryB7ChanSendMissingRhsPreservesFollowingStmt(t *testing.T) {
 }
 
 func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    defer
-    let z = 2
-}
-`)
+	src := fixtureFnWithTrailingLet("    defer\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -454,13 +486,7 @@ func TestParseRecoveryB9DeferMissingExprPreservesFollowingStmt(t *testing.T) {
 // Axis C — control-flow tail recovery.
 
 func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    for i in 0..10 {
-        break +
-        let z = 2
-    }
-}
-`)
+	src := fixtureLoopFnWithTrailingLet("        break +\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -478,13 +504,7 @@ func TestParseRecoveryC1BreakMalformedValuePreservesFollowingStmt(t *testing.T) 
 }
 
 func TestParseRecoveryC3ContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    for i in 0..10 {
-        continue +
-        let z = 2
-    }
-}
-`)
+	src := fixtureLoopFnWithTrailingLet("        continue +\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -502,7 +522,7 @@ func TestParseRecoveryC3ContinueMalformedSuffixPreservesFollowingStmt(t *testing
 }
 
 func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *testing.T) {
-	src := []byte("fn f() {\n    'outer: for i in 0..10 {\n        continue 'outer +\n        let z = 2\n    }\n}\n")
+	src := fixtureLabeledLoopFnWithTrailingLet("outer", "        continue 'outer +\n")
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -522,13 +542,7 @@ func TestParseRecoveryC4LabeledContinueMalformedSuffixPreservesFollowingStmt(t *
 // Axis D — scoped / nested body recovery.
 
 func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    defer {
-        let x =
-    }
-    let z = 2
-}
-`)
+	src := fixtureDeferBlockMalformedBody()
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
@@ -549,15 +563,7 @@ func TestParseRecoveryD1DeferBlockMalformedBodyPreservesFollowingStmt(t *testing
 // Axis E — conditional pattern recovery.
 
 func TestParseRecoveryE1IfLetMalformedScrutineePreservesElseAndFollowingStmt(t *testing.T) {
-	src := []byte(`fn f() {
-    if let value = + {
-        1
-    } else {
-        2
-    }
-    let z = 2
-}
-`)
+	src := fixtureIfLetMalformedScrutinee()
 
 	result := ParseDetailed(src)
 	requireSingleParseDiagnosticCode(t, result, "E0204")
