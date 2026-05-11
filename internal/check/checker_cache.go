@@ -257,7 +257,7 @@ func defaultNativeChecker() (nativeChecker, string) {
 	if path != "" {
 		resolved, err := exec.LookPath(path)
 		if err != nil {
-			return nil, fmt.Sprintf("%s=%q was not found", nativeCheckerEnv, path)
+			return nil, fmt.Sprintf("%s=%q override was not found; unset it to use the default checker path", nativeCheckerEnv, path)
 		}
 		return nativeCheckerExec{path: resolved}, ""
 	}

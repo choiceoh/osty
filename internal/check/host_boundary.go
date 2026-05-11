@@ -22,8 +22,9 @@ import (
 const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
 
 // The checker targets an Osty-native request/response boundary. The default
-// host implementation uses the embedded selfhost checker in-process; callers
-// can opt into an external executable by setting OSTY_NATIVE_CHECKER_BIN.
+// host implementation uses the embedded selfhost checker in-process;
+// OSTY_NATIVE_CHECKER_BIN is reserved for explicit override/debug use and must
+// not be treated as the primary backend-selection signal.
 //
 // The result and request types are api.CheckResult / api.CheckRequest so the
 // in-process embedded path and the subprocess exec path speak identical
@@ -119,7 +120,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	if runner == nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"file",
-			"no Osty-native checker executable is configured",
+			"the OSTY_NATIVE_CHECKER_BIN override is invalid",
 			note,
 		))
 		return
@@ -150,7 +151,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"file",
-			"the Osty-native checker executable failed",
+			"the selected Osty-native checker failed",
 			err.Error(),
 		))
 		return
@@ -171,7 +172,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolv
 	if runner == nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"no Osty-native checker executable is configured",
+			"the OSTY_NATIVE_CHECKER_BIN override is invalid",
 			note,
 		))
 		return
@@ -201,7 +202,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolv
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"the Osty-native checker executable failed",
+			"the selected Osty-native checker failed",
 			err.Error(),
 		))
 		return
@@ -300,7 +301,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *re
 		mu.Lock()
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"no Osty-native checker executable is configured",
+			"the OSTY_NATIVE_CHECKER_BIN override is invalid",
 			note,
 		))
 		mu.Unlock()
@@ -334,7 +335,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *re
 		mu.Lock()
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"the Osty-native checker executable failed",
+			"the selected Osty-native checker failed",
 			err.Error(),
 		))
 		mu.Unlock()

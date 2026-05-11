@@ -174,7 +174,6 @@ type Opts struct {
 	// File() must supply the flag explicitly; the default false is
 	// correct for ordinary user code.
 	Privileged bool
-
 }
 
 // firstOpt returns the first Opts in the slice, or a zero value when
@@ -240,9 +239,9 @@ func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	return result
 }
 
-// Package runs type checking across every file in a resolver Package
-// when a native checker boundary is available. Otherwise it returns an
-// unavailability diagnostic.
+// Package runs type checking across every file in a resolver Package using the
+// default native checker path. An invalid OSTY_NATIVE_CHECKER_BIN override is
+// reported as an unavailability diagnostic.
 func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
