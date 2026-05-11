@@ -362,9 +362,16 @@ func (o *Optional) String() string { return o.Inner.String() + "?" }
 // representation. Receiver types are NOT recorded here — the receiver is
 // modelled as the first parameter at call-synthesis time, but for method
 // *references* the receiver has already been bound.
+//
+// G20: ParamNames carries per-parameter names as type-equality-neutral
+// metadata. Identical/Assignable ignore ParamNames; String includes
+// them when present. Keyword calls through fn-values consult ParamNames
+// to match named arguments; when names are absent or mismatched the call
+// falls back to positional semantics.
 type FnType struct {
-	Params []Type
-	Return Type // Unit for fn with no return
+	Params     []Type
+	ParamNames []string // G20: per-parameter names; nil when unavailable
+	Return     Type     // Unit for fn with no return
 }
 
 func (*FnType) typeNode() {}
@@ -375,6 +382,11 @@ func (f *FnType) String() string {
 	for i, p := range f.Params {
 		if i > 0 {
 			b.WriteString(", ")
+		}
+		// G20: include param name when available.
+		if f.ParamNames != nil && i < len(f.ParamNames) && f.ParamNames[i] != "" {
+			b.WriteString(f.ParamNames[i])
+			b.WriteString(": ")
 		}
 		b.WriteString(p.String())
 	}

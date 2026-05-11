@@ -86,6 +86,10 @@ pub struct TyNode {
     pub varId: Int,
     pub varName: String,
     pub varOwner: String,
+    /// fnParamNames: G20. For TkFn nodes, carries the parameter names as
+    /// type-equality-neutral metadata. Empty when no names are available.
+    /// Type equality (tyEq) ignores this field; tyFnToString includes it.
+    pub fnParamNames: List<String>,
 }
 /// TyArena owns every `TyNode` produced during elaboration. Canonical
 /// primitive indices are pre-populated by `emptyTyArena` so callers
@@ -128,7 +132,7 @@ pub struct TyArena {
 /// is out of range. Callers should not observe this unless a bug is
 /// passing a bogus handle.
 pub fn emptyTyNode() -> TyNode {
-    TyNode {kind: TkErr, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: ""}
+    TyNode {kind: TkErr, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
 }
 /// emptyTyArena builds an arena pre-populated with canonical primitive
 /// nodes. Every primitive is allocated exactly once so callers can
@@ -162,19 +166,19 @@ pub fn emptyTyArena() -> TyArena {
 }
 fn tyAllocErr(arena: TyArena) -> Int {
     let idx = tyNodeCount(arena)
-    let node = TyNode {kind: TkErr, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkErr, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     arena.nodes.push(node)
     idx
 }
 fn tyAllocPoison(arena: TyArena) -> Int {
     let idx = tyNodeCount(arena)
-    let node = TyNode {kind: TkPoison, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkPoison, prim: PkInvalid, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     arena.nodes.push(node)
     idx
 }
 fn tyAllocPrim(arena: TyArena, prim: PrimKind) -> Int {
     let idx = tyNodeCount(arena)
-    let node = TyNode {kind: TkPrim, prim, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkPrim, prim, head: "", args: [], ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     arena.nodes.push(node)
     idx
 }
@@ -292,26 +296,34 @@ pub fn tyPrim(arena: TyArena, prim: PrimKind) -> Int {
 /// tyNamed allocates a named type `head<args...>` node. `args` may be
 /// empty, meaning a plain type like `String` used in type position.
 pub fn tyNamed(arena: TyArena, head: String, args: List<Int>) -> Int {
-    let node = TyNode {kind: TkNamed, prim: PkInvalid, head, args, ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkNamed, prim: PkInvalid, head, args, ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     tyInternNode(arena, tyKeyNamed(node.head, node.args), node)
 }
 /// tyTuple allocates a tuple-type node. `()` is represented by an empty
 /// elems list; callers that want the canonical unit type should use
 /// `tUnit` instead.
 pub fn tyTuple(arena: TyArena, elems: List<Int>) -> Int {
-    let node = TyNode {kind: TkTuple, prim: PkInvalid, head: "", args: elems, ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkTuple, prim: PkInvalid, head: "", args: elems, ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     tyInternNode(arena, tyKeyTuple(node.args), node)
 }
 /// tyFn allocates an `fn(params...) -> ret` node. `ret` may be
 /// `tUnit(arena)` for Unit-returning functions and `tNever(arena)` for
 /// diverging ones; callers must pre-canonicalise.
 pub fn tyFn(arena: TyArena, params: List<Int>, ret: Int) -> Int {
-    let node = TyNode {kind: TkFn, prim: PkInvalid, head: "", args: params, ret, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkFn, prim: PkInvalid, head: "", args: params, ret, varId: 0, varName: "", varOwner: "", fnParamNames: []}
+    tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
+}
+/// tyFnWithNames is like tyFn but attaches parameter names as G20
+/// type-equality-neutral metadata. The names do not affect interning or
+/// equality; they are preserved for keyword-call resolution in the
+/// elaborator.
+pub fn tyFnWithNames(arena: TyArena, params: List<Int>, ret: Int, names: List<String>) -> Int {
+    let node = TyNode {kind: TkFn, prim: PkInvalid, head: "", args: params, ret, varId: 0, varName: "", varOwner: "", fnParamNames: names}
     tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
 }
 /// tyOptional allocates a `T?` node with `inner` as the wrapped index.
 pub fn tyOptional(arena: TyArena, inner: Int) -> Int {
-    let node = TyNode {kind: TkOptional, prim: PkInvalid, head: "", args: [], ret: inner, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkOptional, prim: PkInvalid, head: "", args: [], ret: inner, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     tyInternNode(arena, tyKeyOptional(node.ret), node)
 }
 /// tyVarFresh allocates a fresh unification variable. `owner` is the
@@ -319,7 +331,7 @@ pub fn tyOptional(arena: TyArena, inner: Int) -> Int {
 /// collide during diagnostics.
 pub fn tyVarFresh(arena: TyArena, owner: String, name: String) -> Int {
     let idx = tyNodeCount(arena)
-    let node = TyNode {kind: TkVar, prim: PkInvalid, head: "", args: [], ret: -1, varId: idx + 1, varName: name, varOwner: owner}
+    let node = TyNode {kind: TkVar, prim: PkInvalid, head: "", args: [], ret: -1, varId: idx + 1, varName: name, varOwner: owner, fnParamNames: []}
     arena.nodes.push(node)
     idx
 }
@@ -327,13 +339,22 @@ pub fn tyVarFresh(arena: TyArena, owner: String, name: String) -> Int {
 /// impl). The elaborator substitutes it away once the receiver type is
 /// known.
 pub fn tySelf(arena: TyArena, owner: String) -> Int {
-    let node = TyNode {kind: TkSelf, prim: PkInvalid, head: owner, args: [], ret: -1, varId: 0, varName: "", varOwner: ""}
+    let node = TyNode {kind: TkSelf, prim: PkInvalid, head: owner, args: [], ret: -1, varId: 0, varName: "", varOwner: "", fnParamNames: []}
     tyInternNode(arena, tyKeySelf(node.head), node)
 }
 fn tyInternNode(arena: TyArena, key: String, node: TyNode) -> Int {
     let keyHash = checkHashKey(key)
     let existing = tyLookupInterned(arena, key, keyHash)
     if existing >= 0 {
+        // G20: if the new node carries fn param names but the existing
+        // one doesn't, attach them. First-writer wins.
+        if node.kind == TkFn && node.fnParamNames.len() > 0 {
+            let existingNode = arena.nodes[existing]
+            if existingNode.fnParamNames.len() == 0 {
+                existingNode.fnParamNames = node.fnParamNames
+                arena.nodes[existing] = existingNode
+            }
+        }
         return existing
     }
     let idx = tyNodeCount(arena)
@@ -551,7 +572,7 @@ pub fn tyToString(arena: TyArena, idx: Int) -> String {
         TkNamed -> tyNamedToString(arena, node),
         TkOptional -> "{tyToString(arena, node.ret)}?",
         TkTuple -> tyTupleToString(arena, node.args),
-        TkFn -> tyFnToString(arena, node.args, node.ret),
+        TkFn -> tyFnToString(arena, node),
         TkVar -> {
             if node.varName == "" {
                 "?{node.varId}"
@@ -581,13 +602,25 @@ fn tyTupleToString(arena: TyArena, elems: List<Int>) -> String {
     }
     "({strings.join(parts, sep)})"
 }
-fn tyFnToString(arena: TyArena, params: List<Int>, ret: Int) -> String {
+fn tyFnToString(arena: TyArena, node: TyNode) -> String {
     let sep = ", "
     let mut parts: List<String> = []
-    for p in params {
-        parts.push(tyToString(arena, p))
+    let mut i = 0
+    for p in node.args {
+        // G20: include param name when available.
+        if node.fnParamNames.len() > 0 && i < node.fnParamNames.len() {
+            let name = node.fnParamNames[i]
+            if name != "" {
+                parts.push("{name}: {tyToString(arena, p)}")
+            } else {
+                parts.push(tyToString(arena, p))
+            }
+        } else {
+            parts.push(tyToString(arena, p))
+        }
+        i = i + 1
     }
-    "fn({strings.join(parts, sep)}) -> {tyToString(arena, ret)}"
+    "fn({strings.join(parts, sep)}) -> {tyToString(arena, node.ret)}"
 }
 pub fn primKindName(prim: PrimKind) -> String {
     match prim {

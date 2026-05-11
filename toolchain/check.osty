@@ -42,53 +42,58 @@ pub struct FrontTypeRepr {
     pub path: String,
     pub args: List<FrontTypeRepr>,
     pub ret: Option<FrontTypeRepr>,
+    /// paramNames: G20. For fn-type reprs, carries parameter names.
+    /// Empty when no names are available.
+    pub paramNames: List<String>,
 }
 /// tyToRepr converts a TyArena index into a structured FrontTypeRepr,
 /// eliminating the string-based round-trip on the Go ↔ Osty boundary.
 pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
     if idx < 0 {
-        return FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None}
+        return FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None, paramNames: []}
     }
     let node = tyGet(arena, idx)
     match node.kind {
-        TkErr -> FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None},
-        TkPoison -> FrontTypeRepr {kind: "poison", name: "Poison", path: "", args: [], ret: None},
-        TkPrim -> FrontTypeRepr {kind: "primitive", name: primKindName(node.prim), path: "", args: [], ret: None},
+        TkErr -> FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None, paramNames: []},
+        TkPoison -> FrontTypeRepr {kind: "poison", name: "Poison", path: "", args: [], ret: None, paramNames: []},
+        TkPrim -> FrontTypeRepr {kind: "primitive", name: primKindName(node.prim), path: "", args: [], ret: None, paramNames: []},
         TkNamed -> {
             let mut reprArgs: List<FrontTypeRepr> = []
             for arg in node.args {
                 reprArgs.push(tyToRepr(arena, arg))
             }
-            FrontTypeRepr {kind: "named", name: node.head, path: "", args: reprArgs, ret: None}
+            FrontTypeRepr {kind: "named", name: node.head, path: "", args: reprArgs, ret: None, paramNames: []}
         },
-        TkOptional -> FrontTypeRepr {kind: "optional", name: "", path: "", args: [], ret: Some(tyToRepr(arena, node.ret))},
+        TkOptional -> FrontTypeRepr {kind: "optional", name: "", path: "", args: [], ret: Some(tyToRepr(arena, node.ret)), paramNames: []},
         TkTuple -> {
             let mut elems: List<FrontTypeRepr> = []
             for e in node.args {
                 elems.push(tyToRepr(arena, e))
             }
-            FrontTypeRepr {kind: "tuple", name: "", path: "", args: elems, ret: None}
+            FrontTypeRepr {kind: "tuple", name: "", path: "", args: elems, ret: None, paramNames: []}
         },
         TkFn -> {
             let mut paramReprs: List<FrontTypeRepr> = []
             for p in node.args {
                 paramReprs.push(tyToRepr(arena, p))
             }
-            FrontTypeRepr {kind: "fn", name: "", path: "", args: paramReprs, ret: Some(tyToRepr(arena, node.ret))}
+            // G20: propagate param names from the TyNode.
+            let names = node.fnParamNames
+            FrontTypeRepr {kind: "fn", name: "", path: "", args: paramReprs, ret: Some(tyToRepr(arena, node.ret)), paramNames: names}
         },
         TkVar -> {
             let vName = node.varName
             if vName == "" {
-                FrontTypeRepr {kind: "typevar", name: "?{node.varId}", path: "", args: [], ret: None}
+                FrontTypeRepr {kind: "typevar", name: "?{node.varId}", path: "", args: [], ret: None, paramNames: []}
             } else {
-                FrontTypeRepr {kind: "typevar", name: vName, path: "", args: [], ret: None}
+                FrontTypeRepr {kind: "typevar", name: vName, path: "", args: [], ret: None, paramNames: []}
             }
         },
-        TkSelf -> FrontTypeRepr {kind: "self", name: "Self", path: "", args: [], ret: None},
+        TkSelf -> FrontTypeRepr {kind: "self", name: "Self", path: "", args: [], ret: None, paramNames: []},
     }
 }
 pub fn frontInvalidTypeRepr() -> FrontTypeRepr {
-    FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None}
+    FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None, paramNames: []}
 }
 /// frontTypeReprToString converts a structured FrontTypeRepr back into
 /// a human-readable string for legacy callers that still expect String
@@ -119,8 +124,20 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
         "({strings.join(parts, ", ")})"
     } else if repr.kind == "fn" {
         let mut parts: List<String> = []
+        let mut i = 0
         for p in repr.args {
-            parts.push(frontTypeReprToString(p))
+            // G20: include param name when available.
+            if repr.paramNames.len() > 0 && i < repr.paramNames.len() {
+                let name = repr.paramNames[i]
+                if name != "" {
+                    parts.push("{name}: {frontTypeReprToString(p)}")
+                } else {
+                    parts.push(frontTypeReprToString(p))
+                }
+            } else {
+                parts.push(frontTypeReprToString(p))
+            }
+            i = i + 1
         }
         let retStr = match repr.ret {
             Some(r) -> frontTypeReprToString(r),
@@ -682,7 +699,21 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
     } else {
         let _ = node
     }
-    let fnTy = tyFn(cx.env.tys, sig.paramTys, sig.retTy)
+    // G20: build fn-type with param names. Strip the "?" prefix
+    // that arity-tracking uses — the fn-type metadata wants clean names.
+    let fnTy = if sig.paramNames.len() > 0 {
+        let mut cleanNames: List<String> = []
+        for pn in sig.paramNames {
+            if pn.startsWith("?") {
+                cleanNames.push(pn.slice(1))
+            } else {
+                cleanNames.push(pn)
+            }
+        }
+        tyFnWithNames(cx.env.tys, sig.paramTys, sig.retTy, cleanNames)
+    } else {
+        tyFn(cx.env.tys, sig.paramTys, sig.retTy)
+    }
     checkRecordSymbol(cx.env, declIdx, "fn", name, owner, fnTy, node.start, node.end)
 }
 // Build paramTys / paramNames from node.children (AstNParam entries).

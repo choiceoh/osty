@@ -995,6 +995,14 @@ CodeConstFnGeneric: a `const fn` declaration carries type parameters (`const fn 
 
 **Fix**: declare a separate `const fn` per concrete type, or drop
 
+### E0769 — `CodeFnValueKeywordNameMismatch`
+
+CodeFnValueKeywordNameMismatch: a keyword argument in a call through a function value does not match any parameter name recorded on the fn-type. Per G20, fn-types carry parameter names as type-equality-neutral metadata; when names are available and match, keyword calls are allowed. This diagnostic fires when a keyword is supplied but the fn-type either has no names or none of them match the keyword. The argument is treated as positional for type-checking purposes. v0.5 (G20).
+
+originates from a declaration whose parameter names match.
+
+**Fix**: use a positional argument, or ensure the function value
+
 ### E0754 — `CodeOpAnnotationBadSignature`
 
 CodeOpAnnotationBadSignature: a method carrying `#[op(X)]` does not match the required shape for operator X (wrong parameter count, wrong self-position, wrong return type). v0.5 (G35) §3.1.

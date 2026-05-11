@@ -254,7 +254,7 @@ func typeReprToType(repr *api.TypeRepr) types.Type {
 		if ret == nil {
 			ret = types.Unit
 		}
-		return &types.FnType{Params: params, Return: ret}
+		return &types.FnType{Params: params, ParamNames: repr.ParamNames, Return: ret}
 	case "unit":
 		return types.Unit
 	case "never":

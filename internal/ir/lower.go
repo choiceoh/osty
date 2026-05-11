@@ -842,7 +842,7 @@ func (l *lowerer) fromCheckerType(t types.Type) Type {
 		if ret == nil {
 			ret = TUnit
 		}
-		return &FnType{Params: params, Return: ret}
+		return &FnType{Params: params, ParamNames: t.ParamNames, Return: ret}
 	case *types.Named:
 		name := "?"
 		builtin := false

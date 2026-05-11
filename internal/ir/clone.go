@@ -60,6 +60,11 @@ func CloneType(t Type) Type {
 				out.Params[i] = CloneType(p)
 			}
 		}
+		// G20: clone param names
+		if len(t.ParamNames) > 0 {
+			out.ParamNames = make([]string, len(t.ParamNames))
+			copy(out.ParamNames, t.ParamNames)
+		}
 		return out
 	case *TypeVar:
 		return &TypeVar{Name: t.Name, Owner: t.Owner}

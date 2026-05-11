@@ -353,8 +353,22 @@ fn elabVariantOwnerType(cx: ElabCx, variant: CheckVariantSig) -> Int {
     tyNamed(cx.env.tys, variant.owner, args)
 }
 /// fnSigToTy builds an `fn(params) -> ret` type from a CheckFnSig.
+/// G20: propagates parameter names as type-equality-neutral metadata.
 fn fnSigToTy(env: CheckEnv, sig: CheckFnSig) -> Int {
-    tyFn(env.tys, sig.paramTys, sig.retTy)
+    // Strip the "?" prefix that arity-tracking uses.
+    let mut cleanNames: List<String> = []
+    for pn in sig.paramNames {
+        if pn.startsWith("?") {
+            cleanNames.push(pn.slice(1))
+        } else {
+            cleanNames.push(pn)
+        }
+    }
+    if cleanNames.len() > 0 {
+        tyFnWithNames(env.tys, sig.paramTys, sig.retTy, cleanNames)
+    } else {
+        tyFn(env.tys, sig.paramTys, sig.retTy)
+    }
 }
 // ---------------------------------------------------------------------
 // Unary operators.

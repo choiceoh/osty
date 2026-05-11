@@ -71,7 +71,8 @@ fn testDiagnosticExamplesClassifyBackendCodes() {
 fn testDiagnosticExamplesClassifyUnknownFamilyGaps() {
     assertDiagnosticFamily("E0000", "unknown")
     assertDiagnosticFamily("E0099", "unknown")
-    assertDiagnosticFamily("E0769", "unknown")
+    // E0769 was "unknown" but now carries G20 fn-value keyword-name mismatch.
+    assertDiagnosticFamily("E0769", "typechecking")
     assertDiagnosticFamily("E2040", "unknown")
     assertDiagnosticFamily("L0000", "unknown")
     assertDiagnosticFamily("Z0000", "unknown")

@@ -42,11 +42,12 @@ type CheckSummary struct {
 // host bridge. The Osty side emits a TypeRepr for every typed node; the
 // Go side converts it directly to types.Type without string parsing.
 type TypeRepr struct {
-	Kind   string     `json:"kind"`             // "primitive", "named", "tuple", "optional", "fn", "unit", "never", "typevar", "self", "error", "poison"
-	Name   string     `json:"name,omitempty"`   // primitive/named/typevar name: "Int", "List", "T"
-	Path   string     `json:"path,omitempty"`   // qualified path (reserved, currently empty)
-	Args   []TypeRepr `json:"args,omitempty"`   // named generic args / tuple elems / fn params
-	Return *TypeRepr  `json:"return,omitempty"` // fn return type / optional inner
+	Kind       string     `json:"kind"`                  // "primitive", "named", "tuple", "optional", "fn", "unit", "never", "typevar", "self", "error", "poison"
+	Name       string     `json:"name,omitempty"`        // primitive/named/typevar name: "Int", "List", "T"
+	Path       string     `json:"path,omitempty"`        // qualified path (reserved, currently empty)
+	Args       []TypeRepr `json:"args,omitempty"`        // named generic args / tuple elems / fn params
+	Return     *TypeRepr  `json:"return,omitempty"`      // fn return type / optional inner
+	ParamNames []string   `json:"param_names,omitempty"` // G20: fn-type parameter names; nil when unavailable
 }
 
 // String renders a TypeRepr back to a human-readable type string matching the
@@ -99,7 +100,12 @@ func (tr *TypeRepr) String() string {
 	case "fn":
 		parts := make([]string, 0, len(tr.Args))
 		for i := range tr.Args {
-			parts = append(parts, tr.Args[i].String())
+			// G20: include param name when available.
+			if tr.ParamNames != nil && i < len(tr.ParamNames) && tr.ParamNames[i] != "" {
+				parts = append(parts, tr.ParamNames[i]+": "+tr.Args[i].String())
+			} else {
+				parts = append(parts, tr.Args[i].String())
+			}
 		}
 		s := "fn(" + joinTypeReprStrings(parts, ", ") + ")"
 		if tr.Return != nil {
