@@ -203,7 +203,7 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 		return 1
 	}
 	input := nativePackageCheckInput(pkg, nil)
-	checked, err := selfhost.CheckPackageStructured(input)
+	checked, err := check.NativePackageCheck(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
 		return 1
@@ -269,10 +269,12 @@ func printNativePackageTypes(result api.CheckResult, files []api.PackageCheckFil
 
 // runCheckPackageNative is the DIR sibling of runCheckFileNative.
 // Loads the package via LoadPackageForNative (no eager *ast.File
-// materialization), runs selfhost.CheckPackageStructured over the
-// arena, and converts the resulting CheckDiagnosticRecord slice into
-// per-file *diag.Diagnostic values so printPackageDiags keeps its
-// file-bucketed rendering. Returns the subcommand exit code.
+// materialization), routes the structured check through
+// check.NativePackageCheck (factory-selected: managed subprocess in
+// production, embedded fallback otherwise), and converts the resulting
+// CheckDiagnosticRecord slice into per-file *diag.Diagnostic values so
+// printPackageDiags keeps its file-bucketed rendering. Returns the
+// subcommand exit code.
 func runCheckPackageNative(dir string, flags cliFlags) int {
 	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
@@ -280,7 +282,7 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 		return 1
 	}
 	input := nativePackageCheckInput(pkg, nil)
-	checked, err := selfhost.CheckPackageStructured(input)
+	checked, err := check.NativePackageCheck(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
 		return 1
@@ -316,7 +318,7 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 			continue
 		}
 		input := nativePackageCheckInput(pkg, resolve.PackageGraphImportSurfaces(graph, path))
-		checked, err := selfhost.CheckPackageStructured(input)
+		checked, err := check.NativePackageCheck(input)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
 			return 1
@@ -619,7 +621,7 @@ func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, api.CheckResu
 	var checked api.CheckResult
 	if len(imports) > 0 {
 		var err error
-		checked, err = selfhost.CheckPackageStructured(api.PackageCheckInput{
+		checked, err = check.NativePackageCheck(api.PackageCheckInput{
 			Imports: imports,
 			Files: []api.PackageCheckFile{{
 				Source: append([]byte(nil), src...),
