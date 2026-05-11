@@ -23,17 +23,11 @@ func TestStdlibCheckResultStringsModule(t *testing.T) {
 		t.Fatalf("stdlibCheckResult(strings) = nil, want non-nil *check.Result")
 	}
 	// Sanity: at least some expression types should be recorded for a
-	// non-empty stdlib module. Exact count varies with the checker
-	// coverage, so assert "more than a handful" rather than a precise
-	// number.
-	//
-	// Post-#1645 the legacy `chk.Types` AST-keyed map is no longer
-	// populated in production paths (the `overlaySelfhostResult` calls
-	// that used to mirror native check facts into it were dropped, and
-	// putting them back regresses ONB int-literal lowering by
-	// overwriting context-inferred types with raw untyped-int records).
-	// Read from `NativeCheckResult.TypedNodes`, the authoritative
-	// structured checker output, instead.
+	// non-empty stdlib module. Source of truth is
+	// `NativeCheckResult.TypedNodes` — #1645 stopped populating the
+	// legacy pointer-keyed `chk.Types` map (it is now empty in
+	// production), so coverage is measured against the structured
+	// SemanticDB-backed result instead.
 	native := chk.NativeCheckResult
 	if native == nil {
 		t.Fatalf("chk.NativeCheckResult is nil, want non-nil native check result")

@@ -976,11 +976,39 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		*ast.CharLit, *ast.BoolLit, *ast.ListExpr, *ast.MapExpr,
 		*ast.TupleExpr, *ast.RangeExpr:
 		return true
+	case *ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
+		*ast.QuestionExpr, *ast.TurbofishExpr:
+		// These expression shapes always yield a value in Osty (they
+		// have no statement form). When SemanticDB type lookup misses
+		// (post-#1645, both byID and the no-op byKey lookup fail for
+		// these kinds) the type-driven branch above returns nil and we
+		// rely on syntactic shape to keep the trailing expression as
+		// the block's Result rather than a discarded ExprStmt. Without
+		// this case `fn f(p: Point) -> Int { p.x + p.y }` lowers with
+		// `Body.Result = nil` and MIR emits an UnreachableTerm, which
+		// breaks stage0 patterns P15-P19, P23 and TestStage0RealMIRBaseline.
+		return true
+	case *ast.ParenExpr:
+		if px, ok := e.(*ast.ParenExpr); ok && px.X != nil {
+			return l.expressionYieldsValue(px.X)
+		}
+		return false
 	case *ast.IfExpr:
 		return astIfLooksLikeValueExpr(e)
+	case *ast.MatchExpr:
+		return astMatchLooksLikeValueExpr(e)
 	case *ast.Ident:
 		return astIdentLooksLikeValueConstructor(e)
 	case *ast.CallExpr:
+		// CallExpr return type may be unit (e.g. `println(...)`),
+		// in which case the trailing call should stay an ExprStmt
+		// rather than promote to the block's Result — promoting it
+		// changes the MIR shape (Stmt-positioned IntrinsicInstr vs
+		// expression-positioned), breaking stage0 patterns that key
+		// on `println`-as-stmt. Without `chk.Types` we can't
+		// distinguish unit vs non-unit calls reliably, so keep the
+		// original conservative behaviour: only constructor-shaped
+		// calls (uppercase Ident callee) are promoted.
 		return astCallLooksLikeValueConstructor(e)
 	}
 	return false
@@ -1017,6 +1045,52 @@ func astIfLooksLikeValueExpr(e ast.Expr) bool {
 	return astElseLooksLikeValueConstructor(ife.Else)
 }
 
+// astMatchLooksLikeValueExpr reports whether a trailing `match ... { ... }`
+// at the block-final position should be lowered as the block's Result
+// (a value expression) rather than as a MatchStmt. Mirrors
+// `astIfLooksLikeValueExpr` but walks every arm — if any arm yields a
+// value, the match itself yields a value. Without `chk.Types`
+// (#1645-zeroed legacy map) the type-driven branch in
+// `expressionYieldsValue` misses match expressions entirely, so the
+// trailing match becomes a MatchStmt with no result wired back to the
+// function return → MIR UnreachableTerm → stage0 declines.
+func astMatchLooksLikeValueExpr(e ast.Expr) bool {
+	m, ok := e.(*ast.MatchExpr)
+	if !ok || m == nil || len(m.Arms) == 0 {
+		return false
+	}
+	for _, arm := range m.Arms {
+		if arm == nil || arm.Body == nil {
+			continue
+		}
+		// Arm body is either a Block or a bare expression. Both reduce
+		// to "is the tail expression a value-yielding shape?".
+		if blk, ok := arm.Body.(*ast.Block); ok {
+			if astBlockTailLooksLikeValueConstructor(blk) {
+				return true
+			}
+			continue
+		}
+		switch arm.Body.(type) {
+		case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit,
+			*ast.RangeExpr, *ast.IntLit, *ast.FloatLit, *ast.StringLit,
+			*ast.CharLit, *ast.BoolLit, *ast.BinaryExpr, *ast.UnaryExpr,
+			*ast.FieldExpr, *ast.IndexExpr, *ast.QuestionExpr,
+			*ast.TurbofishExpr:
+			return true
+		case *ast.Ident:
+			if astIdentLooksLikeValueConstructor(arm.Body) {
+				return true
+			}
+		case *ast.CallExpr:
+			if astCallLooksLikeValueConstructor(arm.Body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func astElseLooksLikeValueConstructor(e ast.Expr) bool {
 	switch x := e.(type) {
 	case nil:
@@ -1039,7 +1113,21 @@ func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
 	if !ok || last == nil {
 		return false
 	}
-	return astIdentLooksLikeValueConstructor(last.X) || astCallLooksLikeValueConstructor(last.X)
+	if astIdentLooksLikeValueConstructor(last.X) || astCallLooksLikeValueConstructor(last.X) {
+		return true
+	}
+	// Without `chk.Types` (zeroed by #1645) we can't ask the checker
+	// whether `(a, b)` / `x + y` / `obj.field` is the block's value, so
+	// classify by shape. Mirrors the additions in `expressionYieldsValue`
+	// — same rationale (always-yields-value syntactic shapes in Osty).
+	switch last.X.(type) {
+	case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit, *ast.RangeExpr,
+		*ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.BoolLit,
+		*ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
+		*ast.QuestionExpr, *ast.TurbofishExpr:
+		return true
+	}
+	return false
 }
 
 func expressionTypeYieldsValue(t Type) bool {

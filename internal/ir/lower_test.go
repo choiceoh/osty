@@ -146,6 +146,80 @@ func TestLowerCallTypeUsesNativeIndexWithoutLegacyTypeMap(t *testing.T) {
 // identifier's NodeID (not the CallExpr's). `instantiationArgs` must
 // follow that anchor or generic monomorphization regresses to "arity
 // mismatch" for every non-turbofish generic call site.
+// `expressionYieldsValue` falls back to syntactic shape when
+// `chk.Types` is empty (post-#1645). The fallback must recognize that
+// `BinaryExpr`, `FieldExpr`, `MatchExpr`, etc. always yield values, or
+// the trailing expression in `fn f() -> Int { p.x + p.y }` lowers as
+// an ExprStmt with no Result and MIR emits `UnreachableTerm` — which
+// breaks every stage0 P15-P19 pattern and drops `toolchain/` audit
+// coverage by ~1000 functions.
+func TestLowerTrailingBinaryExprYieldsValue(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+fn pointSum(p: Point) -> Int { p.x + p.y }
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	var pointSum *FnDecl
+	for _, decl := range mod.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Name == "pointSum" {
+			pointSum = fn
+			break
+		}
+	}
+	if pointSum == nil {
+		t.Fatal("pointSum not lowered")
+	}
+	if pointSum.Body == nil || pointSum.Body.Result == nil {
+		t.Fatalf("pointSum.Body.Result = nil, want BinaryExpr (trailing expr regression)")
+	}
+	if _, ok := pointSum.Body.Result.(*BinaryExpr); !ok {
+		t.Fatalf("pointSum.Body.Result = %T, want *BinaryExpr", pointSum.Body.Result)
+	}
+}
+
+func TestLowerTrailingMatchExprYieldsValue(t *testing.T) {
+	src := "fn find(text: String, needle: String) -> Bool {\n" +
+		"    let idx = text.indexOf(needle)\n" +
+		"    match idx {\n" +
+		"        Some(i) -> i < 10,\n" +
+		"        None -> false,\n" +
+		"    }\n" +
+		"}\n\nfn main() {}\n"
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	var find *FnDecl
+	for _, decl := range mod.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Name == "find" {
+			find = fn
+			break
+		}
+	}
+	if find == nil {
+		t.Fatal("find not lowered")
+	}
+	if find.Body == nil || find.Body.Result == nil {
+		t.Fatalf("find.Body.Result = nil, want *MatchExpr (trailing match regression)")
+	}
+}
+
 // Real selfhost output anchors CheckedBinding records by byte range,
 // with a NodeID that does not match the AST IdentPat's ID (they live in
 // separate namespaces). `nativeBindingType` must look up by byte range
