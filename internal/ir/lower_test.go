@@ -428,8 +428,9 @@ func TestLowerLetStmtUsesByteRangeBindingTypeWhenNodeIDsDiverge(t *testing.T) {
 		NativeCheckResult: &api.CheckResult{
 			Bindings: []api.CheckedBinding{
 				{
-					// Same span, wrong name: the byte-range fallback must
-					// ignore SemanticDB noise unless the binding name matches.
+					// NodeID 901 shares x's span but carries a different
+					// binding name, so the byte-range fallback must ignore it
+					// and keep searching for the matching x record.
 					NodeID: 901,
 					Name:   "other",
 					Start:  4,
@@ -536,8 +537,9 @@ func TestLowerIdentUsesByteRangeSymbolTypeWhenNodeIDsDiverge(t *testing.T) {
 		NativeCheckResult: &api.CheckResult{
 			Symbols: []api.CheckedSymbol{
 				{
-					// Same span, wrong name: byte-range fallback still needs
-					// the symbol-name filter when SemanticDB records collide.
+					// NodeID 901 collides on g's span but names a different
+					// symbol, so lowering must skip it and match NodeID 902's
+					// `g` record via byte range + symbol name.
 					NodeID: 901,
 					Kind:   "let",
 					Name:   "other",
