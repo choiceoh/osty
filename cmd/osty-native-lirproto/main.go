@@ -47,6 +47,10 @@ import (
 // the same env var.
 const SelfBinEnv = "OSTY_SELF_BIN"
 
+// selfForwardArgsEnv is the argv forwarding channel consumed by
+// toolchain/main.osty before it falls back to std.env.args().
+const selfForwardArgsEnv = "OSTY_SELF_REBUILD_FORWARD_ARGS"
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -103,6 +107,7 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(), selfForwardArgsEnv+"="+strings.Join(args, "\n"))
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
