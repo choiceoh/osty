@@ -843,16 +843,30 @@ const (
 	//      `const` and use an ordinary generic function at runtime.
 	CodeConstFnGeneric = "E0768"
 
+	// CodeFnValueKeywordNameMismatch: a keyword argument in a call
+	// through a function value does not match any parameter name
+	// recorded on the fn-type. Per G20, fn-types carry parameter names
+	// as type-equality-neutral metadata; when names are available and
+	// match, keyword calls are allowed. This diagnostic fires when a
+	// keyword is supplied but the fn-type either has no names or none
+	// of them match the keyword. The argument is treated as positional
+	// for type-checking purposes.
+	// v0.5 (G20).
+	// Fix: use a positional argument, or ensure the function value
+	//      originates from a declaration whose parameter names match.
+	CodeFnValueKeywordNameMismatch = "E0769"
+
 	// v0.5 additions (G20-G35). The following codes extend the E07xx
 	// band for numeric widening, operator overloading, enum
 	// discriminants, and label/loop control flow. Module-resolution
 	// additions for `pub use` re-export and scoped imports live in
 	// the E055x band. `#[cfg(...)]` key validation lives in E0405.
 	//
-	// Free slots claimed: E0754-E0759 (typecheck), E0765-E0768
-	// (control flow; E0766-E0768 are `const fn` validation, §3.1.1),
-	// E0552-E0554 (name resolution), E0405 (imports). E0769 remains
-	// free in the control-flow band. The E0770-E0772 slots are
+	// Free slots claimed: E0754-E0759 (typecheck), E0765-E0769
+	// (control flow; E0766-E0768 are `const fn` validation, §3.1.1;
+	// E0769 is fn-value keyword-name mismatch, G20),
+	// E0552-E0554 (name resolution), E0405 (imports).
+	// The E0770-E0772 slots are
 	// occupied by §19 runtime sublanguage diagnostics
 	// (CodeRuntimePrivilegeViolation, CodePodShapeViolation,
 	// CodeNoAllocViolation) defined below.

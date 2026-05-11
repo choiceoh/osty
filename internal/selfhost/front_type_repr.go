@@ -11,11 +11,12 @@ import (
 // Go seed. It keeps structured types intact until the public api.TypeRepr
 // boundary instead of forcing checker results through a type-name string.
 type FrontTypeRepr struct {
-	kind string
-	name string
-	path string
-	args []*FrontTypeRepr
-	ret  *FrontTypeRepr
+	kind       string
+	name       string
+	path       string
+	args       []*FrontTypeRepr
+	ret        *FrontTypeRepr
+	paramNames []string // G20: fn-type parameter names; nil when unavailable
 }
 
 func tyToRepr(arena *TyArena, idx int) *FrontTypeRepr {
@@ -44,6 +45,9 @@ func tyToRepr(arena *TyArena, idx int) *FrontTypeRepr {
 	case *TyKind_TkTuple:
 		return &FrontTypeRepr{kind: "tuple", args: tyReprArgs(arena, node.args)}
 	case *TyKind_TkFn:
+		// G20: param names come from the Osty-native checker boundary
+		// (host_boundary_overlay.go), not from the frozen Go seed. The
+		// seed's TyNode has no fnParamNames field.
 		return &FrontTypeRepr{
 			kind: "fn",
 			args: tyReprArgs(arena, node.args),
@@ -94,9 +98,10 @@ func frontTypeReprToAPI(repr *FrontTypeRepr) *api.TypeRepr {
 		return nil
 	}
 	out := &api.TypeRepr{
-		Kind: repr.kind,
-		Name: repr.name,
-		Path: repr.path,
+		Kind:       repr.kind,
+		Name:       repr.name,
+		Path:       repr.path,
+		ParamNames: repr.paramNames, // G20
 	}
 	if len(repr.args) > 0 {
 		out.Args = make([]api.TypeRepr, 0, len(repr.args))

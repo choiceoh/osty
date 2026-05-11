@@ -158,7 +158,7 @@ half of these forms still round-trips through the regen path.
 - Enum integer discriminants `pub enum X: Int { A = 1, ... }` (G31)
 - `#[op(+)]` operator overload (G35) — six-operator allow-list
 - Lossless numeric widening (G34)
-- Function-value parameter-name preservation (G20)
+- Function-value parameter-name preservation (G20) — infrastructure shipped: FnType.ParamNames, TyNode.fnParamNames, FrontTypeRepr.paramNames, tyFnWithNames, fnSigToTy/collectFnDecl propagation, String() rendering, diagnostic E0769
 - `#[cfg]` composition forms `all(...)` / `any(...)` / `not(...)` (G29 partial)
 
 ## Native checker status

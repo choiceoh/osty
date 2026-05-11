@@ -244,10 +244,12 @@ func (t *TupleType) String() string {
 	return b.String()
 }
 
-// FnType is `fn(A, B) -> R`.
+// FnType is `fn(A, B) -> R` in the IR. G20: ParamNames carries per-parameter
+// names as type-equality-neutral metadata (nil when unavailable).
 type FnType struct {
-	Params []Type
-	Return Type
+	Params     []Type
+	ParamNames []string // G20: fn-type parameter names; nil when unavailable
+	Return     Type
 }
 
 func (*FnType) typeNode() {}
@@ -258,6 +260,11 @@ func (f *FnType) String() string {
 	for i, p := range f.Params {
 		if i > 0 {
 			b.WriteString(", ")
+		}
+		// G20: include param name when available.
+		if f.ParamNames != nil && i < len(f.ParamNames) && f.ParamNames[i] != "" {
+			b.WriteString(f.ParamNames[i])
+			b.WriteString(": ")
 		}
 		b.WriteString(typeString(p))
 	}
