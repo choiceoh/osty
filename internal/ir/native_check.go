@@ -11,9 +11,10 @@ import (
 )
 
 type nativeCheckCache struct {
-	idx                api.CheckResultIndex
-	ready              bool
-	typedNodesByNodeID map[int][]*api.CheckedNode
+	idx                   api.CheckResultIndex
+	ready                 bool
+	typedNodesByNodeID    map[int][]*api.CheckedNode
+	typedNodesByByteRange map[[2]int][]*api.CheckedNode
 }
 
 func (l *lowerer) nativeIndex() (api.CheckResultIndex, bool) {
@@ -28,6 +29,7 @@ func (l *lowerer) nativeIndex() (api.CheckResultIndex, bool) {
 	native.EnsureStableIDs()
 	l.native.idx = native.Index()
 	l.native.typedNodesByNodeID = typedNodesByNodeID(native.TypedNodes)
+	l.native.typedNodesByByteRange = typedNodesByByteRange(native.TypedNodes)
 	return l.native.idx, true
 }
 
@@ -43,6 +45,25 @@ func typedNodesByNodeID(nodes []api.CheckedNode) map[int][]*api.CheckedNode {
 	return out
 }
 
+// typedNodesByByteRange indexes typed nodes by their source byte range,
+// keyed as [start, end]. Used as the byte-range fallback in
+// nativeCheckedType when the AST NodeID does not match the selfhost
+// arena id (the two namespaces are independent). The CheckResultIndex
+// TypedNodesByNodeKey uses a content-hash key (`stableNodeKey`) that
+// includes the node kind, so it cannot be queried from an AST node
+// alone; this raw index closes that gap.
+func typedNodesByByteRange(nodes []api.CheckedNode) map[[2]int][]*api.CheckedNode {
+	out := make(map[[2]int][]*api.CheckedNode, len(nodes))
+	for i := range nodes {
+		if nodes[i].Start == 0 && nodes[i].End == 0 {
+			continue
+		}
+		key := [2]int{nodes[i].Start, nodes[i].End}
+		out[key] = append(out[key], &nodes[i])
+	}
+	return out
+}
+
 func nativeRecordNodeID(nodeID, legacyNode int) int {
 	if nodeID != 0 {
 		return nodeID
@@ -51,7 +72,7 @@ func nativeRecordNodeID(nodeID, legacyNode int) int {
 }
 
 func (l *lowerer) nativeCheckedType(e ast.Expr) Type {
-	idx, ok := l.nativeIndex()
+	_, ok := l.nativeIndex()
 	if !ok {
 		return nil
 	}
@@ -63,15 +84,32 @@ func (l *lowerer) nativeCheckedType(e ast.Expr) Type {
 		}
 	}
 
-	// Fallback: span-based lookup via NodeKey ("start:end").
-	// This covers cases where Go AST NodeIDs and native checker NodeIDs
-	// diverge (e.g., re-parsed source or different ID assignment order).
+	// Byte-range fallback, restricted to ClosureExpr. AST NodeIDs and
+	// selfhost arena ids live in separate namespaces, so the byID path
+	// misses whenever the two diverge. We restrict this fallback to
+	// closures because:
+	//   1. Closures are the one case where the IR-level fallbacks
+	//      (signatureForFn, stdlibFreeFnReturnType, recoverOperandType
+	//      etc.) cannot recover the inferred FnType — there is no
+	//      signature table to consult, and `lowerClosure` relies on
+	//      `out.T` to backfill per-param Types for inline closures like
+	//      `|acc, n| acc + n`.
+	//   2. Widening the fallback to every expression shape lets the
+	//      byte-range hit win over the existing recovery chain, which
+	//      observably reduces stage0 coverage of `toolchain/` functions
+	//      (selfhost typed nodes occasionally carry pre-inference
+	//      shapes that the MIR signature tables would resolve better).
+	if _, isClosure := e.(*ast.ClosureExpr); !isClosure {
+		return nil
+	}
 	start, end, hasRange := astNodeByteRange(e)
 	if !hasRange {
 		return nil
 	}
-	key := fmt.Sprintf("%d:%d", start, end)
-	if rec := idx.TypedNodesByNodeKey[key]; rec != nil && rec.Type != nil {
+	for _, rec := range l.native.typedNodesByByteRange[[2]int{start, end}] {
+		if rec == nil || rec.Type == nil || rec.Kind != "Closure" {
+			continue
+		}
 		return l.fromNativeTypeRepr(rec.Type)
 	}
 	return nil
