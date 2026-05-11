@@ -6320,14 +6320,18 @@ func (bs *bodyState) lowerStructLit(sl *ir.StructLit, hint Type) RValue {
 func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 	t := v.T
 	// Prefer the destination hint when the literal's own type is
-	// missing or carries a poisoned (`<error>`) type-arg. The
-	// embedded selfhost checker drops the second arg of
-	// `Result<Int, UserError>` to `<error>` whenever the inner
-	// `UserError` reference doesn't resolve, which propagates an
-	// opaque LLVM type into the variant's AggregateRV; using the
-	// hint (the function-return / parent-aggregate slot's type)
-	// gives the codegen a fully-resolved shape to render.
-	if t == nil {
+	// missing, fully poisoned (`v.T == <error>`), or carries a
+	// poisoned (`<error>`) type-arg. The embedded selfhost checker
+	// drops the whole match-arm type to `<error>` when the variant
+	// constructor appears inside a poisoned-typed `if` arm — e.g.
+	// `fn first(n: Int) -> Int? { if n > 0 { Some(n) } else { None } }`
+	// where checker recovery on the if-arms occasionally collapses
+	// to ErrType. The variant literal then carries ErrType straight
+	// into the AggregateRV, and ONB rejects with `unknown enum
+	// layout for <error>`. Falling back to the destination hint
+	// (function-return / parent-aggregate slot's type) keeps the
+	// MIR validatable when the hint itself is concrete.
+	if t == nil || isPoisonType(t) {
 		t = hint
 	} else if hint != nil && irHasPoisonedTypeArg(t) && !irHasPoisonedTypeArg(hint) {
 		t = hint
