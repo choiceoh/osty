@@ -28764,7 +28764,6 @@ func diagIntrinsicNonEmptyBody(fnName string, start int, end int) *CheckDiagnost
 	return checkDiagWithNotes(checkCodeIntrinsicNonEmptyBody(), fmt.Sprintf("`#[intrinsic]` function `%s` must have an empty body", ostyToString(fnName)), start, end, []string{"LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored", "hint: keep the signature and drop the body, or use an empty block"})
 }
 
-
 // Osty: /tmp/selfhost_merged.osty:11286:5
 func checkSuggestSimilar(candidates []string, name string) string {
 	// Osty: /tmp/selfhost_merged.osty:11287:5
@@ -70337,4 +70336,3 @@ func pureCopyLocals(in map[string]struct{}) map[string]struct{} {
 	}
 	return out
 }
-

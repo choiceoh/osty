@@ -909,6 +909,7 @@ func isRangeIntOrCharType(t Type) bool {
 	}
 	return pt.Kind == ir.PrimInt || pt.Kind == ir.PrimChar
 }
+
 // isIteratorType reports whether t is a NamedType with Name "Iterator"
 // and exactly one type argument (the element type).
 func isIteratorType(t Type) bool {
@@ -927,7 +928,6 @@ func iteratorElementType(t Type) Type {
 	}
 	return nt.Args[0]
 }
-
 
 // isCountableIteratorType reports whether an Iterator<T> is countable
 // (exposes len() and supports direct indexing). Array<T> and Slice<T>
@@ -2119,6 +2119,7 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
 	bs.cur = exit
 }
+
 // lowerForInIterator lowers `for x in iter { ... }` where iter implements
 // the Iterator<T> protocol. Each loop iteration calls iter.next() which
 // returns Option<T>. Some(val) continues the loop; None terminates it.
@@ -2206,7 +2207,6 @@ func (bs *bodyState) lowerForInIterator(f *ir.ForStmt, iterT Type) {
 	bs.cur = exit
 }
 
-
 // lowerForInCountableIterator lowers a for-in over a countable Iterator<T>
 // to an index-driven counter loop identical to the List for-in shape.
 // The LLVM vectorizer can compute trip counts from idx < len and
@@ -2241,8 +2241,8 @@ func (bs *bodyState) lowerForInCountableIterator(f *ir.ForStmt, iterT Type) {
 	bs.cur = header
 	cmp := bs.freshTemp(TBool, f.SpanV)
 	bs.emit(&AssignInstr{
-		Dest: Place{Local: cmp},
-		Src: &BinaryRV{Op: BinLt, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &CopyOp{Place: Place{Local: lenLocal}, T: TInt}, T: TBool},
+		Dest:  Place{Local: cmp},
+		Src:   &BinaryRV{Op: BinLt, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &CopyOp{Place: Place{Local: lenLocal}, T: TInt}, T: TBool},
 		SpanV: f.SpanV,
 	})
 	bs.terminate(&BranchTerm{
@@ -2276,8 +2276,8 @@ func (bs *bodyState) lowerForInCountableIterator(f *ir.ForStmt, iterT Type) {
 	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
 	bs.cur = step
 	bs.emit(&AssignInstr{
-		Dest: Place{Local: idx},
-		Src: &BinaryRV{Op: BinAdd, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt}, T: TInt},
+		Dest:  Place{Local: idx},
+		Src:   &BinaryRV{Op: BinAdd, Left: &CopyOp{Place: Place{Local: idx}, T: TInt}, Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt}, T: TInt},
 		SpanV: f.SpanV,
 	})
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})

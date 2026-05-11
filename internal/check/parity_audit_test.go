@@ -42,9 +42,9 @@ func TestCheckPackageParityAudit(t *testing.T) {
 	res := resolve.ResolvePackageDefault(pkg)
 	reg := stdlib.LoadCached()
 	chk := check.Package(pkg, res, check.Opts{
-		Stdlib:             reg,
-		Primitives:         reg.Primitives,
-		ResultMethods:      reg.ResultMethods,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
 	})
 
 	type diagRow struct {

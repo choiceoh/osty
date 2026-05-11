@@ -174,7 +174,6 @@ type Opts struct {
 	// File() must supply the flag explicitly; the default false is
 	// correct for ordinary user code.
 	Privileged bool
-
 }
 
 // firstOpt returns the first Opts in the slice, or a zero value when

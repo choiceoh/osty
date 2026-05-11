@@ -84,10 +84,10 @@ func parseBackendFile(t *testing.T, src string) (*ast.File, *resolve.Result, *ch
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
-		Stdlib:             reg,
-		Primitives:         reg.Primitives,
-		ResultMethods:      reg.ResultMethods,
-		Source:             []byte(src),
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
 	})
 	return file, res, chk
 }

@@ -1149,7 +1149,6 @@ const (
 	//
 	// Fix: check write permissions and free space.
 	CodeScaffoldWriteError = "E2052"
-
 )
 
 const (
