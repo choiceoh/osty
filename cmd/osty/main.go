@@ -108,6 +108,13 @@ type cliFlags struct {
 }
 
 func main() {
+	// Flip the production native-checker default to the managed subprocess.
+	// SUBPROCESS_SWITCHOVER.md baseline confirms no user-visible regression on
+	// the workloads that matter; OSTY_NATIVE_CHECKER_BIN env override still
+	// wins and the production factory lazily resolves the managed binary on
+	// the first check (cheap when none happens, e.g. for `osty fmt`).
+	check.UseManagedSubprocessChecker(".")
+
 	parsed := clicmd.ParseArgs(os.Args[1:])
 	if !parsed.IsOk() {
 		if len(parsed.Name) == 0 && len(parsed.RawRest) == 0 {
