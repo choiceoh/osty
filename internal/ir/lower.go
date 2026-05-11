@@ -1277,7 +1277,7 @@ func astCallLooksLikeValueConstructor(e ast.Expr) bool {
 
 func astIfLooksLikeValueExpr(e ast.Expr) bool {
 	ife, ok := e.(*ast.IfExpr)
-	if !ok || ife == nil || ife.IsIfLet {
+	if !ok || ife == nil {
 		return false
 	}
 	if ife.Then == nil || len(ife.Then.Stmts) == 0 {
@@ -1286,6 +1286,13 @@ func astIfLooksLikeValueExpr(e ast.Expr) bool {
 	if !astBlockTailLooksLikeValueConstructor(ife.Then) {
 		return false
 	}
+	// `if let Some(x) = opt { x } else { -1 }` is a perfectly valid
+	// value expression — same shape as a regular `if cond { ... } else
+	// { ... }`. The earlier `IsIfLet → false` short-circuit was
+	// over-restrictive; rely on branch-shape analysis to decide whether
+	// the whole expression yields a value. Without this, trailing
+	// `if let` at block-final position drops to ExprStmt → MIR
+	// UnreachableTerm.
 	return astElseLooksLikeValueConstructor(ife.Else)
 }
 
@@ -1368,7 +1375,11 @@ func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
 	case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit, *ast.RangeExpr,
 		*ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.BoolLit,
 		*ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
-		*ast.QuestionExpr, *ast.TurbofishExpr:
+		*ast.QuestionExpr, *ast.TurbofishExpr, *ast.Ident:
+		// `*ast.Ident` covers `if cond { x } else { -1 }` where `x` is a
+		// binding/parameter reference. Bare ident at block-tail is
+		// almost always a value (function references are a theoretical
+		// false positive but harmless — they're FnType-valued).
 		return true
 	}
 	return false
