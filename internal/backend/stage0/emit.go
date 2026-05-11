@@ -4070,6 +4070,15 @@ func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx 
 			return fmt.Sprintf("%d", c.Value), scalarChar, true
 		case *mir.FloatConst:
 			return formatFloatConst(c.Value), scalarFloat, true
+		case *mir.FnConst:
+			// Function pointer constant — opaque ptr ABI. Used when a
+			// function value is passed as a call argument (e.g.
+			// `checkFromHostResult(host.CheckLockfile, ...)` where the
+			// first arg is the function reference).
+			if c.Symbol == "" {
+				return "", scalarUnknown, false
+			}
+			return "@" + c.Symbol, scalarOpaquePtr, true
 		}
 		return "", scalarUnknown, false
 	}
@@ -9976,6 +9985,14 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 			return fmt.Sprintf("%d", c.Value), scalarChar, true
 		case *mir.FloatConst:
 			return formatFloatConst(c.Value), scalarFloat, true
+		case *mir.FnConst:
+			// Function pointer constant — opaque ptr ABI. Used when a
+			// function value is passed as a call argument inside a
+			// while/CFG-body context (e.g. `checkFromHostResult(host.X, ...)`).
+			if c.Symbol == "" {
+				return "", scalarUnknown, false
+			}
+			return "@" + c.Symbol, scalarOpaquePtr, true
 		}
 		return "", scalarUnknown, false
 	}

@@ -128,6 +128,26 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 각 phase = 한 PR 단위. 의존성 순서대로.
 
+### Phase 0 — Bootstrap chain unblock (모든 phase 선행 필수)
+
+**상태 (2026-05-11)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능. 현재 상태:
+- 디폴트 registry (`github.com/choiceoh/osty/releases/.../osty-self-snapshots`) — 자산 0건 (404 확인).
+- `OSTY_STAGE0_FALLBACK=1` — P21–P23 머지됨에도 `install-self`가 **1340 function declines** 로 차단 (`OSTY_STAGE0_LIST_ALL_DECLINES=1` 확인).
+- 캐시/사전빌드 osty-self 없음.
+
+**0-A — Stage0 P24+ unlock 진행** (master plan v2 — `docs/osty_self_b2_1_audit.md §4.3`)
+- 다음 차단 클러스터를 P-phase로 분할. `tyToRepr` / `frontTypeReprToString` / `useDeclTailAfter` / `selfCheck*` / `checkLookup*` / `checkSubst*` 등이 decline top 그룹.
+- 각 P-phase = independent PR, emit.go에 ~300–500 LOC + matcher + 회귀 테스트.
+- 추정: 10–15 PR, 2–4 주. 부트스트랩 가능까지의 누적.
+- 회귀: `TestStage0ToolchainAudit` cover % 모니터 + `OSTY_STAGE0_FALLBACK=1 install-self` E2E.
+
+**0-B — Registry publish 활성화** (병렬 옵션)
+- `.github/workflows/build-osty-self.yml` 가 stage0로 osty-self 빌드 → release upload. `docs/operations/first-publish-playbook.md` 참조.
+- 의존성: 0-A 가 충분히 진행되어 stage0가 install-self를 완주 가능. 즉 **0-A의 부분 결과**.
+- 회귀: fresh-clone CI matrix에서 registry 경로로 osty-self 페치 + 검증.
+
+**Phase C–F closeout 차단**: 0-A가 install-self 완주 가능하게 만들거나, 0-B 가 publish 후 OSTY_SELF_REGISTRY_URL이 정상 작동할 때까지 Phase E3/E4/C4/G1/G2/F4 검증 불가. lir_proto.osty의 E3/E4 코드는 이미 머지 ([lir_proto.osty:2645](toolchain/lir_proto.osty:2645)) — verification만 차단.
+
 ### Phase A — 기반 인프라 강화 (선행)
 
 **A1 — Type lowering invalid path 진단 강화** (GAP-TYP-004)
@@ -182,6 +202,14 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 - 진행: Go MIR lowering 회귀도 같은 shape를 `whole` alias store + `.addr.city`/`.addr.zip`/`.score` projected reads로 잠근다. LIR Proto catalog sentinel은 current-generator fixture set에 이 source parity fixture가 계속 포함되는지도 확인한다.
 - 회귀: `TestRunCoversNestedStructBindingPattern` (cmd/osty-native-llvmgen).
 - 의존성: A1 진단 가시화 권장.
+
+**C4 — `Result<Struct, _>` composite payload widening** (GAP-TYP-004 잔여)
+- C1이 Option aggregate를 `{i64 tag, %Foo payload}`로 넓힌 동일 인프라를 Result로 확장.
+- Ok-side composite (`Result<Struct, _>`)와 Err-side composite (`Result<_, Struct>`) 양쪽을 한 PR. LIR Proto가 `%Result.Foo.Bar = { i64, %Foo, %Bar }` 직접 payload로 emit.
+- `?` 전파, `Ok(struct)` / `Err(struct)` aggregate, `unwrap()` / `unwrap_err()` composite return path 포함.
+- Source/Go tag convention `Ok=0` / `Err=1`은 C2에서 이미 정렬됨 — C4는 payload type widening만.
+- 회귀: 1 IR fixture per side + `TestNativeOwnedModuleEntryResultStructPayloadBatch` (신규).
+- 의존성: C1.
 
 ### Phase D — Generic method monomorphization symbol selection (Tier A `(c1)`)
 
@@ -238,32 +266,73 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 - `clangPlatformRuntimeLinkArgs` 수정 — 현재 darwin에 `Security`, `CoreFoundation` 추가 있지만 keychain object link 시 누락.
 - 회귀: `TestBundledRuntimeMap*` × 6.
 
+**F4 — LLVM015 fall-through audit & regression lock** (cleanup)
+- 닫힌 historical 패턴 (`buf.clear()`, `List/Map/Set.isEmpty`, `String.bytes` / `String.chars`, `List.pop` discard, `!a.m()` precedence) 별 IR snapshot 1건씩 회귀 락만 추가. 새 로직 없음.
+- LIR Proto에 새로 노출되는 fall-through는 GAP-INSTR-002/003/004로 추적 (LLVM015는 legacy Go-side bootstrap 진단 코드, 새 native 경로는 LIR Proto 진단 사용).
+- 의존성: 모든 phase 후. 위험 낮음, 병렬 가능.
+
+### Phase G — Closure escape (heap-alloc fallback)
+
+LIR Proto 현 stage limit ([lir_proto.osty:6339](toolchain/lir_proto.osty)): closure env는 stack alloca, escape 시 깨짐. 현재 실패 테스트는 없지만 higher-order Map/List helper / Handle 반환 패턴의 future blocker. 별도 phase로 격리.
+
+**G1 — Escape detection in MIR**
+- 새 MIR pass가 closure aggregate 사이트별로 escape 분류: return-from-fn / capture-into-escaping-env / store-into-heap-rooted-struct.
+- `MirAggClosure`에 `escapes: Bool` 플래그 추가. 비탈출은 stack alloca 유지 (perf 영향 0).
+- 회귀: MIR snapshot fixture (escape 분류 결과 lock).
+- 의존성: 없음 (independent).
+
+**G2 — Heap-alloc lowering in LIR Proto**
+- `lirLowerMirClosureAggregate`가 `escapes == true` 시 `osty.gc.alloc_v1(size)` 호출 후 GC-managed slot에 채워넣음. 비탈출은 기존 alloca 경로.
+- 회귀: 1 IR fixture (heap-allocated env shape) + 1 E2E binary (returned closure를 caller가 invoke).
+- 의존성: G1.
+
+**참고**: annotation-based opt-in (`#[boxed_closure]` 등) 도입 안 함 — Osty 우선 원칙상 메타 신설 전에 escape analysis로 충분한지 먼저 확인.
+
 ## 5. 의존성 그래프
 
 ```
+Phase 0-A (stage0 P24+) ──┐
+                          ├──→ (osty-self 빌드 가능) ──→ 모든 Phase C–F closeout verification
+Phase 0-B (registry pub) ─┘
+
 A1 (진단) ─┬─→ B1 ─→ B2 ─→ B3
            ├─→ C1 ─→ C2 ─→ C3
+           │         └──→ C4 (Result composite)
            └─→ D1
 A2 (uses) ─→ F2 (multi-file)
-E1 ─→ E2 ─→ E3 ─→ E4 (closure: TestLLVMBackendBinaryRunsInterfaceBoxingDispatch)
+E1 ─→ E2 ─→ E3 ─→ E4 (closes: TestLLVMBackendBinaryRunsInterfaceBoxingDispatch)
+G1 ─→ G2 (closure escape; 독립)
 F3 (별개): TestBundledRuntimeMap* link
+F4 (cleanup): 모든 phase 후
 ```
 
-병렬화 가능: A1 후 B*/C*/D*/E* 동시 진행 가능. F3는 처음부터 독립.
+**Phase C–F closeout 우산 (작업 순서)**:
+1. **Phase 0 prerequisite** — stage0 P24+ unlock 또는 registry 활성화로 osty-self 확보. 미해결 시 이하 단계 verification 불가.
+2. E3 → E4 (named E2E 테스트 1:1 매핑, E1/E2 컨텍스트 fresh) — lir_proto 코드는 이미 머지, 부트스트랩 후 검증만.
+3. C4 (Result composite — Optional aggregate batch와 함께 검증)
+4. G1 → G2 (closure escape, 디자인 불확실성 높음 → 위 둘 후)
+5. F4 (audit-only)
+
+D는 D1 완료로 종료. 새 갭 발견 시 그때 phase 추가.
+
+병렬화 가능: Phase 0이 풀린 후 A1 → B*/C*/D*/E*/G* 동시 진행 가능. F3/F4는 독립. **0-A 와 0-B는 서로 병렬**.
 
 ## 6. PR 사이즈 추정
 
 | Phase | PR | 추정 LOC | 예상 review 부담 |
 |---|---|---|---|
+| **0 (선행)** | **10–15 PR (stage0 P24+) + 1 PR (registry)** | **~3000–5000 (Go) + CI yaml** | **큼 — 가장 큰 영역** |
 | A | 2 PR | 100 + 150 | 작음 |
 | B | 3 PR | 200 + 300 + 200 | 중간 |
-| C | 3 PR | 200 + 250 + 300 | 중간 |
-| D | 1 PR | 250 | 중간 |
+| C | 4 PR | 200 + 250 + 300 + 250 | 중간 |
+| D | 1 PR | 250 (완료) | 중간 |
 | E | 4 PR | 200 + 300 + 350 + 400 | 큼 (특히 E4) |
-| F | 3 PR | 150 + audit + 50 | 작음 |
-| **총** | **16 PR** | **~3100 LOC** | — |
+| F | 4 PR | 150 + audit + 50 + 100 | 작음 |
+| G | 2 PR | 150 + 250 | 중간 |
+| **총** | **30–35 PR** | **~6650–8650 LOC** | — |
 
-추정 작업 시간: 한 사람 기준 2-3주. 병렬화 시 1.5주.
+추정 작업 시간 (Phase 0 포함): 한 사람 기준 4–6주. 병렬화 시 3–4주.
+**Phase 0 단독**: 2–4주 (master plan v2 추정).
 
 ## 7. 결정 사항
 
