@@ -998,7 +998,29 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 	case *ast.MatchExpr:
 		return astMatchLooksLikeValueExpr(e)
 	case *ast.Ident:
-		return astIdentLooksLikeValueConstructor(e)
+		if astIdentLooksLikeValueConstructor(e) {
+			return true
+		}
+		// Trailing bare ident (`xs` after building a list, `x`
+		// returning a parameter): a binding/parameter reference is
+		// always a value. Without this branch
+		//   fn build() -> List<Int> { let mut xs = []; xs.push(1); xs }
+		// drops the trailing `xs` to ExprStmt because the type-driven
+		// path can't see `xs`'s inferred type (`let mut xs = []` is
+		// type-inferred and post-#1645 the SemanticDB lookup misses on
+		// AST Ident nodes whose ID doesn't match the selfhost arena id).
+		// Limit to bindings/parameters — top-level fn references stay
+		// in the constructor-only branch above to avoid promoting
+		// `let f = helper; f` style indirect-call boilerplate.
+		if id, ok := e.(*ast.Ident); ok && id != nil && l.res != nil {
+			if sym := l.res.RefsByID[id.ID]; sym != nil {
+				switch sym.Kind {
+				case resolve.SymLet, resolve.SymParam:
+					return true
+				}
+			}
+		}
+		return false
 	case *ast.CallExpr:
 		// CallExpr return type may be unit (e.g. `println(...)`),
 		// in which case the trailing call should stay an ExprStmt

@@ -815,6 +815,72 @@ func TestLowerIfExprRecoversSyntacticBranchType(t *testing.T) {
 	}
 }
 
+// A trailing bare ident (`xs`, `x`) at the end of a block must be
+// promoted to the block's `Result` so the function's return path is
+// wired up. Pre-fix, `astIdentLooksLikeValueConstructor` only matched
+// uppercase constructor-style idents (`Some`, `Color`), and the
+// type-driven branch missed for inferred-type bindings (`let mut xs =
+// []` → `xs.Type()` is `<error>` post-#1645). Net effect:
+//
+//	fn build() -> List<Int> {
+//	    let mut xs = []
+//	    xs.push(1)
+//	    xs              // <- dropped to ExprStmt, MIR UnreachableTerm
+//	}
+//
+// The fix consults the resolver: trailing idents that resolve to a
+// `SymLet` or `SymParam` are always values, regardless of whether
+// their inferred type made it into the per-node Types map.
+func TestLowerTrailingBareIdentYieldsValue(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			"inferred_list",
+			`fn build() -> List<Int> {
+    let mut xs = []
+    xs.push(1)
+    xs
+}
+fn main() {}`,
+		},
+		{
+			"param_passthrough",
+			`fn id(x: Int) -> Int { x }
+fn main() {}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil (trailing bare-ident regression)", fn.Name)
+					continue
+				}
+				if _, ok := fn.Body.Result.(*Ident); !ok {
+					t.Errorf("fn %s: body.Result = %T, want *Ident", fn.Name, fn.Body.Result)
+				}
+			}
+		})
+	}
+}
+
 // Tuple field access (`t.0`, `t.1`) lowers via FieldExpr with a
 // numeric name. Post-#1645 the checker no longer fills `chk.Types[e]`
 // and the SemanticDB byID/byKey lookups miss for FieldExpr-on-tuple,
