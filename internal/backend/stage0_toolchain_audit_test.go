@@ -724,10 +724,12 @@ func stage0AuditModuleVerifyEnabled() bool {
 
 // stage0AuditExecVerifyEnabled reports whether the audit should link
 // the produced IR + runtime objects into an executable and invoke it
-// with a no-op argument (`--version`), checking exit code 0. Adds
-// link-stage bug detection (undefined symbols, calling-conv
-// mismatches with the runtime ABI) and a smoke test for trivial
-// runtime crashes.
+// with `--selfhost-doctor` (the lightest of the stage0 binary's
+// advertised subcommands). Adds link-stage bug detection (undefined
+// symbols, calling-conv mismatches with the runtime ABI) and a
+// smoke test for trivial runtime crashes. Stage0 today bottoms out
+// at the CLI dispatch banner + process.abort; the audit accepts
+// that ceiling and only flags an earlier crash.
 //
 // Cost: one full link + one process spawn. Adds ~10s on top of
 // MODULE_VERIFY (and implies it).
@@ -867,9 +869,11 @@ func runStage0AuditModuleVerify(t *testing.T, module *mir.Module, clangPath stri
 // them on demand and links them with the IR. Failure modes reported:
 //
 //   - link error (undefined symbols, ABI mismatch)
-//   - exec failure (non-zero exit, segfault, hang)
+//   - exec failure (segfault / hang / non-zero exit *without* the
+//     known stage0 dispatch banner — see
+//     `stage0AuditOutputHasKnownAbortMarker`)
 //   - exec timeout (defaults to 10s; the smoke target is just
-//     `--version` so this should be sub-second)
+//     `--selfhost-doctor` so this should be sub-second)
 func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string) {
 	t.Helper()
 	if module == nil {
@@ -967,16 +971,59 @@ func runStage0AuditExecVerify(t *testing.T, module *mir.Module, clangPath string
 		return
 	}
 	t.Logf("exec-verify: linked binary at %s (size %s)", binPath, fileSize(binPath))
-	// Smoke test: invoke with --version so we don't trigger heavy
-	// flows. Many CLIs treat unknown args as a usage error which is
-	// also fine for "the binary loaded and printed something".
-	runCmd := exec.Command(binPath, "--version")
+	// Smoke test: invoke with `--selfhost-doctor`, the lightest of
+	// `toolchain/main.osty`'s advertised subcommands. Two outcomes
+	// pass:
+	//
+	//   1. exit 0 — the produced binary actually handled the command.
+	//      Implies stage0 emit + runtime are deep enough to dispatch.
+	//   2. SIGABRT (exit 134) + stderr contains the known
+	//      `osty-self: unsupported command` marker — main reached
+	//      argv dispatch and printed the usage banner before
+	//      aborting. Stage0 today bottoms out here because the CLI
+	//      switch in `toolchain/main.osty` calls
+	//      `process.abort(...)` for every entry point until
+	//      per-instruction MIR body emission lands (Phase 1+).
+	//
+	// Anything else (segfault before main, no output, wrong message)
+	// is a real regression and gets logged.
+	runCmd := exec.Command(binPath, "--selfhost-doctor")
 	runOut, runErr := runCmd.CombinedOutput()
-	if runErr != nil {
-		t.Logf("exec-verify: binary --version failed: %v; output: %s", runErr, truncate(strings.TrimSpace(string(runOut)), 400))
+	combined := strings.TrimSpace(string(runOut))
+	if runErr == nil {
+		t.Logf("exec-verify: binary --selfhost-doctor succeeded; first 200 bytes of output: %s", truncate(combined, 200))
 		return
 	}
-	t.Logf("exec-verify: binary --version succeeded; first 200 bytes of output: %s", truncate(strings.TrimSpace(string(runOut)), 200))
+	if stage0AuditOutputHasKnownAbortMarker(combined) {
+		t.Logf("exec-verify: binary reached argv dispatch + printed known stage0 banner before abort (%v); stage0 supported subset still routes through process.abort. Output: %s", runErr, truncate(combined, 200))
+		return
+	}
+	t.Logf("exec-verify: binary --selfhost-doctor failed: %v; output: %s", runErr, truncate(combined, 400))
+}
+
+// stage0AuditOutputHasKnownAbortMarker reports whether the captured
+// stdout+stderr from a stage0-produced binary invocation contains
+// one of the known banner strings emitted by `toolchain/main.osty`'s
+// CLI dispatch before it falls back to `process.abort`. Used by
+// exec-verify and fp-verify to distinguish "binary reached argv
+// dispatch and aborted by design" (current stage0 ceiling) from
+// "binary crashed earlier" (a real regression).
+//
+// The markers must match strings the production toolchain CLI
+// actually emits so audit pass/fail flips immediately when stage0
+// regresses out of being able to print them.
+func stage0AuditOutputHasKnownAbortMarker(output string) bool {
+	markers := []string{
+		"osty-self: unsupported command",
+		"host compiler forwarding is disabled",
+		"supported subcommands:",
+	}
+	for _, m := range markers {
+		if strings.Contains(output, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // truncate returns s clipped to n bytes with an ellipsis suffix when
@@ -1130,35 +1177,54 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 	}
 
 	type phase struct {
-		name       string
-		args       []string
-		requireOut bool
+		name string
+		args []string
 	}
-	// Order matters — each phase implies the previous one worked
-	// inside the produced binary's source. Stop at first failure.
+	// Phase sequence mirrors what `toolchain/main.osty` advertises in
+	// its `--selfhost-doctor` banner — `--selfhost-doctor` is the
+	// lightest (no fixture needed), `lir-proto-lower` is the next
+	// stratum, `compile` is full pipeline. Stage0 today routes every
+	// one of these through `process.abort` after printing the
+	// dispatch banner, so each phase is graded on three outcomes:
+	//
+	//   - exit 0 → phase actually handled (real progress)
+	//   - known stage0 abort banner + non-zero exit → binary
+	//     reached argv dispatch (current ceiling)
+	//   - anything else → regression (segfault before dispatch,
+	//     missing banner, hang)
+	//
+	// Order matters for the "deepest reached" log line — each entry
+	// implies the previous one's machinery worked inside the
+	// produced binary.
 	phases := []phase{
-		{name: "parse", args: []string{"parse", fixturePath}, requireOut: true},
-		{name: "check", args: []string{"check", fixturePath}, requireOut: false},
-		{name: "pipeline", args: []string{"pipeline", fixturePath}, requireOut: true},
+		{name: "--selfhost-doctor", args: []string{"--selfhost-doctor"}},
+		{name: "lir-proto-lower", args: []string{"lir-proto-lower", fixturePath}},
+		{name: "compile", args: []string{"compile", fixturePath}},
 	}
 	deepest := ""
 	for _, p := range phases {
 		runCmd := exec.Command(binPath, p.args...)
 		runOut, runErr := runCmd.CombinedOutput()
-		if runErr != nil {
-			t.Logf("fp-verify: `osty %s` FAILED: %v", strings.Join(p.args, " "), runErr)
-			t.Logf("  output: %s", truncate(strings.TrimSpace(string(runOut)), 800))
-			break
+		combined := strings.TrimSpace(string(runOut))
+		if runErr == nil {
+			deepest = p.name
+			t.Logf("fp-verify: `osty %s` ✓ exit 0 (%d bytes output)", strings.Join(p.args, " "), len(runOut))
+			continue
 		}
-		if p.requireOut && len(strings.TrimSpace(string(runOut))) == 0 {
-			t.Logf("fp-verify: `osty %s` exit 0 but empty output (expected non-empty)", strings.Join(p.args, " "))
-			break
+		if stage0AuditOutputHasKnownAbortMarker(combined) {
+			t.Logf("fp-verify: `osty %s` reached argv dispatch + printed known banner before abort (%v); stage0 ceiling. Output: %s", strings.Join(p.args, " "), runErr, truncate(combined, 200))
+			// Treat banner-then-abort as "binary entry works"; do
+			// not advance `deepest` (the command was not actually
+			// handled) but keep walking so a later phase that
+			// exits 0 still gets credited.
+			continue
 		}
-		deepest = p.name
-		t.Logf("fp-verify: `osty %s` ✓ (%d bytes output)", strings.Join(p.args, " "), len(runOut))
+		t.Logf("fp-verify: `osty %s` FAILED with no recognisable stage0 banner: %v", strings.Join(p.args, " "), runErr)
+		t.Logf("  output: %s", truncate(combined, 800))
+		break
 	}
 	if deepest == "" {
-		t.Logf("fp-verify: produced binary failed at the very first phase")
+		t.Logf("fp-verify: stage0 binary entry-point + dispatch reachable; no phase actually handled (current stage0 ceiling)")
 	} else {
 		t.Logf("fp-verify: produced binary reached phase %q on the fixture", deepest)
 	}
