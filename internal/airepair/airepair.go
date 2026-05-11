@@ -14,6 +14,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 )
@@ -315,20 +316,32 @@ func (r Result) ResidualPrimaryHabit() string {
 }
 
 func probe(src []byte) (ProbeStats, []*diag.Diagnostic) {
-	// Phase 1c.4: drive the self-host checker directly. selfhost.CheckFromSource
-	// merges resolver + checker diagnostics into one CheckResult, so we split
-	// them back apart by diag code prefix (E05xx = resolve, everything else =
-	// check) to preserve the per-stage count contract ProbeStats exposes to
-	// accept/reject heuristics in Analyze().
-	//
-	// The E05xx = resolve contract is enforced at the codebase level: CLAUDE.md
-	// namespaces E0500-E0599 to name-resolution errors, and internal/diag/codes.go
-	// tracks every one. A resolve-phase diagnostic emitted outside that band
-	// would already break other tooling, so relying on the prefix here doesn't
-	// add a new fragility axis.
-	parseDiags, checked := selfhost.CheckFromSource(src)
-	convertedCheck := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
+	// Locally parse for the parse-phase ProbeStats — subprocess
+	// CheckPackageStructured rejects sources with parse errors outright,
+	// so the parse phase has to be observable here before the round-trip
+	// even attempts to run.
+	run := selfhost.Run(src)
+	parseDiags := run.Diagnostics()
 
+	// Resolve + check phases come from the factory (managed subprocess in
+	// production). When parse already errored, skip the subprocess call —
+	// CheckPackageStructured would reject the input and we'd lose the
+	// per-phase break-down that ProbeStats exposes to accept/reject
+	// heuristics in Analyze().
+	var checkedDiags []api.CheckDiagnosticRecord
+	if !probeDiagsHaveError(parseDiags) {
+		checked, err := check.NativePackageCheck(api.PackageCheckInput{
+			Files: []api.PackageCheckFile{{Source: src}},
+		})
+		if err == nil {
+			checkedDiags = checked.Diagnostics
+		}
+	}
+	convertedCheck := selfhost.CheckDiagnosticsAsDiag(src, checkedDiags)
+
+	// CLAUDE.md namespaces E0500-E0599 to name-resolution diagnostics, so we
+	// split converted records into resolve vs check by code prefix to
+	// preserve the per-stage count contract.
 	resolveDiags := make([]*diag.Diagnostic, 0, len(convertedCheck))
 	checkDiags := make([]*diag.Diagnostic, 0, len(convertedCheck))
 	for _, d := range convertedCheck {
@@ -354,6 +367,15 @@ func probe(src []byte) (ProbeStats, []*diag.Diagnostic) {
 	all = append(all, parseDiags...)
 	all = append(all, convertedCheck...)
 	return stats, all
+}
+
+func probeDiagsHaveError(diags []*diag.Diagnostic) bool {
+	for _, d := range diags {
+		if d != nil && d.Severity == diag.Error {
+			return true
+		}
+	}
+	return false
 }
 
 func count(diags []*diag.Diagnostic) StageStats {

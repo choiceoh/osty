@@ -189,13 +189,25 @@ func nativeResolveArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFil
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.err
 }
 
+// NativePackageCheckHook is the seam through which package-check requests
+// reach the production native checker (managed subprocess installed by
+// check.UseManagedSubprocessChecker). The internal/check package's init
+// wires it to check.NativePackageCheck so the resolver's fact-artifact
+// pipeline sees the same factory as `osty check` / `lint` / `typecheck`.
+//
+// Default falls back to the in-process selfhost path so pure resolve unit
+// tests that don't import check still get a working checker.
+var NativePackageCheckHook = func(input api.PackageCheckInput) (api.CheckResult, error) {
+	return selfhost.CheckPackageStructured(input)
+}
+
 func nativeResolveFactArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFileInfo, api.CheckResult, error) {
 	result, files, err := nativeResolveArtifacts(pkg)
 	if err != nil || pkg == nil {
 		return result, files, api.CheckResult{}, err
 	}
 	pkg.nativeResolve.checkOnce.Do(func() {
-		checked, err := selfhost.CheckPackageStructured(pkg.nativeResolve.checkInput)
+		checked, err := NativePackageCheckHook(pkg.nativeResolve.checkInput)
 		if err == nil {
 			pkg.nativeResolve.check = checked
 		}
