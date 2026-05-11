@@ -117,9 +117,6 @@ type Result struct {
 	Lint     *lint.Result
 	AllDiags []*diag.Diagnostic // every diag from every phase, in phase order
 
-	nativeResolve *selfhost.ResolveResult
-	nativeCheck   *selfhost.CheckResult
-
 	// PerDecl is populated when Config.PerDecl is set. One entry per
 	// (declaration, pass) pair the type checker visited. Sorted by
 	// total descending in RenderText / RenderJSON.
@@ -135,34 +132,6 @@ type Result struct {
 	// for caret snippets even when the pipeline spans multiple files or
 	// packages.
 	Sources map[string][]byte
-}
-
-// NativeResolveResult returns the self-host resolver's structured result for
-// the retained ParseRun without touching the public *ast.File boundary. The
-// legacy Result.Resolve field remains populated for existing consumers.
-func (r *Result) NativeResolveResult() *selfhost.ResolveResult {
-	if r == nil || r.ParseRun == nil {
-		return nil
-	}
-	if r.nativeResolve == nil {
-		resolved := selfhost.ResolveStructuredFromRun(r.ParseRun)
-		r.nativeResolve = &resolved
-	}
-	return r.nativeResolve
-}
-
-// NativeCheckResult returns the self-host checker's structured result for the
-// retained ParseRun without touching the public *ast.File boundary. The legacy
-// Result.Check field remains populated for existing consumers.
-func (r *Result) NativeCheckResult() *selfhost.CheckResult {
-	if r == nil || r.ParseRun == nil {
-		return nil
-	}
-	if r.nativeCheck == nil {
-		checked := selfhost.CheckStructuredFromRun(r.ParseRun)
-		r.nativeCheck = &checked
-	}
-	return r.nativeCheck
 }
 
 // DeclTiming records how long the type checker spent on one
