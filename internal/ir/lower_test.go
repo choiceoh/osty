@@ -142,6 +142,35 @@ func TestLowerCallTypeUsesNativeIndexWithoutLegacyTypeMap(t *testing.T) {
 	}
 }
 
+// Real selfhost output anchors instantiation records to the callee
+// identifier's NodeID (not the CallExpr's). `instantiationArgs` must
+// follow that anchor or generic monomorphization regresses to "arity
+// mismatch" for every non-turbofish generic call site.
+func TestLowerInstantiationArgsAnchorsOnCalleeIdentNodeID(t *testing.T) {
+	fnIdent := &ast.Ident{ID: 11, Name: "id"}
+	call := &ast.CallExpr{
+		ID: 13, // CallExpr.ID intentionally different from fnIdent.ID
+		Fn: fnIdent,
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Instantiations: []api.CheckInstantiation{{
+				NodeID:   int(fnIdent.ID),
+				Callee:   "id",
+				TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}},
+			}},
+		},
+	}
+
+	mod, _ := Lower("main", file, nil, chk)
+	stmt := mod.Script[0].(*ExprStmt)
+	loweredCall := stmt.X.(*CallExpr)
+	if got := loweredCall.TypeArgs; len(got) != 1 || got[0] != TInt {
+		t.Fatalf("call type args = %#v, want [TInt] (callee-Ident-anchored lookup)", got)
+	}
+}
+
 func TestLowerInstantiationArgsUseNativeIndexWithoutLegacyMap(t *testing.T) {
 	call := &ast.CallExpr{
 		ID: 11,
