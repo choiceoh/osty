@@ -881,6 +881,66 @@ fn main() {}`,
 	}
 }
 
+// Trailing stdlib container-method calls (`xs.filter(...)`,
+// `xs.sorted()`) must promote to the block's `Result` so the function
+// returns the new list. The previous CallExpr branch in
+// `expressionYieldsValue` only consulted `userMethodReturnTypeFromAST`
+// which bails out for builtin containers (List/Map/Set/String/Bytes).
+// Without a stdlib-intrinsic fallback, a method chain like
+//
+//	fn evens(xs: List<Int>) -> List<Int> { xs.filter(|x| x % 2 == 0) }
+//
+// drops the trailing call to ExprStmt → MIR UnreachableTerm → stage0
+// declined.
+func TestLowerTrailingStdlibMethodCallYieldsValue(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			"list_filter",
+			`fn evens(xs: List<Int>) -> List<Int> {
+    xs.filter(|x| x % 2 == 0)
+}
+fn main() {}`,
+		},
+		{
+			"list_sorted",
+			`fn ord(xs: List<Int>) -> List<Int> { xs.sorted() }
+fn main() {}`,
+		},
+		{
+			"list_contains",
+			`fn has(xs: List<Int>, n: Int) -> Bool { xs.contains(n) }
+fn main() {}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil (trailing stdlib-method regression)", fn.Name)
+				}
+			}
+		})
+	}
+}
+
 // Tuple field access (`t.0`, `t.1`) lowers via FieldExpr with a
 // numeric name. Post-#1645 the checker no longer fills `chk.Types[e]`
 // and the SemanticDB byID/byKey lookups miss for FieldExpr-on-tuple,

@@ -1042,6 +1042,17 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 				if rt := l.userMethodReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
 					return true
 				}
+				// Builtin container / stdlib intrinsic methods: when
+				// the user-method path bails out because the receiver
+				// is a builtin (`List<T>`, `Map<K,V>`, `String`,
+				// `Bytes`), consult the same intrinsic table the
+				// MethodCall recovery uses. Without this, trailing
+				// `xs.filter(|x| ...)`, `xs.map(...)`, `s.toUpper()`
+				// etc. are dropped to ExprStmt and the function
+				// returns nothing — MIR UnreachableTerm.
+				if rt := l.builtinMethodReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
 			}
 			// Free-fn calls (`helper()`): promote when the resolved
 			// declaration has a non-unit return type. We restrict this
@@ -1087,6 +1098,101 @@ func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
 		return l.lowerType(d.ReturnType)
 	}
 	return nil
+}
+
+// builtinMethodReturnTypeFromAST mirrors `userMethodReturnTypeFromAST`
+// for receivers whose static type is a builtin container or primitive
+// (`List<T>`, `Map<K,V>`, `Set<T>`, `String`, `Bytes`). It defers to
+// the existing `recoverMethodReturnTypeFromType` intrinsic table so
+// trailing `xs.filter(...)`, `s.toUpper()` etc. promote to the block's
+// Result instead of being dropped to ExprStmt.
+func (l *lowerer) builtinMethodReturnTypeFromAST(fx *ast.FieldExpr) Type {
+	if l == nil || fx == nil {
+		return nil
+	}
+	recvType := l.resolveExprStaticType(fx.X)
+	if recvType == nil || recvType == ErrTypeVal {
+		return nil
+	}
+	return recoverMethodReturnTypeFromType(fx.Name, recvType)
+}
+
+// resolveExprStaticType returns a best-effort static type for the
+// expression, using resolver + AST decl shapes when SemanticDB lookups
+// miss. Limited to the receiver shapes commonly used as method-call
+// receivers: bare Ident (binding/parameter) and FieldExpr (struct
+// field access). Returns nil when the type can't be recovered.
+func (l *lowerer) resolveExprStaticType(e ast.Expr) Type {
+	if l == nil || e == nil || l.res == nil {
+		return nil
+	}
+	switch x := e.(type) {
+	case *ast.Ident:
+		sym := l.res.RefsByID[x.ID]
+		if sym == nil {
+			return nil
+		}
+		if t := l.nativeBindingTypeForSymbol(sym); t != nil && t != ErrTypeVal {
+			return t
+		}
+		if t := l.nativeSymbolType(sym); t != nil && t != ErrTypeVal {
+			return t
+		}
+		if p, ok := sym.Decl.(*ast.Param); ok && p.Type != nil {
+			if t := l.lowerType(p.Type); t != nil && t != ErrTypeVal {
+				return t
+			}
+		}
+		// Let-stmt binding with explicit Type annotation.
+		if ip, ok := sym.Decl.(*ast.IdentPat); ok {
+			if ls := l.findLetStmtByPattern(ip); ls != nil && ls.Type != nil {
+				if t := l.lowerType(ls.Type); t != nil && t != ErrTypeVal {
+					return t
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// findLetStmtByPattern walks the current file for a LetStmt whose
+// IdentPat matches `pat`. Used to recover a let binding's declared
+// type when the SemanticDB lookup misses.
+func (l *lowerer) findLetStmtByPattern(pat *ast.IdentPat) *ast.LetStmt {
+	if pat == nil || l.file == nil {
+		return nil
+	}
+	var found *ast.LetStmt
+	var walk func(ast.Node)
+	walk = func(n ast.Node) {
+		if n == nil || found != nil {
+			return
+		}
+		if ls, ok := n.(*ast.LetStmt); ok && ls != nil {
+			if ip, ok := ls.Pattern.(*ast.IdentPat); ok && ip == pat {
+				found = ls
+				return
+			}
+		}
+		switch x := n.(type) {
+		case *ast.File:
+			for _, d := range x.Decls {
+				walk(d)
+			}
+		case *ast.FnDecl:
+			if x.Body != nil {
+				walk(x.Body)
+			}
+		case *ast.Block:
+			for _, s := range x.Stmts {
+				walk(s)
+			}
+		case *ast.ExprStmt:
+			walk(x.X)
+		}
+	}
+	walk(l.file)
+	return found
 }
 
 // userMethodReturnTypeFromAST resolves the receiver expression of a
@@ -3367,8 +3473,15 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &OptionalType{Inner: nt.Args[0]}
 		case "push":
 			return TUnit
-		case "sorted":
+		case "sorted", "reverse", "reversed", "filter":
+			// `filter(pred)` keeps the element type; `sorted` /
+			// `reversed` likewise return a same-typed List. Note that
+			// `map(fn)` is intentionally excluded — its return is
+			// `List<U>` where `U` depends on the closure return, which
+			// the intrinsic table can't see without checker support.
 			return nt
+		case "contains":
+			return TBool
 		}
 	}
 	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,
