@@ -146,6 +146,70 @@ func TestLowerCallTypeUsesNativeIndexWithoutLegacyTypeMap(t *testing.T) {
 // identifier's NodeID (not the CallExpr's). `instantiationArgs` must
 // follow that anchor or generic monomorphization regresses to "arity
 // mismatch" for every non-turbofish generic call site.
+// Real selfhost output anchors CheckedBinding records by byte range,
+// with a NodeID that does not match the AST IdentPat's ID (they live in
+// separate namespaces). `nativeBindingType` must look up by byte range
+// + name when byID misses, or every let binding whose RHS type can only
+// be recovered from SemanticDB (method call result, struct field
+// access) regresses to `Type=<error>` after #1645 zeroed the legacy
+// Result.Types map.
+func TestLowerBindingTypeAnchorsOnByteRange(t *testing.T) {
+	src := `pub struct Buf {
+    items: List<Int>,
+
+    pub fn sum(self) -> Int {
+        let mut acc = 0
+        acc
+    }
+}
+
+fn main() {
+    let b = Buf { items: [1, 2, 3] }
+    let total = b.sum()
+    let items = b.items
+}
+`
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse: %v", parseDiags)
+	}
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+
+	want := map[string]string{
+		"b":     "Buf",
+		"total": "Int",
+		"items": "List<Int>",
+	}
+	got := map[string]string{}
+	Inspect(mod, func(n Node) bool {
+		fn, ok := n.(*FnDecl)
+		if !ok || fn.Name != "main" {
+			return true
+		}
+		Inspect(fn.Body, func(n Node) bool {
+			if ls, ok := n.(*LetStmt); ok {
+				got[ls.Name] = typeString(ls.Type)
+			}
+			return true
+		})
+		return true
+	})
+	for name, expect := range want {
+		if got[name] != expect {
+			t.Errorf("let %s: Type=%q, want %q (byte-range fallback regression)", name, got[name], expect)
+		}
+	}
+}
+
 func TestLowerInstantiationArgsAnchorsOnCalleeIdentNodeID(t *testing.T) {
 	fnIdent := &ast.Ident{ID: 11, Name: "id"}
 	call := &ast.CallExpr{

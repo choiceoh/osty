@@ -1,7 +1,6 @@
 package ir
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 
@@ -15,6 +14,8 @@ type nativeCheckCache struct {
 	ready                 bool
 	typedNodesByNodeID    map[int][]*api.CheckedNode
 	typedNodesByByteRange map[[2]int][]*api.CheckedNode
+	bindingsByByteRange   map[[2]int][]*api.CheckedBinding
+	symbolsByByteRange    map[[2]int][]*api.CheckedSymbol
 }
 
 func (l *lowerer) nativeIndex() (api.CheckResultIndex, bool) {
@@ -30,6 +31,8 @@ func (l *lowerer) nativeIndex() (api.CheckResultIndex, bool) {
 	l.native.idx = native.Index()
 	l.native.typedNodesByNodeID = typedNodesByNodeID(native.TypedNodes)
 	l.native.typedNodesByByteRange = typedNodesByByteRange(native.TypedNodes)
+	l.native.bindingsByByteRange = bindingsByByteRange(native.Bindings)
+	l.native.symbolsByByteRange = symbolsByByteRange(native.Symbols)
 	return l.native.idx, true
 }
 
@@ -60,6 +63,35 @@ func typedNodesByByteRange(nodes []api.CheckedNode) map[[2]int][]*api.CheckedNod
 		}
 		key := [2]int{nodes[i].Start, nodes[i].End}
 		out[key] = append(out[key], &nodes[i])
+	}
+	return out
+}
+
+// bindingsByByteRange / symbolsByByteRange index CheckedBinding /
+// CheckedSymbol records by `[start, end]`. Same rationale as
+// typedNodesByByteRange — `CheckResultIndex.BindingsByNodeKey` /
+// `SymbolsByNodeKey` use content-hash keys that include kind/name so
+// they cannot be queried from an AST node alone.
+func bindingsByByteRange(bs []api.CheckedBinding) map[[2]int][]*api.CheckedBinding {
+	out := make(map[[2]int][]*api.CheckedBinding, len(bs))
+	for i := range bs {
+		if bs[i].Start == 0 && bs[i].End == 0 {
+			continue
+		}
+		key := [2]int{bs[i].Start, bs[i].End}
+		out[key] = append(out[key], &bs[i])
+	}
+	return out
+}
+
+func symbolsByByteRange(ss []api.CheckedSymbol) map[[2]int][]*api.CheckedSymbol {
+	out := make(map[[2]int][]*api.CheckedSymbol, len(ss))
+	for i := range ss {
+		if ss[i].Start == 0 && ss[i].End == 0 {
+			continue
+		}
+		key := [2]int{ss[i].Start, ss[i].End}
+		out[key] = append(out[key], &ss[i])
 	}
 	return out
 }
@@ -228,13 +260,18 @@ func (l *lowerer) nativeBindingType(n ast.Node, name string) Type {
 		}
 	}
 
-	// Fallback: span-based lookup via NodeKey.
+	// Byte-range fallback. AST NodeIDs and selfhost arena ids live in
+	// separate namespaces, so byID misses for real selfhost output (the
+	// AST IdentPat for `acc` may have ID=6 while SemanticDB records the
+	// binding under Node=4). Byte ranges do align, so look up by
+	// `[start, end]` and disambiguate by `name`. The historical
+	// `idx.BindingsByNodeKey[fmt.Sprintf("%d:%d", ...)]` lookup was a
+	// no-op — that map is keyed on content-hash strings, not raw spans.
 	start, end, hasRange := astNodeByteRange(n)
 	if !hasRange {
 		return nil
 	}
-	key := fmt.Sprintf("%d:%d", start, end)
-	for _, rec := range idx.BindingsByNodeKey[key] {
+	for _, rec := range l.native.bindingsByByteRange[[2]int{start, end}] {
 		if rec != nil && rec.Type != nil && (name == "" || rec.Name == name) {
 			return l.fromNativeTypeRepr(rec.Type)
 		}
@@ -276,13 +313,16 @@ func (l *lowerer) nativeSymbolTypeForNode(n ast.Node, name string) Type {
 		}
 	}
 
-	// Fallback: span-based lookup via NodeKey.
+	// Byte-range fallback. Same rationale as nativeBindingType: AST
+	// NodeIDs and selfhost arena ids diverge in practice (AST FnDecl
+	// `sum`.ID=12 vs SemanticDB CheckedSymbol Node=10 for the same span)
+	// and `SymbolsByNodeKey` is content-hashed, not span-keyed. Match by
+	// byte range and disambiguate by symbol name.
 	start, end, hasRange := astNodeByteRange(n)
 	if !hasRange {
 		return nil
 	}
-	key := fmt.Sprintf("%d:%d", start, end)
-	for _, rec := range idx.SymbolsByNodeKey[key] {
+	for _, rec := range l.native.symbolsByByteRange[[2]int{start, end}] {
 		if rec != nil && rec.Type != nil && (name == "" || rec.Name == name) {
 			return l.fromNativeTypeRepr(rec.Type)
 		}
