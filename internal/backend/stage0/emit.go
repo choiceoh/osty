@@ -344,6 +344,16 @@ type moduleCtx struct {
 	tuplePool   map[string]string
 	nextTupleID int
 	nextTempID  int
+	// declinedStubBanners tracks which decline-stub function-name string
+	// constants have already been written to extraDecls so multiple
+	// stub emits don't duplicate them. Key = MIR function name, value
+	// = the assigned LLVM global label (with leading `@`).
+	declinedStubBanners map[string]string
+	// declinedStubHelperEmitted records whether the
+	// `declare void @osty_rt_stage0_declined(ptr)` line is already in
+	// extraDecls. Single per-module declare; first stub emit lays it
+	// down, subsequent ones reuse.
+	declinedStubHelperEmitted bool
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
@@ -359,24 +369,41 @@ func newModuleCtx(module *mir.Module) *moduleCtx {
 		}
 	}
 	return &moduleCtx{
-		module:         module,
-		extraDecls:     &strings.Builder{},
-		stringPool:     map[string]string{},
-		emittedStructs: map[string]bool{},
-		definedFnSyms:  defined,
-		tuplePool:      map[string]string{},
+		module:              module,
+		extraDecls:          &strings.Builder{},
+		stringPool:          map[string]string{},
+		emittedStructs:      map[string]bool{},
+		definedFnSyms:       defined,
+		tuplePool:           map[string]string{},
+		declinedStubBanners: map[string]string{},
 	}
 }
 
-// emitDeclineStub renders a minimal `define <ret> @<name>(<params>)
-// { entry: unreachable }` body for a function that declined trial-
-// emit. The callers in successfully-emitted functions reference this
-// symbol via `call @<sym>(...)`; without a definition the linker
-// rejects the binary with `Undefined symbols for architecture …`.
-// `unreachable` as the only terminator is valid LLVM and asserts at
-// runtime — a stage0-built binary that hits this codepath traps
-// (which is correct: the production LIR-Proto path lowers the
-// function for real, stage0 just needs the smoke test to link).
+// emitDeclineStub renders a minimal
+// `define <ret> @<name>(<params>) { entry:
+//
+//	    call void @osty_rt_stage0_declined(ptr @.stage0.declined.<N>)
+//	    unreachable
+//	}` body for a function that declined trial-emit. The callers in
+//
+// successfully-emitted functions reference this symbol via
+// `call @<sym>(...)`; without a definition the linker rejects the
+// binary with `Undefined symbols for architecture …`.
+//
+// The body used to be a bare `unreachable`. clang lowered that to
+// `ud2` which on x86-64 is a fixed-size 2-byte trap. At link time
+// `ld --icf=safe` (the lld/GNU ld default for identical-cold-code)
+// then folded multiple zero-cost stubs into the address of an
+// unrelated abort-shaped function (`osty_rt_option_unwrap_none` in
+// practice), so a stage0 binary that dispatched into a declined
+// function aborted with `called unwrap on None` — misleading and
+// unmatchable from the audit harness.
+//
+// The structured `call + unreachable` body forces ICF to keep each
+// stub distinct (the call argument is a unique global per function
+// name) and gives the audit harness a stable banner to match.
+// `osty_rt_stage0_declined` writes the function name + a fixed
+// hint to stderr then calls `abort()`.
 //
 // Returns false when any param or return type can't be classified —
 // such functions stay declined and accept the link gap. Aggregate
@@ -449,9 +476,52 @@ func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
 	}
 	b.WriteString(") {\n")
 	b.WriteString("entry:\n")
+	// Emit a one-shot declaration of the runtime helper and a
+	// per-function string global naming the declined symbol. Both
+	// land in `extraDecls` so they appear before any function body
+	// references them; idempotent across multiple stub emits via the
+	// `declinedStubHelperEmitted` flag and the `declinedStubBanners`
+	// map.
+	if !mctx.declinedStubHelperEmitted {
+		mctx.extraDecls.WriteString("declare void @osty_rt_stage0_declined(ptr)\n")
+		mctx.declinedStubHelperEmitted = true
+	}
+	bannerLabel := mctx.declinedStubBanners[fn.Name]
+	if bannerLabel == "" {
+		bannerLabel = fmt.Sprintf("@.stage0.declined.%d", len(mctx.declinedStubBanners))
+		mctx.declinedStubBanners[fn.Name] = bannerLabel
+		// LLVM `c"..."` strings need backslash escapes for quotes,
+		// backslashes, and non-printables. MIR function names are
+		// identifier-shaped so the unescaped name is safe to embed,
+		// but route through `llvmStringEscape` regardless to stay
+		// robust against unusual mangles.
+		escaped := llvmStringEscape(fn.Name)
+		fmt.Fprintf(mctx.extraDecls,
+			"%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"\n",
+			bannerLabel, len(fn.Name)+1, escaped)
+	}
+	fmt.Fprintf(&b, "  call void @osty_rt_stage0_declined(ptr %s)\n", bannerLabel)
 	b.WriteString("  unreachable\n")
 	b.WriteString("}\n\n")
 	return b.String(), true
+}
+
+// llvmStringEscape returns `s` with bytes that need escaping inside
+// an LLVM `c"..."` string constant replaced by their `\HH` form.
+// Used by `emitDeclineStub`'s banner global; the same shape works
+// for any private string constant.
+func llvmStringEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '"' || c == '\\' || c < 0x20 || c > 0x7e {
+			fmt.Fprintf(&b, "\\%02X", c)
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // internTupleType returns the synthetic LLVM type name (with leading
