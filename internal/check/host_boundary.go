@@ -81,7 +81,25 @@ func (embeddedNativeChecker) CheckPackageStructured(input api.PackageCheckInput)
 	return selfhost.CheckPackageStructured(input)
 }
 
+// productionNativeCheckerFactory is the single production-path selector.
+// Probe-only tooling keeps opting into the managed subprocess explicitly.
+var productionNativeCheckerFactory = func() (nativeChecker, string) {
+	return embeddedNativeChecker{}, ""
+}
+
 var nativeCheckerFactory = defaultNativeChecker
+
+func defaultNativeChecker() (nativeChecker, string) {
+	path := strings.TrimSpace(os.Getenv(nativeCheckerEnv))
+	if path != "" {
+		resolved, err := exec.LookPath(path)
+		if err != nil {
+			return nil, fmt.Sprintf("%s=%q was not found", nativeCheckerEnv, path)
+		}
+		return nativeCheckerExec{path: resolved}, ""
+	}
+	return productionNativeCheckerFactory()
+}
 
 type selfhostCheckedSource struct {
 	source []byte

@@ -7,10 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -250,16 +248,4 @@ func (c cachedNativeChecker) write(key string, res api.CheckResult) {
 func cachedEmbeddedKey(tag string, data []byte) string {
 	sum := sha256.Sum256(data)
 	return tag + "-" + hex.EncodeToString(sum[:])
-}
-
-func defaultNativeChecker() (nativeChecker, string) {
-	path := strings.TrimSpace(os.Getenv(nativeCheckerEnv))
-	if path != "" {
-		resolved, err := exec.LookPath(path)
-		if err != nil {
-			return nil, fmt.Sprintf("%s=%q was not found", nativeCheckerEnv, path)
-		}
-		return nativeCheckerExec{path: resolved}, ""
-	}
-	return embeddedNativeChecker{}, ""
 }
