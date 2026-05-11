@@ -17,7 +17,7 @@ func (stubNativeChecker) CheckPackageStructured(api.PackageCheckInput) (api.Chec
 	return api.CheckResult{}, nil
 }
 
-func TestDefaultNativeCheckerUsesProductionSelectorByDefault(t *testing.T) {
+func TestDefaultNativeCheckerUsesProductionSelector(t *testing.T) {
 	original := productionNativeCheckerFactory
 	t.Cleanup(func() {
 		productionNativeCheckerFactory = original
@@ -38,7 +38,7 @@ func TestDefaultNativeCheckerUsesProductionSelectorByDefault(t *testing.T) {
 	}
 }
 
-func TestDefaultNativeCheckerPrefersExplicitManagedOverride(t *testing.T) {
+func TestDefaultNativeCheckerUsesEnvOverride(t *testing.T) {
 	original := productionNativeCheckerFactory
 	t.Cleanup(func() {
 		productionNativeCheckerFactory = original
