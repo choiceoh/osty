@@ -881,6 +881,70 @@ fn main() {}`,
 	}
 }
 
+// Bundle 4: 40+ more trailing-call shapes — Math/Float (log, sin,
+// exp, etc.), Int bit ops (gcd, sign, countOnes, leadingZeros),
+// List<T> functional helpers (reduce, flatten, distinct, partition),
+// String byte/char access (byteAt, charAt, splitFirst, byteSize),
+// Option/Result extras (unwrapOrElse, or, and), Map.getOr,
+// Bytes.toString/toHex/concat.
+func TestLowerTrailingMethodCallBundle4(t *testing.T) {
+	tests := []struct {
+		name, src, wantType string
+	}{
+		{"math_log", `fn lg(x: Float) -> Float { x.log() } fn main() {}`, "Float"},
+		{"math_sin", `fn s(x: Float) -> Float { x.sin() } fn main() {}`, "Float"},
+		{"math_exp", `fn e(x: Float) -> Float { x.exp() } fn main() {}`, "Float"},
+		{"int_gcd", `fn g(a: Int, b: Int) -> Int { a.gcd(b) } fn main() {}`, "Int"},
+		{"int_sign", `fn sg(n: Int) -> Int { n.sign() } fn main() {}`, "Int"},
+		{"int_countOnes", `fn co(n: Int) -> Int { n.countOnes() } fn main() {}`, "Int"},
+		{"int_leadingZeros", `fn lz(n: Int) -> Int { n.leadingZeros() } fn main() {}`, "Int"},
+		{"list_reduce", `fn r(xs: List<Int>) -> Int? { xs.reduce(|a, b| a + b) } fn main() {}`, "Int?"},
+		{"list_flatten", `fn f(xs: List<List<Int>>) -> List<Int> { xs.flatten() } fn main() {}`, "List<Int>"},
+		{"list_distinct", `fn d(xs: List<Int>) -> List<Int> { xs.distinct() } fn main() {}`, "List<Int>"},
+		{"list_partition", `fn p(xs: List<Int>) -> (List<Int>, List<Int>) { xs.partition(|x| x > 0) } fn main() {}`, "(List<Int>, List<Int>)"},
+		{"string_splitFirst", `fn sf(s: String, c: Char) -> (String, String)? { s.splitFirst(c) } fn main() {}`, "(String, String)?"},
+		{"string_byteAt", `fn b(s: String, i: Int) -> Byte? { s.byteAt(i) } fn main() {}`, "Byte?"},
+		{"string_charAt", `fn c(s: String, i: Int) -> Char? { s.charAt(i) } fn main() {}`, "Char?"},
+		{"string_byteSize", `fn bs(s: String) -> Int { s.byteSize() } fn main() {}`, "Int"},
+		{"option_or", `fn o(a: Int?, b: Int?) -> Int? { a.or(b) } fn main() {}`, "Int?"},
+		{"option_and", `fn a_(a: Int?, b: Int?) -> Int? { a.and(b) } fn main() {}`, "Int?"},
+		{"option_unwrapOrElse", `fn ue(o: Int?, d: Int) -> Int { o.unwrapOrElse(|| d) } fn main() {}`, "Int"},
+		{"result_unwrapOrElse", `fn oe(r: Result<Int, Error>, d: Int) -> Int { r.unwrapOrElse(|_| d) } fn main() {}`, "Int"},
+		{"map_getOr", `fn go_(m: Map<String, Int>, k: String, d: Int) -> Int { m.getOr(k, d) } fn main() {}`, "Int"},
+		{"bytes_toString", `fn b2s(b: Bytes) -> Result<String, Error> { b.toString() } fn main() {}`, "Result<String, Error>"},
+		{"bytes_toHex", `fn h(b: Bytes) -> String { b.toHex() } fn main() {}`, "String"},
+		{"bytes_concat", `fn bc(a: Bytes, b: Bytes) -> Bytes { a.concat(b) } fn main() {}`, "Bytes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil", fn.Name)
+					continue
+				}
+				if got := typeString(fn.Body.Result.Type()); got != tt.wantType {
+					t.Errorf("fn %s: body.Result.Type = %q, want %q", fn.Name, got, tt.wantType)
+				}
+			}
+		})
+	}
+}
+
 // Bundle 3: 40+ more trailing-call shapes covering Int/Float
 // predicates+formatting, String mutation/predicate helpers, List<T>
 // mutation operations (pop/remove/indexOf/iter/extend), Iterator<T>
