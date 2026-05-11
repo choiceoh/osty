@@ -35,6 +35,28 @@ not from `TestMain`, so `go test ./...` from inside the repo doesn't
 trigger managed binary builds that would otherwise add seconds and
 clutter every test package's `.osty/toolchain/...`.
 
+Gate (b-hard) prerequisites — migrating tests off that embedded default —
+have begun. `internal/check/testsupport.go` exposes three helpers:
+
+- `BuildSharedNativeCheckerForTests()` — builds `cmd/osty-native-checker`
+  once per test binary into a temp dir, returning its absolute path.
+- `InstallSubprocessCheckerForPackageTests(binPath)` — installs the
+  subprocess factory for the lifetime of a test binary, intended for use
+  from `TestMain`.
+- `UseSubprocessCheckerForTest(t, binPath)` — per-test scope with
+  `t.Cleanup` restore, for tests that need explicit isolation.
+
+The migration recipe for downstream test packages (`internal/ir/`,
+`internal/backend/`, `internal/lsp/`, `internal/pipeline/`, etc.) is:
+
+1. Add a `TestMain` that calls `BuildSharedNativeCheckerForTests` and
+   `InstallSubprocessCheckerForPackageTests`.
+2. Verify tests still pass and measure the wall-clock delta (one-time
+   `go build` plus per-call subprocess fork).
+3. Once enough downstream packages are migrated that no consumer hits
+   the embedded default, delete `embeddedNativeChecker` and the seed it
+   depends on.
+
 The bootstrap Osty→Go transpiler has been removed (CLAUDE.md). Embedded is
 therefore *frozen* — new `toolchain/*.osty` changes only land via the
 LLVM-compiled native checker binary. Embedded must eventually retire.
@@ -48,7 +70,7 @@ is on record before any flip.
 |---|---|---|---|
 | **(a)** | Flip default from embedded to subprocess | Per-shape cold cost ratios within the thresholds listed below | shipped (PRs #1669 + #1671) |
 | **(b-soft)** | Remove the silent embedded fallback in `UseManagedSubprocessChecker` so production failures surface | Subprocess error reporting good enough that opaque fallback is not needed | shipped (this gate's PR) |
-| **(b-hard)** | Delete `embeddedNativeChecker` and the embedded path entirely | Tests migrated off the embedded factory default | not started |
+| **(b-hard)** | Delete `embeddedNativeChecker` and the embedded path entirely | Tests migrated off the embedded factory default | prep landed (test helpers in `internal/check/testsupport.go`); per-package migrations still ahead |
 
 ## Reproduction
 
