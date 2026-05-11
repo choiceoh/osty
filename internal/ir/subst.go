@@ -24,16 +24,10 @@ func SubstituteTypes(n Node, env SubstEnv) {
 // potentially-replaced type. NamedType etc. are mutated in place so
 // structural identity is preserved for nested Args.
 //
-// Treats `*NamedType{Name: "T", Args: nil, Package: "", Builtin: false}`
-// as a TypeVar reference when "T" is present in env. The IR lowerer
-// historically encodes generic parameters as both `*TypeVar` (from the
-// resolver's symbol table) and bare `*NamedType` (from the parser's
-// type-reference shape that hasn't been promoted yet), and monomorph
-// needs to substitute both. Without this branch, `fn first<T>(...) ->
-// T?` lowers with the inner `T` as `*NamedType{Name:"T"}` and survives
-// substitution unchanged — surfaces in `generic_fn_first` test as
-// VariantProj.FieldIdx=-1 on the caller side because the match
-// scrutinee inherits `T?` instead of `Int?`.
+// Bare `*NamedType{Name, Args:nil, Package:"", Builtin:false}` is
+// treated as a TypeVar reference when Name is in env — the IR lowerer
+// encodes generic parameters as both `*TypeVar` and bare `*NamedType`,
+// so substitution has to recognize both shapes.
 func substType(t Type, env SubstEnv) Type {
 	if t == nil || len(env) == 0 {
 		return t
