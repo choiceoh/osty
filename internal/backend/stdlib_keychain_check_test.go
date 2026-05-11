@@ -13,8 +13,13 @@ func TestStdlibCheckResultKeychainAndSecrets(t *testing.T) {
 		if chk == nil {
 			t.Fatalf("stdlibCheckResult(%s) = nil, want non-nil *check.Result", module)
 		}
-		if module == "keychain" && len(chk.Types) == 0 {
-			t.Fatalf("stdlibCheckResult(%s) recorded no expression types", module)
+		// Read from `NativeCheckResult.TypedNodes` post-#1645 — see
+		// TestStdlibCheckResultStringsModule for the rationale.
+		if module == "keychain" {
+			native := chk.NativeCheckResult
+			if native == nil || len(native.TypedNodes) == 0 {
+				t.Fatalf("stdlibCheckResult(%s) recorded no native typed nodes", module)
+			}
 		}
 	}
 }
