@@ -2378,6 +2378,43 @@ func (l *lowerer) identTypeFromDecl(decl ast.Node) Type {
 		return nil
 	case *ast.Variant:
 		return l.enumTypeForVariantDecl(d)
+	case *ast.Receiver:
+		// `self` inside a method body. The resolver records the
+		// `self` ident with `Decl = *ast.Receiver`, which carries no
+		// type info on its own. Walk the file's struct/enum decls
+		// looking for the method that owns this receiver, then
+		// return the owner's nominal type. Without this, every
+		// `self` reference inside a struct method body lowers as
+		// `Ident.T = <error>` and cascades through every enclosing
+		// expression — especially `self.method()` chains in
+		// examples/gc/lib.osty style code.
+		return l.selfReceiverType(d)
+	}
+	return nil
+}
+
+// selfReceiverType locates the struct/enum declaration that owns the
+// given Receiver node and returns its nominal type, or nil when the
+// receiver can't be matched to any decl in the current file.
+func (l *lowerer) selfReceiverType(recv *ast.Receiver) Type {
+	if l == nil || recv == nil || l.file == nil {
+		return nil
+	}
+	for _, decl := range l.file.Decls {
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			for _, m := range d.Methods {
+				if m != nil && m.Recv == recv {
+					return &NamedType{Name: d.Name}
+				}
+			}
+		case *ast.EnumDecl:
+			for _, m := range d.Methods {
+				if m != nil && m.Recv == recv {
+					return &NamedType{Name: d.Name}
+				}
+			}
+		}
 	}
 	return nil
 }

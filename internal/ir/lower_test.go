@@ -881,6 +881,49 @@ fn main() {}`,
 	}
 }
 
+// `self` inside a struct method body must resolve to the owner
+// struct's nominal type. The resolver records the `self` ident with
+// `Decl = *ast.Receiver`, which carries no type info on its own. The
+// lowerer now matches the receiver against each StructDecl/EnumDecl's
+// Methods to find the owner, then returns its NamedType. Without
+// this, every `self` reference inside a method body lowers as
+// `Ident.T = <error>` and cascades through `self.field`, `self.method()`,
+// `self.method().unwrap()` etc.
+func TestLowerSelfReceiverType(t *testing.T) {
+	src := `pub struct Buf {
+    capacity: Int,
+    pub fn use_(self) -> Int { self.capacity }
+    pub fn dbl(self) -> Int { self.capacity * 2 }
+}
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	for _, decl := range mod.Decls {
+		sd, ok := decl.(*StructDecl)
+		if !ok {
+			continue
+		}
+		for _, m := range sd.Methods {
+			if m.Body == nil || m.Body.Result == nil {
+				t.Errorf("method %s: body.Result missing (self regression)", m.Name)
+				continue
+			}
+			if got := typeString(m.Body.Result.Type()); got != "Int" {
+				t.Errorf("method %s: body.Result.Type = %q, want Int", m.Name, got)
+			}
+		}
+	}
+}
+
 // Bundle 6: small incremental fixes after #1693. Two additions:
 //
 //  1. `lowerIdent` consults `resolveExprStaticType` as a final
