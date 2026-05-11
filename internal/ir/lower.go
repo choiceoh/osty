@@ -2296,6 +2296,19 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 			out.T = t
 		}
 	}
+	// AST-wide static-type recovery: `resolveExprStaticType(id)`
+	// consults the resolver + struct/enum decls. This catches let
+	// bindings whose initialiser type was missed by both
+	// `bindingPatTypes` (e.g. RHS is a chained method call whose
+	// inner type only resolves via the AST helpers) and the
+	// per-decl shapes above. Without this, ident references in
+	// examples/ai_demo_*.osty bodies stay at `<error>` and cascade
+	// through every enclosing expression.
+	if out.T == nil || out.T == ErrTypeVal || hasPoisonedTypeArg(out.T) {
+		if t := l.resolveExprStaticType(id); t != nil && t != ErrTypeVal && !hasPoisonedTypeArg(t) {
+			out.T = t
+		}
+	}
 	return out
 }
 
@@ -3553,6 +3566,50 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
 			if recovered := l.recoverUserMethodReturnType(fx.Name, recv); recovered != nil {
 				t = recovered
+			}
+		}
+		// AST-side receiver recovery: when the IR receiver carries
+		// `<error>` (typical for `self` inside methods, or method
+		// chains where the inner call's T didn't resolve), recover
+		// the receiver's static type via `resolveExprStaticType` and
+		// retry the intrinsic / user-method tables with the better
+		// type. Critical for examples/gc-style code where every
+		// method body is `self.tryFoo(...).unwrap()`.
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
+			if astRecvT := l.resolveExprStaticType(fx.X); astRecvT != nil && astRecvT != ErrTypeVal {
+				if recovered := recoverMethodReturnTypeFromType(fx.Name, astRecvT); recovered != nil {
+					t = recovered
+				}
+				if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
+					// User method via NamedType receiver.
+					if nt, ok := astRecvT.(*NamedType); ok && nt != nil && !nt.Builtin {
+						if sd := l.structDeclByName(nt.Name); sd != nil {
+							for _, m := range sd.Methods {
+								if m == nil || m.Name != fx.Name {
+									continue
+								}
+								if m.ReturnType == nil {
+									t = TUnit
+									break
+								}
+								if lt := l.lowerType(m.ReturnType); lt != nil && lt != ErrTypeVal {
+									t = lt
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// Use-alias FFI method recovery: `strings.ToUpper(name)` parses
+		// as `MethodCall{Receiver: Ident("strings"), Name: "ToUpper"}`.
+		// The receiver Ident resolves to a `*ast.UseDecl` symbol, not a
+		// nominal value type, so the intrinsic / user-method paths above
+		// bail out. Look up the fn signature in the UseDecl body.
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
+			if rt := l.useAliasFnReturnTypeFromAST(fx); rt != nil && rt != ErrTypeVal {
+				t = rt
 			}
 		}
 	}
