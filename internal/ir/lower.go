@@ -3672,16 +3672,23 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			"concat", "reverse", "toUpperCase", "toLowerCase",
 			"replaceAll", "replaceFirst":
 			return TString
-		case "count":
+		case "count", "byteSize":
 			return TInt
 		case "first", "last":
 			return &OptionalType{Inner: TChar}
 		case "stripPrefix", "stripSuffix":
 			return &OptionalType{Inner: TString}
+		case "byteAt":
+			return &OptionalType{Inner: TByte}
+		case "charAt":
+			return &OptionalType{Inner: TChar}
+		case "splitFirst", "splitLast":
+			return &OptionalType{Inner: &TupleType{Elems: []Type{TString, TString}}}
 		}
 	}
-	// Range<Int> intrinsic returns.
-	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Range" {
+	// Range<Int> intrinsic returns. `Builtin` flag may or may not be
+	// set depending on call site; accept either form.
+	if nt, ok := rt.(*NamedType); ok && nt.Name == "Range" {
 		switch name {
 		case "toList":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{TInt}}
@@ -3709,7 +3716,9 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 	// Int primitive method returns.
 	if isPrim(rt, PrimInt) {
 		switch name {
-		case "abs", "min", "max", "neg", "pow", "clamp":
+		case "abs", "min", "max", "neg", "pow", "clamp", "gcd", "lcm", "sign":
+			return TInt
+		case "countOnes", "countZeros", "leadingZeros", "trailingZeros":
 			return TInt
 		case "toFloat":
 			return TFloat
@@ -3722,7 +3731,10 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 	// Float primitive method returns.
 	if isPrim(rt, PrimFloat) {
 		switch name {
-		case "abs", "sqrt", "floor", "ceil", "round", "min", "max", "pow", "neg":
+		case "abs", "sqrt", "floor", "ceil", "round", "min", "max", "pow", "neg",
+			"log", "log2", "log10", "exp", "sin", "cos", "tan",
+			"asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh",
+			"cbrt", "ln":
 			return TFloat
 		case "toInt":
 			return TInt
@@ -3744,6 +3756,14 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &OptionalType{Inner: TInt}
 		case "len":
 			return TInt
+		case "concat", "slice", "repeat":
+			return TBytes
+		case "toHex":
+			return TString
+		case "toString":
+			return &NamedType{Name: "Result", Builtin: true, Args: []Type{
+				TString, &NamedType{Name: "Error", Builtin: true},
+			}}
 		}
 	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
@@ -3775,6 +3795,18 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &NamedType{Name: "Set", Builtin: true, Args: []Type{elem}}
 		case "iter":
 			return &NamedType{Name: "Iterator", Builtin: true, Args: []Type{elem}}
+		case "reduce":
+			return &OptionalType{Inner: elem}
+		case "distinct":
+			return nt
+		case "partition":
+			return &TupleType{Elems: []Type{nt, nt}}
+		}
+	}
+	// List<List<T>>.flatten() → List<T>.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
+		if inner, ok := nt.Args[0].(*NamedType); ok && inner.Builtin && inner.Name == "List" && len(inner.Args) == 1 && name == "flatten" {
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{inner.Args[0]}}
 		}
 	}
 	// Iterator<T> methods. Iterator is a stdlib protocol type whose
@@ -3812,17 +3844,14 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return TInt
 		}
 	}
-	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,
-	// .values() → List<V>, .insert / .remove → V?, .containsKey →
-	// Bool. Without this, untyped map literals (`let m = {1: "a"}`)
-	// landed at MIR with `m.get(1).Type() = V?` (the generic
-	// signature's TypeVar leaked) and downstream `println` walled
-	// on `non-primitive V`.
+	// Map<K, V> method returns.
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Map" && len(nt.Args) == 2 {
 		k, v := nt.Args[0], nt.Args[1]
 		switch name {
 		case "get", "remove":
 			return &OptionalType{Inner: v}
+		case "getOr":
+			return v
 		case "keys":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{k}}
 		case "values":
@@ -3865,9 +3894,9 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 		switch name {
 		case "isSome", "isNone":
 			return TBool
-		case "unwrapOr", "unwrap", "expect":
+		case "unwrapOr", "unwrap", "expect", "unwrapOrElse":
 			return ot.Inner
-		case "orElse", "filter":
+		case "orElse", "filter", "or", "and":
 			return ot
 		}
 	}
@@ -3877,7 +3906,7 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 		switch name {
 		case "isOk", "isErr":
 			return TBool
-		case "unwrapOr", "unwrap", "expect":
+		case "unwrapOr", "unwrap", "expect", "unwrapOrElse":
 			return t
 		case "unwrapErr":
 			return e
