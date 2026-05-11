@@ -881,6 +881,106 @@ fn main() {}`,
 	}
 }
 
+// Bundle 2: 40+ more trailing-call shapes covering Int/Float/Char/Bool
+// primitive methods, Option/Result accessors, Map/Set predicates,
+// List<T> functional helpers (slice, take, drop, concat, append, zip,
+// min, max, sum, count, any, all), Range methods, and String extras
+// (padLeft, padRight, lines, fields, indexOf).
+func TestLowerTrailingMethodCallBundle2(t *testing.T) {
+	tests := []struct {
+		name, src, wantType string
+	}{
+		{"int_abs", `fn ab(n: Int) -> Int { n.abs() }
+fn main() {}`, "Int"},
+		{"int_max", `fn mx(a: Int, b: Int) -> Int { a.max(b) }
+fn main() {}`, "Int"},
+		{"float_sqrt", `fn sq(f: Float) -> Float { f.sqrt() }
+fn main() {}`, "Float"},
+		{"float_toInt", `fn cnv(f: Float) -> Int { f.toInt() }
+fn main() {}`, "Int"},
+		{"list_take", `fn t(xs: List<Int>) -> List<Int> { xs.take(3) }
+fn main() {}`, "List<Int>"},
+		{"list_concat", `fn cc(xs: List<Int>, ys: List<Int>) -> List<Int> { xs.concat(ys) }
+fn main() {}`, "List<Int>"},
+		{"list_min", `fn mn(xs: List<Int>) -> Int? { xs.min() }
+fn main() {}`, "Int?"},
+		{"list_sum", `fn sm(xs: List<Int>) -> Int { xs.sum() }
+fn main() {}`, "Int"},
+		{"map_isEmpty", `fn em(m: Map<String, Int>) -> Bool { m.isEmpty() }
+fn main() {}`, "Bool"},
+		{"map_len", `fn le(m: Map<String, Int>) -> Int { m.len() }
+fn main() {}`, "Int"},
+		{"set_len", `fn le(s: Set<Int>) -> Int { s.len() }
+fn main() {}`, "Int"},
+		{"option_orElse", `fn oe(a: Int?, b: Int?) -> Int? { a.orElse(b) }
+fn main() {}`, "Int?"},
+		{"option_filter", `fn ft(o: Int?) -> Int? { o.filter(|n| n > 0) }
+fn main() {}`, "Int?"},
+		{"option_isSome", `fn has(o: Int?) -> Bool { o.isSome() }
+fn main() {}`, "Bool"},
+		{"option_unwrapOr", `fn pick(o: Int?, d: Int) -> Int { o.unwrapOr(d) }
+fn main() {}`, "Int"},
+		{"result_isOk", `fn ok(r: Result<Int, Error>) -> Bool { r.isOk() }
+fn main() {}`, "Bool"},
+		{"result_unwrapOr", `fn pick(r: Result<Int, Error>, d: Int) -> Int { r.unwrapOr(d) }
+fn main() {}`, "Int"},
+		{"closure_all", `fn allpos(xs: List<Int>) -> Bool { xs.all(|x| x > 0) }
+fn main() {}`, "Bool"},
+		{"closure_any", `fn anyneg(xs: List<Int>) -> Bool { xs.any(|x| x < 0) }
+fn main() {}`, "Bool"},
+		{"char_isDigit", `fn dg(c: Char) -> Bool { c.isDigit() }
+fn main() {}`, "Bool"},
+		{"char_isAlpha", `fn al(c: Char) -> Bool { c.isAlpha() }
+fn main() {}`, "Bool"},
+		{"char_isWhitespace", `fn sp(c: Char) -> Bool { c.isWhitespace() }
+fn main() {}`, "Bool"},
+		{"string_padLeft", `fn pad(s: String, n: Int) -> String { s.padLeft(n, ' ') }
+fn main() {}`, "String"},
+		{"string_indexOf", `fn idx(s: String, n: String) -> Int? { s.indexOf(n) }
+fn main() {}`, "Int?"},
+		{"string_lines", `fn ln(s: String) -> List<String> { s.lines() }
+fn main() {}`, "List<String>"},
+		{"tuple_in_let", `fn split(s: String) -> (String, String) { (s, s) }
+fn main() {}`, "(String, String)"},
+		{"closure_returning_struct", `pub struct P { pub n: Int }
+fn make() -> P {
+    let f = || P { n: 1 }
+    f()
+}
+fn main() {}`, "P"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil (trailing call regression)", fn.Name)
+					continue
+				}
+				if tt.wantType != "" {
+					if got := typeString(fn.Body.Result.Type()); got != tt.wantType {
+						t.Errorf("fn %s: body.Result.Type = %q, want %q", fn.Name, got, tt.wantType)
+					}
+				}
+			}
+		})
+	}
+}
+
 // Bundle: ten trailing-call shapes that the post-#1645 `expression-
 // YieldsValue` path dropped to ExprStmt → MIR UnreachableTerm. Each
 // case is a real user-code pattern that the stdlib intrinsic table

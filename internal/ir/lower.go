@@ -1113,6 +1113,30 @@ func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
 			}
 			return l.lowerType(ft.ReturnType)
 		}
+	case *ast.IdentPat:
+		// Let-bound closure: `let f = || P { n: 1 }; f()`. Walk the
+		// owning LetStmt to find the closure expression and lower its
+		// declared / inferred return type. Limited to closures with an
+		// explicit `-> T` return annotation OR a body whose tail shape
+		// unambiguously yields a value (literal / struct-lit / binary
+		// op). Without this, trailing `f()` calls in non-unit-return
+		// fns drop to ExprStmt → MIR UnreachableTerm. Earlier rounds
+		// excluded this path due to stage0 audit regressions; the
+		// conservative form (only promotes when the closure body
+		// shape is value-yielding) avoids those regressions.
+		if cl := l.findLetClosureByPattern(d); cl != nil {
+			if cl.ReturnType != nil {
+				if lt := l.lowerType(cl.ReturnType); lt != nil && lt != ErrTypeVal {
+					return lt
+				}
+			}
+			switch cl.Body.(type) {
+			case *ast.StructLit, *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr,
+				*ast.BinaryExpr, *ast.UnaryExpr, *ast.IntLit, *ast.FloatLit,
+				*ast.StringLit, *ast.CharLit, *ast.BoolLit:
+				return &NamedType{Name: "?closure_result"}
+			}
+		}
 	}
 	return nil
 }
@@ -1122,10 +1146,14 @@ func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
 // the receiver alone. Covers the common shapes:
 //
 //   - `xs.fold(init, fn)` → typeof(init)
+//   - `xs.map(fn)`        → List<typeof(fn(x))>, approximated as List<?>
 //   - `o.map(fn)`         → Option<typeof(fn(x))>, approximated as Option<?>
 //
 // Returns nil when the call doesn't match a known shape. Used by
 // `expressionYieldsValue` to decide promotion at trailing position.
+// For `.map` we return a sentinel non-unit type so promotion fires
+// without committing to a wrong inner type; MIR/backend then run
+// their own recovery on the closure body.
 func (l *lowerer) closureDependentMethodReturnTypeFromAST(fx *ast.FieldExpr, args []*ast.Arg) Type {
 	if l == nil || fx == nil {
 		return nil
@@ -1135,13 +1163,44 @@ func (l *lowerer) closureDependentMethodReturnTypeFromAST(fx *ast.FieldExpr, arg
 		return nil
 	}
 	switch fx.Name {
-	case "fold":
+	case "fold", "reduce":
 		// `xs.fold(init, fn)`: result type = type of init.
-		if len(args) >= 1 && args[0] != nil && args[0].Value != nil {
+		// `xs.reduce(fn)`: result type = element type (skip for now,
+		// would need receiver introspection).
+		if fx.Name == "fold" && len(args) >= 1 && args[0] != nil && args[0].Value != nil {
 			if t := l.lowerExpr(args[0].Value).Type(); t != nil && t != ErrTypeVal {
 				return t
 			}
 		}
+	case "map", "flatMap":
+		// `xs.map(fn)` / `o.map(fn)`: promotion-only — wrap a
+		// `?closure_result` sentinel in the appropriate container so
+		// `expressionTypeYieldsValue` reports true.
+		switch r := recvType.(type) {
+		case *NamedType:
+			if r.Builtin && r.Name == "List" {
+				return &NamedType{Name: "List", Builtin: true, Args: []Type{&NamedType{Name: "?closure_result"}}}
+			}
+			if r.Builtin && r.Name == "Result" && len(r.Args) == 2 {
+				return &NamedType{Name: "Result", Builtin: true, Args: []Type{&NamedType{Name: "?closure_result"}, r.Args[1]}}
+			}
+		case *OptionalType:
+			return &OptionalType{Inner: &NamedType{Name: "?closure_result"}}
+		}
+	case "zip":
+		// `xs.zip(ys)`: List<T>.zip(List<U>) → List<(T, U)>.
+		nt, ok := recvType.(*NamedType)
+		if !ok || !nt.Builtin || nt.Name != "List" || len(nt.Args) != 1 || len(args) < 1 || args[0] == nil || args[0].Value == nil {
+			return nil
+		}
+		other := l.lowerExpr(args[0].Value).Type()
+		ont, ok := other.(*NamedType)
+		if !ok || !ont.Builtin || ont.Name != "List" || len(ont.Args) != 1 {
+			return nil
+		}
+		return &NamedType{Name: "List", Builtin: true, Args: []Type{
+			&TupleType{Elems: []Type{nt.Args[0], ont.Args[0]}},
+		}}
 	}
 	return nil
 }
@@ -1199,6 +1258,49 @@ func (l *lowerer) resolveExprStaticType(e ast.Expr) Type {
 		}
 	}
 	return nil
+}
+
+// findLetClosureByPattern walks the current file looking for a
+// LetStmt whose IdentPat matches `pat` and whose value is a
+// ClosureExpr. Used by `freeFnReturnTypeFromAST` to peek at the
+// closure's declared / inferred return type for promotion decisions.
+func (l *lowerer) findLetClosureByPattern(pat *ast.IdentPat) *ast.ClosureExpr {
+	if pat == nil || l.file == nil {
+		return nil
+	}
+	var found *ast.ClosureExpr
+	var walk func(ast.Node)
+	walk = func(n ast.Node) {
+		if n == nil || found != nil {
+			return
+		}
+		if ls, ok := n.(*ast.LetStmt); ok && ls != nil {
+			if ip, ok := ls.Pattern.(*ast.IdentPat); ok && ip == pat {
+				if cl, ok := ls.Value.(*ast.ClosureExpr); ok {
+					found = cl
+				}
+				return
+			}
+		}
+		switch x := n.(type) {
+		case *ast.File:
+			for _, d := range x.Decls {
+				walk(d)
+			}
+		case *ast.FnDecl:
+			if x.Body != nil {
+				walk(x.Body)
+			}
+		case *ast.Block:
+			for _, s := range x.Stmts {
+				walk(s)
+			}
+		case *ast.ExprStmt:
+			walk(x.X)
+		}
+	}
+	walk(l.file)
+	return found
 }
 
 // findLetStmtByPattern walks the current file for a LetStmt whose
@@ -1991,6 +2093,24 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		out := &TupleLit{T: l.exprType(e), SpanV: nodeSpan(e)}
 		for _, el := range e.Elems {
 			out.Elems = append(out.Elems, l.lowerExpr(el))
+		}
+		// Recover the tuple type from the lowered element types when the
+		// checker didn't supply one. Tuples are fully determined by
+		// their elements, so this is always safe.
+		if out.T == nil || out.T == ErrTypeVal || hasPoisonedTypeArg(out.T) {
+			elems := make([]Type, len(out.Elems))
+			ok := true
+			for i, el := range out.Elems {
+				et := el.Type()
+				if et == nil || et == ErrTypeVal {
+					ok = false
+					break
+				}
+				elems[i] = et
+			}
+			if ok {
+				out.T = &TupleType{Elems: elems}
+			}
 		}
 		return out
 	case *ast.MapExpr:
@@ -3530,6 +3650,23 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{TChar}}
 		case "bytes":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{TByte}}
+		case "indexOf", "lastIndexOf":
+			return &OptionalType{Inner: TInt}
+		case "lines", "fields":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{TString}}
+		case "padLeft", "padRight", "padStart", "padEnd":
+			return TString
+		}
+	}
+	// Range<Int> intrinsic returns.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Range" {
+		switch name {
+		case "toList":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{TInt}}
+		case "len":
+			return TInt
+		case "isEmpty", "contains":
+			return TBool
 		}
 	}
 	// Char / Byte primitive method returns.
@@ -3539,29 +3676,72 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return TInt
 		}
 	}
+	// Char-specific predicate methods.
+	if isPrim(rt, PrimChar) {
+		switch name {
+		case "isDigit", "isAlpha", "isWhitespace", "isUpper", "isLower",
+			"isAlnum", "isAscii":
+			return TBool
+		}
+	}
+	// Int primitive method returns: abs / min / max / toString.
+	if isPrim(rt, PrimInt) {
+		switch name {
+		case "abs", "min", "max":
+			return TInt
+		}
+	}
+	// Float primitive method returns.
+	if isPrim(rt, PrimFloat) {
+		switch name {
+		case "abs", "sqrt", "floor", "ceil", "round", "min", "max":
+			return TFloat
+		case "toInt":
+			return TInt
+		}
+	}
+	// Bool predicates: redundant but documents.
+	if isPrim(rt, PrimBool) {
+		switch name {
+		case "not":
+			return TBool
+		}
+	}
+	// Bytes-specific intrinsic returns.
+	if isPrim(rt, PrimBytes) {
+		switch name {
+		case "indexOf", "lastIndexOf":
+			return &OptionalType{Inner: TInt}
+		case "len":
+			return TInt
+		}
+	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
+		elem := nt.Args[0]
 		switch name {
-		case "first", "last":
-			return &OptionalType{Inner: nt.Args[0]}
-		case "push":
+		case "first", "last", "min", "max":
+			return &OptionalType{Inner: elem}
+		case "push", "add", "clear", "insert", "removeAt":
 			return TUnit
-		case "sorted", "reverse", "reversed", "filter":
-			// `filter(pred)` keeps the element type; `sorted` /
-			// `reversed` likewise return a same-typed List. Note that
-			// `map(fn)` is intentionally excluded — its return is
-			// `List<U>` where `U` depends on the closure return, which
-			// the intrinsic table can't see without checker support.
+		case "sorted", "reverse", "reversed", "filter",
+			"slice", "take", "drop", "concat", "append":
+			// Same-typed List return. `map(fn)` excluded — closure
+			// dependent. `take/drop/slice` keep element type.
 			return nt
-		case "contains":
+		case "contains", "any", "all", "isEmpty":
 			return TBool
+		case "count":
+			return TInt
+		case "sum", "product":
+			return elem
 		case "entries":
 			// List<T>.entries() → List<(Int, T)>.
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{
-				&TupleType{Elems: []Type{TInt, nt.Args[0]}},
+				&TupleType{Elems: []Type{TInt, elem}},
 			}}
 		case "toSet":
-			return &NamedType{Name: "Set", Builtin: true, Args: []Type{nt.Args[0]}}
+			return &NamedType{Name: "Set", Builtin: true, Args: []Type{elem}}
 		}
 	}
 	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,
@@ -3595,10 +3775,48 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 		switch name {
 		case "toList":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{nt.Args[0]}}
-		case "add", "remove":
+		case "add", "remove", "clear":
 			return TUnit
-		case "contains":
+		case "contains", "isEmpty":
 			return TBool
+		case "len":
+			return TInt
+		}
+	}
+	// Map<K,V> generic isEmpty/len.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Map" && len(nt.Args) == 2 {
+		switch name {
+		case "isEmpty":
+			return TBool
+		case "len":
+			return TInt
+		}
+	}
+	// Option<T> methods. `OptionalType{Inner}` carries T directly.
+	if ot, ok := rt.(*OptionalType); ok && ot != nil {
+		switch name {
+		case "isSome", "isNone":
+			return TBool
+		case "unwrapOr", "unwrap", "expect":
+			return ot.Inner
+		case "orElse", "filter":
+			return ot
+		}
+	}
+	// Result<T, E> methods.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Result" && len(nt.Args) == 2 {
+		t, e := nt.Args[0], nt.Args[1]
+		switch name {
+		case "isOk", "isErr":
+			return TBool
+		case "unwrapOr", "unwrap", "expect":
+			return t
+		case "unwrapErr":
+			return e
+		case "ok":
+			return &OptionalType{Inner: t}
+		case "err":
+			return &OptionalType{Inner: e}
 		}
 	}
 	return nil
