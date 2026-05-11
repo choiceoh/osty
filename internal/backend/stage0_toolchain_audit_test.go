@@ -1017,6 +1017,13 @@ func stage0AuditOutputHasKnownAbortMarker(output string) bool {
 		"osty-self: unsupported command",
 		"host compiler forwarding is disabled",
 		"supported subcommands:",
+		// New marker from decline-stub banner — the produced binary
+		// reached the declined function via real CLI dispatch (rather
+		// than the unsupported-command fallback) and aborted from the
+		// stub. Emitted by `osty_rt_stage0_declined` for every body
+		// `emitDeclineStub` lays down.
+		"osty-self: stage0 declined function:",
+		"requires the LIR Proto self-host pipeline",
 	}
 	for _, m := range markers {
 		if strings.Contains(output, m) {

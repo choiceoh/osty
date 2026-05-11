@@ -29641,3 +29641,37 @@ void *osty_rt_audit_i64_placeholder(void) {
 }
 
 #endif /* defined(__GNUC__) || defined(__clang__) */
+
+/* osty_rt_stage0_declined — banner helper for stage0 decline-stubs.
+ *
+ * `emitDeclineStub` in `internal/backend/stage0/emit.go` now generates
+ * each declined function's body as
+ *
+ *     define <ret> @<fn>(...) {
+ *     entry:
+ *       call void @osty_rt_stage0_declined(ptr @.stage0.declined.<N>)
+ *       unreachable
+ *     }
+ *
+ * The previous body was a bare `unreachable` which clang lowered to
+ * `ud2`; the linker's identical-cold-code folding then merged all
+ * zero-cost stubs into the address of an unrelated abort-shaped
+ * helper (`osty_rt_option_unwrap_none`), producing the misleading
+ * `called unwrap on None` message when a stage0-built binary
+ * dispatched into a declined function. Routing through this helper
+ * forces the linker to keep each stub distinct (each call argument
+ * is a unique global) and emits a banner the L3/L4 audit harness
+ * can match.
+ *
+ * `name` is the MIR function name as a NUL-terminated UTF-8 string
+ * constant (not an Osty `String` — these are bare C literals from
+ * the LLVM `private unnamed_addr constant` globals stage0 lays down
+ * alongside each stub). NULL is tolerated for forward compatibility.
+ */
+void osty_rt_stage0_declined(const char *name) {
+    fputs("osty-self: stage0 declined function: ", stderr);
+    fputs(name != NULL ? name : "(unknown)", stderr);
+    fputc('\n', stderr);
+    fputs("osty-self: this codepath requires the LIR Proto self-host pipeline (Phase 1+)\n", stderr);
+    abort();
+}
