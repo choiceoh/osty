@@ -3,11 +3,11 @@ package check
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
@@ -48,6 +48,32 @@ func (e nativeCheckerExec) CheckPackageStructured(input api.PackageCheckInput) (
 	return e.run(api.CheckRequest{Package: &input})
 }
 
+// Subprocess output preview caps. stderr keeps the tail (panic stacks are most
+// useful at the bottom); stdout keeps the head (JSON parse errors fire near the
+// start, and a 256B prefix is enough to recognize what shape the response had).
+const (
+	subprocStdoutPreviewBytes = 256
+	subprocStderrPreviewBytes = 2048
+)
+
+// subprocessError carries the structured failure of a native-checker exec so
+// callers can surface stdout/stderr as separate diagnostic notes instead of
+// mashing everything into a single string.
+type subprocessError struct {
+	Path      string
+	Err       error
+	Stdout    []byte // truncated head, up to subprocStdoutPreviewBytes
+	Stderr    []byte // truncated tail, up to subprocStderrPreviewBytes
+	StdoutLen int    // original stdout length before truncation
+	StderrLen int    // original stderr length before truncation
+}
+
+func (e *subprocessError) Error() string {
+	return fmt.Sprintf("native checker %s: %v", e.Path, e.Err)
+}
+
+func (e *subprocessError) Unwrap() error { return e.Err }
+
 func (e nativeCheckerExec) run(req api.CheckRequest) (api.CheckResult, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -55,20 +81,74 @@ func (e nativeCheckerExec) run(req api.CheckRequest) (api.CheckResult, error) {
 	}
 	cmd := exec.Command(e.path)
 	cmd.Stdin = bytes.NewReader(payload)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = "<no output>"
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	runErr := cmd.Run()
+	stdout := stdoutBuf.Bytes()
+	stderr := stderrBuf.Bytes()
+	if runErr != nil {
+		return api.CheckResult{}, &subprocessError{
+			Path:      e.path,
+			Err:       runErr,
+			Stdout:    headBytes(stdout, subprocStdoutPreviewBytes),
+			Stderr:    tailBytes(stderr, subprocStderrPreviewBytes),
+			StdoutLen: len(stdout),
+			StderrLen: len(stderr),
 		}
-		return api.CheckResult{}, fmt.Errorf("exec %s: %w (%s)", e.path, err, msg)
 	}
 	var checked api.CheckResult
-	if err := json.Unmarshal(out, &checked); err != nil {
-		return api.CheckResult{}, fmt.Errorf("decode native checker response: %w", err)
+	if err := json.Unmarshal(stdout, &checked); err != nil {
+		return api.CheckResult{}, &subprocessError{
+			Path:      e.path,
+			Err:       fmt.Errorf("decode response: %w", err),
+			Stdout:    headBytes(stdout, subprocStdoutPreviewBytes),
+			Stderr:    tailBytes(stderr, subprocStderrPreviewBytes),
+			StdoutLen: len(stdout),
+			StderrLen: len(stderr),
+		}
 	}
 	checked.EnsureStableIDs()
 	return checked, nil
+}
+
+func headBytes(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[:n]
+}
+
+func tailBytes(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[len(b)-n:]
+}
+
+// subprocessFailureNotes expands a native-checker run error into diagnostic
+// notes. A *subprocessError is split into "exec failed" + separate stderr /
+// stdout preview notes; any other error becomes a single note.
+func subprocessFailureNotes(err error) []string {
+	var se *subprocessError
+	if !errors.As(err, &se) {
+		return []string{"the Osty-native checker executable failed", err.Error()}
+	}
+	notes := []string{"the Osty-native checker executable failed", se.Error()}
+	if se.StderrLen > 0 {
+		notes = append(notes, formatStreamPreview("stderr", se.Stderr, se.StderrLen, "tail"))
+	}
+	if se.StdoutLen > 0 {
+		notes = append(notes, formatStreamPreview("stdout", se.Stdout, se.StdoutLen, "head"))
+	}
+	return notes
+}
+
+func formatStreamPreview(label string, preview []byte, total int, side string) string {
+	if total <= len(preview) {
+		return fmt.Sprintf("%s (%d bytes):\n%s", label, total, preview)
+	}
+	return fmt.Sprintf("%s (%s %d of %d bytes):\n%s", label, side, len(preview), total, preview)
 }
 
 type embeddedNativeChecker struct{}
@@ -150,8 +230,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"file",
-			"the Osty-native checker executable failed",
-			err.Error(),
+			subprocessFailureNotes(err)...,
 		))
 		return
 	}
@@ -201,8 +280,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolv
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"the Osty-native checker executable failed",
-			err.Error(),
+			subprocessFailureNotes(err)...,
 		))
 		return
 	}
@@ -334,8 +412,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *re
 		mu.Lock()
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
-			"the Osty-native checker executable failed",
-			err.Error(),
+			subprocessFailureNotes(err)...,
 		))
 		mu.Unlock()
 		return

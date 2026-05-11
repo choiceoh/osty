@@ -8,7 +8,7 @@ fn main() {
             let n = list.len()
             println("digits: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let c = list[i]
                 match c.get(0) {
                     Some(s) -> println("  whole: {s}"),
@@ -27,7 +27,7 @@ fn main() {
             let n = list.len()
             println("kv: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let c = list[i]
                 match c.get(1) {
                     Some(s) -> println("  k={s}"),
@@ -50,7 +50,7 @@ fn main() {
             let n = list.len()
             println("anchored: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let c = list[i]
                 match c.get(0) {
                     Some(s) -> println("  {s}"),
@@ -79,7 +79,7 @@ fn main() {
             let n = list.len()
             println("alt: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let c = list[i]
                 match c.get(0) {
                     Some(s) -> println("  whole={s}"),
