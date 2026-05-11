@@ -12,6 +12,7 @@ import (
 	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/nativellvmgen"
+	"github.com/osty/osty/internal/subproc"
 )
 
 // ErrLLVMNotImplemented marks source shapes that the early LLVM lowering slice
@@ -504,17 +505,30 @@ func runClang(ctx context.Context, action string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", llvmabi.MissingClangMessage(), err)
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
-	combined, err := cmd.CombinedOutput()
-	if err == nil {
+	stdout, stderr, runErr := subproc.RunCommand(ctx, path, args, nil)
+	if runErr == nil {
 		return nil
 	}
-	msg := strings.TrimSpace(string(combined))
-	if msg == "" {
-		msg = "<no output>"
-	}
+	msg := joinClangOutput(stderr, stdout)
 	command := "clang " + strings.Join(args, " ")
-	return fmt.Errorf("%s: %w", llvmabi.ClangFailureMessage(action, command, msg), err)
+	return fmt.Errorf("%s: %w", llvmabi.ClangFailureMessage(action, command, msg), runErr)
+}
+
+// joinClangOutput stitches stderr and stdout into a single human-readable
+// blob for ClangFailureMessage. stderr leads because clang sends diagnostics
+// there; stdout is appended only when non-empty (rare — `-o file` is the norm).
+func joinClangOutput(stderr, stdout []byte) string {
+	parts := make([]string, 0, 2)
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		parts = append(parts, s)
+	}
+	if s := strings.TrimSpace(string(stdout)); s != "" {
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return "<no output>"
+	}
+	return strings.Join(parts, "\n")
 }
 
 // useMIRBackend reports whether LLVM emission should use the

@@ -2,6 +2,7 @@ package subproc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 var fakePath string
@@ -178,6 +180,43 @@ func TestFailureNotes_PlainErrorFallback(t *testing.T) {
 	}
 	if !strings.Contains(notes[1], "some non-structured error") {
 		t.Errorf("plain error should be preserved; got: %q", notes[1])
+	}
+}
+
+func TestRunCommand_PassesArgs(t *testing.T) {
+	t.Setenv("FAKESUBPROC_MODE", "echo-args")
+	stdout, _, err := RunCommand(context.Background(), fakePath, []string{"alpha", "beta", "gamma"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout) != "alpha|beta|gamma" {
+		t.Errorf("stdout=%q, want %q", stdout, "alpha|beta|gamma")
+	}
+}
+
+func TestRunCommand_NilStdinDoesNotBlock(t *testing.T) {
+	t.Setenv("FAKESUBPROC_MODE", "ok")
+	stdout, _, err := RunCommand(context.Background(), fakePath, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(stdout) != "{}" {
+		t.Errorf("stdout=%q, want %q", stdout, "{}")
+	}
+}
+
+func TestRunCommand_ContextCancellationKillsChild(t *testing.T) {
+	t.Setenv("FAKESUBPROC_MODE", "sleep")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := RunCommand(ctx, fakePath, nil, nil)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error when context times out before subprocess finishes")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("context cancellation should have killed the 30s sleep quickly; took %v", elapsed)
 	}
 }
 

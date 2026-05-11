@@ -9,6 +9,7 @@ package subproc
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -57,8 +58,23 @@ func (e *Error) Unwrap() error { return e.Err }
 // json.Unmarshal returning an error on the captured stdout) should call
 // WrapResponseError with the underlying error and the same streams.
 func Run(path string, stdin []byte) (stdout, stderr []byte, err error) {
-	cmd := exec.Command(path)
-	cmd.Stdin = bytes.NewReader(stdin)
+	return RunCommand(context.Background(), path, nil, stdin)
+}
+
+// RunCommand is the general-purpose form of Run: it accepts a context (for
+// cancellation), command-line args, and optional stdin bytes. Stream capture,
+// truncation policy, and structured-error semantics match Run.
+//
+// When `stdin` is nil the subprocess inherits no input (suitable for tools
+// that read args/files rather than stdin, like clang or lld).
+func RunCommand(ctx context.Context, path string, args []string, stdin []byte) (stdout, stderr []byte, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, path, args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf

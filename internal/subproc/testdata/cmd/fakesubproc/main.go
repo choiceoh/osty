@@ -1,7 +1,8 @@
 // fakesubproc is a flag-driven stand-in for the Osty-native subprocess
-// binaries (osty-native-checker / lirproto / llvmgen). It emits deterministic
-// (stdout, stderr, exit code) combinations keyed by FAKESUBPROC_MODE so the
-// subproc package tests can assert capture + truncation correctness.
+// binaries (osty-native-checker / lirproto / llvmgen) and the external
+// toolchain (clang / lld). It emits deterministic (stdout, stderr, exit code)
+// combinations keyed by FAKESUBPROC_MODE so the subproc package tests can
+// assert capture + truncation + cancellation correctness.
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -41,6 +43,10 @@ func main() {
 	case "huge-stdout":
 		fmt.Fprint(os.Stdout, "HEAD_MARKER_FIRST_LINE\n")
 		fmt.Fprint(os.Stdout, strings.Repeat("garbage line\n", 1000))
+	case "echo-args":
+		fmt.Fprint(os.Stdout, strings.Join(os.Args[1:], "|"))
+	case "sleep":
+		time.Sleep(30 * time.Second)
 	default:
 		fmt.Fprintf(os.Stderr, "fakesubproc: unknown mode %q\n", mode)
 		os.Exit(1)
