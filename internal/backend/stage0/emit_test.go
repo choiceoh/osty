@@ -1298,6 +1298,42 @@ func TestStage0EmitsKnownCallWithUserNamedParam(t *testing.T) {
 	}
 }
 
+// TestStage0EmitsCallWithFnConstArg mirrors the `Runner__checkLockfile`
+// shape — a callee whose argument list contains a function pointer
+// constant. Pre-patch, `resolveOperand` had no FnConst case and the
+// call lowered as "argType=scalarUnknown", forcing the matcher to
+// decline. The patch routes `FnConst{Symbol: S}` to `@S` with opaque
+// ptr ABI.
+func TestStage0EmitsCallWithFnConstArg(t *testing.T) {
+	t.Parallel()
+	caller := makeMultiInstrFn(
+		"caller",
+		ir.TInt,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 1},
+				Callee: &mir.FnRef{Symbol: "outer", Type: ir.ErrTypeVal},
+				Args: []mir.Operand{
+					&mir.ConstOp{Const: &mir.FnConst{Symbol: "inner_fn", T: ir.ErrTypeVal}, T: ir.ErrTypeVal},
+					intConst(42),
+				},
+			},
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"@outer(ptr @inner_fn, i64 42)",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0InlinesConstGlobalRef(t *testing.T) {
 	t.Parallel()
 	checkName := &ir.NamedType{Name: "CheckName"}
