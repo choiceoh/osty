@@ -93,10 +93,13 @@ var productionNativeCheckerFactory = func() (nativeChecker, string) {
 // `toolchain.EnsureNativeChecker(start)` on the first call (which builds the
 // managed binary on demand) and reuse the cached path thereafter.
 //
-// On managed-build failure the selector silently falls back to embedded with
-// a note so callers without a Go toolchain (or a broken native checker
-// build) still get a working check; the note surfaces via the existing
-// `checkerUnavailableDiag` path.
+// Gate (b) policy: on managed-build failure the selector returns
+// `(nil, "managed native checker unavailable: <reason>")`. Callers surface
+// that note through `checkerUnavailableDiag` / `NativePackageCheck` error
+// paths; the production CLI no longer silently degrades to the frozen
+// in-process checker, because the embedded path can only ever lag behind
+// the live `toolchain/*.osty` sources and a silent fallback hides real
+// configuration/build problems.
 //
 // Tests do not call this and continue to use the embedded factory — the
 // managed binary build would otherwise add seconds and clutter
@@ -105,7 +108,7 @@ func UseManagedSubprocessChecker(start string) {
 	productionNativeCheckerFactory = func() (nativeChecker, string) {
 		path, err := toolchain.EnsureNativeChecker(start)
 		if err != nil {
-			return embeddedNativeChecker{}, fmt.Sprintf("managed native checker unavailable: %v; using embedded fallback", err)
+			return nil, fmt.Sprintf("managed native checker unavailable: %v", err)
 		}
 		return nativeCheckerExec{path: path}, ""
 	}

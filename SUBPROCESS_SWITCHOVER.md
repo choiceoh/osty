@@ -2,7 +2,7 @@
 
 - **Scope**: Performance baseline for the embedded vs subprocess native-checker decision.
 - **Type**: Reference / decision data
-- **Status**: Gate (a) **shipped** — CLI startup installs the managed subprocess checker as the production default via `check.UseManagedSubprocessChecker`, and every package-input check path (`osty check` / `lint` / `typecheck` / `build` / `run` / `test` / `ci` / `lsp` / `pipeline`) now routes through `check.NativePackageCheck` so the factory selection is consistent across commands. Gate (b) — full embedded retirement — still requires separate reliability work.
+- **Status**: Gate (a) **shipped** — CLI startup installs the managed subprocess checker as the production default via `check.UseManagedSubprocessChecker`, and every package-input check path (`osty check` / `lint` / `typecheck` / `build` / `run` / `test` / `ci` / `lsp` / `pipeline`) now routes through `check.NativePackageCheck` so the factory selection is consistent across commands. Gate (b) **partial** — the production factory no longer falls back to embedded on managed-build failure (a missing Go toolchain or broken build now surfaces as a clear diagnostic instead of silently re-routing to the frozen in-process checker). Full embedded code removal still depends on migrating the test infrastructure off the embedded default.
 
 ## Why this baseline exists
 
@@ -16,10 +16,11 @@
 
 Today's default (CLI startup, after gate (a) flip) is **subprocess** via
 `check.UseManagedSubprocessChecker(".")` in `cmd/osty/main.go`, which lazily
-resolves the managed binary on first factory-routed check. The factory falls
-back to embedded with a diagnostic note if the managed build fails — Go-less
-environments still get working checks. `OSTY_NATIVE_CHECKER_BIN` still wins
-outright when set.
+resolves the managed binary on first factory-routed check. After the gate
+(b) cleanup, a managed-build failure now surfaces as `(nil, "managed native
+checker unavailable: <reason>")` — callers see a clear "checker
+unavailable" diagnostic instead of an opaque silent shift to the frozen
+embedded path. `OSTY_NATIVE_CHECKER_BIN` still wins outright when set.
 
 Every CLI surface that previously called `selfhost.CheckPackageStructured`
 directly (`runCheckPackageNative`, `runNativeWorkspaceCheck`,
@@ -43,10 +44,11 @@ is on record before any flip.
 
 ### Decision gates this baseline informs
 
-| Gate | Decision | Required evidence |
-|---|---|---|
-| **(a)** | Flip default from embedded to subprocess | Per-shape cold cost ratios within the thresholds listed below |
-| **(b)** | Delete the embedded path entirely | Same as (a), plus subprocess path is reliable enough to be the sole codepath (separate reliability work, out of scope here) |
+| Gate | Decision | Required evidence | Status |
+|---|---|---|---|
+| **(a)** | Flip default from embedded to subprocess | Per-shape cold cost ratios within the thresholds listed below | shipped (PRs #1669 + #1671) |
+| **(b-soft)** | Remove the silent embedded fallback in `UseManagedSubprocessChecker` so production failures surface | Subprocess error reporting good enough that opaque fallback is not needed | shipped (this gate's PR) |
+| **(b-hard)** | Delete `embeddedNativeChecker` and the embedded path entirely | Tests migrated off the embedded factory default | not started |
 
 ## Reproduction
 
