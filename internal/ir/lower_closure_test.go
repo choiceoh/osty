@@ -108,7 +108,9 @@ func TestLowerClosureUsesByteRangeFallbackWhenNodeIDsDiverge(t *testing.T) {
 		NativeCheckResult: &api.CheckResult{
 			TypedNodes: []api.CheckedNode{{
 				// AST closure uses NodeID 21; SemanticDB record 999 forces
-				// lowering onto the byte-range fallback instead of the byID path.
+				// lowering onto the byte-range fallback instead of the byID
+				// path. This guards the IR switchover against subprocess
+				// JSON-boundary type loss when Go/selfhost NodeIDs diverge.
 				NodeID: 999,
 				Kind:   "Closure",
 				Start:  0,

@@ -430,7 +430,9 @@ func TestLowerLetStmtUsesByteRangeBindingTypeWhenNodeIDsDiverge(t *testing.T) {
 				{
 					// NodeID 901 shares x's span but carries a different
 					// binding name, so the fallback has to match on both byte
-					// range and binding name before accepting a record.
+					// range and binding name before accepting a record. This
+					// guards the IR switchover against JSON-boundary
+					// SemanticDB mismatches that drop the byID hit.
 					NodeID: 901,
 					Name:   "other",
 					Start:  4,
@@ -539,7 +541,9 @@ func TestLowerIdentUsesByteRangeSymbolTypeWhenNodeIDsDiverge(t *testing.T) {
 				{
 					// NodeID 901 shares g's span but names a different
 					// symbol, so lowering must skip it and match NodeID 902's
-					// `g` record via byte range + symbol name.
+					// `g` record via byte range + symbol name. This guards the
+					// IR switchover against JSON-boundary SemanticDB
+					// mismatches when Go and selfhost NodeIDs diverge.
 					NodeID: 901,
 					Kind:   "let",
 					Name:   "other",
