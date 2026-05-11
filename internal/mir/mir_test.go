@@ -2809,6 +2809,62 @@ func TestLowerStringSliceRecoversStaleRangeIndexType(t *testing.T) {
 	}
 }
 
+// TestLowerStringSliceLetBindingTypeRecoveredFromIndexExpr verifies the
+// `let head = name[0..N]` shape: when the check pass leaves
+// `IndexExpr.T = Char` even though the slice yields String, the
+// let-binding local must take the recovered String type so the
+// `string_substring` intrinsic's String result stores into a matching
+// slot. Pre-patch the binding inherited Char and produced a type
+// mismatch that downstream String operations rejected.
+func TestLowerStringSliceLetBindingTypeRecoveredFromIndexExpr(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "sliceLet",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "s", Type: ir.TString},
+			{Name: "n", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "head",
+					// No type annotation — stale Char from check leaks
+					// into the IndexExpr value's T.
+					Value: &ir.IndexExpr{
+						X: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+						Index: &ir.RangeLit{
+							Start: &ir.IntLit{Text: "0", T: ir.TInt},
+							End:   &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+							T:     &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+						},
+						T: ir.TChar, // ← stale; should be String
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "head", Kind: ir.IdentLocal, T: ir.TString},
+		},
+	}
+	out := lowerHIR(t, fn)
+	mirFn := out.LookupFunction("sliceLet")
+	if mirFn == nil {
+		t.Fatal("missing sliceLet")
+	}
+	// Find the `head` local and assert its type is String, not Char.
+	var headLocal *Local
+	for _, l := range mirFn.Locals {
+		if l != nil && l.Name == "head" {
+			headLocal = l
+			break
+		}
+	}
+	if headLocal == nil {
+		t.Fatalf("expected `head` local in MIR:\n%s", PrintFunction(mirFn))
+	}
+	if prim, ok := headLocal.Type.(*ir.PrimType); !ok || prim.Kind != ir.PrimString {
+		t.Fatalf("head local should be String, got %T (%v):\n%s", headLocal.Type, headLocal.Type, PrintFunction(mirFn))
+	}
+}
+
 func TestLowerStdlibStringsTrimSpaceFreeFn(t *testing.T) {
 	useDecl := &ir.UseDecl{
 		Path:    []string{"std", "strings"},
