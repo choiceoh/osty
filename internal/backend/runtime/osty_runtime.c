@@ -29301,8 +29301,10 @@ int32_t osty_rt_stage0_string_char_at(const char *s, int64_t index) {
 /* osty_rt_strings_to_int — parse a decimal integer from `s`. Stage0
  * declares this as `ptr (ptr)`, returning `scalarOpaquePtr` — an
  * Option<Int> box. Concretely: a heap-allocated 16-byte aggregate
- * { tag: i64 (0=None, 1=Some), value: i64 }. NULL or unparseable
- * input yields None.
+ * { tag: i64, value: i64 } where tag follows the source/Go
+ * convention `Some=0, None=1` (see
+ * `internal/mir/lower.go:7757`). NULL or unparseable input yields
+ * None.
  */
 void *osty_rt_strings_to_int(const char *s);
 void *osty_rt_strings_to_int(const char *s) {
@@ -29314,7 +29316,7 @@ void *osty_rt_strings_to_int(const char *s) {
     if (box == NULL) {
         return NULL;
     }
-    box[0] = 0; /* None */
+    box[0] = 1; /* None */
     box[1] = 0;
     if (s == NULL) {
         return box;
@@ -29349,7 +29351,7 @@ void *osty_rt_strings_to_int(const char *s) {
     if (*p != '\0') {
         return box; /* trailing garbage → None */
     }
-    box[0] = 1; /* Some */
+    box[0] = 0; /* Some */
     box[1] = sign * value;
     return box;
 }
@@ -29377,7 +29379,8 @@ bool osty_rt_list_contains_str(void *raw_list, const char *needle) {
  * return the Ok value if Ok, else `fallback`. Stage0 declares as
  * `ptr (ptr, ptr)`, returning the inner string. The Result ABI
  * mirrors `osty_rt_strings_to_int`'s Option<Int> layout: 16 bytes,
- * { tag: i64 (0=Err, 1=Ok), payload: ptr or i64 }.
+ * { tag: i64, payload: ptr or i64 } with the source/Go convention
+ * `Ok=0, Err=1` (see `internal/mir/lower.go:7757`).
  */
 const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback);
 const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback) {
@@ -29385,7 +29388,7 @@ const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback) 
         return fallback;
     }
     int64_t *box = (int64_t *)result;
-    if (box[0] != 1) {
+    if (box[0] != 0) {
         /* Err or unknown variant. */
         return fallback;
     }
@@ -29486,24 +29489,89 @@ int64_t osty_rt_audit_strings_compare(const char *left, const char *right) {
     return osty_rt_strings_Compare(left, right);
 }
 
-/* std.env.args() — return an empty List<String>. Stage0 binaries
- * never reach the real argv plumbing on the smoke `--version` path;
- * an empty list keeps user code that iterates the result safe. */
+/* Captured process argv. Populated once before main() runs via a
+ * platform-specific initialiser (`.init_array` on glibc/musl,
+ * `__attribute__((constructor))` + Apple's `_NSGetArg{c,v}` on
+ * macOS). `std.env.args` reads from here so a stage0-produced
+ * binary can route argv into toolchain CLI dispatch instead of
+ * falling through to the unsupported-command banner.
+ *
+ * Both globals default to 0/NULL; if the platform-specific
+ * initialiser fails to run (or the host isn't covered below),
+ * `std.env.args` falls back to an empty list — same behaviour as
+ * the pre-capture stub. */
+static int osty_rt_saved_argc;
+static char **osty_rt_saved_argv;
+
+#if defined(__APPLE__)
+/* macOS exposes the captured argv via dyld-provided indirection.
+ * `__attribute__((constructor))` runs before main() and lets us
+ * snapshot the pointers once. */
+extern int *_NSGetArgc(void);
+extern char ***_NSGetArgv(void);
+__attribute__((constructor))
+static void osty_rt_audit_capture_argv_apple(void) {
+    int *ac = _NSGetArgc();
+    char ***av = _NSGetArgv();
+    if (ac != NULL) {
+        osty_rt_saved_argc = *ac;
+    }
+    if (av != NULL) {
+        osty_rt_saved_argv = *av;
+    }
+}
+#elif defined(__linux__)
+/* glibc + musl call every function pointer in `.init_array` (and
+ * `.preinit_array`) with the program's `argc, argv, envp` — a
+ * non-POSIX but ABI-stable convention they have honoured for
+ * decades. The standard `__attribute__((constructor))` shape
+ * only takes `void(void)`, so we register the capture function
+ * manually with the wider signature via a typed pointer placed
+ * in `.init_array`. */
+static void osty_rt_audit_capture_argv_linux(int argc, char **argv, char **envp) {
+    (void)envp;
+    osty_rt_saved_argc = argc;
+    osty_rt_saved_argv = argv;
+}
+__attribute__((used, section(".init_array")))
+static void (*osty_rt_audit_capture_argv_init_ptr)(int, char **, char **) =
+    &osty_rt_audit_capture_argv_linux;
+#endif
+
+/* std.env.args() — return a List<String> built from the captured
+ * argv. Element 0 is the program path (matches POSIX/Go semantics);
+ * `toolchain/main.osty:forwardedArgs` slices from index 1. Falls
+ * back to an empty list if argv capture failed (unsupported host
+ * or constructor skipped). */
 void *osty_rt_audit_env_args(void) __asm__("std.env.args");
 void *osty_rt_audit_env_args(void) {
-    return osty_rt_list_new();
+    void *list = osty_rt_list_new();
+    if (list == NULL || osty_rt_saved_argv == NULL) {
+        return list;
+    }
+    for (int i = 0; i < osty_rt_saved_argc; i++) {
+        const char *raw = osty_rt_saved_argv[i];
+        if (raw == NULL) {
+            continue;
+        }
+        const char *dup = osty_rt_string_dup_site(raw, strlen(raw), "stage0.audit.env_args");
+        osty_rt_list_push_string(list, dup);
+    }
+    return list;
 }
 
 /* std.env.get(name) — return a heap-allocated `%stage0.Option.ptr`
- * ({ i64 tag, char* value }) wrapping `getenv(name)`. tag=1 (Some)
- * when set, tag=0 (None) when unset or on NULL input. */
+ * ({ i64 tag, char* value }) wrapping `getenv(name)`. Tag follows
+ * the source/Go convention `Some=0, None=1` (see
+ * `internal/mir/lower.go:7757`): tag=0 (Some) when set, tag=1
+ * (None) when unset or on NULL input. */
 void *osty_rt_audit_env_get(const char *name) __asm__("std.env.get");
 void *osty_rt_audit_env_get(const char *name) {
     int64_t *box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
     if (box == NULL) {
         return NULL;
     }
-    box[0] = 0; /* None */
+    box[0] = 1; /* None */
     box[1] = 0;
     if (name == NULL) {
         return box;
@@ -29516,7 +29584,7 @@ void *osty_rt_audit_env_get(const char *name) {
         return box;
     }
     char *dup = osty_rt_string_dup_site(raw, strlen(raw), "stage0.audit.env_get");
-    box[0] = 1; /* Some */
+    box[0] = 0; /* Some */
     memcpy(&box[1], &dup, sizeof(dup));
     return box;
 }
