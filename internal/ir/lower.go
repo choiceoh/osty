@@ -1053,6 +1053,12 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 				if rt := l.builtinMethodReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
 					return true
 				}
+				// Closure-dependent methods (`xs.fold(init, fn)`,
+				// `o.map(fn)`): result type comes from an argument
+				// rather than the receiver alone.
+				if rt := l.closureDependentMethodReturnTypeFromAST(fx, call.Args); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
 			}
 			// Free-fn calls (`helper()`): promote when the resolved
 			// declaration has a non-unit return type. We restrict this
@@ -1076,11 +1082,12 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 }
 
 // freeFnReturnTypeFromAST resolves the callee identifier of a free-fn
-// call (`helper()`) to its declared return type via the resolver.
-// Used by `expressionYieldsValue` to decide whether a trailing call
-// promotes to the block's Result. Returns nil when the symbol does not
-// resolve to a top-level FnDecl. Closure / let-bound function callees
-// are intentionally excluded — they parse and resolve but their bodies
+// call (`helper()`) or a parameter whose declared type is a function
+// type (`fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }`) to its
+// declared return type via the resolver. Used by
+// `expressionYieldsValue` to decide whether a trailing call promotes
+// to the block's Result. Closure / let-bound function callees are
+// intentionally excluded — they parse and resolve but their bodies
 // are sometimes Stmt-positioned in the toolchain, and promoting them
 // regresses stage0 audit coverage.
 func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
@@ -1091,11 +1098,50 @@ func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
 	if sym == nil {
 		return nil
 	}
-	if d, ok := sym.Decl.(*ast.FnDecl); ok && d != nil {
+	switch d := sym.Decl.(type) {
+	case *ast.FnDecl:
 		if d.ReturnType == nil {
 			return TUnit
 		}
 		return l.lowerType(d.ReturnType)
+	case *ast.Param:
+		// Function-typed parameter — return the FnType's declared
+		// return so `f(x)` at trailing position promotes.
+		if ft, ok := d.Type.(*ast.FnType); ok && ft != nil {
+			if ft.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(ft.ReturnType)
+		}
+	}
+	return nil
+}
+
+// closureDependentMethodReturnTypeFromAST handles the methods whose
+// return type is derived from a function-typed argument rather than
+// the receiver alone. Covers the common shapes:
+//
+//   - `xs.fold(init, fn)` → typeof(init)
+//   - `o.map(fn)`         → Option<typeof(fn(x))>, approximated as Option<?>
+//
+// Returns nil when the call doesn't match a known shape. Used by
+// `expressionYieldsValue` to decide promotion at trailing position.
+func (l *lowerer) closureDependentMethodReturnTypeFromAST(fx *ast.FieldExpr, args []*ast.Arg) Type {
+	if l == nil || fx == nil {
+		return nil
+	}
+	recvType := l.resolveExprStaticType(fx.X)
+	if recvType == nil || recvType == ErrTypeVal {
+		return nil
+	}
+	switch fx.Name {
+	case "fold":
+		// `xs.fold(init, fn)`: result type = type of init.
+		if len(args) >= 1 && args[0] != nil && args[0].Value != nil {
+			if t := l.lowerExpr(args[0].Value).Type(); t != nil && t != ErrTypeVal {
+				return t
+			}
+		}
 	}
 	return nil
 }
@@ -3477,6 +3523,22 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return TString
 		}
 	}
+	// String-specific element-type returns.
+	if isPrim(rt, PrimString) {
+		switch name {
+		case "chars":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{TChar}}
+		case "bytes":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{TByte}}
+		}
+	}
+	// Char / Byte primitive method returns.
+	if isPrim(rt, PrimChar) || isPrim(rt, PrimByte) {
+		switch name {
+		case "toInt":
+			return TInt
+		}
+	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
 		switch name {
@@ -3493,6 +3555,13 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return nt
 		case "contains":
 			return TBool
+		case "entries":
+			// List<T>.entries() → List<(Int, T)>.
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{
+				&TupleType{Elems: []Type{TInt, nt.Args[0]}},
+			}}
+		case "toSet":
+			return &NamedType{Name: "Set", Builtin: true, Args: []Type{nt.Args[0]}}
 		}
 	}
 	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,
@@ -3510,10 +3579,26 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{k}}
 		case "values":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{v}}
+		case "entries":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{
+				&TupleType{Elems: []Type{k, v}},
+			}}
 		case "containsKey":
 			return TBool
 		case "insert":
 			return TUnit
+		}
+	}
+	// Set<T> method returns: .toList() → List<T>, .add/.remove → Unit,
+	// .contains → Bool. Mirrors the List/Map intrinsic tables.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Set" && len(nt.Args) == 1 {
+		switch name {
+		case "toList":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{nt.Args[0]}}
+		case "add", "remove":
+			return TUnit
+		case "contains":
+			return TBool
 		}
 	}
 	return nil

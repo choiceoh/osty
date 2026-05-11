@@ -881,6 +881,67 @@ fn main() {}`,
 	}
 }
 
+// Bundle: ten trailing-call shapes that the post-#1645 `expression-
+// YieldsValue` path dropped to ExprStmt → MIR UnreachableTerm. Each
+// case is a real user-code pattern that the stdlib intrinsic table
+// previously didn't cover, plus the `f(x)` fn-typed-parameter call.
+func TestLowerTrailingMethodCallBundle(t *testing.T) {
+	tests := []struct {
+		name, src, wantType string
+	}{
+		{"list_fold_promote", `fn total(xs: List<Int>) -> Int { xs.fold(0, |a, x| a + x) }
+fn main() {}`, ""},
+		{"map_entries", `fn ents(m: Map<String, Int>) -> List<(String, Int)> { m.entries() }
+fn main() {}`, "List<(String, Int)>"},
+		{"set_to_list", `fn arr(s: Set<Int>) -> List<Int> { s.toList() }
+fn main() {}`, "List<Int>"},
+		{"set_contains", `fn has(s: Set<Int>, n: Int) -> Bool { s.contains(n) }
+fn main() {}`, "Bool"},
+		{"string_chars", `fn ch(s: String) -> List<Char> { s.chars() }
+fn main() {}`, "List<Char>"},
+		{"string_bytes", `fn bs(s: String) -> List<Byte> { s.bytes() }
+fn main() {}`, "List<Byte>"},
+		{"char_to_int", `fn ord(c: Char) -> Int { c.toInt() }
+fn main() {}`, "Int"},
+		{"byte_to_int", `fn b2i(b: Byte) -> Int { b.toInt() }
+fn main() {}`, "Int"},
+		{"closure_param_call", `fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn main() {}`, "Int"},
+		{"list_entries", `fn ents(xs: List<Int>) -> List<(Int, Int)> { xs.entries() }
+fn main() {}`, "List<(Int, Int)>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil (trailing call promotion regression)", fn.Name)
+					continue
+				}
+				if tt.wantType != "" {
+					if got := typeString(fn.Body.Result.Type()); got != tt.wantType {
+						t.Errorf("fn %s: body.Result.Type = %q, want %q", fn.Name, got, tt.wantType)
+					}
+				}
+			}
+		})
+	}
+}
+
 // `if let Some(x) = opt { x } else { default }` is a value expression
 // just like a regular `if ... else`. The pre-fix
 // `astIfLooksLikeValueExpr` short-circuited on `IsIfLet → false`,
