@@ -64,10 +64,12 @@ func TestRunInvokesOstySelfWithRequestArgs(t *testing.T) {
 	bin := buildFakeOstySelf(t)
 	captureDir := t.TempDir()
 	captureArgs := filepath.Join(captureDir, "args.json")
+	captureForwardArgs := filepath.Join(captureDir, "forward_args.txt")
 	captureSource := filepath.Join(captureDir, "source.osty")
 
 	t.Setenv(SelfBinEnv, bin)
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_FORWARD_ARGS", captureForwardArgs)
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureSource)
 	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; lir-proto IR\ndefine i64 @check(i64 %x) {\n  ret i64 %x\n}\n")
 
@@ -115,6 +117,15 @@ func TestRunInvokesOstySelfWithRequestArgs(t *testing.T) {
 	}
 	if !contains(args, wantTarget) {
 		t.Fatalf("args missing %q: %v", wantTarget, args)
+	}
+	forwarded := strings.Split(readFile(t, captureForwardArgs), "\n")
+	if len(forwarded) != len(args) {
+		t.Fatalf("forwarded arg count = %d, want %d (%q)", len(forwarded), len(args), readFile(t, captureForwardArgs))
+	}
+	for i := range args {
+		if forwarded[i] != args[i] {
+			t.Fatalf("forwarded arg[%d] = %q, want %q (payload %q)", i, forwarded[i], args[i], readFile(t, captureForwardArgs))
+		}
 	}
 
 	source := readFile(t, captureSource)
@@ -243,6 +254,9 @@ func main() {
 		if err == nil {
 			_ = os.WriteFile(path, data, 0o644)
 		}
+	}
+	if path := os.Getenv("FAKE_OSTY_SELF_CAPTURE_FORWARD_ARGS"); path != "" {
+		_ = os.WriteFile(path, []byte(os.Getenv("OSTY_SELF_REBUILD_FORWARD_ARGS")), 0o644)
 	}
 	if path := os.Getenv("FAKE_OSTY_SELF_CAPTURE_SOURCE"); path != "" && len(os.Args) > 2 {
 		// Args[2] is the staged source path (lir-proto-lower <path> ...).
