@@ -182,19 +182,19 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P18 | `\|\|` short-circuit + if-else struct return | (#1461) — **구현 완료** |
 | P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
 | P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
-| **P21+** | **emergency-only freeze — Q8 결정**. `docs/osty_self_b2_1_audit.md` 측정으로 stage0 단독 부트스트랩의 ROI 가 옵션 (C) registry 보다 낮음 (현재 11.3% cover, P21–P24 추가해도 ~40%). 진행은 옵션 (C) registry path 안정 후 별도 dedicated 트랙으로 평가. | — |
+| **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (`OSTY_STAGE0_AUDIT=1 ./internal/backend/`). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
+| **P24+** | **active — master plan v2 진행 중**. 현 `install-self` 시 `OSTY_STAGE0_LIST_ALL_DECLINES=1` → 1340 function declines (audit %에도 불구하고 부트스트랩은 unique shape × 함수 instance 단위로 cumulative). 다음 P-phase 후보는 `b2_1_audit.md §4.3` 의 master plan v2 표 참조. | 측정 중 |
 
-각 Phase는 independent PR. P0은 수십 줄. P1~P20 합산 emit.go 약 4253 줄
-+ tests 1703 줄 = ~6K LOC.
+각 Phase는 independent PR. P0은 수십 줄. P1~P23 합산 emit.go 4253 + P21–P23 추가분 = ~5K+ 줄.
 
-## 5. 결정 — RESOLVED
+## 5. 결정 — RESOLVED (P21+ 정책 갱신 2026-05)
 
 | 항목 | 결정 |
 |---|---|
-| 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — 진행 동결**. P0–P20 가 v0.5 의 단순 함수/제어/타입 cover. P21+ 동결로 더 넓은 v0.5 surface 는 cover 하지 않음. surface 는 outright 미진행 (CLAUDE.md "v0.5 baseline" 규칙). |
-| 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (4253 줄) + emit_test.go (1703 줄) + doc.go. |
-| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — emergency 발화 시만 사용자가 명시 set. CI matrix 에서도 default off; `bootstrap-smoke-test.yml` 가 fresh-clone 시나리오 (registry path) 만 검증. |
-| 4. stage0 retirement 시점 | **영구 보존** — Q8. `docs/security/bootstrap-recovery.md` §5 의 "DR2 reconstruction" 경로에 명시. retirement PR 미예정 — stage0 가 진단 가치 (`b2_1_audit.md` decline 카탈로그 source) 만으로도 6K LOC 비용 정당화. |
+| 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — P21+ unfrozen**. P0–P20 + P21/P22/P23 머지됨. install-self 부트스트랩 가능까지 master plan v2 (b2_1_audit §4.3) 의 sequence 진행. surface 추가는 부트스트랩 차단 함수에 한정 (CLAUDE.md "v0.5 baseline" 규칙은 spec surface — emitter coverage는 무관). |
+| 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (15304 줄, P21–P23 포함) + emit_test.go (6783 줄) + doc.go. |
+| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — registry path 가 default. 하지만 registry 가 0 자산 (`github.com/choiceoh/osty/releases/.../osty-self-snapshots` 404 confirmed 2026-05-11) 인 상황에서는 stage0 가 유일한 fresh-clone 부트스트랩 경로. CI bootstrap-smoke 도 양쪽 모두 검증. |
+| 4. stage0 retirement 시점 | **영구 보존** — Q8. 진단 가치 + registry-down-시 DR2 부트스트랩 경로로 정당화. retirement PR 미예정. |
 
 ---
 
