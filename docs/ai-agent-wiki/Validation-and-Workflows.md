@@ -1,0 +1,55 @@
+# Validation and Workflows
+
+## Preferred command loops
+
+- fast front-end loop: `just front`
+- fast broad loop: `just short`
+- spec-only loop: `just spec`
+- focused command tests: `just cmd <regex>`
+- focused LSP tests: `just lsp <regex>`
+- focused diag tests: `just diag <regex>`
+- focused codegen tests: `just gen <regex>`
+- broad push gate: `just prepush`
+
+If `just` is unavailable, mirror the matching recipes from `/justfile`.
+
+## Pre-edit baseline
+
+- Run the narrowest existing tests that cover the area.
+- Note unrelated failures before editing.
+- Prefer focused package tests over whole-tree runs unless the change is broad.
+
+## Area-specific expectations
+
+### Front-end changes
+
+- start with focused package tests or `just front`
+- use the spec corpus when parser/checker behavior changes
+- add focused diagnostic tests for new `Exxxx` codes
+
+### CLI, toolchain, generated-output, or self-host path changes
+
+- include `just verify-selfhost`
+- include `just ci`
+- consider `just repair-check`
+
+### Backend changes
+
+- keep unsupported shapes on structured diagnostic paths
+- use focused backend/codegen tests first
+- expand to broader verification when emission behavior changes
+
+## Common repo recipes
+
+- build CLI: `go build -o .bin/osty ./cmd/osty`
+- build native checker: `go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker`
+- verify self-host snapshots: `go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner`
+- update diagnostic golden output: `go test ./internal/diag/ -run TestGolden -update`
+
+## Validation strategy
+
+1. reproduce or baseline
+2. make the smallest meaningful change
+3. run focused validation immediately
+4. widen only as the change surface widens
+5. use `just prepush` before shipping broad or risky changes
