@@ -849,6 +849,24 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 			}
 		}
 	}
+	// Stale IndexExpr.T recovery. `let head = name[0..N]` on a String
+	// receives `IndexExpr{T: Char}` from check (see
+	// TestLowerStringSliceRecoversStaleRangeIndexType), and ir.lowerLet
+	// then inherits that Char into `let.Type` via `out.Type =
+	// out.Value.Type()`. The value-side emitter recovers via
+	// `string_substring` so the assigned operand is actually String;
+	// the local has to match that. Always consult `indexExprType` for
+	// IndexExpr-rooted values so the slice case overrides the stale
+	// scalar element type — the recovery returns the original `x.T`
+	// when no slicing/list rule applies, so non-slice indexes are
+	// unaffected.
+	if let.Value != nil {
+		if ix, ok := let.Value.(*ir.IndexExpr); ok {
+			if recovered := bs.indexExprType(ix); !isPoisonType(recovered) {
+				t = recovered
+			}
+		}
+	}
 	if t == nil {
 		t = ir.ErrTypeVal
 	}
