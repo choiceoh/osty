@@ -38,6 +38,35 @@ func TestDefaultNativeCheckerUsesProductionSelector(t *testing.T) {
 	}
 }
 
+func TestUseManagedSubprocessCheckerInstallsFactory(t *testing.T) {
+	original := productionNativeCheckerFactory
+	t.Cleanup(func() {
+		productionNativeCheckerFactory = original
+	})
+	t.Setenv(nativeCheckerEnv, "")
+
+	UseManagedSubprocessChecker(".")
+
+	got, note := productionNativeCheckerFactory()
+	// EnsureNativeChecker may succeed (returns nativeCheckerExec, empty note)
+	// or fail (returns embedded with a note) depending on the test cwd's
+	// project-root resolution. Both outcomes are valid — the contract is
+	// only that the factory is swapped to one that consults the managed
+	// path and falls back rather than panicking.
+	switch got.(type) {
+	case nativeCheckerExec:
+		if note != "" {
+			t.Errorf("note = %q on success path, want empty", note)
+		}
+	case embeddedNativeChecker:
+		if note == "" {
+			t.Errorf("embedded fallback must surface a note explaining why managed checker is unavailable")
+		}
+	default:
+		t.Fatalf("UseManagedSubprocessChecker produced %#v, want nativeCheckerExec or embeddedNativeChecker", got)
+	}
+}
+
 func TestDefaultNativeCheckerUsesEnvOverride(t *testing.T) {
 	original := productionNativeCheckerFactory
 	t.Cleanup(func() {

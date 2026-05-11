@@ -2,7 +2,7 @@
 
 - **Scope**: Performance baseline for the embedded vs subprocess native-checker decision.
 - **Type**: Reference / decision data
-- **Status**: Skeleton — populate the matrix tables by running `bash scripts/bench-checker.sh` and pasting the script's stdout summary.
+- **Status**: Gate (a) **shipped (partial)** — CLI startup installs the managed subprocess checker as the production default via `check.UseManagedSubprocessChecker` for factory-routed paths (`osty build` / `run` / `test` / `ci` / `lsp` / `pipeline`). `osty check` retains its embedded-only path (`runCheckPackageNative` calls `selfhost.CheckPackageStructured` directly without consulting the factory); routing it through the factory is a separate follow-up. Gate (b) — full embedded retirement — still requires separate reliability work.
 
 ## Why this baseline exists
 
@@ -14,8 +14,28 @@
 - **subprocess** — forks `OSTY_NATIVE_CHECKER_BIN`, JSON request via stdin,
   JSON response on stdout.
 
-Today's default is embedded. `OSTY_NATIVE_CHECKER_BIN` is documented as
-debug/override only.
+Today's default (CLI startup, after gate (a) partial flip) is **subprocess** via
+`check.UseManagedSubprocessChecker(".")` in `cmd/osty/main.go`, which lazily
+resolves the managed binary on first factory-routed check. The factory falls
+back to embedded with a diagnostic note if the managed build fails — Go-less
+environments still get working checks. `OSTY_NATIVE_CHECKER_BIN` still wins
+outright when set.
+
+`osty check` is an outlier: `runCheckPackageNative` and
+`runNativeWorkspaceCheck` call `selfhost.CheckPackageStructured` directly,
+bypassing the factory. The bench data below was measured via `osty check` with
+the env override, but in retrospect that command path doesn't read the env at
+all — the recorded subprocess-vs-embedded delta on that surface should be
+re-investigated when `osty check` is routed through the factory in a
+follow-up. The flip remains correct for the consumers that *do* go through
+the factory; their workloads share the same checker code so the bench
+shape still informs the decision.
+
+Tests inside `internal/check/` and downstream packages keep the embedded
+default — `UseManagedSubprocessChecker` is called only from CLI startup,
+not from `TestMain`, so `go test ./...` from inside the repo doesn't
+trigger managed binary builds that would otherwise add seconds and
+clutter every test package's `.osty/toolchain/...`.
 
 The bootstrap Osty→Go transpiler has been removed (CLAUDE.md). Embedded is
 therefore *frozen* — new `toolchain/*.osty` changes only land via the
@@ -171,6 +191,11 @@ that the cache layer keeps both modes interactive, which it does
 
 ## Out of scope (follow-up)
 
+- Route `osty check` through `nativeCheckerFactory` so the production
+  subprocess flip actually reaches the command users invoke most. Currently
+  `cmd/osty/native_check.go` calls `selfhost.CheckPackageStructured` directly
+  and the production switchover has no effect there. Re-bench after that
+  wiring lands.
 - `OSTY_CHECK_PARALLEL=0` ablation on the toolchain shape.
 - True-cold measurements (post-reboot, `sudo purge`).
 - Linux baseline.

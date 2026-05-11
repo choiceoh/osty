@@ -17,6 +17,7 @@ import (
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/subproc"
+	"github.com/osty/osty/internal/toolchain"
 )
 
 const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
@@ -76,9 +77,37 @@ func (embeddedNativeChecker) CheckPackageStructured(input api.PackageCheckInput)
 }
 
 // productionNativeCheckerFactory is the single production-path selector.
-// Probe-only tooling keeps opting into the managed subprocess explicitly.
+// Default is embedded so that `go test ./...` from inside the repo never
+// triggers the managed-binary build (which would otherwise pollute every
+// test package's cwd with `.osty/toolchain/...`). CLI startup calls
+// UseManagedSubprocessChecker to flip to the subprocess path before any
+// check fires; the bench data in SUBPROCESS_SWITCHOVER.md gates that flip.
 var productionNativeCheckerFactory = func() (nativeChecker, string) {
 	return embeddedNativeChecker{}, ""
+}
+
+// UseManagedSubprocessChecker installs the managed subprocess checker as the
+// production default for this process. Call once from CLI startup with the
+// workspace start path; subsequent check invocations will route through
+// `toolchain.EnsureNativeChecker(start)` on the first call (which builds the
+// managed binary on demand) and reuse the cached path thereafter.
+//
+// On managed-build failure the selector silently falls back to embedded with
+// a note so callers without a Go toolchain (or a broken native checker
+// build) still get a working check; the note surfaces via the existing
+// `checkerUnavailableDiag` path.
+//
+// Tests do not call this and continue to use the embedded factory — the
+// managed binary build would otherwise add seconds and clutter
+// `internal/check/.osty/` on every package's test run.
+func UseManagedSubprocessChecker(start string) {
+	productionNativeCheckerFactory = func() (nativeChecker, string) {
+		path, err := toolchain.EnsureNativeChecker(start)
+		if err != nil {
+			return embeddedNativeChecker{}, fmt.Sprintf("managed native checker unavailable: %v; using embedded fallback", err)
+		}
+		return nativeCheckerExec{path: path}, ""
+	}
 }
 
 var nativeCheckerFactory = defaultNativeChecker
