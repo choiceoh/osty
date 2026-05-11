@@ -976,14 +976,118 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		*ast.CharLit, *ast.BoolLit, *ast.ListExpr, *ast.MapExpr,
 		*ast.TupleExpr, *ast.RangeExpr:
 		return true
+	case *ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
+		*ast.QuestionExpr, *ast.TurbofishExpr:
+		// These expression shapes always yield a value in Osty (they
+		// have no statement form). When SemanticDB type lookup misses
+		// (post-#1645, both byID and the no-op byKey lookup fail for
+		// these kinds) the type-driven branch above returns nil and we
+		// rely on syntactic shape to keep the trailing expression as
+		// the block's Result rather than a discarded ExprStmt. Without
+		// this case `fn f(p: Point) -> Int { p.x + p.y }` lowers with
+		// `Body.Result = nil` and MIR emits an UnreachableTerm, which
+		// breaks stage0 patterns P15-P19, P23 and TestStage0RealMIRBaseline.
+		return true
+	case *ast.ParenExpr:
+		if px, ok := e.(*ast.ParenExpr); ok && px.X != nil {
+			return l.expressionYieldsValue(px.X)
+		}
+		return false
 	case *ast.IfExpr:
 		return astIfLooksLikeValueExpr(e)
+	case *ast.MatchExpr:
+		return astMatchLooksLikeValueExpr(e)
 	case *ast.Ident:
 		return astIdentLooksLikeValueConstructor(e)
 	case *ast.CallExpr:
-		return astCallLooksLikeValueConstructor(e)
+		// CallExpr return type may be unit (e.g. `println(...)`),
+		// in which case the trailing call should stay an ExprStmt
+		// rather than promote to the block's Result — promoting it
+		// changes the MIR shape (Stmt-positioned IntrinsicInstr vs
+		// expression-positioned), breaking stage0 patterns that key
+		// on `println`-as-stmt.
+		if astCallLooksLikeValueConstructor(e) {
+			return true
+		}
+		// Method calls (`recv.name(...)`) on user-defined types: look
+		// up the method's declared ReturnType via the resolver to
+		// decide. Non-unit returns promote, unit-returning side-effect
+		// calls (e.g. `ch.send(x)`) remain Stmts. Without this branch
+		// `fn show(t: Tag) -> String { t.label() }` would lose the
+		// trailing call (Body.Result=nil → MIR UnreachableTerm).
+		if call, ok := e.(*ast.CallExpr); ok && call != nil {
+			if fx, ok := call.Fn.(*ast.FieldExpr); ok && fx != nil {
+				if rt := l.userMethodReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	return false
+}
+
+// userMethodReturnTypeFromAST resolves the receiver expression of a
+// `recv.method(...)` call to its user-defined struct/enum decl and
+// returns the named method's lowered return type. Returns nil when the
+// receiver is not a nominal user type or the method is absent.
+func (l *lowerer) userMethodReturnTypeFromAST(fx *ast.FieldExpr) Type {
+	if l == nil || fx == nil {
+		return nil
+	}
+	id, ok := fx.X.(*ast.Ident)
+	if !ok || id == nil || l.res == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil {
+		return nil
+	}
+	recvType := l.nativeBindingTypeForSymbol(sym)
+	if recvType == nil || recvType == ErrTypeVal {
+		recvType = l.nativeSymbolType(sym)
+	}
+	if recvType == nil || recvType == ErrTypeVal {
+		// Fall back to the symbol's Decl AST type when SemanticDB
+		// lookups miss (e.g. parameters whose declared Type is known
+		// from AST alone).
+		switch d := sym.Decl.(type) {
+		case *ast.Param:
+			if d.Type != nil {
+				recvType = l.lowerType(d.Type)
+			}
+		}
+	}
+	if recvType == nil || recvType == ErrTypeVal {
+		return nil
+	}
+	nt, ok := recvType.(*NamedType)
+	if !ok || nt == nil || nt.Builtin {
+		return nil
+	}
+	if sd := l.structDeclByName(nt.Name); sd != nil {
+		for _, m := range sd.Methods {
+			if m == nil || m.Name != fx.Name {
+				continue
+			}
+			if m.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(m.ReturnType)
+		}
+	}
+	if ed := l.enumDeclByName(nt.Name); ed != nil {
+		for _, m := range ed.Methods {
+			if m == nil || m.Name != fx.Name {
+				continue
+			}
+			if m.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(m.ReturnType)
+		}
+	}
+	return nil
 }
 
 func astIdentLooksLikeValueConstructor(e ast.Expr) bool {
@@ -1017,6 +1121,52 @@ func astIfLooksLikeValueExpr(e ast.Expr) bool {
 	return astElseLooksLikeValueConstructor(ife.Else)
 }
 
+// astMatchLooksLikeValueExpr reports whether a trailing `match ... { ... }`
+// at the block-final position should be lowered as the block's Result
+// (a value expression) rather than as a MatchStmt. Mirrors
+// `astIfLooksLikeValueExpr` but walks every arm — if any arm yields a
+// value, the match itself yields a value. Without `chk.Types`
+// (#1645-zeroed legacy map) the type-driven branch in
+// `expressionYieldsValue` misses match expressions entirely, so the
+// trailing match becomes a MatchStmt with no result wired back to the
+// function return → MIR UnreachableTerm → stage0 declines.
+func astMatchLooksLikeValueExpr(e ast.Expr) bool {
+	m, ok := e.(*ast.MatchExpr)
+	if !ok || m == nil || len(m.Arms) == 0 {
+		return false
+	}
+	for _, arm := range m.Arms {
+		if arm == nil || arm.Body == nil {
+			continue
+		}
+		// Arm body is either a Block or a bare expression. Both reduce
+		// to "is the tail expression a value-yielding shape?".
+		if blk, ok := arm.Body.(*ast.Block); ok {
+			if astBlockTailLooksLikeValueConstructor(blk) {
+				return true
+			}
+			continue
+		}
+		switch arm.Body.(type) {
+		case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit,
+			*ast.RangeExpr, *ast.IntLit, *ast.FloatLit, *ast.StringLit,
+			*ast.CharLit, *ast.BoolLit, *ast.BinaryExpr, *ast.UnaryExpr,
+			*ast.FieldExpr, *ast.IndexExpr, *ast.QuestionExpr,
+			*ast.TurbofishExpr:
+			return true
+		case *ast.Ident:
+			if astIdentLooksLikeValueConstructor(arm.Body) {
+				return true
+			}
+		case *ast.CallExpr:
+			if astCallLooksLikeValueConstructor(arm.Body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func astElseLooksLikeValueConstructor(e ast.Expr) bool {
 	switch x := e.(type) {
 	case nil:
@@ -1039,7 +1189,21 @@ func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
 	if !ok || last == nil {
 		return false
 	}
-	return astIdentLooksLikeValueConstructor(last.X) || astCallLooksLikeValueConstructor(last.X)
+	if astIdentLooksLikeValueConstructor(last.X) || astCallLooksLikeValueConstructor(last.X) {
+		return true
+	}
+	// Without `chk.Types` (zeroed by #1645) we can't ask the checker
+	// whether `(a, b)` / `x + y` / `obj.field` is the block's value, so
+	// classify by shape. Mirrors the additions in `expressionYieldsValue`
+	// — same rationale (always-yields-value syntactic shapes in Osty).
+	switch last.X.(type) {
+	case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit, *ast.RangeExpr,
+		*ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.BoolLit,
+		*ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
+		*ast.QuestionExpr, *ast.TurbofishExpr:
+		return true
+	}
+	return false
 }
 
 func expressionTypeYieldsValue(t Type) bool {
@@ -2936,6 +3100,19 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 				t = recovered
 			}
 		}
+		// User-defined method recovery: look up the method on the
+		// receiver's struct/enum declaration via the resolver. The
+		// stdlib intrinsic table above only covers builtin containers
+		// + String + Bytes; without this branch a call like
+		// `b.capacity()` (user-method on `struct Buf`) lowers with
+		// T=<error> post-#1645 (the checker's per-node Types map is
+		// no longer populated and the byID/byKey native lookups miss),
+		// which silently poisons every enclosing expression.
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
+			if recovered := l.recoverUserMethodReturnType(fx.Name, recv); recovered != nil {
+				t = recovered
+			}
+		}
 	}
 	out := &MethodCall{
 		Receiver: recv,
@@ -2948,6 +3125,80 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// recoverUserMethodReturnType walks the receiver's struct/enum AST
+// declaration looking for a method whose name matches. Returns its
+// lowered ReturnType, or nil when no such method exists or the
+// receiver's type is not a user-defined nominal. Mirrors the lookup
+// path in lowerMethodCall fallback for stdlib intrinsics, but for
+// user-side declarations the IR has to consult the AST directly because
+// the checker's per-node Types map is no longer populated (#1645) and
+// the byID/byKey SemanticDB lookups for arbitrary CallExpr / MethodCall
+// nodes are unreliable (selfhost arena ids != AST NodeIDs).
+func (l *lowerer) recoverUserMethodReturnType(name string, recv Expr) Type {
+	if l == nil || recv == nil || name == "" {
+		return nil
+	}
+	rt := recv.Type()
+	if rt == nil || rt == ErrTypeVal {
+		return nil
+	}
+	named, ok := rt.(*NamedType)
+	if !ok || named == nil || named.Builtin {
+		return nil
+	}
+	if sd := l.structDeclByName(named.Name); sd != nil {
+		for _, m := range sd.Methods {
+			if m == nil || m.Name != name {
+				continue
+			}
+			if m.ReturnType == nil {
+				return TUnit
+			}
+			lowered := l.lowerType(m.ReturnType)
+			if lowered != nil && lowered != ErrTypeVal {
+				return lowered
+			}
+		}
+	}
+	if ed := l.enumDeclByName(named.Name); ed != nil {
+		for _, m := range ed.Methods {
+			if m == nil || m.Name != name {
+				continue
+			}
+			if m.ReturnType == nil {
+				return TUnit
+			}
+			lowered := l.lowerType(m.ReturnType)
+			if lowered != nil && lowered != ErrTypeVal {
+				return lowered
+			}
+		}
+	}
+	return nil
+}
+
+// enumDeclByName mirrors `structDeclByName` for `enum Foo { ... fn ... }`.
+func (l *lowerer) enumDeclByName(name string) *ast.EnumDecl {
+	if name == "" {
+		return nil
+	}
+	if l.file != nil {
+		for _, decl := range l.file.Decls {
+			if ed, ok := decl.(*ast.EnumDecl); ok && ed != nil && ed.Name == name {
+				return ed
+			}
+		}
+	}
+	if l.res != nil && l.res.FileScope != nil {
+		if sym := l.res.FileScope.Lookup(name); sym != nil {
+			if ed, ok := sym.Decl.(*ast.EnumDecl); ok {
+				return ed
+			}
+		}
+	}
+	return nil
 }
 
 // recoverMethodReturnType derives the return type of a receiver-and-
