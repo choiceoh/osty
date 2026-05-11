@@ -1201,6 +1201,20 @@ func (l *lowerer) closureDependentMethodReturnTypeFromAST(fx *ast.FieldExpr, arg
 		return &NamedType{Name: "List", Builtin: true, Args: []Type{
 			&TupleType{Elems: []Type{nt.Args[0], ont.Args[0]}},
 		}}
+	case "mapOr":
+		// `o.mapOr(default, fn)`: result type = type of default.
+		if len(args) >= 1 && args[0] != nil && args[0].Value != nil {
+			if t := l.lowerExpr(args[0].Value).Type(); t != nil && t != ErrTypeVal {
+				return t
+			}
+		}
+	case "mapErr":
+		// `r.mapErr(fn)` on Result<T, E> → Result<T, ?closure_result>.
+		if nt, ok := recvType.(*NamedType); ok && nt.Builtin && nt.Name == "Result" && len(nt.Args) == 2 {
+			return &NamedType{Name: "Result", Builtin: true, Args: []Type{
+				nt.Args[0], &NamedType{Name: "?closure_result"},
+			}}
+		}
 	}
 	return nil
 }
@@ -3654,8 +3668,16 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return &OptionalType{Inner: TInt}
 		case "lines", "fields":
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{TString}}
-		case "padLeft", "padRight", "padStart", "padEnd":
+		case "padLeft", "padRight", "padStart", "padEnd",
+			"concat", "reverse", "toUpperCase", "toLowerCase",
+			"replaceAll", "replaceFirst":
 			return TString
+		case "count":
+			return TInt
+		case "first", "last":
+			return &OptionalType{Inner: TChar}
+		case "stripPrefix", "stripSuffix":
+			return &OptionalType{Inner: TString}
 		}
 	}
 	// Range<Int> intrinsic returns.
@@ -3684,20 +3706,28 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return TBool
 		}
 	}
-	// Int primitive method returns: abs / min / max / toString.
+	// Int primitive method returns.
 	if isPrim(rt, PrimInt) {
 		switch name {
-		case "abs", "min", "max":
+		case "abs", "min", "max", "neg", "pow", "clamp":
 			return TInt
+		case "toFloat":
+			return TFloat
+		case "toHex", "toBinary", "toOctal":
+			return TString
+		case "isPositive", "isNegative", "isZero", "isEven", "isOdd":
+			return TBool
 		}
 	}
 	// Float primitive method returns.
 	if isPrim(rt, PrimFloat) {
 		switch name {
-		case "abs", "sqrt", "floor", "ceil", "round", "min", "max":
+		case "abs", "sqrt", "floor", "ceil", "round", "min", "max", "pow", "neg":
 			return TFloat
 		case "toInt":
 			return TInt
+		case "isNan", "isFinite", "isInfinite", "isPositive", "isNegative", "isZero":
+			return TBool
 		}
 	}
 	// Bool predicates: redundant but documents.
@@ -3720,14 +3750,16 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
 		elem := nt.Args[0]
 		switch name {
-		case "first", "last", "min", "max":
+		case "first", "last", "min", "max", "pop":
 			return &OptionalType{Inner: elem}
-		case "push", "add", "clear", "insert", "removeAt":
+		case "push", "add", "clear", "insert", "removeAt", "extend":
 			return TUnit
+		case "remove":
+			return elem
+		case "indexOf", "lastIndexOf":
+			return &OptionalType{Inner: TInt}
 		case "sorted", "reverse", "reversed", "filter",
 			"slice", "take", "drop", "concat", "append":
-			// Same-typed List return. `map(fn)` excluded — closure
-			// dependent. `take/drop/slice` keep element type.
 			return nt
 		case "contains", "any", "all", "isEmpty":
 			return TBool
@@ -3736,12 +3768,48 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 		case "sum", "product":
 			return elem
 		case "entries":
-			// List<T>.entries() → List<(Int, T)>.
 			return &NamedType{Name: "List", Builtin: true, Args: []Type{
 				&TupleType{Elems: []Type{TInt, elem}},
 			}}
 		case "toSet":
 			return &NamedType{Name: "Set", Builtin: true, Args: []Type{elem}}
+		case "iter":
+			return &NamedType{Name: "Iterator", Builtin: true, Args: []Type{elem}}
+		}
+	}
+	// Iterator<T> methods. Iterator is a stdlib protocol type whose
+	// `Builtin` flag may or may not be set depending on how it was
+	// declared at the call site — accept either form.
+	if nt, ok := rt.(*NamedType); ok && nt.Name == "Iterator" && len(nt.Args) == 1 {
+		elem := nt.Args[0]
+		switch name {
+		case "collect":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{elem}}
+		case "next":
+			return &OptionalType{Inner: elem}
+		case "hasNext":
+			return TBool
+		case "count":
+			return TInt
+		}
+	}
+	// Channel<T> methods.
+	if nt, ok := rt.(*NamedType); ok && nt.Name == "Channel" && len(nt.Args) == 1 {
+		elem := nt.Args[0]
+		switch name {
+		case "send", "close":
+			return TUnit
+		case "recv":
+			return &OptionalType{Inner: elem}
+		case "isClosed":
+			return TBool
+		}
+	}
+	// Duration methods.
+	if nt, ok := rt.(*NamedType); ok && nt.Name == "Duration" {
+		switch name {
+		case "toMillis", "toMicros", "toNanos", "toSeconds", "toMinutes", "toHours":
+			return TInt
 		}
 	}
 	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,

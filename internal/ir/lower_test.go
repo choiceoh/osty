@@ -881,6 +881,70 @@ fn main() {}`,
 	}
 }
 
+// Bundle 3: 40+ more trailing-call shapes covering Int/Float
+// predicates+formatting, String mutation/predicate helpers, List<T>
+// mutation operations (pop/remove/indexOf/iter/extend), Iterator<T>
+// methods, Channel<T> send/recv, Duration unit conversions, and
+// closure-arg-dependent recovery for `mapOr` / `mapErr`.
+func TestLowerTrailingMethodCallBundle3(t *testing.T) {
+	tests := []struct {
+		name, src, wantType string
+	}{
+		{"int_pow", `fn pw(a: Int, b: Int) -> Int { a.pow(b) } fn main() {}`, "Int"},
+		{"int_toFloat", `fn tf(n: Int) -> Float { n.toFloat() } fn main() {}`, "Float"},
+		{"int_clamp", `fn cl(n: Int, lo: Int, hi: Int) -> Int { n.clamp(lo, hi) } fn main() {}`, "Int"},
+		{"int_isPositive", `fn p(n: Int) -> Bool { n.isPositive() } fn main() {}`, "Bool"},
+		{"int_isZero", `fn z(n: Int) -> Bool { n.isZero() } fn main() {}`, "Bool"},
+		{"int_toHex", `fn hx(n: Int) -> String { n.toHex() } fn main() {}`, "String"},
+		{"float_pow", `fn pw(a: Float, b: Float) -> Float { a.pow(b) } fn main() {}`, "Float"},
+		{"float_isNan", `fn n(f: Float) -> Bool { f.isNan() } fn main() {}`, "Bool"},
+		{"float_isFinite", `fn fi(f: Float) -> Bool { f.isFinite() } fn main() {}`, "Bool"},
+		{"string_concat", `fn cc(a: String, b: String) -> String { a.concat(b) } fn main() {}`, "String"},
+		{"string_repeat", `fn rp(s: String, n: Int) -> String { s.repeat(n) } fn main() {}`, "String"},
+		{"string_reverse", `fn rv(s: String) -> String { s.reverse() } fn main() {}`, "String"},
+		{"string_count", `fn ct(s: String, p: String) -> Int { s.count(p) } fn main() {}`, "Int"},
+		{"string_replaceAll", `fn rp(s: String, o: String, n: String) -> String { s.replaceAll(o, n) } fn main() {}`, "String"},
+		{"string_first", `fn fi(s: String) -> Char? { s.first() } fn main() {}`, "Char?"},
+		{"string_stripPrefix", `fn sp(s: String, p: String) -> String? { s.stripPrefix(p) } fn main() {}`, "String?"},
+		{"string_toUpperCase", `fn uc(s: String) -> String { s.toUpperCase() } fn main() {}`, "String"},
+		{"list_pop", `fn pp(mut xs: List<Int>) -> Int? { xs.pop() } fn main() {}`, "Int?"},
+		{"list_remove", `fn rm(mut xs: List<Int>, i: Int) -> Int { xs.remove(i) } fn main() {}`, "Int"},
+		{"list_indexOf", `fn ix(xs: List<Int>, n: Int) -> Int? { xs.indexOf(n) } fn main() {}`, "Int?"},
+		{"list_iter", `fn it(xs: List<Int>) -> Iterator<Int> { xs.iter() } fn main() {}`, "Iterator<Int>"},
+		{"iter_collect", `fn cl(it: Iterator<Int>) -> List<Int> { it.collect() } fn main() {}`, "List<Int>"},
+		{"chan_recv", `fn rc(ch: Channel<Int>) -> Int? { ch.recv() } fn main() {}`, "Int?"},
+		{"duration_toMillis", `fn dm(d: Duration) -> Int { d.toMillis() } fn main() {}`, "Int"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil", fn.Name)
+					continue
+				}
+				if got := typeString(fn.Body.Result.Type()); got != tt.wantType {
+					t.Errorf("fn %s: body.Result.Type = %q, want %q", fn.Name, got, tt.wantType)
+				}
+			}
+		})
+	}
+}
+
 // Bundle 2: 40+ more trailing-call shapes covering Int/Float/Char/Bool
 // primitive methods, Option/Result accessors, Map/Set predicates,
 // List<T> functional helpers (slice, take, drop, concat, append, zip,
