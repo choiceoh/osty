@@ -135,25 +135,55 @@ func (l *lowerer) nativeInstantiationArgs(e *ast.CallExpr) []Type {
 		return nil
 	}
 
-	// Fast path: NodeID lookup.
+	// SemanticDB records instantiations against the callee identifier's
+	// NodeID, not the enclosing CallExpr's NodeID. Empirically for
+	// `id(42)`: AST CallExpr.ID=13, AST Fn.ID=11, SemanticDB
+	// inst.NodeID=11. Try the callee Ident first.
+	//
+	// Byte ranges differ between AST and SemanticDB (the inst is anchored
+	// at the argument list, e.g. `(42)` rather than the callee `id` or
+	// the full call) so we cannot use `selectNativeInstantiation`'s
+	// byte-range filter here — take the first non-empty record matched
+	// by NodeID. The selfhost arena assigns one inst per call site so
+	// the slice is single-entry in practice.
+	if calleeID := calleeIdentNodeID(e.Fn); calleeID != 0 {
+		for _, rec := range idx.InstantiationsByNodeID[calleeID] {
+			if rec != nil && len(rec.TypeArgs) > 0 {
+				return l.nativeInstantiationTypes(rec.TypeArgs)
+			}
+		}
+	}
+
+	// Fallback: CallExpr's own NodeID. Synthetic test data
+	// (`TestLowerInstantiationArgsUseNativeIndexWithoutLegacyMap`)
+	// anchors records to the call expression directly, and a future
+	// selfhost frontend change could do the same — keep this path as
+	// a safety net.
 	if id := int(astNodeID(e)); id != 0 {
 		if rec := selectNativeInstantiation(idx.InstantiationsByNodeID[id], e); rec != nil && len(rec.TypeArgs) > 0 {
 			return l.nativeInstantiationTypes(rec.TypeArgs)
 		}
 	}
-
-	// Fallback: span-based lookup via NodeKey.
-	start, end, hasRange := astNodeByteRange(e)
-	if !hasRange {
-		return nil
-	}
-	key := fmt.Sprintf("%d:%d", start, end)
-	for _, rec := range idx.InstantiationsByNodeKey[key] {
-		if rec != nil && len(rec.TypeArgs) > 0 {
-			return l.nativeInstantiationTypes(rec.TypeArgs)
-		}
-	}
 	return nil
+}
+
+// calleeIdentNodeID returns the AST NodeID for the callee identifier
+// of a call expression's `Fn` slot. Handles three shapes:
+//   - direct `f(x)` → Ident node
+//   - turbofish `f::<T>(x)` → TurbofishExpr wrapping an Ident
+//   - method/path-qualified `x.f(...)` / `m.f(...)` → FieldExpr
+//
+// Returns 0 for shapes we don't track instantiations against.
+func calleeIdentNodeID(fn ast.Expr) int {
+	switch x := fn.(type) {
+	case *ast.Ident:
+		return int(x.ID)
+	case *ast.TurbofishExpr:
+		return calleeIdentNodeID(x.Base)
+	case *ast.FieldExpr:
+		return int(x.ID)
+	}
+	return 0
 }
 
 func (l *lowerer) nativeInstantiationTypes(args []api.TypeRepr) []Type {
