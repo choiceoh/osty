@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/semanticdb"
+	"github.com/osty/osty/internal/subproc"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -193,6 +194,13 @@ func firstOpt(opts []Opts) Opts {
 // Use this for new front-end consumers that can stay on stable selfhost node
 // IDs. Keep SelfhostFile for compatibility paths that still need Types /
 // LetTypes / SymTypes keyed by Go AST and resolver symbols.
+//
+// Routes through NativePackageCheck so the production subprocess sees the
+// same single-file check that `osty check FILE` does. The subprocess re-
+// parses opt.Source — cheap for a single file and the only way to keep the
+// embedded path off this surface. Parse errors short-circuit before the
+// subprocess call because `selfhost.CheckPackageStructured` rejects sources
+// whose parse arena carries any error.
 func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
@@ -201,8 +209,22 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 	}
 	src := append([]byte(nil), opt.Source...)
 	result.inspectSource = append(result.inspectSource[:0], src...)
-	result.Diags = append(result.Diags, run.Diagnostics()...)
-	checked := selfhost.CheckStructuredFromRun(run)
+	parseDiags := run.Diagnostics()
+	result.Diags = append(result.Diags, parseDiags...)
+	if diagsHaveError(parseDiags) {
+		diag.StampFile(result.Diags, opt.Path)
+		return result
+	}
+	checked, err := NativePackageCheck(api.PackageCheckInput{
+		Files: []api.PackageCheckFile{{Source: src, Path: opt.Path}},
+	})
+	if err != nil {
+		result.Diags = append(result.Diags, checkerUnavailableDiag(
+			"file",
+			subproc.FailureNotes("the Osty-native checker executable failed", err)...,
+		))
+		return result
+	}
 	policy := nativeDiagPolicy{privileged: opt.Privileged}
 	result.Diags = append(result.Diags, nativeCheckerDiags(src, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
@@ -210,6 +232,15 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 	result.SemanticDB = semanticdb.FromCheck(checked)
 	diag.StampFile(result.Diags, opt.Path)
 	return result
+}
+
+func diagsHaveError(diags []*diag.Diagnostic) bool {
+	for _, d := range diags {
+		if d != nil && d.Severity == diag.Error {
+			return true
+		}
+	}
+	return false
 }
 
 // SelfhostFile runs type checking for one resolved source file through
