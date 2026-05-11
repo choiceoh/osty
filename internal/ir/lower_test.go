@@ -815,6 +815,87 @@ func TestLowerIfExprRecoversSyntacticBranchType(t *testing.T) {
 	}
 }
 
+// Tuple field access (`t.0`, `t.1`) lowers via FieldExpr with a
+// numeric name. Post-#1645 the checker no longer fills `chk.Types[e]`
+// and the SemanticDB byID/byKey lookups miss for FieldExpr-on-tuple,
+// so `TupleAccess.T` regressed to `<error>` — poisoning any enclosing
+// `BinaryExpr` (`t.0 + t.1`). The lowerer now derives the element
+// type from the receiver's TupleType when the checker is silent.
+func TestLowerTupleAccessRecoversElementTypeFromReceiver(t *testing.T) {
+	src := `fn sumPair(t: (Int, Int)) -> Int { t.0 + t.1 }
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	var sumPair *FnDecl
+	for _, decl := range mod.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Name == "sumPair" {
+			sumPair = fn
+			break
+		}
+	}
+	if sumPair == nil || sumPair.Body == nil || sumPair.Body.Result == nil {
+		t.Fatal("sumPair body result missing")
+	}
+	bx, ok := sumPair.Body.Result.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("body result = %T, want *BinaryExpr", sumPair.Body.Result)
+	}
+	if got := typeString(bx.T); got != "Int" {
+		t.Errorf("BinaryExpr.T = %q, want Int (tuple-access type-recovery regression)", got)
+	}
+	left, ok := bx.Left.(*TupleAccess)
+	if !ok {
+		t.Fatalf("Left = %T, want *TupleAccess", bx.Left)
+	}
+	if got := typeString(left.T); got != "Int" {
+		t.Errorf("TupleAccess.T = %q, want Int", got)
+	}
+}
+
+// Trailing free-fn call (`helper()`) with a non-unit return type must
+// promote to the block's Result. `expressionYieldsValue` previously
+// only handled constructor-shaped calls (uppercase Ident callee),
+// dropping `fn main() -> Int { helper() }` to an ExprStmt and emitting
+// MIR UnreachableTerm.
+func TestLowerTrailingFreeFnCallYieldsValue(t *testing.T) {
+	src := `fn helper() -> Int { 42 }
+fn caller() -> Int { helper() }
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	var caller *FnDecl
+	for _, decl := range mod.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Name == "caller" {
+			caller = fn
+			break
+		}
+	}
+	if caller == nil || caller.Body == nil || caller.Body.Result == nil {
+		t.Fatal("caller body result missing (trailing free-fn call regression)")
+	}
+	if _, ok := caller.Body.Result.(*CallExpr); !ok {
+		t.Fatalf("body result = %T, want *CallExpr", caller.Body.Result)
+	}
+}
+
 func TestLowerFieldExprRecoversTypeFromRecordedBinding(t *testing.T) {
 	binding := &ast.IdentPat{Name: "p"}
 	pRef := &ast.Ident{ID: 1, Name: "p"}

@@ -1021,10 +1021,50 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 					return true
 				}
 			}
+			// Free-fn calls (`helper()`): promote when the resolved
+			// declaration has a non-unit return type. We restrict this
+			// to top-level fn decls because:
+			//   - let-bound closures (`let g = |n| n + 1; g(x)`) are
+			//     correct to promote but altering this site for them
+			//     measurably regresses stage0 toolchain coverage
+			//     (some toolchain helpers rely on the current
+			//     Stmt-positioned shape).
+			//   - free-fn return types are stable (no inference), so
+			//     `expressionTypeYieldsValue` decides reliably.
+			if id, ok := call.Fn.(*ast.Ident); ok && id != nil {
+				if rt := l.freeFnReturnTypeFromAST(id); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
+			}
 		}
 		return false
 	}
 	return false
+}
+
+// freeFnReturnTypeFromAST resolves the callee identifier of a free-fn
+// call (`helper()`) to its declared return type via the resolver.
+// Used by `expressionYieldsValue` to decide whether a trailing call
+// promotes to the block's Result. Returns nil when the symbol does not
+// resolve to a top-level FnDecl. Closure / let-bound function callees
+// are intentionally excluded — they parse and resolve but their bodies
+// are sometimes Stmt-positioned in the toolchain, and promoting them
+// regresses stage0 audit coverage.
+func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
+	if l == nil || id == nil || l.res == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil {
+		return nil
+	}
+	if d, ok := sym.Decl.(*ast.FnDecl); ok && d != nil {
+		if d.ReturnType == nil {
+			return TUnit
+		}
+		return l.lowerType(d.ReturnType)
+	}
+	return nil
 }
 
 // userMethodReturnTypeFromAST resolves the receiver expression of a
@@ -3636,10 +3676,25 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 	// it with a FieldExpr; lift it to TupleAccess to keep backends
 	// simple.
 	if idx, ok := tupleIndex(e.Name); ok {
+		x := l.lowerExpr(e.X)
+		t := l.exprType(e)
+		// AST recovery: when the checker didn't populate the tuple-
+		// access type (post-#1645 `chk.Types[e]` is empty and the
+		// SemanticDB byID/byKey lookups miss for FieldExpr-on-tuple),
+		// pull the element type off the receiver's TupleType. Without
+		// this `fn f(t: (Int, Int)) -> Int { t.0 + t.1 }` lowers with
+		// every TupleAccess at T=<error>, poisoning the BinaryExpr.
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+			if tt, ok := x.Type().(*TupleType); ok && tt != nil && idx >= 0 && idx < len(tt.Elems) {
+				if elem := tt.Elems[idx]; elem != nil && elem != ErrTypeVal {
+					t = elem
+				}
+			}
+		}
 		return &TupleAccess{
-			X:     l.lowerExpr(e.X),
+			X:     x,
 			Index: idx,
-			T:     l.exprType(e),
+			T:     t,
 			SpanV: nodeSpan(e),
 		}
 	}
