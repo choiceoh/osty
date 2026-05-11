@@ -187,6 +187,13 @@ osty/
 └── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
+## AI agent wiki bundle
+
+For a wiki-ready, AI-first navigation layer, see
+[`docs/ai-agent-wiki/`](./docs/ai-agent-wiki/Home.md). It summarizes task
+routing, non-negotiable repo rules, validation loops, and the canonical
+source-of-truth documents without replacing them.
+
 ## Supported platforms
 
 The toolchain (Osty CLI, `osty-native-checker`, and the LLVM-backend driver)
