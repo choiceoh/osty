@@ -560,6 +560,56 @@ func TestLowerLetStmtUsesNativeBindingTypeWithoutLegacyMap(t *testing.T) {
 	}
 }
 
+func TestLowerLetStmtUsesByteRangeBindingTypeWhenNodeIDsDiverge(t *testing.T) {
+	pat := &ast.IdentPat{
+		ID:   21,
+		PosV: token.Pos{Line: 1, Column: 5, Offset: 4},
+		EndV: token.Pos{Line: 1, Column: 6, Offset: 5},
+		Name: "x",
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.LetStmt{
+		Pattern: pat,
+		Value:   &ast.CallExpr{ID: 22, Fn: &ast.Ident{Name: "unknown"}},
+	}}}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Bindings: []api.CheckedBinding{
+				{
+					// NodeID 901 shares x's span but carries a different
+					// binding name, so the fallback has to match on both byte
+					// range and binding name before accepting a record. This
+					// guards the IR switchover against JSON-boundary
+					// SemanticDB mismatches that drop the byID hit.
+					NodeID: 901,
+					Name:   "other",
+					Start:  4,
+					End:    5,
+					Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+				},
+				{
+					NodeID: 902,
+					Name:   "x",
+					Start:  4,
+					End:    5,
+					Type:   &api.TypeRepr{Kind: "primitive", Name: "Int"},
+				},
+			},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	if let.Type != TInt {
+		t.Fatalf("let type = %#v, want TInt from byte-range binding fallback", let.Type)
+	}
+}
+
 func TestLowerIdentUsesNativeSymbolTypeWithoutLegacyMap(t *testing.T) {
 	global := &ast.LetDecl{ID: 31, Name: "g"}
 	ref := &ast.Ident{ID: 32, Name: "g"}
@@ -604,6 +654,86 @@ func TestLowerIdentUsesNativeSymbolTypeWithoutLegacyMap(t *testing.T) {
 	}
 	if id.T != TString {
 		t.Fatalf("ident type = %#v, want TString from native symbol", id.T)
+	}
+}
+
+func TestLowerIdentUsesByteRangeSymbolTypeWhenNodeIDsDiverge(t *testing.T) {
+	global := &ast.LetDecl{
+		ID:   31,
+		PosV: token.Pos{Line: 1, Column: 1, Offset: 0},
+		EndV: token.Pos{Line: 1, Column: 2, Offset: 1},
+		Name: "g",
+		Value: &ast.CallExpr{
+			ID: 33,
+			Fn: &ast.Ident{Name: "unknown"},
+		},
+	}
+	ref := &ast.Ident{ID: 32, Name: "g"}
+	file := &ast.File{
+		Decls: []ast.Decl{global},
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "y"},
+			Value:   ref,
+		}},
+	}
+	res := &resolve.Result{
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			ref.ID: {Name: "g", Kind: resolve.SymLet, Decl: global},
+		},
+		RefIdents: []*ast.Ident{ref},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Symbols: []api.CheckedSymbol{
+				{
+					// NodeID 901 shares g's span but names a different
+					// symbol, so lowering must skip it and match NodeID 902's
+					// `g` record via byte range + symbol name. This guards the
+					// IR switchover against JSON-boundary SemanticDB
+					// mismatches when Go and selfhost NodeIDs diverge.
+					NodeID: 901,
+					Kind:   "let",
+					Name:   "other",
+					Start:  0,
+					End:    1,
+					Type:   &api.TypeRepr{Kind: "primitive", Name: "Int"},
+				},
+				{
+					NodeID: 902,
+					Kind:   "let",
+					Name:   "g",
+					Start:  0,
+					End:    1,
+					Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+				},
+			},
+		},
+	}
+
+	mod, issues := Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	decl, ok := mod.Decls[0].(*LetDecl)
+	if !ok {
+		t.Fatalf("decls[0] = %T, want *LetDecl", mod.Decls[0])
+	}
+	if decl.Type != TString {
+		t.Fatalf("decl type = %#v, want TString from byte-range symbol fallback", decl.Type)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	if let.Type != TString {
+		t.Fatalf("let type = %#v, want TString from byte-range symbol fallback", let.Type)
+	}
+	id, ok := let.Value.(*Ident)
+	if !ok {
+		t.Fatalf("let value = %T, want *Ident", let.Value)
+	}
+	if id.T != TString {
+		t.Fatalf("ident type = %#v, want TString from byte-range symbol fallback", id.T)
 	}
 }
 
