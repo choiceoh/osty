@@ -1059,6 +1059,16 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 				if rt := l.closureDependentMethodReturnTypeFromAST(fx, call.Args); rt != nil && expressionTypeYieldsValue(rt) {
 					return true
 				}
+				// `use go "X" as alias { fn Y(...) -> T }` FFI call:
+				// `alias.Y(...)`. Receiver is a UseDecl alias symbol;
+				// look up the listed fn's return type in the UseDecl
+				// body. Without this, trailing `strings.ToUpper(...)`
+				// in `fn banner(name: String) -> String { strings.
+				// ToUpper(strings.Repeat(name, 2)) }` drops to
+				// ExprStmt → MIR UnreachableTerm.
+				if rt := l.useAliasFnReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
 			}
 			// Free-fn calls (`helper()`): promote when the resolved
 			// declaration has a non-unit return type. We restrict this
@@ -1221,10 +1231,13 @@ func (l *lowerer) closureDependentMethodReturnTypeFromAST(fx *ast.FieldExpr, arg
 
 // builtinMethodReturnTypeFromAST mirrors `userMethodReturnTypeFromAST`
 // for receivers whose static type is a builtin container or primitive
-// (`List<T>`, `Map<K,V>`, `Set<T>`, `String`, `Bytes`). It defers to
-// the existing `recoverMethodReturnTypeFromType` intrinsic table so
-// trailing `xs.filter(...)`, `s.toUpper()` etc. promote to the block's
-// Result instead of being dropped to ExprStmt.
+// (`List<T>`, `Map<K,V>`, `Set<T>`, `String`, `Bytes`,
+// `Option<T>`, `Result<T,E>`). It defers to the existing
+// `recoverMethodReturnTypeFromType` intrinsic table so trailing
+// `xs.filter(...)`, `s.toUpper()`, `opt.unwrap()` etc. promote to
+// the block's Result instead of being dropped to ExprStmt. Receiver
+// is resolved via `resolveExprStaticType`, which also handles
+// chained method calls (`x.foo().bar()`).
 func (l *lowerer) builtinMethodReturnTypeFromAST(fx *ast.FieldExpr) Type {
 	if l == nil || fx == nil {
 		return nil
@@ -1238,9 +1251,10 @@ func (l *lowerer) builtinMethodReturnTypeFromAST(fx *ast.FieldExpr) Type {
 
 // resolveExprStaticType returns a best-effort static type for the
 // expression, using resolver + AST decl shapes when SemanticDB lookups
-// miss. Limited to the receiver shapes commonly used as method-call
-// receivers: bare Ident (binding/parameter) and FieldExpr (struct
-// field access). Returns nil when the type can't be recovered.
+// miss. Covers the receiver shapes commonly used as method-call
+// receivers: bare Ident, FieldExpr (struct field access), and
+// CallExpr (method-chain / free-fn return type). Returns nil when the
+// type can't be recovered.
 func (l *lowerer) resolveExprStaticType(e ast.Expr) Type {
 	if l == nil || e == nil || l.res == nil {
 		return nil
@@ -1267,6 +1281,50 @@ func (l *lowerer) resolveExprStaticType(e ast.Expr) Type {
 			if ls := l.findLetStmtByPattern(ip); ls != nil && ls.Type != nil {
 				if t := l.lowerType(ls.Type); t != nil && t != ErrTypeVal {
 					return t
+				}
+			}
+		}
+	case *ast.CallExpr:
+		// Method-chain receiver: `recv.foo(...).bar()`. The outer
+		// `.bar()` needs `foo(...)`'s return type to look up `bar`.
+		// Delegate to userMethodReturnTypeFromAST / builtinMethodReturn-
+		// TypeFromAST / freeFnReturnTypeFromAST based on the callee
+		// shape. Without this, every chained method call (which is
+		// the dominant shape in toolchain code like
+		// `self.tryAllocate(k, n).unwrap()`) fails receiver type
+		// resolution → promotion misses → MIR UnreachableTerm.
+		if fx, ok := x.Fn.(*ast.FieldExpr); ok && fx != nil {
+			if t := l.userMethodReturnTypeFromAST(fx); t != nil && t != ErrTypeVal {
+				return t
+			}
+			if t := l.builtinMethodReturnTypeFromAST(fx); t != nil && t != ErrTypeVal {
+				return t
+			}
+			if t := l.useAliasFnReturnTypeFromAST(fx); t != nil && t != ErrTypeVal {
+				return t
+			}
+			if t := l.closureDependentMethodReturnTypeFromAST(fx, x.Args); t != nil && t != ErrTypeVal {
+				return t
+			}
+		}
+		if id, ok := x.Fn.(*ast.Ident); ok && id != nil {
+			if t := l.freeFnReturnTypeFromAST(id); t != nil && t != ErrTypeVal {
+				return t
+			}
+		}
+	case *ast.FieldExpr:
+		// `r.field` chain: recover the field's declared type from the
+		// receiver's struct decl.
+		recv := l.resolveExprStaticType(x.X)
+		if nt, ok := recv.(*NamedType); ok && nt != nil && !nt.Builtin {
+			if sd := l.structDeclByName(nt.Name); sd != nil {
+				for _, f := range sd.Fields {
+					if f == nil || f.Name != x.Name {
+						continue
+					}
+					if t := l.lowerType(f.Type); t != nil && t != ErrTypeVal {
+						return t
+					}
 				}
 			}
 		}
@@ -1357,6 +1415,29 @@ func (l *lowerer) findLetStmtByPattern(pat *ast.IdentPat) *ast.LetStmt {
 	return found
 }
 
+// useAliasFnReturnTypeFromAST resolves an `alias.Fn(...)` call whose
+// receiver is a `use go "..." as alias { fn Fn(...) -> T }` import
+// alias. Returns the declared return type from the UseDecl body, or
+// nil when the receiver isn't a use-alias or no matching fn is found.
+func (l *lowerer) useAliasFnReturnTypeFromAST(fx *ast.FieldExpr) Type {
+	if l == nil || fx == nil || l.res == nil {
+		return nil
+	}
+	id, ok := fx.X.(*ast.Ident)
+	if !ok || id == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil {
+		return nil
+	}
+	ud, ok := sym.Decl.(*ast.UseDecl)
+	if !ok || ud == nil {
+		return nil
+	}
+	return l.lookupUseDeclFnReturn(ud, fx.Name)
+}
+
 // userMethodReturnTypeFromAST resolves the receiver expression of a
 // `recv.method(...)` call to its user-defined struct/enum decl and
 // returns the named method's lowered return type. Returns nil when the
@@ -1365,29 +1446,13 @@ func (l *lowerer) userMethodReturnTypeFromAST(fx *ast.FieldExpr) Type {
 	if l == nil || fx == nil {
 		return nil
 	}
-	id, ok := fx.X.(*ast.Ident)
-	if !ok || id == nil || l.res == nil {
+	if l.res == nil {
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
-	if sym == nil {
-		return nil
-	}
-	recvType := l.nativeBindingTypeForSymbol(sym)
-	if recvType == nil || recvType == ErrTypeVal {
-		recvType = l.nativeSymbolType(sym)
-	}
-	if recvType == nil || recvType == ErrTypeVal {
-		// Fall back to the symbol's Decl AST type when SemanticDB
-		// lookups miss (e.g. parameters whose declared Type is known
-		// from AST alone).
-		switch d := sym.Decl.(type) {
-		case *ast.Param:
-			if d.Type != nil {
-				recvType = l.lowerType(d.Type)
-			}
-		}
-	}
+	// Receiver may be an Ident (`x.method()`), a chained call
+	// (`x.foo().bar()`), or another FieldExpr (`x.y.bar()`).
+	// `resolveExprStaticType` handles all three.
+	recvType := l.resolveExprStaticType(fx.X)
 	if recvType == nil || recvType == ErrTypeVal {
 		return nil
 	}
@@ -2341,7 +2406,25 @@ func (l *lowerer) lowerUnary(e *ast.UnaryExpr) Expr {
 		l.note("unsupported unary op %v at %v", e.Op, e.Pos())
 		return &ErrorExpr{Note: "unary op", T: ErrTypeVal, SpanV: nodeSpan(e)}
 	}
-	return &UnaryExpr{Op: op, X: l.lowerExpr(e.X), T: l.exprType(e), SpanV: nodeSpan(e)}
+	x := l.lowerExpr(e.X)
+	t := l.exprType(e)
+	// Type recovery: when the checker is silent, fall back to the
+	// operand's type. Unary minus / plus / bitwise-not preserve the
+	// numeric type; `!` always yields Bool. Without this, `-n` where
+	// `n: Int` leaves `UnaryExpr.T = <error>` and any wrapping `if -n
+	// > 0 { ... } else { ... }` propagates the poison through to the
+	// IfExpr's Result.
+	if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+		switch op {
+		case UnNot:
+			t = TBool
+		case UnNeg, UnPlus, UnBitNot:
+			if xt := x.Type(); xt != nil && xt != ErrTypeVal && !hasPoisonedTypeArg(xt) {
+				t = xt
+			}
+		}
+	}
+	return &UnaryExpr{Op: op, X: x, T: t, SpanV: nodeSpan(e)}
 }
 
 func unaryOp(k token.Kind) (UnOp, bool) {
