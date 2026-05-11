@@ -978,10 +978,81 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		return true
 	case *ast.IfExpr:
 		return astIfLooksLikeValueExpr(e)
+	case *ast.MatchExpr:
+		return astMatchLooksLikeValueExpr(e)
 	case *ast.Ident:
 		return astIdentLooksLikeValueConstructor(e)
 	case *ast.CallExpr:
 		return astCallLooksLikeValueConstructor(e)
+	}
+	return false
+}
+
+// astMatchLooksLikeValueExpr decides whether a trailing `match e { ... }`
+// in statement position should be promoted to a value-returning Block
+// `Result` rather than a discarding `MatchStmt`. The previous shape only
+// honoured the checker's `MatchExpr` type tag (line 966 above); when the
+// native checker didn't record a type for the match — which happens for
+// any match whose arms return Bool literals or short binary comparisons
+// like `Some(i) -> i < 10` against `Int?` — the trailing match fell
+// through to `*ast.ExprStmt` lowering, became a `MatchStmt`, and its
+// result was thrown away. For a `Bool`-returning function whose last
+// statement is the match, that means `_return` is never assigned and
+// `finishNoReturn` terminates the merge block with `Unreachable`,
+// leaving the body without any actual `ret` instruction — surfaces in
+// stage0 audit / `TestStage0StringIndexOfOptionBox` as "function `find`
+// does not match any stage0 pattern".
+//
+// Strict criterion: every arm has a non-nil body, and every body
+// syntactically looks like a value-yielding expression. We intentionally
+// don't widen this to "at least one arm yields" — that would silently
+// promote `match _ { _ -> println(x) }` to a value context and produce
+// confusing diagnostics downstream.
+func astMatchLooksLikeValueExpr(e ast.Expr) bool {
+	m, ok := e.(*ast.MatchExpr)
+	if !ok || m == nil || len(m.Arms) == 0 {
+		return false
+	}
+	for _, arm := range m.Arms {
+		if arm == nil || arm.Body == nil {
+			return false
+		}
+		if !astArmBodyLooksLikeValue(arm.Body) {
+			return false
+		}
+	}
+	return true
+}
+
+// astArmBodyLooksLikeValue is a syntactic value-yielding-shape check
+// for match arm bodies. Mirrors the spirit of
+// `astBlockTailLooksLikeValueConstructor` but covers the broader set of
+// expression forms that legitimately occupy an arm tail. Binary /
+// unary / field / index expressions count because the arm tail is the
+// match's value site — any non-call/non-statement expression there
+// evaluates to a value.
+func astArmBodyLooksLikeValue(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit,
+		*ast.BoolLit, *ast.StructLit, *ast.ListExpr, *ast.MapExpr,
+		*ast.TupleExpr, *ast.RangeExpr, *ast.BinaryExpr, *ast.UnaryExpr,
+		*ast.FieldExpr, *ast.IndexExpr:
+		return true
+	case *ast.Ident:
+		// Any in-scope identifier is a value (variable or constructor).
+		_ = x
+		return true
+	case *ast.CallExpr:
+		// Calls in arm bodies typically return values; even `println(...)`
+		// returns Unit which is still a value form. Match-on-unit will
+		// fall back to `expressionTypeYieldsValue` filtering downstream.
+		return true
+	case *ast.Block:
+		return astBlockTailLooksLikeValueConstructor(x)
+	case *ast.IfExpr:
+		return !x.IsIfLet
+	case *ast.MatchExpr:
+		return astMatchLooksLikeValueExpr(x)
 	}
 	return false
 }
