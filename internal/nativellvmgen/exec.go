@@ -1,18 +1,17 @@
 package nativellvmgen
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/subproc"
 	"github.com/osty/osty/internal/toolchain"
 )
 
@@ -70,19 +69,13 @@ func Run(start string, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, fmt.Errorf("marshal native llvmgen request: %w", err)
 	}
-	cmd := exec.Command(path)
-	cmd.Stdin = bytes.NewReader(payload)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = "<no output>"
-		}
-		return Response{}, fmt.Errorf("exec %s: %w (%s)", path, err, msg)
+	stdout, stderr, runErr := subproc.Run(path, payload)
+	if runErr != nil {
+		return Response{}, runErr
 	}
 	var resp Response
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return Response{}, fmt.Errorf("decode native llvmgen response: %w", err)
+	if err := json.Unmarshal(stdout, &resp); err != nil {
+		return Response{}, subproc.WrapResponseError(path, fmt.Errorf("decode native llvmgen response: %w", err), stdout, stderr)
 	}
 	return resp, nil
 }
