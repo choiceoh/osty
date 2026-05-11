@@ -42,6 +42,7 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		out:                     &Module{Package: mod.Package, SpanV: mod.SpanV},
 		genericsByName:          map[string]*FnDecl{},
 		seen:                    map[string]string{},
+		typeVarNames:            map[string]bool{},
 		genericStructsByName:    map[string]*StructDecl{},
 		genericEnumsByName:      map[string]*EnumDecl{},
 		genericInterfacesByName: map[string]*InterfaceDecl{},
@@ -69,20 +70,40 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		case *FnDecl:
 			if len(x.Generics) > 0 {
 				state.genericsByName[x.Name] = x
+				for _, g := range x.Generics {
+					if g != nil && g.Name != "" {
+						state.typeVarNames[g.Name] = true
+					}
+				}
 			}
 		case *StructDecl:
 			state.structsByName[x.Name] = x
 			if len(x.Generics) > 0 {
 				state.genericStructsByName[x.Name] = x
+				for _, g := range x.Generics {
+					if g != nil && g.Name != "" {
+						state.typeVarNames[g.Name] = true
+					}
+				}
 			}
 		case *EnumDecl:
 			state.enumsByName[x.Name] = x
 			if len(x.Generics) > 0 {
 				state.genericEnumsByName[x.Name] = x
+				for _, g := range x.Generics {
+					if g != nil && g.Name != "" {
+						state.typeVarNames[g.Name] = true
+					}
+				}
 			}
 		case *InterfaceDecl:
 			if len(x.Generics) > 0 {
 				state.genericInterfacesByName[x.Name] = x
+				for _, g := range x.Generics {
+					if g != nil && g.Name != "" {
+						state.typeVarNames[g.Name] = true
+					}
+				}
 			}
 		}
 	}
@@ -171,6 +192,13 @@ type monoState struct {
 	// seen maps a dedup key to the mangled symbol name so duplicate
 	// requests short-circuit to the same specialization.
 	seen map[string]string
+	// typeVarNames is the set of every TypeParam name declared by any
+	// generic fn / struct / enum / interface in this module. Used by
+	// `referencesKnownTypeVar` to detect bare `*NamedType{Name:"T"}`
+	// references that the IR lowerer sometimes emits in place of
+	// `*TypeVar` (the lowerer's two encodings of a type-parameter
+	// reference). Populated in Pass 1 alongside genericsByName.
+	typeVarNames map[string]bool
 	// queue is the worklist of pending specializations. Index-based
 	// drain lets new entries appended during scanning be picked up.
 	queue []monoInstance
@@ -667,7 +695,16 @@ func (s *monoState) rewriteExprType(e Expr) {
 	case *FloatLit:
 		x.T = s.rewriteType(x.T)
 	case *Ident:
-		if isUnresolvedType(x.T) && (x.Kind == IdentLocal || x.Kind == IdentParam) {
+		// Refresh local/param Ident's cached type when it's unresolved
+		// or still carries a generic TypeVar reference. The latter
+		// arises in monomorph-rewritten call sites: `let r = first(xs)`
+		// for `fn first<T>(...) -> T?` lowers with `r: T?` on the
+		// LetStmt and on every Ident ref to `r`. The LetStmt handler
+		// at line ~1380 already refreshes the binding type from the
+		// value's (post-rewrite) concrete type; this branch propagates
+		// the same refresh to subsequent Ident references so the match
+		// scrutinee sees `Int?` instead of an unsubstituted `T?`.
+		if (isUnresolvedType(x.T) || containsTypeVar(x.T) || s.referencesKnownTypeVar(x.T)) && (x.Kind == IdentLocal || x.Kind == IdentParam) {
 			if inferred, ok := s.lookupLocalType(x.Name); ok {
 				x.T = CloneType(inferred)
 			}
@@ -1382,7 +1419,7 @@ func (s *monoState) scanStmt(st Stmt) {
 		if st.Value != nil {
 			s.seedVariantTypeFromContext(st.Type, st.Value)
 			s.scanExpr(st.Value)
-			if isUnresolvedType(st.Type) || containsTypeVar(st.Type) {
+			if isUnresolvedType(st.Type) || containsTypeVar(st.Type) || s.referencesKnownTypeVar(st.Type) {
 				st.Type = cloneResolvedType(s.resolvedExprType(st.Value))
 			}
 		}
@@ -1904,6 +1941,24 @@ func (s *monoState) rewriteGenericCall(c *CallExpr) {
 	if mangled == "" {
 		return
 	}
+	// Substitute the call's return type and the callee identifier's
+	// FnType using the same env `request` used to mangle the symbol.
+	// Without this, downstream IR/MIR lowering sees `let r = first(xs)`
+	// where `r`'s binding type stays `T?` and the match scrutinee
+	// inherits the generic shape — VariantProj.FieldIdx then resolves
+	// to -1 (no concrete variant layout for `T?`), and the unwrap
+	// reads the wrong slot at runtime. The mangled name was correct
+	// but the type info was stale because `rewriteGenericCall`
+	// previously cleared `c.TypeArgs` without applying the substitution.
+	env := buildSubstEnv(orig.Generics, c.TypeArgs)
+	if _, isErr := c.T.(*ErrType); c.T != nil && !isErr {
+		c.T = cloneAndSubstType(c.T, env)
+	} else if orig.Return != nil {
+		c.T = cloneAndSubstType(orig.Return, env)
+	}
+	if id.T != nil {
+		id.T = cloneAndSubstType(id.T, env)
+	}
 	id.Name = mangled
 	id.TypeArgs = nil
 	c.TypeArgs = nil
@@ -1934,6 +1989,62 @@ func cloneAndSubstType(t Type, env SubstEnv) Type {
 
 // containsTypeVar reports whether a Type still contains a TypeVar
 // anywhere in its structure.
+// referencesKnownTypeVar reports whether t contains a reference to a
+// declared type parameter of this module — either as `*TypeVar` (the
+// resolver's canonical form) or as a bare `*NamedType{Name: "T"}`
+// (an alternate encoding the IR lowerer emits for parser-level type
+// references that haven't been promoted). Used by LetStmt / Ident
+// recovery in monomorph to detect when a binding's cached type is
+// still generic and must be refreshed against the post-rewrite value
+// type. Unlike `containsTypeVar`, this restricts the bare-NamedType
+// branch to names actually declared as type parameters somewhere in
+// the module, so real user types named `Point` / `User` etc. are not
+// mistakenly flagged. Without the bare-NamedType branch the
+// `generic_fn_first` ONB test fails: `let r = first(xs)` for
+// `fn first<T>(...) -> T?` keeps `r: T?` after monomorph rewrites
+// the call to `Int?`, then `match r { Some(x) -> x }` derives a
+// match scrutinee with type `T?` and `VariantProj.FieldIdx = -1`
+// because the variant layout can't resolve against an unsubstituted
+// generic.
+func (s *monoState) referencesKnownTypeVar(t Type) bool {
+	if s == nil {
+		return false
+	}
+	switch t := t.(type) {
+	case *TypeVar:
+		return true
+	case *NamedType:
+		if len(t.Args) == 0 && t.Package == "" && !t.Builtin {
+			if s.typeVarNames[t.Name] {
+				return true
+			}
+		}
+		for _, a := range t.Args {
+			if s.referencesKnownTypeVar(a) {
+				return true
+			}
+		}
+		return false
+	case *OptionalType:
+		return s.referencesKnownTypeVar(t.Inner)
+	case *TupleType:
+		for _, e := range t.Elems {
+			if s.referencesKnownTypeVar(e) {
+				return true
+			}
+		}
+		return false
+	case *FnType:
+		for _, p := range t.Params {
+			if s.referencesKnownTypeVar(p) {
+				return true
+			}
+		}
+		return s.referencesKnownTypeVar(t.Return)
+	}
+	return false
+}
+
 func containsTypeVar(t Type) bool {
 	switch t := t.(type) {
 	case *TypeVar:
