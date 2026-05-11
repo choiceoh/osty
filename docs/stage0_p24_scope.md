@@ -161,6 +161,70 @@ func TestStage0EmitsSequentialForInListMutableScan(t *testing.T) {
 - 매처 이름 컨벤션 — `matchSequentialForInListMutableScan` 길지만 명확. 짧은 대안 (`matchTailScan` 등) 도 OK.
 - `ErrType` literal `-1` 처리 정책 — silently i64 fallback vs explicit `mir.IntConst{Type: ErrType}` 변환. 기존 P-phase 패턴 따르면 silent fallback이 일반적.
 
+## 6. 추가 audit 발견 (2026-05-12) — 단순 후보 진입 못 함
+
+`useDeclTailAfter` 대신 더 단순해 보이는 single-block aggregate-return 후보 (`Runner__checkLockfile`, `selfPkgPathDependency`) 를 점검했더니, 두 함수 모두 **upstream MIR type-info 손실** 로 인해 stage0 매처가 깨끗하게 거부할 수 없는 상태.
+
+### 6.1 `Runner__checkLockfile` (audit `blocks=1 params=1 ret=named:Check instrs=2 feats=call`)
+
+```
+bb 0 ReturnTerm instrs=2:
+  CallInstr dest=local#2 callee=FnRef{runtime.cihost.CheckLockfile type=fn}
+                              args=[Copy(local#1+proj type=String), Copy(local#1+proj type=opt)]
+  CallInstr dest=local#0 callee=FnRef{checkFromHostResult type=*ir.ErrType}
+                              args=[Const(FnConst type=*ir.ErrType), Copy(local#2 type=named:CheckResult)]
+```
+
+매처 거부 사유:
+- `matchDirectAggregateCall` — 단일 CallInstr만 허용 (여기는 2개).
+- `matchAggregateConstructor` — 마지막 instr이 `AggregateRV{Struct|Tuple}` 이어야 함 (여기는 CallInstr).
+- `matchGenericScalarCFG` — `emitWhileStep` 가 두 번째 CallInstr 인자 `Copy(local#2 type=named:CheckResult)` 처리 못함 → fail at line 16.
+
+진짜 P24 필요 unlock:
+- (a) **named-type intermediate를 call arg로**: `Copy(local#2 type=named:T)` 를 opaque ptr ABI로 통과. `resolveOperandWithPrelude` 확장.
+- (b) **FnConst arg**: `Const(FnConst type=*ir.ErrType)` — 함수 포인터 상수를 i64/ptr로 인코딩.
+- (c) **`+proj type=opt` arg**: Optional 필드 projection. P10 (struct field read)이 scalar만 cover.
+- (d) **errType callee signature**: 콜리 시그니처가 손실됐을 때 인자 / 반환 타입 추론을 호출 사이트로부터 역추론.
+
+### 6.2 `selfPkgPathDependency` (audit `blocks=1 params=2 ret=named:SelfPkgDependency instrs=3 feats=call,agg`)
+
+```
+bb 0 ReturnTerm instrs=3:
+  AssignInstr dest=local#3 src=Aggregate(variant, fields=[], type=named:SelfPkgSourceKind)
+  CallInstr dest=local#4 callee=FnRef{anySemReq type=*ir.ErrType} args=[]
+  AssignInstr dest=local#0 src=Aggregate(struct, fields=[
+    Copy(local#1 type=String),
+    Const(StringConst type=String),
+    Copy(local#3 type=named:SelfPkgSourceKind),
+    Copy(local#4 type=Bool),         # ← 타입 불일치
+    Const(StringConst type=String),
+    Copy(local#2 type=String),
+  ], type=named:SelfPkgDependency)
+```
+
+`SelfPkgDependency.versionReq: SemReq` 인데 fields[3] 이 `Copy(local#4 type=Bool)`. 즉 `anySemReq()` 반환 타입이 errType 으로 손실 → fallback Bool 로 lower. **타입 불일치 IR 을 emit 하면 verifier가 reject.**
+
+매처 거부 사유: `matchAggregateConstructor` 의 `if ty != fieldTypes[i]` 검사가 정확히 이 미스매치 잡음 → 거부 정상.
+
+진짜 fix 위치: stage0 가 아니라 **upstream `anySemReq` 콜 시그니처 보존** (front-end / IR / MIR lowering 어느 단계인지 추적 필요).
+
+### 6.3 결론 갱신
+
+- "단순한 single-block aggregate-return" 결정 클러스터는 사실 upstream MIR type-degradation 의 표출. stage0 매처 추가만으로 풀리지 않음.
+- 진짜 P24 의 best ROI 는: **`Copy(local type=named:T)` opaque-ptr arg 통과** + **`+proj type=opt` Optional 필드 read** 두 unlock 의 조합. 이 둘이 풀리면 `Runner__checkLockfile` 류 함수가 `matchGenericScalarCFG` 안에서 통과.
+- 그 두 unlock은 stage0 emit.go 의 `resolveOperandWithPrelude` 와 `classifyProjectedCallLine` / `resolveProjectedFieldSlot` 확장. 추정 ~300 LOC + Option<T> 필드 read 시 i64 tag + payload 분리 emit 필요.
+- 별도 P-phase로 분할:
+  - **P24-named**: `Copy(named:T)` call arg 통과 (단독)
+  - **P24-optproj**: `+proj type=opt` 필드 read (별개)
+  - **P25-aggcallchain**: 2+ CallInstr 시퀀스 ending in aggregate-return CallInstr (위 둘 위에 누적)
+- `useDeclTailAfter` (P24-foritermut) 와 `tyToRepr` (P26-enumagg) 는 다른 unlock 으로 별도 PR.
+
+### 6.4 install-self 차단 해소까지의 거리
+
+위 분석으로 P-phase 수가 더 늘어남. 최소 6–8 개 P-phase + 각 ~300–500 LOC + 회귀 테스트. install-self 완주까지 4–6 주 단일 사람 estimate, 병렬 2–3 주.
+
+이 경로의 alternative 는 LLVM_BACKEND_GAP_PLAN.md Phase 0-B (registry publish) 또는 다른 머신/체크아웃의 working osty-self 를 `OSTY_SELF_BIN` 으로 고정. Phase C–F closeout 자체 진행을 빨리 보고 싶다면 0-B 권장.
+
 ---
 
 다음 액션: 이 문서 기준으로 P24 PR을 별도 세션에서 진행. 한 PR 당 단일 P-phase. PR 단위 review/regression 가시화 유지.
