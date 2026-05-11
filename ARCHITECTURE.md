@@ -314,7 +314,9 @@ The v0.4 and v0.5 language-decision sweeps are closed in
 backlog — the host-side legacy checker boundary
 (`internal/check/host_boundary.go`) still acts as a fallback under the
 native checker, and retiring it is the main architectural cleanup
-tracked outside spec gaps.
+tracked outside spec gaps. The agreed long-lived stdio JSON-RPC daemon protocol
+for that switchover lives in
+[`docs/native_checker_daemon_protocol.md`](./docs/native_checker_daemon_protocol.md).
 
 #### Type inference algorithm
 

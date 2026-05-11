@@ -327,6 +327,11 @@ but falls back to the embedded selfhost checker when that binary is unavailable.
 `OSTY_NATIVE_CHECKER_BIN` is still supported as a strict override/debug escape
 hatch.
 
+The current shipped boundary is still the one-shot stdin JSON
+`api.CheckRequest` → `api.CheckResult` contract. The agreed long-lived stdio
+JSON-RPC daemon replacement for LSP-triggered checking is documented in
+[`docs/native_checker_daemon_protocol.md`](./docs/native_checker_daemon_protocol.md).
+
 This repository also ships a repo-local wrapper at
 [`scripts/osty-native-checker`](./scripts/osty-native-checker), backed by
 [`cmd/osty-native-checker/`](./cmd/osty-native-checker/).
