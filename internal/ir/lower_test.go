@@ -881,6 +881,59 @@ fn main() {}`,
 	}
 }
 
+// `if let Some(x) = opt { x } else { default }` is a value expression
+// just like a regular `if ... else`. The pre-fix
+// `astIfLooksLikeValueExpr` short-circuited on `IsIfLet → false`,
+// dropping the trailing if-let expression to ExprStmt → MIR
+// UnreachableTerm. Also covers the case where a then-branch's tail
+// is a bare ident reference (`{ x }`) which previously failed
+// `astBlockTailLooksLikeValueConstructor`'s syntactic switch.
+func TestLowerTrailingIfLetYieldsValue(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			"ident_tail",
+			`fn unwrap(o: Int?) -> Int {
+    if let Some(x) = o { x } else { -1 }
+}
+fn main() {}`,
+		},
+		{
+			"expr_tail",
+			`fn plusOne(o: Int?) -> Int {
+    if let Some(x) = o { x + 1 } else { 0 }
+}
+fn main() {}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil (trailing if-let regression)", fn.Name)
+				}
+			}
+		})
+	}
+}
+
 // Trailing stdlib container-method calls (`xs.filter(...)`,
 // `xs.sorted()`) must promote to the block's `Result` so the function
 // returns the new list. The previous CallExpr branch in
