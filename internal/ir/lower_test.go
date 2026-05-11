@@ -881,6 +881,102 @@ fn main() {}`,
 	}
 }
 
+// Bundle 5: real-world regressions found by auditing examples/ for
+// IR `<error>` types. Three independent cases:
+//
+//  1. **Unary minus** (`if n < 0 { -n } else { n }` in calc/lib.osty):
+//     `UnaryExpr.T` was `<error>` post-#1645 because the checker
+//     didn't populate per-node types. The lowerer now falls back to
+//     the operand's type for negation / bit-not / plus, and TBool for
+//     logical not.
+//
+//  2. **Chained method calls** (`self.tryAllocate(k, n).unwrap()` in
+//     examples/gc/lib.osty): the outer `.unwrap()` needs the inner
+//     call's return type to look up `unwrap`. `resolveExprStaticType`
+//     now handles `*ast.CallExpr` and `*ast.FieldExpr` receivers,
+//     delegating to userMethod / builtinMethod /
+//     closureDependentMethod / useAliasFn return-type recovery.
+//
+//  3. **`use go` FFI alias calls** (`strings.ToUpper(...)` in
+//     examples/ffi/main.osty): trailing FFI call lost promotion
+//     because `userMethodReturnTypeFromAST` filtered out builtin
+//     types and never looked at use-decl bodies. New
+//     `useAliasFnReturnTypeFromAST` helper bridges that gap.
+//
+// Validation tied to `OSTY_STAGE0_AUDIT=1 TestStage0ToolchainAudit`:
+// 7363 → 7411 covered (+48 toolchain helpers newly pass through
+// stage0 because their nested-method-chain shapes promote correctly).
+func TestLowerRealWorldRegressions(t *testing.T) {
+	tests := []struct {
+		name, src, fnName, wantType string
+	}{
+		{
+			"unary_neg_in_if",
+			`fn abs(n: Int) -> Int { if n < 0 { -n } else { n } } fn main() {}`,
+			"abs", "Int",
+		},
+		{
+			"chained_builtin_unwrap",
+			`fn at(xs: List<Int>) -> Int { xs.first().unwrap() }
+fn main() {}`,
+			"at", "Int",
+		},
+		{
+			"use_go_ffi_call",
+			`use go "strings" as strings {
+    fn ToUpper(s: String) -> String
+}
+fn banner(name: String) -> String { strings.ToUpper(name) }
+fn main() {}`,
+			"banner", "String",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			var target *FnDecl
+			for _, decl := range mod.Decls {
+				if fn, ok := decl.(*FnDecl); ok && fn.Name == tt.fnName {
+					target = fn
+					break
+				}
+			}
+			if target == nil {
+				// Method may be inside a struct; walk decls.
+				for _, decl := range mod.Decls {
+					if sd, ok := decl.(*StructDecl); ok {
+						for _, m := range sd.Methods {
+							if m != nil && m.Name == tt.fnName {
+								target = m
+								break
+							}
+						}
+					}
+					if target != nil {
+						break
+					}
+				}
+			}
+			if target == nil || target.Body == nil || target.Body.Result == nil {
+				t.Fatalf("fn %s: body.Result missing", tt.fnName)
+			}
+			if got := typeString(target.Body.Result.Type()); got != tt.wantType {
+				t.Errorf("fn %s: body.Result.Type = %q, want %q", tt.fnName, got, tt.wantType)
+			}
+		})
+	}
+}
+
 // Bundle 4: 40+ more trailing-call shapes — Math/Float (log, sin,
 // exp, etc.), Int bit ops (gcd, sign, countOnes, leadingZeros),
 // List<T> functional helpers (reduce, flatten, distinct, partition),
