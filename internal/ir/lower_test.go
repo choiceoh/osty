@@ -881,6 +881,69 @@ fn main() {}`,
 	}
 }
 
+// Bundle 6: small incremental fixes after #1693. Two additions:
+//
+//  1. `lowerIdent` consults `resolveExprStaticType` as a final
+//     fallback, catching idents whose binding type only resolves via
+//     AST-side helpers (e.g. let bindings whose initialiser is a
+//     chained method call).
+//
+//  2. `lowerMethodCall` now retries `useAliasFnReturnTypeFromAST`
+//     when the existing recovery chain fails, so `strings.ToUpper(s)`
+//     inside `use go "strings" as strings { fn ToUpper(s: String)
+//     -> String }` lowers with `MethodCall.T = String` instead of
+//     `<error>`.
+//
+// Both changes are conservative — they only fire when the existing
+// recovery path returns `<error>`, so they never overwrite a checker-
+// supplied type.
+func TestLowerIncrementalRecovery(t *testing.T) {
+	tests := []struct {
+		name, src, fnName, wantType string
+	}{
+		{
+			"use_alias_method_call_type",
+			`use go "strings" as strings {
+    fn ToUpper(s: String) -> String
+}
+fn make(s: String) -> String {
+    let upper = strings.ToUpper(s)
+    upper
+}
+fn main() {}`,
+			"make", "String",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name != tt.fnName {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result missing", tt.fnName)
+					continue
+				}
+				if got := typeString(fn.Body.Result.Type()); got != tt.wantType {
+					t.Errorf("fn %s: body.Result.Type = %q, want %q", tt.fnName, got, tt.wantType)
+				}
+			}
+		})
+	}
+}
+
 // Bundle 5: real-world regressions found by auditing examples/ for
 // IR `<error>` types. Three independent cases:
 //
