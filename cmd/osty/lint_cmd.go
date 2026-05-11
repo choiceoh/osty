@@ -112,7 +112,7 @@ func lintNativePackageDiagnostics(pkg *resolve.Package, imports []api.PackageChe
 		return nil, nil
 	}
 	input := nativePackageCheckInput(pkg, imports)
-	checked, err := selfhost.CheckPackageStructured(input)
+	checked, err := check.NativePackageCheck(input)
 	if err != nil {
 		return nil, err
 	}

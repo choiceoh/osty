@@ -2,6 +2,7 @@ package check
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/selfhost/api"
@@ -14,6 +15,21 @@ func (stubNativeChecker) CheckSourceStructured([]byte) (api.CheckResult, error) 
 }
 
 func (stubNativeChecker) CheckPackageStructured(api.PackageCheckInput) (api.CheckResult, error) {
+	return api.CheckResult{}, nil
+}
+
+type stubPackageChecker struct {
+	onCheck func()
+}
+
+func (s stubPackageChecker) CheckSourceStructured([]byte) (api.CheckResult, error) {
+	return api.CheckResult{}, nil
+}
+
+func (s stubPackageChecker) CheckPackageStructured(api.PackageCheckInput) (api.CheckResult, error) {
+	if s.onCheck != nil {
+		s.onCheck()
+	}
 	return api.CheckResult{}, nil
 }
 
@@ -35,6 +51,39 @@ func TestDefaultNativeCheckerUsesProductionSelector(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("defaultNativeChecker checker = %#v, want %#v", got, want)
+	}
+}
+
+func TestNativePackageCheckRoutesThroughFactory(t *testing.T) {
+	original := nativeCheckerFactory
+	t.Cleanup(func() { nativeCheckerFactory = original })
+
+	called := false
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return stubPackageChecker{onCheck: func() { called = true }}, ""
+	}
+	_, err := NativePackageCheck(api.PackageCheckInput{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("NativePackageCheck did not consult the factory-supplied runner")
+	}
+}
+
+func TestNativePackageCheckPropagatesUnavailability(t *testing.T) {
+	original := nativeCheckerFactory
+	t.Cleanup(func() { nativeCheckerFactory = original })
+
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return nil, "OSTY_NATIVE_CHECKER_BIN=\"/missing\" was not found"
+	}
+	_, err := NativePackageCheck(api.PackageCheckInput{})
+	if err == nil {
+		t.Fatal("expected error when factory yields nil runner")
+	}
+	if !strings.Contains(err.Error(), "OSTY_NATIVE_CHECKER_BIN") {
+		t.Errorf("error should propagate the factory note; got: %v", err)
 	}
 }
 

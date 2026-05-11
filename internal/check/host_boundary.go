@@ -2,6 +2,7 @@ package check
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,6 +112,34 @@ func UseManagedSubprocessChecker(start string) {
 }
 
 var nativeCheckerFactory = defaultNativeChecker
+
+// NativePackageCheck routes a structured package-check request through the
+// production native checker (managed subprocess after CLI startup invokes
+// UseManagedSubprocessChecker, embedded otherwise; OSTY_NATIVE_CHECKER_BIN
+// overrides both). Returns the raw api.CheckResult directly, skipping the
+// *Result wrapper that Package() builds for diagnostic-rendering callers.
+//
+// Use from CLI code paths that previously called
+// selfhost.CheckPackageStructured(input) so `osty check` / `osty lint` /
+// `osty typecheck` see the same checker as `osty build` / `run` / `test`.
+//
+// If the factory yields a nil runner (typically because
+// OSTY_NATIVE_CHECKER_BIN points at a missing binary), the note is
+// propagated through the returned error so callers preserve the existing
+// "checker unavailable" surface.
+func NativePackageCheck(input api.PackageCheckInput) (api.CheckResult, error) {
+	runner, note := nativeCheckerFactory()
+	if runner == nil {
+		if note == "" {
+			note = "no Osty-native checker executable is configured"
+		}
+		return api.CheckResult{}, errors.New(note)
+	}
+	if pkg, ok := runner.(nativePackageChecker); ok {
+		return pkg.CheckPackageStructured(input)
+	}
+	return api.CheckResult{}, errors.New("configured native checker does not implement package input")
+}
 
 func defaultNativeChecker() (nativeChecker, string) {
 	path := strings.TrimSpace(os.Getenv(nativeCheckerEnv))
