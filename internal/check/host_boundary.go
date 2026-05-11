@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
