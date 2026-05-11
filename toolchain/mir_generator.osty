@@ -1628,7 +1628,8 @@ fn mirFirstDirectiveLine(input: String, prefixes: List<String>) -> Int {
     }
     if start < n && mirLineHasAnyPrefix(input[start..n], prefixes) {
         return start
-    } - 1
+    }
+    return -1
 }
 /// mirInjectBeforeFirstFn splices `block` into `body` immediately
 /// before the first top-level `define ` / `declare ` line, returning the
@@ -15406,7 +15407,8 @@ pub fn mirDecimalDigitValue(ch: String) -> Int {
     }
     if ch == "9" {
         return 9
-    } - 1
+    }
+    return -1
 }
 /// mirParseDecimalPrefix parses a non-empty ASCII decimal prefix from
 /// `text[0..end]`. Returns `-1` if any byte is not a digit. The caller
