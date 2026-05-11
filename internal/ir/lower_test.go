@@ -146,6 +146,79 @@ func TestLowerCallTypeUsesNativeIndexWithoutLegacyTypeMap(t *testing.T) {
 // identifier's NodeID (not the CallExpr's). `instantiationArgs` must
 // follow that anchor or generic monomorphization regresses to "arity
 // mismatch" for every non-turbofish generic call site.
+// Method calls on user-defined structs / enums lose their checker-
+// assigned return type post-#1645 (the SemanticDB byID lookup misses
+// because AST and selfhost arena ids diverge, and the legacy
+// `chk.Types[e]` map is empty). The stdlib intrinsic table covers
+// builtin containers but not user methods, so without an AST-side
+// fallback `b.capacity()` lowers as `*ir.MethodCall{T:<error>}` and
+// poisons every enclosing expression. This test asserts that the
+// MethodCall IR node carries the declared return type for both struct
+// methods and enum methods.
+func TestLowerMethodCallRecoversUserDefinedReturnType(t *testing.T) {
+	src := `pub struct Buf {
+    capacity: Int,
+
+    pub fn capacity(self) -> Int { self.capacity }
+}
+
+pub enum Tag {
+    A, B,
+
+    pub fn label(self) -> String { "tag" }
+}
+
+fn double(b: Buf) -> Int { b.capacity() + b.capacity() }
+fn show(t: Tag) -> String { t.label() }
+fn main() {}
+`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+
+	want := map[string]string{"double": "Int", "show": "String"}
+	got := map[string]string{}
+	for _, decl := range mod.Decls {
+		fn, ok := decl.(*FnDecl)
+		if !ok {
+			continue
+		}
+		if _, expect := want[fn.Name]; !expect {
+			continue
+		}
+		if fn.Body == nil {
+			continue
+		}
+		var mc *MethodCall
+		switch r := fn.Body.Result.(type) {
+		case *MethodCall:
+			mc = r
+		case *BinaryExpr:
+			if leftCall, ok := r.Left.(*MethodCall); ok {
+				mc = leftCall
+			}
+		}
+		if mc == nil {
+			t.Errorf("fn %s: body result missing MethodCall: %T", fn.Name, fn.Body.Result)
+			continue
+		}
+		got[fn.Name] = typeString(mc.T)
+	}
+	for name, expect := range want {
+		if got[name] != expect {
+			t.Errorf("fn %s: MethodCall.T = %q, want %q (user-method return recovery)", name, got[name], expect)
+		}
+	}
+}
+
 // `expressionYieldsValue` falls back to syntactic shape when
 // `chk.Types` is empty (post-#1645). The fallback must recognize that
 // `BinaryExpr`, `FieldExpr`, `MatchExpr`, etc. always yield values, or
