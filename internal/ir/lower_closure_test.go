@@ -2,6 +2,11 @@ package ir
 
 import (
 	"testing"
+
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/token"
 )
 
 // Inline closures (`|x| x + 1`) leave their per-param AST Type nil
@@ -82,5 +87,71 @@ fn main() {
 	})
 	if !checked {
 		t.Fatalf("no 1-param explicit-type Closure found")
+	}
+}
+
+func TestLowerClosureUsesByteRangeFallbackWhenNodeIDsDiverge(t *testing.T) {
+	closure := &ast.ClosureExpr{
+		ID:   21,
+		PosV: token.Pos{Line: 1, Column: 1, Offset: 0},
+		EndV: token.Pos{Line: 1, Column: 13, Offset: 12},
+		Params: []*ast.Param{
+			{Name: "x"},
+			{Name: "y"},
+		},
+		Body: &ast.IntLit{Text: "1"},
+	}
+	file := &ast.File{
+		Stmts: []ast.Stmt{&ast.ExprStmt{X: closure}},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{{
+				NodeID: 999,
+				Kind:   "Closure",
+				Start:  0,
+				End:    12,
+				Type: &api.TypeRepr{
+					Kind: "fn",
+					Args: []api.TypeRepr{
+						{Kind: "primitive", Name: "Int"},
+						{Kind: "primitive", Name: "String"},
+					},
+					Return: &api.TypeRepr{Kind: "primitive", Name: "Bool"},
+				},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	stmt, ok := mod.Script[0].(*ExprStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *ExprStmt", mod.Script[0])
+	}
+	lowered, ok := stmt.X.(*Closure)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *Closure", stmt.X)
+	}
+	if lowered.Return != TBool {
+		t.Fatalf("closure return = %#v, want TBool from byte-range fallback", lowered.Return)
+	}
+	if len(lowered.Params) != 2 {
+		t.Fatalf("closure params = %d, want 2", len(lowered.Params))
+	}
+	if lowered.Params[0].Type != TInt {
+		t.Fatalf("closure param[0] type = %#v, want TInt from byte-range fallback", lowered.Params[0].Type)
+	}
+	if lowered.Params[1].Type != TString {
+		t.Fatalf("closure param[1] type = %#v, want TString from byte-range fallback", lowered.Params[1].Type)
+	}
+	fnT, ok := lowered.T.(*FnType)
+	if !ok {
+		t.Fatalf("closure T = %T, want *FnType", lowered.T)
+	}
+	if len(fnT.Params) != 2 || fnT.Params[0] != TInt || fnT.Params[1] != TString || fnT.Return != TBool {
+		t.Fatalf("closure FnType = %#v, want fn(Int, String) -> Bool", fnT)
 	}
 }
