@@ -617,23 +617,20 @@ func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, api.CheckResu
 	if hasError(parseDiags) {
 		return parseDiags, api.CheckResult{}, nil
 	}
-	imports := nativeFileImportSurfaces(run)
-	var checked api.CheckResult
-	if len(imports) > 0 {
-		var err error
-		checked, err = check.NativePackageCheck(api.PackageCheckInput{
-			Imports: imports,
-			Files: []api.PackageCheckFile{{
-				Source: append([]byte(nil), src...),
-				Name:   filepath.Base(path),
-				Path:   path,
-			}},
-		})
-		if err != nil {
-			return parseDiags, api.CheckResult{}, err
-		}
-	} else {
-		_, checked = selfhost.CheckFromSource(src)
+	// Route both with- and without-imports cases through the factory so the
+	// production subprocess sees `osty check FILE` consistently with `osty
+	// check DIR`. The subprocess re-parses the single source — cheap for one
+	// file — in exchange for parity with the workspace path.
+	checked, err := check.NativePackageCheck(api.PackageCheckInput{
+		Imports: nativeFileImportSurfaces(run),
+		Files: []api.PackageCheckFile{{
+			Source: append([]byte(nil), src...),
+			Name:   filepath.Base(path),
+			Path:   path,
+		}},
+	})
+	if err != nil {
+		return parseDiags, api.CheckResult{}, err
 	}
 	return parseDiags, checked, nil
 }
