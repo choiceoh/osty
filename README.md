@@ -291,7 +291,7 @@ Consumer-side env vars:
 | `OSTY_SELF_REGISTRY_OFFLINE` | When truthy, hard-disables the fetcher even with a registry URL set. CI / air-gapped environments. |
 | `OSTY_SELF_TRUSTED_KEY` | 64-char hex ed25519 public key. When set, manifests must be signed under the matching private key or the fetcher rejects them. Unset ⇒ falls back to `selfhostcache.DefaultTrustedKeyHex`; if both are empty, unsigned manifests are accepted (warn-only mode). |
 | `OSTY_SELF_BIN` | Bypass everything and use this binary path. |
-| `OSTY_STAGE0_FALLBACK` | Last-resort emergency-only Go MIR→LLVM emitter. See `docs/osty_self_bootstrap_design.md`. |
+| `OSTY_STAGE0_FALLBACK` | Last-resort emergency-only Go MIR→LLVM emitter. Explicit opt-in only; default builds hard-error instead of silently falling back. See `docs/osty_self_bootstrap_design.md`. |
 
 The fetcher verifies the binary's SHA-256 against the manifest
 unconditionally. The signature check is opt-in via

@@ -121,8 +121,13 @@ internal/backend/stage0/
 
 ### 3.2 활성화 조건
 
+- **정책 결정**: 기본 동작은 **hard error** 다. `clang` 누락, managed
+  `osty-native-llvmgen` 빌드 실패, `toolchain/*.osty` self-host build 실패는
+  사용자가 환경/소스를 고치도록 그대로 surface 한다.
 - 환경변수 `OSTY_STAGE0_FALLBACK=1` (기본 OFF) 로 명시적 opt-in 시 stage0 사용.
 - **자동 fallback은 `tryNativeOwnedMIRPayloadLLVMIRText`가 "osty-self not found"으로 declined한 경우에만**. 다른 declined 사유 (예: `osty-self`는 있지만 lir-proto가 명시적으로 "이 shape 못 한다"고 선언한 경우)는 fall through 시키지 않고 그대로 unsupported로 surface.
+- **silent fallback 금지**. production build는 사용자가 명시 opt-in 하지 않은
+  stage0 경로로 자동 전환하지 않는다.
 - CI 빌드는 `OSTY_STAGE0_FALLBACK=1` 명시 + `osty-self`도 빌드해서 양쪽 모두 검증 (stage0이 stale 안 나도록).
 
 ### 3.3 surface 가드
@@ -193,7 +198,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 |---|---|
 | 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — 진행 동결**. P0–P20 가 v0.5 의 단순 함수/제어/타입 cover. P21+ 동결로 더 넓은 v0.5 surface 는 cover 하지 않음. surface 는 outright 미진행 (CLAUDE.md "v0.5 baseline" 규칙). |
 | 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (4253 줄) + emit_test.go (1703 줄) + doc.go. |
-| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — emergency 발화 시만 사용자가 명시 set. CI matrix 에서도 default off; `bootstrap-smoke-test.yml` 가 fresh-clone 시나리오 (registry path) 만 검증. |
+| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — 기본 정책은 hard error + fix 요청. emergency 발화 시만 사용자가 명시 set 하며, production build는 silent fallback 하지 않는다. CI matrix 에서도 default off; `bootstrap-smoke-test.yml` 가 fresh-clone 시나리오 (registry path) 만 검증. |
 | 4. stage0 retirement 시점 | **영구 보존** — Q8. `docs/security/bootstrap-recovery.md` §5 의 "DR2 reconstruction" 경로에 명시. retirement PR 미예정 — stage0 가 진단 가치 (`b2_1_audit.md` decline 카탈로그 source) 만으로도 6K LOC 비용 정당화. |
 
 ---

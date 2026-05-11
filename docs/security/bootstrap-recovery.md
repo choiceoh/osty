@@ -10,8 +10,8 @@
 
 The fresh-clone resolver chain (in
 `internal/toolchain/selfhostcache/`) walks these layers in order, top
-to bottom. If a layer below is reachable, the system recovers
-without operator action:
+to bottom. Layers L1/L3/L4 can recover automatically when reachable;
+L2/L5 are explicit operator-controlled escape hatches:
 
 | Layer | Source | Failure mode |
 |---|---|---|
@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Explicit opt-in only; default policy is hard error, never silent fallback. Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
