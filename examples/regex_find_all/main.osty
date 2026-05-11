@@ -8,7 +8,7 @@ fn main() {
             let n = list.len()
             println("words: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let m = list[i]
                 let t = m.text
                 let s = m.start
@@ -54,7 +54,7 @@ fn main() {
             let n = list.len()
             println("greedy: {n} match(es)")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let m = list[i]
                 let t = m.text
                 let s = m.start

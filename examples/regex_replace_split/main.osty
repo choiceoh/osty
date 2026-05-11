@@ -46,7 +46,7 @@ fn main() {
             let n = parts.len()
             println("split count: {n}")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let p = parts[i]
                 println("  [{i}]={p}")
                 i += 1
@@ -76,7 +76,7 @@ fn main() {
             let n = parts.len()
             println("empties count: {n}")
             let mut i = 0
-            while i < n {
+            for i < n {
                 let p = parts[i]
                 println("  [{i}]='{p}'")
                 i += 1
