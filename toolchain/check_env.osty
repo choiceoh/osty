@@ -502,8 +502,10 @@ fn checkHashKey(key: String) -> Int {
 fn checkNameIndexTableSlot(table: CheckNameIndexTable, key: String) -> Int {
     let slot = table.slots.get(key)
     if slot.isSome() {
-        return slot.unwrap()
-    } - 1
+        slot.unwrap()
+    } else {
+        -1
+    }
 }
 fn checkNameIndexTableSet(table: CheckNameIndexTable, key: String, value: Int) {
     let slot = checkNameIndexTableSlot(table, key)
@@ -526,8 +528,10 @@ fn checkNameIndexTableGet(table: CheckNameIndexTable, key: String) -> Int {
 fn checkNameSetTableSlot(table: CheckNameSetTable, key: String) -> Int {
     let slot = table.slots.get(key)
     if slot.isSome() {
-        return slot.unwrap()
-    } - 1
+        slot.unwrap()
+    } else {
+        -1
+    }
 }
 fn checkNameSetTableAdd(table: CheckNameSetTable, key: String) {
     let slot = checkNameSetTableSlot(table, key)
@@ -544,8 +548,10 @@ fn checkNameSetTableHas(table: CheckNameSetTable, key: String) -> Bool {
 fn checkBindingStackIndexSlot(table: CheckBindingStackIndex, key: String) -> Int {
     let slot = table.slots.get(key)
     if slot.isSome() {
-        return slot.unwrap()
-    } - 1
+        slot.unwrap()
+    } else {
+        -1
+    }
 }
 fn checkBindingStackIndexPush(table: CheckBindingStackIndex, binding: CheckBinding) {
     let slot = checkBindingStackIndexSlot(table, binding.name)
@@ -581,8 +587,10 @@ fn checkBindingStackIndexTop(table: CheckBindingStackIndex, name: String) -> Che
 fn checkIntStackIndexSlot(table: CheckIntStackIndex, key: String) -> Int {
     let slot = table.slots.get(key)
     if slot.isSome() {
-        return slot.unwrap()
-    } - 1
+        slot.unwrap()
+    } else {
+        -1
+    }
 }
 fn checkIntStackIndexPush(table: CheckIntStackIndex, key: String, value: Int) {
     let slot = checkIntStackIndexSlot(table, key)

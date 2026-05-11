@@ -736,7 +736,8 @@ fn hirOptimizeCharToDigit(ch: Char) -> Int {
     }
     if ch == 'F' {
         return 15
-    } - 1
+    }
+    return -1
 }
 // B2: payload-less Char dispatch as if-else chain (stage0 P0–P15).
 // ====================================================================

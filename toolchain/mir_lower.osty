@@ -4836,7 +4836,8 @@ fn mirLowerMapUpdateIncrDeltaSafe(e: HirExpr, paramName: String) -> Bool {
 fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
     if recv.kind == HirExprIdent {
         return mirLowerLookupUseAlias(l, recv.identName)
-    } - 1
+    }
+    return -1
 }
 // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// mirLowerBodyUseAliasIndexForReceiver is the body-aware variant of
