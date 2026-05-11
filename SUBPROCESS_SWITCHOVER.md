@@ -6,13 +6,14 @@
 
 ## Why this baseline exists
 
-`internal/check/host_boundary.go` exposes two implementations of the same
-`nativeChecker` interface:
+`internal/check/host_boundary.go` previously exposed two implementations of
+the same `nativeChecker` interface:
 
 - **embedded** — in-process via `internal/selfhost` (the frozen 68k-line
-  `internal/selfhost/generated.go` seed).
+  `internal/selfhost/generated.go` seed). Removed in gate (b-hard); see
+  history below.
 - **subprocess** — forks `OSTY_NATIVE_CHECKER_BIN`, JSON request via stdin,
-  JSON response on stdout.
+  JSON response on stdout. Now the only checker the factory ever returns.
 
 Today's default (CLI startup, after gate (a) flip) is **subprocess** via
 `check.UseManagedSubprocessChecker(".")` in `cmd/osty/main.go`, which lazily
@@ -69,8 +70,8 @@ is on record before any flip.
 | Gate | Decision | Required evidence | Status |
 |---|---|---|---|
 | **(a)** | Flip default from embedded to subprocess | Per-shape cold cost ratios within the thresholds listed below | shipped (PRs #1669 + #1671) |
-| **(b-soft)** | Remove the silent embedded fallback in `UseManagedSubprocessChecker` so production failures surface | Subprocess error reporting good enough that opaque fallback is not needed | shipped (this gate's PR) |
-| **(b-hard)** | Delete `embeddedNativeChecker` and the embedded path entirely | Tests migrated off the embedded factory default | prep landed (test helpers in `internal/check/testsupport.go`); per-package migrations still ahead |
+| **(b-soft)** | Remove the silent embedded fallback in `UseManagedSubprocessChecker` so production failures surface | Subprocess error reporting good enough that opaque fallback is not needed | shipped (#1674) |
+| **(b-hard)** | Delete `embeddedNativeChecker` and the embedded factory default | Tests migrated off the embedded default + production paths route exclusively through the subprocess factory | shipped (this gate's PR) |
 
 ## Reproduction
 

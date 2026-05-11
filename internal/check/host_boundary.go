@@ -12,7 +12,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
@@ -67,24 +66,24 @@ func (e nativeCheckerExec) run(req api.CheckRequest) (api.CheckResult, error) {
 	return checked, nil
 }
 
-type embeddedNativeChecker struct{}
-
-func (embeddedNativeChecker) CheckSourceStructured(src []byte) (api.CheckResult, error) {
-	return selfhost.CheckSourceStructured(src), nil
-}
-
-func (embeddedNativeChecker) CheckPackageStructured(input api.PackageCheckInput) (api.CheckResult, error) {
-	return selfhost.CheckPackageStructured(input)
-}
-
 // productionNativeCheckerFactory is the single production-path selector.
-// Default is embedded so that `go test ./...` from inside the repo never
-// triggers the managed-binary build (which would otherwise pollute every
-// test package's cwd with `.osty/toolchain/...`). CLI startup calls
-// UseManagedSubprocessChecker to flip to the subprocess path before any
-// check fires; the bench data in SUBPROCESS_SWITCHOVER.md gates that flip.
+// Default is "no checker installed" — callers must install one explicitly
+// via UseManagedSubprocessChecker (CLI startup) or
+// InstallSubprocessCheckerForPackageTests / UseSubprocessCheckerForTest
+// (test helpers in testsupport.go).
+//
+// Pre-gate (b-hard) this returned an embedded in-process checker as a
+// silent default. That default has been removed because:
+//   - The embedded checker is a frozen seed (internal/selfhost/generated.go)
+//     that lags every change to toolchain/*.osty.
+//   - Production code paths now route exclusively through the managed
+//     subprocess; the embedded fallback was hiding setup bugs rather than
+//     providing useful resilience.
+//   - All in-tree test packages that exercise the factory install the
+//     subprocess via TestMain (see SUBPROCESS_SWITCHOVER.md gate (b-hard)
+//     migration history).
 var productionNativeCheckerFactory = func() (nativeChecker, string) {
-	return embeddedNativeChecker{}, ""
+	return nil, "no native checker installed — call check.UseManagedSubprocessChecker (production) or check.InstallSubprocessCheckerForPackageTests / UseSubprocessCheckerForTest (tests)"
 }
 
 // UseManagedSubprocessChecker installs the managed subprocess checker as the
