@@ -77,6 +77,9 @@ func (a *AnnotationArg) End() token.Pos {
 	if a.Value != nil {
 		return a.Value.End()
 	}
+	if len(a.Compose) > 0 {
+		return a.Compose[len(a.Compose)-1].End()
+	}
 	// Flag form has no value; the argument occupies just its key,
 	// which we approximate by using the start position. The exact
 	// end column isn't tracked separately by the parser.

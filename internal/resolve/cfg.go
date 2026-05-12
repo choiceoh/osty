@@ -159,10 +159,34 @@ func evaluateCfgAnnotation(a *ast.Annotation, env *CfgEnv) (bool, []*diag.Diagno
 }
 
 // evaluateCfgArg handles one `key = "value"` pair or a composition
-// form (`all`/`any`/`not`).
+// form (`all`/`any`/`not`). The composition may arrive via two paths:
+//   - arg.Compose set (AST lowering created AnnotationComposeArgNode)
+//   - arg.Value is a *ast.CallExpr (parser produced a call expression)
+// Both paths are handled transparently.
 func evaluateCfgArg(arg *ast.AnnotationArg, env *CfgEnv) (bool, []*diag.Diagnostic) {
 	if len(arg.Compose) > 0 {
 		return evaluateCfgCompose(arg.Key, arg.Compose, arg.PosV, env)
+	}
+	// Fallback: the parser may have produced a CallExpr for all(...)/any(...)/not(...)
+	// before the AST lowering was taught to emit Compose nodes. Detect and handle.
+	if call, ok := arg.Value.(*ast.CallExpr); ok {
+		callee, _ := call.Fn.(*ast.Ident)
+		if callee != nil {
+			switch callee.Name {
+			case "all", "any", "not":
+				children := callArgsToCompose(call)
+				return evaluateCfgCompose(callee.Name, children, arg.PosV, env)
+			}
+		}
+		// Some other call inside #[cfg(...)] — not a composition.
+		return false, []*diag.Diagnostic{
+			diag.New(diag.Error,
+				"`#[cfg(...)]` argument must be `key = \"value\"` or a composition (`all`/`any`/`not`)").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "unexpected call expression in cfg").
+				Note("v0.5 §5: use `#[cfg(key = \"value\")]`, `#[cfg(all(...))]`, `#[cfg(any(...))]`, or `#[cfg(not(...))]`").
+				Build(),
+		}
 	}
 	value, ok := stringArg(arg.Value)
 	if !ok {
@@ -242,6 +266,34 @@ func evaluateCfgCompose(op string, children []*ast.AnnotationArg, pos token.Pos,
 				Build(),
 		}
 	}
+}
+
+// callArgsToCompose converts a CallExpr's positional/keyword arguments
+// into the []*ast.AnnotationArg form expected by evaluateCfgCompose.
+// Each Arg{Name: "key", Value: StringLit} becomes an AnnotationArg{Key: "key", Value: StringLit}.
+// Nested CallExpr args are converted recursively.
+func callArgsToCompose(call *ast.CallExpr) []*ast.AnnotationArg {
+	out := make([]*ast.AnnotationArg, 0, len(call.Args))
+	for _, a := range call.Args {
+		arg := &ast.AnnotationArg{
+			PosV: a.Pos(),
+			Key:  a.Name,
+		}
+		if nested, ok := a.Value.(*ast.CallExpr); ok {
+			if callee, ok2 := nested.Fn.(*ast.Ident); ok2 {
+				switch callee.Name {
+				case "all", "any", "not":
+					arg.Compose = callArgsToCompose(nested)
+					arg.Key = callee.Name
+					out = append(out, arg)
+					continue
+				}
+			}
+		}
+		arg.Value = a.Value
+		out = append(out, arg)
+	}
+	return out
 }
 
 // annotationsOf extracts the annotation slice on any declaration

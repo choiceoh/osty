@@ -68917,8 +68917,23 @@ func astLowerAnnotation(arena *AstArena, toks []astbridge.Token, idx int) astbri
 		// Osty: /tmp/selfhost_merged.osty:36556:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:36557:9
-		if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+		// G29 cfg composition: all(...)/any(...)/not(...)
+		if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
+			calleeNode := astArenaNodeAt(arena, cn.left)
+			opName := ""
+			if ostyEqual(calleeNode.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+				opName = calleeNode.text
+			}
+			composeArgs := astbridge.EmptyAnnotationArgList()
+			for _, carg := range cn.children {
+				composeArgs = append(composeArgs, astLowerAnnotationArg(arena, toks, carg))
+			}
+			func() struct{} {
+				args = append(args, astbridge.AnnotationComposeArgNode(astLowerNodePos(toks, cn), opName, composeArgs))
+				return struct{}{}
+			}()
+		} else if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+			// key = value
 			// Osty: /tmp/selfhost_merged.osty:36558:13
 			func() struct{} {
 				args = append(args, astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
@@ -68939,6 +68954,39 @@ func astLowerAnnotation(arena *AstArena, toks []astbridge.Token, idx int) astbri
 		}
 	}
 	return astbridge.AnnotationNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, args)
+}
+
+// astLowerAnnotationArg lowers a single annotation argument CST node (which may be
+// a key=value field, a bare identifier flag, or a nested call for cfg composition)
+// into a public ast.AnnotationArg.
+func astLowerAnnotationArg(arena *AstArena, toks []astbridge.Token, idx int) astbridge.AnnotationArg {
+	if idx < 0 {
+		return astbridge.NilAnnotationArg()
+	}
+	n := astArenaNodeAt(arena, idx)
+	// Composition form: all(...)/any(...)/not(...)
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
+		calleeNode := astArenaNodeAt(arena, n.left)
+		opName := ""
+		if ostyEqual(calleeNode.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+			opName = calleeNode.text
+		}
+		composeArgs := astbridge.EmptyAnnotationArgList()
+		for _, carg := range n.children {
+			composeArgs = append(composeArgs, astLowerAnnotationArg(arena, toks, carg))
+		}
+		return astbridge.AnnotationComposeArgNode(astLowerNodePos(toks, n), opName, composeArgs)
+	}
+	// key = value
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+		return astbridge.AnnotationArgNode(astLowerNodePos(toks, n), n.text, astLowerExpr(arena, toks, n.left))
+	}
+	// bare identifier flag
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		return astbridge.AnnotationArgNode(astLowerNodePos(toks, n), n.text, astbridge.NilExpr())
+	}
+	// fallback: bare literal / expression
+	return astbridge.AnnotationArgNode(astLowerNodePos(toks, n), "", astLowerExpr(arena, toks, idx))
 }
 
 // Osty: /tmp/selfhost_merged.osty:36568:1
