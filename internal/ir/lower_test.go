@@ -881,6 +881,44 @@ fn main() {}`,
 	}
 }
 
+// `use std.X` module call (`strings.toLower(s)`, `debug.dbg(n)`) at
+// trailing position must promote. The receiver Ident resolves to a
+// `SymPackage` whose Decl is `*ast.UseDecl` with Path = ["std", "X"].
+// The fn's declared return type is looked up via the stdlib registry
+// (single-file context) or `sym.Package` (package context). Without
+// this, trailing `strings.toLower(strings.trim(raw))` lowers as
+// ExprStmt → MIR UnreachableTerm.
+func TestLowerStdModuleCallPromotes(t *testing.T) {
+	src := `use std.strings
+fn norm(s: String) -> String {
+    strings.toLower(strings.trim(s))
+}
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	for _, decl := range mod.Decls {
+		fn, ok := decl.(*FnDecl)
+		if !ok || fn.Name != "norm" {
+			continue
+		}
+		if fn.Body == nil || fn.Body.Result == nil {
+			t.Fatal("body.Result missing")
+		}
+		if got := typeString(fn.Body.Result.Type()); got != "String" {
+			t.Errorf("body.Result.Type = %q, want String", got)
+		}
+	}
+}
+
 // Enum-qualified variant calls (`Color.Red(255)`, `Value.IntVal(n)`)
 // must promote to the block's Result when at trailing position. The
 // receiver Ident resolves to a `SymEnum`, the field name to one of
