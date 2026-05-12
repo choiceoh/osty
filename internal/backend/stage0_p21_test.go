@@ -31,10 +31,12 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @wrap(ptr %a) {",
+		// Named struct returns flow through the heap-pointer ABI now.
+		// Both wrap and innerFn return ptr; the wrapper just chains.
+		"define ptr @wrap(ptr %a) {",
 		"entry:",
-		"%0 = call %R @innerFn(ptr %a)",
-		"ret %R %0",
+		"%0 = call ptr @innerFn(ptr %a)",
+		"ret ptr %0",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {
@@ -68,9 +70,9 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @wrap(ptr %a, i1 %b) {",
-		"%0 = call %R @innerFn(ptr %a, i1 %b)",
-		"ret %R %0",
+		"define ptr @wrap(ptr %a, i1 %b) {",
+		"%0 = call ptr @innerFn(ptr %a, i1 %b)",
+		"ret ptr %0",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {
@@ -105,9 +107,9 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%Config = type { i64, ptr, i1 }",
-		"define %Config @wrap(i64 %n, ptr %name, i1 %active) {",
-		"%0 = call %Config @makeConfig(i64 %n, ptr %name, i1 %active)",
-		"ret %Config %0",
+		"define ptr @wrap(i64 %n, ptr %name, i1 %active) {",
+		"%0 = call ptr @makeConfig(i64 %n, ptr %name, i1 %active)",
+		"ret ptr %0",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {
@@ -172,9 +174,9 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @wrap() {",
-		"%0 = call %R @defaultR()",
-		"ret %R %0",
+		"define ptr @wrap() {",
+		"%0 = call ptr @defaultR()",
+		"ret ptr %0",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {

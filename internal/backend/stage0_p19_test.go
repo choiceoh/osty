@@ -32,7 +32,8 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @parseMode(ptr %value) {",
+		// Named struct return → heap-pointer ABI.
+		"define ptr @parseMode(ptr %value) {",
 		// Two String== runtime calls + one phi over 3 arms.
 		"call i1 @osty_rt_strings_Equal",
 		// First rung branches to its arm or the second rung's cond block.
@@ -42,9 +43,10 @@ fn main() {}
 		"arm0.",
 		"arm1.",
 		"fallback.",
-		// 3-incoming phi.
+		// 3-incoming phi (still %R-typed; boxed to ptr at the ret seam).
 		"%retval = phi %R [",
-		"ret %R %retval",
+		"store %R %retval, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {

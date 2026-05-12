@@ -36,7 +36,8 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @parseMode(ptr %value) {",
+		// Named struct return → heap-pointer ABI.
+		"define ptr @parseMode(ptr %value) {",
 		// `||` head
 		"or_short.",
 		"or_right.",
@@ -52,9 +53,10 @@ fn main() {}
 		"arm2.",
 		"arm3.",
 		"fallback.",
-		// 5-incoming phi
+		// 5-incoming phi (still %R-typed; boxed to ptr at the ret seam).
 		"%retval = phi %R [",
-		"ret %R %retval",
+		"store %R %retval, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {

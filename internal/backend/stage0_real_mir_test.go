@@ -359,10 +359,15 @@ fn origin() -> Point { Point { x: 0, y: 0 } }
 fn main() {}`,
 			wantIR: []string{
 				"%Point = type { i64, i64 }",
-				"define %Point @origin()",
+				// Named struct returns are boxed through osty_rt_stage0_alloc
+				// and returned as ptr (see aggregateReturnIsHeapPtr) so call
+				// sites — which treat user struct values as opaque ptr — see
+				// a matching ABI.
+				"define ptr @origin()",
 				"%0 = insertvalue %Point poison, i64 0, 0",
 				"%1 = insertvalue %Point %0, i64 0, 1",
-				"ret %Point %1",
+				"store %Point %1, ptr %stage0.agg.ret.slot",
+				"ret ptr %stage0.agg.ret.slot",
 			},
 		},
 		{
@@ -372,10 +377,11 @@ fn make(x: Int, y: Int) -> Point { Point { x: x, y: y } }
 fn main() {}`,
 			wantIR: []string{
 				"%Point = type { i64, i64 }",
-				"define %Point @make(i64 %x, i64 %y)",
+				"define ptr @make(i64 %x, i64 %y)",
 				"%0 = insertvalue %Point poison, i64 %x, 0",
 				"%1 = insertvalue %Point %0, i64 %y, 1",
-				"ret %Point %1",
+				"store %Point %1, ptr %stage0.agg.ret.slot",
+				"ret ptr %stage0.agg.ret.slot",
 			},
 		},
 		{

@@ -1756,11 +1756,17 @@ func TestStage0AggregateResolvesOnbFnConstAndEmptyDefaults(t *testing.T) {
 	}
 	got := string(gotBytes)
 	for _, want := range []string{
-		"define %OnbInstr @onbInstrAddReg(ptr %dst, ptr %lhs, ptr %rhs)",
+		// Named struct returns go through the heap-pointer ABI now so call
+		// sites (which treat user struct values as opaque ptr) see a
+		// matching return type. The in-register insertvalue chain still
+		// builds the struct value; emitAggregateValueToPtrReturn boxes it
+		// once at the return seam.
+		"define ptr @onbInstrAddReg(ptr %dst, ptr %lhs, ptr %rhs)",
 		"insertvalue %OnbInstr poison, i64 2, 0",
 		"insertvalue %OnbInstr %0, ptr %dst, 1",
 		"insertvalue %OnbInstr %8, i64 -1, 9",
-		"ret %OnbInstr",
+		"store %OnbInstr %11, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)
@@ -1825,11 +1831,13 @@ func TestStage0AggregateUsesErrTypedEnumPayloadCall(t *testing.T) {
 	got := string(gotBytes)
 	for _, want := range []string{
 		"declare ptr @KStr(ptr)",
-		"define %TomlValue @tomlValueStr(ptr %s, i64 %line)",
+		// Named struct return → heap-pointer ABI (see emitAggregateConstructor).
+		"define ptr @tomlValueStr(ptr %s, i64 %line)",
 		"%0 = call ptr @KStr(ptr %s)",
 		"insertvalue %TomlValue poison, ptr %0, 0",
 		"insertvalue %TomlValue %1, i64 %line, 1",
-		"ret %TomlValue %2",
+		"store %TomlValue %2, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)
@@ -2695,7 +2703,10 @@ func TestStage0P25AggregateReturnAfterCalls(t *testing.T) {
 		"%1 = call ptr @externalLabel()",
 		"%2 = insertvalue %Fixture poison, ptr %0, 0",
 		"%3 = insertvalue %Fixture %2, ptr %1, 1",
-		"ret %Fixture %3",
+		// Named struct return → heap-pointer ABI.
+		"define ptr @fixture()",
+		"store %Fixture %3, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)
@@ -2755,7 +2766,10 @@ func TestStage0AggregateReturnCanReadBaseFields(t *testing.T) {
 		"%1 = insertvalue %Rec poison, i64 4, 0",
 		"%2 = insertvalue %Rec %1, ptr %label, 1",
 		"%3 = insertvalue %Rec %2, i64 %stage0.field.1, 2",
-		"ret %Rec %3",
+		// Named struct return → heap-pointer ABI.
+		"define ptr @makeRec(ptr %label)",
+		"store %Rec %3, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)

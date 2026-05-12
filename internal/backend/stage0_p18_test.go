@@ -39,7 +39,8 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%R = type { ptr, i1 }",
-		"define %R @parseMode(ptr %value) {",
+		// Named struct return → heap-pointer ABI.
+		"define ptr @parseMode(ptr %value) {",
 		// left cond evaluation in entry
 		"call i1 @osty_rt_strings_Equal",
 		// short-circuit branch
@@ -52,9 +53,10 @@ fn main() {}
 		"%or = phi i1 [ true, %or_short.",
 		// branch to if-else arms
 		"br i1 %or, label %then.",
-		// final struct phi
+		// final struct phi still uses %R; boxed to ptr at the ret seam.
 		"%retval = phi %R",
-		"ret %R %retval",
+		"store %R %retval, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	}
 	for _, want := range wants {
 		if !strings.Contains(got, want) {

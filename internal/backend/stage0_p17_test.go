@@ -34,13 +34,18 @@ fn main() {}
 	}
 	wants := []string{
 		"%Result = type { ptr, i1 }",
-		"define %Result @parseMode(",
+		// Named struct returns go through the heap-pointer ABI (see
+		// aggregateReturnIsHeapPtr). The in-register phi still builds the
+		// struct value; emitAggregateValueToPtrReturn boxes it once at the
+		// return seam.
+		"define ptr @parseMode(",
 		"call i1 @osty_rt_strings_Equal(",
 		"br i1",
 		"insertvalue %Result poison",
 		"insertvalue %Result %",
 		`%retval = phi %Result [`,
-		"ret %Result %retval",
+		"store %Result %retval, ptr %stage0.agg.ret.slot",
+		"ret ptr %stage0.agg.ret.slot",
 	}
 	got := string(out)
 	for _, want := range wants {
@@ -108,7 +113,8 @@ fn main() {}
 	got := string(out)
 	wants := []string{
 		"%Pair = type { ptr, i1 }",
-		"define %Pair @label(ptr %value)",
+		// Named struct return → ptr ABI.
+		"define ptr @label(ptr %value)",
 		// else arm should reference the param register directly
 		"insertvalue %Pair poison, ptr %value, 0",
 	}
