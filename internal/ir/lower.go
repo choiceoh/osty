@@ -1079,6 +1079,13 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 				if rt := l.enumVariantCallReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
 					return true
 				}
+				// `use std.strings` module call: `strings.toLower(s)`.
+				// Receiver Ident resolves to `SymPackage` whose Decl
+				// is a `*ast.UseDecl` with Path = ["std", "strings", ...].
+				// Look up the fn declaration in the stdlib registry.
+				if rt := l.stdModuleFnReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
 			}
 			// Free-fn calls (`helper()`): promote when the resolved
 			// declaration has a non-unit return type. We restrict this
@@ -1423,6 +1430,48 @@ func (l *lowerer) findLetStmtByPattern(pat *ast.IdentPat) *ast.LetStmt {
 	}
 	walk(l.file)
 	return found
+}
+
+// stdModuleFnReturnTypeFromAST resolves `module.fn(...)` calls where
+// `module` is a `use std.X` import alias. Looks up the fn's declared
+// return type via the existing `lookupUseDeclFnReturn` /
+// `lookupPackageFnReturn` chain, with a stdlib-registry fallback for
+// single-file contexts where `sym.Package` isn't populated.
+func (l *lowerer) stdModuleFnReturnTypeFromAST(fx *ast.FieldExpr) Type {
+	if l == nil || fx == nil || l.res == nil {
+		return nil
+	}
+	id, ok := fx.X.(*ast.Ident)
+	if !ok || id == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil || sym.Kind != resolve.SymPackage {
+		return nil
+	}
+	ud, ok := sym.Decl.(*ast.UseDecl)
+	if !ok || ud == nil {
+		return nil
+	}
+	if t := l.lookupUseDeclFnReturn(ud, fx.Name); t != nil && t != ErrTypeVal {
+		return t
+	}
+	if sym.Package != nil {
+		if t := l.lookupPackageFnReturn(sym.Package, fx.Name); t != nil && t != ErrTypeVal {
+			return t
+		}
+	}
+	// stdlib registry direct lookup.
+	if reg := stdlib.LoadCached(); reg != nil && len(ud.Path) >= 2 && ud.Path[0] == "std" {
+		modKey := strings.Join(ud.Path[1:], ".")
+		if fn := reg.LookupFnDecl(modKey, fx.Name); fn != nil {
+			if fn.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(fn.ReturnType)
+		}
+	}
+	return nil
 }
 
 // enumVariantCallReturnTypeFromAST resolves `Enum.Variant(...)` calls
