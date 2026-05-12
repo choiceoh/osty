@@ -12205,10 +12205,14 @@ func matchStructFieldRead(fn *mir.Function, mctx *moduleCtx) (structFieldReadPat
 
 func emitStructFieldRead(out *strings.Builder, fn *mir.Function, pat structFieldReadPattern) error {
 	resultLLVM := pat.resultType.llvm()
-	fmt.Fprintf(out, "define %s @%s(%%%s %%%s) {\n", resultLLVM, fn.Name, pat.structName, pat.paramName)
+	// Take the struct by pointer to stay ABI-compatible with the
+	// generic call-site emission (see emitStructFieldListLen for the
+	// failure mode this prevents).
+	fmt.Fprintf(out, "define %s @%s(ptr %%%s) {\n", resultLLVM, fn.Name, pat.paramName)
 	out.WriteString("entry:\n")
-	fmt.Fprintf(out, "  %%0 = extractvalue %%%s %%%s, %d\n", pat.structName, pat.paramName, pat.fieldIndex)
-	fmt.Fprintf(out, "  ret %s %%0\n", resultLLVM)
+	fmt.Fprintf(out, "  %%0 = getelementptr inbounds %%%s, ptr %%%s, i32 0, i32 %d\n", pat.structName, pat.paramName, pat.fieldIndex)
+	fmt.Fprintf(out, "  %%1 = load %s, ptr %%0\n", resultLLVM)
+	fmt.Fprintf(out, "  ret %s %%1\n", resultLLVM)
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -12379,20 +12383,28 @@ func classifyP15Operand(op mir.Operand, paramID mir.LocalID, fieldTypes []scalar
 func emitStructFieldBinaryOp(out *strings.Builder, fn *mir.Function, pat structFieldBinaryOpPattern) error {
 	resultLLVM := pat.resultType.llvm()
 	operandLLVM := pat.operandType.llvm()
-	fmt.Fprintf(out, "define %s @%s(%%%s %%%s) {\n", resultLLVM, fn.Name, pat.structName, pat.paramName)
+	// Take the struct by pointer (see emitStructFieldListLen for the
+	// ABI-mismatch failure mode this avoids).
+	fmt.Fprintf(out, "define %s @%s(ptr %%%s) {\n", resultLLVM, fn.Name, pat.paramName)
 	out.WriteString("entry:\n")
 	nextSSA := 0
 	leftExpr := pat.left.constText
 	if pat.left.isField {
-		leftExpr = fmt.Sprintf("%%%d", nextSSA)
-		fmt.Fprintf(out, "  %s = extractvalue %%%s %%%s, %d\n", leftExpr, pat.structName, pat.paramName, pat.left.fieldIndex)
+		slotReg := fmt.Sprintf("%%%d", nextSSA)
 		nextSSA++
+		leftExpr = fmt.Sprintf("%%%d", nextSSA)
+		nextSSA++
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %%%s, i32 0, i32 %d\n", slotReg, pat.structName, pat.paramName, pat.left.fieldIndex)
+		fmt.Fprintf(out, "  %s = load %s, ptr %s\n", leftExpr, operandLLVM, slotReg)
 	}
 	rightExpr := pat.right.constText
 	if pat.right.isField {
-		rightExpr = fmt.Sprintf("%%%d", nextSSA)
-		fmt.Fprintf(out, "  %s = extractvalue %%%s %%%s, %d\n", rightExpr, pat.structName, pat.paramName, pat.right.fieldIndex)
+		slotReg := fmt.Sprintf("%%%d", nextSSA)
 		nextSSA++
+		rightExpr = fmt.Sprintf("%%%d", nextSSA)
+		nextSSA++
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %%%s, i32 0, i32 %d\n", slotReg, pat.structName, pat.paramName, pat.right.fieldIndex)
+		fmt.Fprintf(out, "  %s = load %s, ptr %s\n", rightExpr, operandLLVM, slotReg)
 	}
 	resultReg := fmt.Sprintf("%%%d", nextSSA)
 	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", resultReg, pat.llvmOp, operandLLVM, leftExpr, rightExpr)
@@ -12493,11 +12505,22 @@ func matchStructFieldListLen(fn *mir.Function, mctx *moduleCtx) (structFieldList
 }
 
 func emitStructFieldListLen(out *strings.Builder, fn *mir.Function, pat structFieldListLenPattern) error {
-	fmt.Fprintf(out, "define i64 @%s(%%%s %%%s) {\n", fn.Name, pat.structName, pat.paramName)
+	// Take the struct by pointer to stay ABI-compatible with the
+	// generic call-site emission, which passes user-named structs as
+	// `ptr` (see e.g. `emitCallChain`'s opaque-named handling). Earlier
+	// versions emitted `%StructName %p` (by value) here, which clang
+	// accepted but caused a silent ABI mismatch: callers pushed 8
+	// bytes (the pointer), callees read the first N×8 bytes of the
+	// struct from registers/stack and got garbage. The dropped low
+	// bytes meant the function returned the address itself instead of
+	// `arena.nodes.len()`, surfacing way upstream as a billion-element
+	// list_reserve in `checkAliasDeepCacheSet`.
+	fmt.Fprintf(out, "define i64 @%s(ptr %%%s) {\n", fn.Name, pat.paramName)
 	out.WriteString("entry:\n")
-	fmt.Fprintf(out, "  %%0 = extractvalue %%%s %%%s, %d\n", pat.structName, pat.paramName, pat.fieldIndex)
-	out.WriteString("  %1 = call i64 @osty_rt_list_len(ptr %0)\n")
-	out.WriteString("  ret i64 %1\n")
+	fmt.Fprintf(out, "  %%0 = getelementptr inbounds %%%s, ptr %%%s, i32 0, i32 %d\n", pat.structName, pat.paramName, pat.fieldIndex)
+	out.WriteString("  %1 = load ptr, ptr %0\n")
+	out.WriteString("  %2 = call i64 @osty_rt_list_len(ptr %1)\n")
+	out.WriteString("  ret i64 %2\n")
 	out.WriteString("}\n\n")
 	return nil
 }

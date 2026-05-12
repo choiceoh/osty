@@ -273,9 +273,9 @@ fn first(p: Point) -> Int { p.x }
 fn main() {}`,
 			wantIR: []string{
 				"%Point = type { i64, i64 }",
-				"define i64 @first(%Point %p)",
-				"%0 = extractvalue %Point %p, 0",
-				"ret i64 %0",
+				"define i64 @first(ptr %p)",
+				"getelementptr inbounds %Point, ptr %p, i32 0, i32 0",
+				"load i64",
 			},
 		},
 		{
@@ -285,7 +285,8 @@ fn second(p: Pair) -> Int { p.b }
 fn main() {}`,
 			wantIR: []string{
 				"%Pair = type { i64, i64 }",
-				"%0 = extractvalue %Pair %p, 1",
+				"getelementptr inbounds %Pair, ptr %p, i32 0, i32 1",
+				"load i64",
 			},
 		},
 		{
