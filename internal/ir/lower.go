@@ -4532,6 +4532,19 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 				t = recovered
 			}
 		}
+		// AST-side receiver recovery: when the IR receiver's T is
+		// `<error>` (chained method receivers, `self`, idents whose
+		// inferred type didn't make it through), resolve the receiver
+		// statically and retry the struct-decl field lookup. Without
+		// this, every `recv.field` chain where the receiver is itself
+		// a non-trivial expression keeps T=<error> and cascades.
+		if !usableRecoveredType(t) {
+			if astRecvT := l.resolveExprStaticType(e.X); astRecvT != nil && astRecvT != ErrTypeVal {
+				if recovered := l.recoverFieldType(astRecvT, e.Name); recovered != nil {
+					t = recovered
+				}
+			}
+		}
 	}
 	return &FieldExpr{
 		X:        x,
