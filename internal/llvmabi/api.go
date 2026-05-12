@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -154,16 +155,34 @@ func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
 
 func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
 	target = CanonicalLLVMTarget(target)
-	args := make([]string, 0, len(objectPaths)+8)
+	args := make([]string, 0, len(objectPaths)+10)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-O3", "-flto=thin", "-Wl,-mllvm,-import-instr-limit=500")
+	args = append(args, "-O3", "-flto=thin")
+	// The `-mllvm` flag below is LLD-only — BFD ld parses it as `-m llvm`
+	// and bails with "unrecognised emulation mode: llvm". We force LLD
+	// when it's reachable and drop the import-instr-limit tuning when
+	// it isn't, so fresh-clone hosts that only have BFD ld can still
+	// produce a (slightly less aggressively-inlined) binary instead of
+	// failing the bootstrap link outright.
+	if hasLLD() {
+		args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+	}
 	args = append(args, objectPaths...)
 	if !strings.Contains(target, "windows") {
 		args = append(args, "-pthread", "-lz")
 	}
 	return append(args, "-o", binaryPath)
+}
+
+func hasLLD() bool {
+	for _, name := range []string{"ld.lld", "lld"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func MissingClangMessage() string {
