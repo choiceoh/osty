@@ -1336,6 +1336,9 @@ pub fn lirLowerPrimitiveTypeName(name: String) -> LirType {
     if name == "Unit" {
         return lirVoidType()
     }
+    if name == "()" {
+        return lirVoidType()
+    }
     if name == "Never" {
         return lirVoidType()
     }
