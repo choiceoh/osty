@@ -705,7 +705,11 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
         let mut cleanNames: List<String> = []
         for pn in sig.paramNames {
             if pn.startsWith("?") {
-                cleanNames.push(pn.slice(1))
+                // String has no 1-arg `slice` intrinsic method; use the
+                // free-function form `strings.slice(s, start, end)`
+                // which the native checker recognises and the MIR
+                // emitter lowers to `MirIntrinsicStringSubstring`.
+                cleanNames.push(strings.slice(pn, 1, pn.len()))
             } else {
                 cleanNames.push(pn)
             }

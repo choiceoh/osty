@@ -355,11 +355,15 @@ fn elabVariantOwnerType(cx: ElabCx, variant: CheckVariantSig) -> Int {
 /// fnSigToTy builds an `fn(params) -> ret` type from a CheckFnSig.
 /// G20: propagates parameter names as type-equality-neutral metadata.
 fn fnSigToTy(env: CheckEnv, sig: CheckFnSig) -> Int {
-    // Strip the "?" prefix that arity-tracking uses.
+    // Strip the "?" prefix that arity-tracking uses. String has no
+    // 1-arg `slice` intrinsic method; use the free-function form
+    // `strings.slice(s, start, end)` which the native checker
+    // recognises and the MIR emitter lowers to
+    // `MirIntrinsicStringSubstring`.
     let mut cleanNames: List<String> = []
     for pn in sig.paramNames {
         if pn.startsWith("?") {
-            cleanNames.push(pn.slice(1))
+            cleanNames.push(strings.slice(pn, 1, pn.len()))
         } else {
             cleanNames.push(pn)
         }
