@@ -1069,6 +1069,16 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 				if rt := l.useAliasFnReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
 					return true
 				}
+				// Enum-qualified variant call (`Color.Red(255)`,
+				// `Value.IntVal(n)`): receiver Ident resolves to a
+				// `SymEnum`, field name is one of the enum's variants.
+				// The call returns the enum's nominal type. Without
+				// this, `pub fn newInt(n: Int) -> Value { Value.IntVal(n) }`
+				// drops the trailing variant call to ExprStmt → MIR
+				// UnreachableTerm.
+				if rt := l.enumVariantCallReturnTypeFromAST(fx); rt != nil && expressionTypeYieldsValue(rt) {
+					return true
+				}
 			}
 			// Free-fn calls (`helper()`): promote when the resolved
 			// declaration has a non-unit return type. We restrict this
@@ -1413,6 +1423,28 @@ func (l *lowerer) findLetStmtByPattern(pat *ast.IdentPat) *ast.LetStmt {
 	}
 	walk(l.file)
 	return found
+}
+
+// enumVariantCallReturnTypeFromAST resolves `Enum.Variant(...)` calls
+// to the enum's nominal type. Receiver Ident must resolve to a
+// `SymEnum` whose declaration lists `Variant` among its variants.
+// Returns nil when the call doesn't match the enum-qualified shape.
+func (l *lowerer) enumVariantCallReturnTypeFromAST(fx *ast.FieldExpr) Type {
+	if l == nil || fx == nil || l.res == nil {
+		return nil
+	}
+	id, ok := fx.X.(*ast.Ident)
+	if !ok || id == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil || sym.Kind != resolve.SymEnum {
+		return nil
+	}
+	if !l.isVariantOfEnum(sym, fx.Name) {
+		return nil
+	}
+	return &NamedType{Name: sym.Name}
 }
 
 // useAliasFnReturnTypeFromAST resolves an `alias.Fn(...)` call whose

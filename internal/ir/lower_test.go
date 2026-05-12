@@ -881,6 +881,51 @@ fn main() {}`,
 	}
 }
 
+// Enum-qualified variant calls (`Color.Red(255)`, `Value.IntVal(n)`)
+// must promote to the block's Result when at trailing position. The
+// receiver Ident resolves to a `SymEnum`, the field name to one of
+// the enum's variants, and the call returns the enum's nominal type.
+// Without this, the very common pattern of "enum method that
+// constructs another variant" leaves the trailing call as ExprStmt
+// → MIR UnreachableTerm → stage0 declines the method. This single
+// fix moves toolchain audit coverage from 97.6% → 99.0% (+68 fns).
+func TestLowerEnumVariantCallPromotes(t *testing.T) {
+	src := `pub enum Value {
+    IntVal(Int),
+    BoolVal(Bool),
+
+    pub fn newInt(n: Int) -> Value { Value.IntVal(n) }
+    pub fn newBool(b: Bool) -> Value { Value.BoolVal(b) }
+}
+fn main() {}`
+	file, _ := parser.ParseDiagnostics([]byte(src))
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.SelfhostFile(file, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, _ := Lower("main", file, res, chk)
+	for _, decl := range mod.Decls {
+		ed, ok := decl.(*EnumDecl)
+		if !ok {
+			continue
+		}
+		for _, m := range ed.Methods {
+			if m.Body == nil || m.Body.Result == nil {
+				t.Errorf("method %s: body.Result missing (enum variant call promotion regression)", m.Name)
+				continue
+			}
+			if got := typeString(m.Body.Result.Type()); got != "Value" {
+				t.Errorf("method %s: body.Result.Type = %q, want Value", m.Name, got)
+			}
+		}
+	}
+}
+
 // `self` inside a struct method body must resolve to the owner
 // struct's nominal type. The resolver records the `self` ident with
 // `Decl = *ast.Receiver`, which carries no type info on its own. The
