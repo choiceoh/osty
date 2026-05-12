@@ -29640,6 +29640,67 @@ void *osty_rt_audit_i64_placeholder(void) {
     return osty_rt_string_dup_site("", 0, "stage0.audit.i64_placeholder");
 }
 
+/* std.fs.readToString(path) — read the entire file at `path` as a
+ * UTF-8 String. Returns a heap-allocated `%stage0.Result.ptr`
+ * ({ i64 tag, ptr value }): tag=0 (Ok) with the contents on success,
+ * tag=1 (Err) with a NULL payload on any I/O failure (open, seek,
+ * read short, allocation). Matches `Some/Ok=0, None/Err=1` per
+ * `internal/mir/lower.go:7757`.
+ *
+ * Needed by stage0 binary's `runCompile` and `runLirProtoLower`
+ * which call `fs.readToString(args[1])` before invoking the rest
+ * of the self-host pipeline; without a stub the link step fails
+ * with `undefined reference to std.fs.readToString` and the
+ * stage0 dispatch ceiling moves back from "binary handled
+ * --selfhost-doctor" to "binary fails to link". */
+void *osty_rt_audit_fs_readToString(const char *path) __asm__("std.fs.readToString");
+void *osty_rt_audit_fs_readToString(const char *path) {
+    int64_t *box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
+    if (box == NULL) {
+        return NULL;
+    }
+    box[0] = 1; /* Err */
+    box[1] = 0;
+    if (path == NULL) {
+        return box;
+    }
+    char path_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *path_ptr = path;
+    osty_rt_string_decode_to_buf_if_inline(&path_ptr, path_buf);
+    FILE *f = fopen(path_ptr, "rb");
+    if (f == NULL) {
+        return box;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return box;
+    }
+    long fsize = ftell(f);
+    if (fsize < 0) {
+        fclose(f);
+        return box;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return box;
+    }
+    char *content = (char *)osty_gc_allocate_managed((size_t)fsize + 1,
+        OSTY_GC_KIND_STRING, "stage0.audit.fs.readToString", NULL, NULL);
+    if (content == NULL) {
+        fclose(f);
+        return box;
+    }
+    size_t got = fread(content, 1, (size_t)fsize, f);
+    fclose(f);
+    if (got != (size_t)fsize) {
+        return box;
+    }
+    content[fsize] = '\0';
+    box[0] = 0; /* Ok */
+    memcpy(&box[1], &content, sizeof(content));
+    return box;
+}
+
 #endif /* defined(__GNUC__) || defined(__clang__) */
 
 /* osty_rt_stage0_declined — banner helper for stage0 decline-stubs.

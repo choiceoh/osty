@@ -4619,11 +4619,122 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 	if out.T == nil || out.T == ErrTypeVal {
 		if recovered := recoverMatchType(out.Arms); recovered != nil && recovered != ErrTypeVal {
 			out.T = recovered
+		} else {
+			// Fallback: each arm's body Result type was poisoned (ErrType)
+			// but the body is a single ident bound by a known sum-type
+			// variant pattern. Derive the binding's type from the
+			// scrutinee's NamedType args and re-attempt unification.
+			// Covers the common `match r { Ok(s) -> s, Err(_) -> {…} }`
+			// shape where `s`'s type the checker didn't record.
+			if scrutT := out.Scrutinee.Type(); scrutT != nil && scrutT != ErrTypeVal {
+				var candidate Type
+				disagree := false
+				for _, arm := range out.Arms {
+					t := recoverVariantBindingArmType(scrutT, arm)
+					if t == nil || t == ErrTypeVal {
+						continue
+					}
+					if candidate == nil {
+						candidate = t
+						continue
+					}
+					if !typesEquivalent(candidate, t) {
+						disagree = true
+						break
+					}
+				}
+				if !disagree && candidate != nil {
+					out.T = candidate
+				}
+			}
 		}
 	}
 	// Compile a decision tree when the arm shapes are specialisable.
 	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
 	return out
+}
+
+// recoverVariantBindingArmType derives the result type of a match arm
+// whose body is `body == arm.Body.Result.(*Ident)` referring to a
+// name introduced by `arm.Pattern.(*VariantPat)`, by looking up the
+// payload slot in the scrutinee's NamedType args. Returns nil for
+// shapes outside the supported envelope or when the scrutinee
+// isn't a recognised sum type.
+//
+// Used as a secondary fallback by `lowerMatchExpr` when
+// `recoverMatchType` can't unify because every arm's body type was
+// poisoned at the checker stage (observed on `runCompile` and
+// `runLirProtoLower` in `toolchain/main.osty` where
+// `match fs.readToString(path) { Ok(s) -> s, Err(_) -> {…} }`
+// dropped `s`'s String type through the SemanticDB→IR seam — same
+// family as the trailing-stdlib-call recovery in
+// `internal/ir/lower.go:bindingTypeFromAST`).
+//
+// Currently supports the prelude sum types `Result<T, E>` and
+// `Option<T>`; non-builtin enums need their variant→payload index
+// pulled from `resolve.Symbol.Decl` and stay out of scope here
+// because the binding-→type pipeline for user enums runs through
+// a different recovery path (`lowerLetStmt:nativeBindingType`).
+func recoverVariantBindingArmType(scrutT Type, arm *MatchArm) Type {
+	if arm == nil || arm.Body == nil || arm.Body.Result == nil {
+		return nil
+	}
+	bodyIdent, ok := arm.Body.Result.(*Ident)
+	if !ok {
+		return nil
+	}
+	if len(arm.Body.Stmts) != 0 {
+		// Only single-expression arm bodies — multi-statement blocks
+		// belong to the existing recoverMatchType path (which already
+		// understands trailing-expression yield).
+		return nil
+	}
+	vpat, ok := arm.Pattern.(*VariantPat)
+	if !ok {
+		return nil
+	}
+	bindingIdx := -1
+	for i, a := range vpat.Args {
+		ip, ok := a.(*IdentPat)
+		if !ok {
+			continue
+		}
+		if ip.Name == bodyIdent.Name {
+			bindingIdx = i
+			break
+		}
+	}
+	if bindingIdx < 0 {
+		return nil
+	}
+	named, ok := scrutT.(*NamedType)
+	if !ok {
+		return nil
+	}
+	switch named.Name {
+	case "Result":
+		if len(named.Args) < 2 {
+			return nil
+		}
+		switch vpat.Variant {
+		case "Ok":
+			if bindingIdx == 0 {
+				return named.Args[0]
+			}
+		case "Err":
+			if bindingIdx == 0 {
+				return named.Args[1]
+			}
+		}
+	case "Option":
+		if len(named.Args) < 1 {
+			return nil
+		}
+		if vpat.Variant == "Some" && bindingIdx == 0 {
+			return named.Args[0]
+		}
+	}
+	return nil
 }
 
 // recoverMatchType returns the common body type across a set of

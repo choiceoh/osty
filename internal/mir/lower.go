@@ -156,6 +156,31 @@ func (l *lowerer) collectSignatures() {
 			l.emitUse(x)
 		}
 	}
+	// Promote module-level `let` statements that the parser routed into
+	// `Script` (e.g. unannotated top-level lets in `toolchain/ci.osty`)
+	// to globals BEFORE function lowering, so cross-file ident references
+	// like `Runner__Run`'s `skipped(CheckFormat)` resolve to a real
+	// `GlobalRefRV` instead of falling through to an unresolved
+	// `FnConst{Symbol: "CheckFormat"}`. The matching script-side promotion
+	// in `emitScript` (Globals output) handles the actual `Global` value
+	// emission; this pass only seeds the lookup table early enough for
+	// `bs.lowerIdent`'s fallback to find them.
+	for _, s := range l.src.Script {
+		ls, ok := s.(*ir.LetStmt)
+		if !ok || ls.Name == "" {
+			continue
+		}
+		if _, already := l.globals[ls.Name]; already {
+			continue
+		}
+		l.globals[ls.Name] = &ir.LetDecl{
+			Name:  ls.Name,
+			Mut:   ls.Mut,
+			Type:  ls.Type,
+			Value: ls.Value,
+			SpanV: ls.SpanV,
+		}
+	}
 }
 
 func (l *lowerer) buildLayouts() {
@@ -370,31 +395,79 @@ func (l *lowerer) emitScript() {
 	if len(l.src.Script) == 0 {
 		return
 	}
-	// If the user already declared `fn main()` explicitly, don't
-	// synthesize a second one — duplicate-symbol breaks LLVM linking
-	// and the backend (`backend: MIR coverage incomplete: function
-	// "main": duplicate symbol`). The toolchain's own
-	// `toolchain/main.osty` declares a real `main` while several other
-	// files (e.g. `toolchain/ci.osty`, `toolchain/scaffold_policy.osty`)
-	// have top-level `let` constants that the parser routes into
-	// `file.Stmts` → `mod.Script`. Without this guard, both the user
-	// `main` and the auto-synthesised initialiser end up as `main`.
+	// Step 1: promote module-level `let` constants to Globals so
+	// they are visible across functions (e.g. `let CheckFormat:
+	// CheckName = "format"` in `toolchain/ci.osty` is referenced by
+	// `Runner__Run` / `Runner__checkFormat` in the same file). Without
+	// this promotion the parser leaves them in `file.Stmts → mod.Script`,
+	// the IR-side `lowerLetDecl` never runs, and `bs.lowerIdent`'s
+	// fallback emits `FnConst{Symbol: "CheckFormat"}` instead of a
+	// `GlobalRefRV` — stage0 then renders an unresolved `@CheckFormat`
+	// reference that fails clang at link.
 	//
-	// Long-term fix: route module-level `let` constants into
-	// `mod.Decls` (as `Global`s) instead of `mod.Script`, OR wrap
-	// script statements in a `__init__`-named entry that the user
-	// `main` calls. For now the conservative fix is to skip the
-	// synthetic when the user's main is present.
+	// The promotion synthesises a minimal `ir.LetDecl` shell from the
+	// `ir.LetStmt`, runs the existing `lowerGlobal` pipeline, and
+	// removes the LetStmt from the script slice so the synthetic main
+	// (next step) doesn't double-emit it.
+	remainingScript := make([]ir.Stmt, 0, len(l.src.Script))
+	for _, s := range l.src.Script {
+		ls, ok := s.(*ir.LetStmt)
+		if !ok || ls.Name == "" {
+			remainingScript = append(remainingScript, s)
+			continue
+		}
+		// `collectSignatures` already seeded `l.globals[ls.Name]` with
+		// a synthetic LetDecl so cross-file refs in user functions
+		// resolved during `emitDeclarations`. Now emit the actual
+		// `Global` value via the shared `lowerGlobal` pipeline. Skip
+		// the entry if `collectSignatures` saw a real LetDecl with the
+		// same name (file with a `pub let X = ...` at top-level
+		// alongside the cross-file ref).
+		ld, ok := l.globals[ls.Name]
+		if !ok {
+			ld = &ir.LetDecl{
+				Name:  ls.Name,
+				Mut:   ls.Mut,
+				Type:  ls.Type,
+				Value: ls.Value,
+				SpanV: ls.SpanV,
+			}
+			l.globals[ls.Name] = ld
+		}
+		alreadyEmitted := false
+		for _, g := range l.out.Globals {
+			if g != nil && g.Name == ld.Name {
+				alreadyEmitted = true
+				break
+			}
+		}
+		if !alreadyEmitted {
+			if g := l.lowerGlobal(ld); g != nil {
+				l.out.Globals = append(l.out.Globals, g)
+			}
+		}
+	}
+
+	// Step 2: if any non-let script statements remain, wrap them in a
+	// synthetic `main()` — but only when the user hasn't declared their
+	// own `fn main()` explicitly. Two `main` definitions break LLVM
+	// linking (`backend: MIR coverage incomplete: function "main":
+	// duplicate symbol`). The toolchain's `toolchain/main.osty` does
+	// declare a real `main`; with the step-1 promotion in place, the
+	// only remaining script content in other files (e.g.
+	// `toolchain/scaffold_policy.osty`) is incidental and safely
+	// dropped here.
+	if len(remainingScript) == 0 {
+		return
+	}
 	for _, existing := range l.out.Functions {
 		if existing != nil && existing.Name == "main" {
 			return
 		}
 	}
-	// Treat script statements as the body of a synthetic main(). The
-	// backend conventionally does the same thing.
 	fn := l.newFunction("main", nil, TUnit, ir.Span{}, false)
 	bs := newBodyState(l, fn)
-	for _, s := range l.src.Script {
+	for _, s := range remainingScript {
 		bs.lowerStmt(s)
 	}
 	bs.finishNoReturn()
@@ -4137,8 +4210,36 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 		return &CopyOp{Place: Place{Local: tmp}, T: t}
 	}
 	// Unknown identifier — possibly a top-level fn not captured in our
-	// signature table; fall back to FnConst.
+	// signature table; fall back to FnConst. First, though, check
+	// whether this is actually a top-level `let` whose IR `id.Kind`
+	// didn't make it to `IdentGlobal` (cross-file resolves on toolchain
+	// drop the `IdentKind` on a few sites — see the `CheckFormat` /
+	// `CheckPolicy` references in `toolchain/ci.osty:Runner__Run`).
+	// Without this guard, the generic-CFG path in
+	// `internal/backend/stage0/emit.go:resolveOperandWithPrelude`
+	// emits `@CheckFormat` as a function pointer, which fails clang
+	// with `error: use of undefined value '@CheckFormat'`.
 	if id.Name != "" {
+		if decl, ok := bs.l.globals[id.Name]; ok && decl != nil {
+			t := id.T
+			if t == nil || isPoisonType(t) {
+				if decl.Type != nil && !isPoisonType(decl.Type) {
+					t = decl.Type
+				} else if decl.Value != nil {
+					t = decl.Value.Type()
+				}
+			}
+			if t == nil {
+				t = ir.ErrTypeVal
+			}
+			tmp := bs.freshTemp(t, id.SpanV)
+			bs.emit(&AssignInstr{
+				Dest:  Place{Local: tmp},
+				Src:   &GlobalRefRV{Name: id.Name, T: t},
+				SpanV: id.SpanV,
+			})
+			return &CopyOp{Place: Place{Local: tmp}, T: t}
+		}
 		t := bs.fnValueType(id.Name, id.T)
 		return &ConstOp{Const: &FnConst{Symbol: id.Name, T: t}, T: t}
 	}
