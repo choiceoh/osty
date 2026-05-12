@@ -8022,6 +8022,18 @@ OSTY_HOT_INLINE int64_t osty_rt_list_len(void *raw_list) {
     return list->len;
 }
 
+/* Bare `len` alias: stage0 emit lowers some `.len()` method-call sites
+ * (specifically those targeting List<T> reached through a match-arm /
+ * Option-unwrap binding — see e.g. `mir_lower::mirLowerMultiAssign`
+ * and `onb_aggregate::onbLowerStructLiteralAssign`) as a direct
+ * `call i64 @len(ptr)` rather than translating the symbol to
+ * `osty_rt_list_len`. Until stage0 grows that translation, declare a
+ * thin alias here so the link step resolves cleanly. Direct-parameter
+ * `.len()` already lowers as `@osty_rt_list_len` and is unaffected. */
+int64_t len(void *raw_list) {
+    return osty_rt_list_len(raw_list);
+}
+
 void osty_rt_list_pop_discard(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     if (list == NULL || list->len <= 0) {

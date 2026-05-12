@@ -928,7 +928,7 @@ fn checkIsNumericNarrowing(env: CheckEnv, expected: Int, got: Int) -> Bool {
 ///   Int8 -> Int16 -> Int32 -> Int -> Float64
 ///   Int  -> Float64
 ///   Float32 -> Float64
-fn checkIsWideningConversion(from: Int, to: Int) -> Bool {
+fn checkIsWideningConversion(from: PrimKind, to: PrimKind) -> Bool {
     // Int widening chain: Int8 -> Int16 -> Int32 -> Int
     if from == PkInt8 && (to == PkInt16 || to == PkInt32 || to == PkInt || to == PkFloat64) {
         return true
