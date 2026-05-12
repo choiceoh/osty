@@ -739,7 +739,13 @@ fn checkResolveAliasDeepFn(env: CheckEnv, ty: Int, depth: Int) -> Int {
         outParams.push(checkResolveAliasDeepAt(env, p, depth + 1))
     }
     let ret = checkResolveAliasDeepAt(env, tyRetAt(env.tys, ty), depth + 1)
-    tyFn(env.tys, outParams, ret)
+    // G20: carry param names through alias resolution.
+    let names = tyFnParamNamesAt(env.tys, ty)
+    if names.len() > 0 {
+        tyFnWithNames(env.tys, outParams, ret, names)
+    } else {
+        tyFn(env.tys, outParams, ret)
+    }
 }
 fn checkResolveAliasDeepNamed(env: CheckEnv, ty: Int, depth: Int) -> Int {
     let args = tyArgsAt(env.tys, ty)
@@ -812,7 +818,13 @@ fn checkSubstituteTyFn(env: CheckEnv, ty: Int, generics: List<String>, args: Lis
         outParams.push(checkSubstituteTy(env, p, generics, args))
     }
     let ret = checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
-    tyFn(env.tys, outParams, ret)
+    // G20: carry param names through substitution.
+    let names = tyFnParamNamesAt(env.tys, ty)
+    if names.len() > 0 {
+        tyFnWithNames(env.tys, outParams, ret, names)
+    } else {
+        tyFn(env.tys, outParams, ret)
+    }
 }
 fn checkAliasDeepCacheGet(env: CheckEnv, ty: Int) -> Int {
     if ty < 0 || ty >= env.local.aliasDeepCache.len() {
@@ -876,11 +888,65 @@ pub fn checkExpectAssignable(env: CheckEnv, expected: Int, got: Int, start: Int,
         env.local.accepted = env.local.accepted + 1
         return true
     }
+    // G34: detect implicit numeric narrowing and emit E0765.
+    if checkIsNumericNarrowing(env, expectedResolved, gotResolved) {
+        env.local.diagnostics.push(diagImplicitNarrowing(tyToString(env.tys, gotResolved), tyToString(env.tys, expectedResolved), start, end))
+        return false
+    }
     if tyKindAt(env.tys, expectedResolved) == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, expectedResolved)) {
         env.local.diagnostics.push(diagInterfaceNotSatisfied(tyToString(env.tys, gotResolved), tyToString(env.tys, expectedResolved), start, end))
         return false
     }
     env.local.diagnostics.push(diagMismatch(tyToString(env.tys, expectedResolved), tyToString(env.tys, gotResolved), start, end))
+    false
+}
+/// checkIsNumericNarrowing returns true when `got` and `expected` are
+/// both concrete numeric primitive types and the conversion from `got`
+/// to `expected` would be a narrowing (lossy) conversion. This is used
+/// to emit E0765 instead of a generic type mismatch.
+fn checkIsNumericNarrowing(env: CheckEnv, expected: Int, got: Int) -> Bool {
+    let gotPrim = tyPrimAt(env.tys, got)
+    let expPrim = tyPrimAt(env.tys, expected)
+    let gotIsPrim = tyKindAt(env.tys, got) == TkPrim
+    let expIsPrim = tyKindAt(env.tys, expected) == TkPrim
+    if !gotIsPrim || !expIsPrim {
+        return false
+    }
+    // Untyped int/float are handled by checkIsAssignableDepth already.
+    if gotPrim == PkUntypedInt || gotPrim == PkUntypedFloat {
+        return false
+    }
+    if expPrim == PkUntypedInt || expPrim == PkUntypedFloat {
+        return false
+    }
+    // If the types are the same, checkIsAssignableDepth already returned true.
+    // So we only reach here when they differ. Check if this is a widening.
+    !checkIsWideningConversion(gotPrim, expPrim)
+}
+/// checkIsWideningConversion returns true when a conversion from `from`
+/// to `to` is a lossless widening per the v0.5 lattice:
+///   Int8 -> Int16 -> Int32 -> Int -> Float64
+///   Int  -> Float64
+///   Float32 -> Float64
+fn checkIsWideningConversion(from: Int, to: Int) -> Bool {
+    // Int widening chain: Int8 -> Int16 -> Int32 -> Int
+    if from == PkInt8 && (to == PkInt16 || to == PkInt32 || to == PkInt || to == PkFloat64) {
+        return true
+    }
+    if from == PkInt16 && (to == PkInt32 || to == PkInt || to == PkFloat64) {
+        return true
+    }
+    if from == PkInt32 && (to == PkInt || to == PkFloat64) {
+        return true
+    }
+    // Int -> Float64
+    if from == PkInt && to == PkFloat64 {
+        return true
+    }
+    // Float32 -> Float64
+    if from == PkFloat32 && to == PkFloat64 {
+        return true
+    }
     false
 }
 /// checkIsAssignable implements structural assignability against the
@@ -922,6 +988,10 @@ fn checkIsAssignableDepth(env: CheckEnv, dst: Int, src: Int, depth: Int) -> Bool
     }
     if dIsPrim && dPrim == PkUntypedFloat {
         return sIsPrim && (sPrim == PkFloat || sPrim == PkFloat32 || sPrim == PkFloat64)
+    }
+    // G34: lossless numeric widening between concrete types.
+    if sIsPrim && dIsPrim && checkIsWideningConversion(sPrim, dPrim) {
+        return true
     }
     let dk = tyKindAt(env.tys, d)
     let sk = tyKindAt(env.tys, s)
@@ -1329,7 +1399,12 @@ fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int, selfTy: I
         }
         checkSubstituteSelfTy(env, sig.retTy, selfResolved)
     }
-    tyFn(env.tys, params, ret)
+    // G20: carry param names from the method signature.
+    if sig.paramNames.len() > 0 {
+        tyFnWithNames(env.tys, params, ret, sig.paramNames)
+    } else {
+        tyFn(env.tys, params, ret)
+    }
 }
 fn checkSubstituteSelfTy(env: CheckEnv, ty: Int, selfTy: Int) -> Int {
     if ty < 0 {
@@ -1358,7 +1433,14 @@ fn checkSubstituteSelfTy(env: CheckEnv, ty: Int, selfTy: Int) -> Int {
         for param in tyArgsAt(env.tys, ty) {
             params.push(checkSubstituteSelfTy(env, param, selfTy))
         }
-        return tyFn(env.tys, params, checkSubstituteSelfTy(env, tyRetAt(env.tys, ty), selfTy))
+        let ret = checkSubstituteSelfTy(env, tyRetAt(env.tys, ty), selfTy)
+        // G20: carry param names through self-type substitution.
+        let names = tyFnParamNamesAt(env.tys, ty)
+        return if names.len() > 0 {
+            tyFnWithNames(env.tys, params, ret, names)
+        } else {
+            tyFn(env.tys, params, ret)
+        }
     }
     if kind == TkOptional {
         return tyOptional(env.tys, checkSubstituteSelfTy(env, tyInnerAt(env.tys, ty), selfTy))

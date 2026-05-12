@@ -144,6 +144,59 @@ pub fn checkCodeBuilderMissingRequiredField() -> String {
 pub fn checkCodePureViolation() -> String {
     "E0775"
 }
+/// checkCodeDefaultNotLiteral reports an `enum` discriminant that isn't a literal constant (G21).
+pub fn checkCodeDefaultNotLiteral() -> String {
+    "E0762"
+}
+/// checkCodeConstFnDisallowed reports a `const fn` used where disallowed (G34).
+pub fn checkCodeConstFnDisallowed() -> String {
+    "E0766"
+}
+/// checkCodeConstFnCycle reports a cycle detected in `const fn` evaluation (G34).
+pub fn checkCodeConstFnCycle() -> String {
+    "E0767"
+}
+/// checkCodeConstFnGeneric reports a `const fn` with generic parameters (G34).
+pub fn checkCodeConstFnGeneric() -> String {
+    "E0768"
+}
+/// checkCodeOpAnnotationBadSignature reports an `#[op]` with a bad function signature (G34).
+pub fn checkCodeOpAnnotationBadSignature() -> String {
+    "E0754"
+}
+/// checkCodeOpDuplicate reports a duplicate `#[op]` definition (G34).
+pub fn checkCodeOpDuplicate() -> String {
+    "E0755"
+}
+/// checkCodeOpNotAllowed reports an `#[op]` used in a context that disallows operators (G34).
+pub fn checkCodeOpNotAllowed() -> String {
+    "E0756"
+}
+/// checkCodeKeywordArgUnknown reports an unknown keyword argument name (G20).
+pub fn checkCodeKeywordArgUnknown() -> String {
+    "E0732"
+}
+/// checkCodePositionalAfterKw reports a positional arg after a keyword arg (G20).
+pub fn checkCodePositionalAfterKw() -> String {
+    "E0733"
+}
+/// checkCodeFnValueKeywordNameMismatch reports a keyword arg name that does
+/// not match any parameter name on the function-value type (G20).
+pub fn checkCodeFnValueKeywordNameMismatch() -> String {
+    "E0769"
+}
+/// checkCodeEnumDiscriminantOnPayload reports a payload-carrying variant with a discriminant (G35).
+pub fn checkCodeEnumDiscriminantOnPayload() -> String {
+    "E0758"
+}
+/// checkCodeEnumDiscriminantDuplicate reports duplicate discriminant values (G35).
+pub fn checkCodeEnumDiscriminantDuplicate() -> String {
+    "E0759"
+}
+/// checkCodeImplicitNarrowingConversion reports a narrowing conversion without an explicit cast (G31).
+pub fn checkCodeImplicitNarrowingConversion() -> String {
+    "E0765"
+}
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
 // sites stay readable.
@@ -370,6 +423,16 @@ pub fn diagPodShapeViolation(message: String, fixHint: String, start: Int, end: 
 pub fn diagIntrinsicNonEmptyBody(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
     checkDiagWithNotes(checkCodeIntrinsicNonEmptyBody(), "`#[intrinsic]` function `{fnName}` must have an empty body", start, end, ["LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored", "hint: keep the signature and drop the body, or use an empty block"])
 }
+/// diagFnValueKeywordNameMismatch reports a keyword argument whose name
+/// does not match any parameter name on the function-value type (G20).
+pub fn diagFnValueKeywordNameMismatch(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeFnValueKeywordNameMismatch(), "keyword argument `{name}:` does not match any parameter name on this function value", start, end, ["G20: function values carry parameter names as type-neutral metadata; keyword calls require a name match", "hint: use a positional argument, or ensure the function value originates from a declaration whose parameter names match"])
+}
+/// diagPositionalAfterKw reports a positional argument appearing after
+/// a keyword argument (E0733, G20).
+pub fn diagPositionalAfterKw(start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(checkCodePositionalAfterKw(), "positional argument cannot appear after a keyword argument", start, end)
+}
 /// diagPureViolation reports a side-effectful operation inside a
 /// `#[pure]` function body. `what` names the rejected operation; the
 /// hint points at either removing `#[pure]` or making the callee/body
@@ -380,6 +443,47 @@ pub fn diagPureViolation(fnName: String, what: String, fixHint: String, start: I
         notes.push("hint: {fixHint}")
     }
     checkDiagWithNotes(checkCodePureViolation(), "`#[pure]` function `{fnName}` cannot {what}", start, end, notes)
+}
+/// diagDefaultNotLiteral reports an `enum` discriminant field that expects a literal
+/// but received a non-literal expression (G21).
+pub fn diagDefaultNotLiteral(paramName: String, what: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeDefaultNotLiteral(), "default discriminant for `{paramName}` must be a literal constant: {what}", start, end, ["LANG_SPEC §3.5 (G21): enum discriminant values must be constant expressions that resolve to integer literals at compile time"])
+}
+/// diagConstFnDisallowed reports a `const fn` used in a context where it is not permitted (G34).
+pub fn diagConstFnDisallowed(fnName: String, what: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeConstFnDisallowed(), "`const fn` `{fnName}` cannot {what}", start, end, ["LANG_SPEC §13 (G34): `const fn` is only allowed in constant contexts and trait defaults; general function bodies require `fn`"])
+}
+/// diagConstFnCycle reports a cycle detected during `const fn` evaluation (G34).
+pub fn diagConstFnCycle(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeConstFnCycle(), "`const fn` `{fnName}` evaluation caused a cycle", start, end, ["LANG_SPEC §13 (G34): cyclic `const fn` calls are rejected; unfold the recursion or break the cycle with a non-const helper"])
+}
+/// diagConstFnGeneric reports a `const fn` declared with generic parameters (G34).
+pub fn diagConstFnGeneric(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeConstFnGeneric(), "`const fn` `{fnName}` cannot have generic parameters", start, end, ["LANG_SPEC §13 (G34): `const fn` does not support generic parameters; use a non-const wrapper or monomorphise at the call site"])
+}
+/// diagEnumDiscriminantOnPayload reports a payload-carrying variant with a discriminant (G35).
+pub fn diagEnumDiscriminantOnPayload(variantName: String, enumName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeEnumDiscriminantOnPayload(), "cannot assign a discriminant to payload-carrying variant `{enumName}::{variantName}`", start, end, ["LANG_SPEC §3.3 (G35): only unit variants (no fields) may carry an explicit discriminant; payload variants get their discriminant from the previous variant"])
+}
+/// diagEnumDiscriminantDuplicate reports duplicate discriminant values (G35).
+pub fn diagEnumDiscriminantDuplicate(variantName: String, otherName: String, value: Int, enumName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeEnumDiscriminantDuplicate(), "discriminant value `{value}` on `{enumName}::{variantName}` duplicates `{enumName}::{otherName}`", start, end, ["LANG_SPEC §3.3 (G35): each variant in an enum must have a unique discriminant value"])
+}
+/// diagImplicitNarrowing reports an implicit narrowing conversion without an explicit cast (G31).
+pub fn diagImplicitNarrowing(from: String, to: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeImplicitNarrowingConversion(), "cannot implicitly convert `{from}` to `{to}` — narrowing conversion requires an explicit cast", start, end, ["LANG_SPEC §6.3 (G31): narrowing conversions between integer types require an explicit cast expression to prevent silent data loss"])
+}
+/// diagOpAnnotationBadSignature reports an `#[op]` annotation with an invalid function signature (G34).
+pub fn diagOpAnnotationBadSignature(fnName: String, opName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeOpAnnotationBadSignature(), "`{fnName}` annotated as `#[op({opName})]` does not match the required signature", start, end, ["LANG_SPEC §13 (G34): `#[op]` functions must accept a single operand and return the operand type, with no additional parameters or return transformation"])
+}
+/// diagOpDuplicate reports a duplicate `#[op]` definition (G34).
+pub fn diagOpDuplicate(opName: String, typeName: String, firstFn: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeOpDuplicate(), "operator `#[op({opName})]` already defined on `{typeName}` by `{firstFn}`", start, end, ["LANG_SPEC §13 (G34): each operator type pair may only have one `#[op]` implementation"])
+}
+/// diagOpNotAllowed reports an `#[op]` used in a context that disallows operator methods (G34).
+pub fn diagOpNotAllowed(opName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(checkCodeOpNotAllowed(), "operator `#[op({opName})]` is not allowed in this context", start, end, ["LANG_SPEC §13 (G34): operator annotations are only permitted in `impl` blocks for named types, not in trait definitions or free functions"])
 }
 // ---------------------------------------------------------------------
 // Suggestion helpers — used to attach "did you mean `foo`?" hints to

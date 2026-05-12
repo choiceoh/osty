@@ -60,6 +60,9 @@ pub fn runCheckGates(cx: ElabCx) {
     runPrivilegeGate(cx)
     runNoAllocGate(cx)
     runPureGate(cx)
+    runConstFnGate(cx)
+    runEnumDiscriminantGate(cx)
+    runOpAnnotationGate(cx)
 }
 // ---------------------------------------------------------------------
 // E0773 — `#[intrinsic]` body-shape gate.
@@ -1279,5 +1282,413 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
     }
     for childIdx in pat.children {
         pureCollectPatternBindings(arena, childIdx, out)
+    }
+}
+// ---------------------------------------------------------------------
+// G21 — `const fn` validation gate (§3.1.1)
+// ---------------------------------------------------------------------
+fn runConstFnGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    let constFnNames = collectConstFnNames(arena)
+    if constFnNames.len() == 0 {
+        return
+    }
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        match node.kind {
+            AstNFnDecl -> constFnCheckDecl(cx, arena, node, constFnNames),
+            AstNStructDecl -> constFnCheckMethods(cx, arena, node, constFnNames),
+            AstNEnumDecl -> constFnCheckMethods(cx, arena, node, constFnNames),
+            _ -> {
+            },
+        }
+    }
+}
+fn collectConstFnNames(arena: AstArena) -> List<String> {
+    let mut out: List<String> = []
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        if node.kind == AstNFnDecl {
+            if fnHasConstAnnotation(arena, node) {
+                out.push(node.text)
+            }
+        } else if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
+            for memberIdx in node.children {
+                let member = astArenaNodeAt(arena, memberIdx)
+                if member.kind == AstNFnDecl && fnHasConstAnnotation(arena, member) {
+                    out.push(member.text)
+                }
+            }
+        }
+    }
+    out
+}
+fn fnHasConstAnnotation(arena: AstArena, fn_: AstNode) -> Bool {
+    if fn_.right < 0 {
+        return false
+    }
+    checkGateAnnotationContains(arena, fn_.extra, "const")
+}
+fn constFnCheckDecl(cx: ElabCx, arena: AstArena, fn_: AstNode, constFnNames: List<String>) {
+    if !fnHasConstAnnotation(arena, fn_) {
+        return
+    }
+    let name = fn_.text
+    if fn_.children2.len() > 0 {
+        let firstGeneric = astArenaNodeAt(arena, fn_.children2[0])
+        cx.env.local.diagnostics.push(diagConstFnGeneric(name, firstGeneric.start, fn_.end))
+    }
+    if fn_.right >= 0 {
+        constFnWalkBody(cx, arena, fn_.right, name, constFnNames, [])
+    }
+    for paramIdx in fn_.children {
+        let param = astArenaNodeAt(arena, paramIdx)
+        if param.kind == AstNParam && param.left >= 0 {
+            constFnCheckDefaultArg(cx, arena, param.left, param.text)
+        }
+    }
+}
+fn constFnCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, constFnNames: List<String>) {
+    for memberIdx in parent.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            constFnCheckDecl(cx, arena, member, constFnNames)
+        }
+    }
+}
+fn constFnCheckDefaultArg(cx: ElabCx, arena: AstArena, exprIdx: Int, paramName: String) {
+    if exprIdx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, exprIdx)
+    match node.kind {
+        AstNIntLit | AstNFloatLit | AstNStringLit | AstNCharLit | AstNByteLit | AstNBoolLit -> {
+        },
+        AstNIdent -> {
+            if node.text == "None" || node.text == "()" {
+            } else {
+                cx.env.local.diagnostics.push(diagDefaultNotLiteral(paramName, "identifier `{node.text}`", node.start, node.end))
+            }
+        },
+        AstNList -> {
+            if node.children.len() == 0 {
+            } else {
+                for elIdx in node.children {
+                    constFnCheckDefaultArg(cx, arena, elIdx, paramName)
+                }
+            }
+        },
+        AstNMap -> {
+            if node.children.len() == 0 {
+            } else {
+                cx.env.local.diagnostics.push(diagDefaultNotLiteral(paramName, "non-empty map literal", node.start, node.end))
+            }
+        },
+        AstNStructLit -> {
+            for fieldIdx in node.children {
+                let field = astArenaNodeAt(arena, fieldIdx)
+                if field.kind == AstNField_ {
+                    constFnCheckDefaultArg(cx, arena, field.left, paramName)
+                }
+            }
+        },
+        AstNTuple -> {
+            for elIdx in node.children {
+                constFnCheckDefaultArg(cx, arena, elIdx, paramName)
+            }
+        },
+        AstNCall -> {
+            let callee = astArenaNodeAt(arena, node.left)
+            if callee.kind != AstNIdent {
+                cx.env.local.diagnostics.push(diagDefaultNotLiteral(paramName, "complex call expression", node.start, node.end))
+            }
+        },
+        _ -> {
+            cx.env.local.diagnostics.push(diagDefaultNotLiteral(paramName, "expression", node.start, node.end))
+        },
+    }
+}
+fn constFnWalkBody(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, constFnNames: List<String>, locals: List<String>) {
+    if blockIdx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, blockIdx)
+    if node.kind != AstNBlock {
+        constFnWalkExpr(cx, arena, blockIdx, fnName, constFnNames, locals)
+        return
+    }
+    for stmtIdx in node.children {
+        constFnWalkExpr(cx, arena, stmtIdx, fnName, constFnNames, locals)
+    }
+}
+fn constFnWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, constFnNames: List<String>, locals: List<String>) {
+    if idx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, idx)
+    match node.kind {
+        AstNIf | AstNMatch | AstNFor -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "control flow", node.start, node.end))
+        },
+        AstNReturn -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "`return` statement (use final-expression form)", node.start, node.end))
+        },
+        AstNQuestion -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "`?` operator", node.start, node.end))
+        },
+        AstNDefer -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "`defer`", node.start, node.end))
+        },
+        AstNClosure -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "closure", node.start, node.end))
+        },
+        AstNAssign -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "assignment (use `let` for single-assignment bindings)", node.start, node.end))
+        },
+        AstNChanSend -> {
+            cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "channel send", node.start, node.end))
+        },
+        AstNCall -> {
+            let callee = astArenaNodeAt(arena, node.left)
+            if callee.kind != AstNIdent {
+                cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "method call", node.start, node.end))
+            } else if callee.kind == AstNIdent && !(listContainsString(constFnNames, callee.text)) {
+                cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "call to non-`const fn` `{callee.text}`", node.start, node.end))
+            }
+            constFnWalkExpr(cx, arena, node.left, fnName, constFnNames, locals)
+            for argIdx in node.children {
+                constFnWalkExpr(cx, arena, argIdx, fnName, constFnNames, locals)
+            }
+        },
+        AstNLet -> {
+            let mut scopedLocals = locals
+            if node.right >= 0 {
+                constFnWalkExpr(cx, arena, node.right, fnName, constFnNames, scopedLocals)
+            }
+        },
+        AstNBlock -> {
+            let mut scopedLocals = locals
+            for stmtIdx in node.children {
+                let stmt = astArenaNodeAt(arena, stmtIdx)
+                constFnWalkExpr(cx, arena, stmtIdx, fnName, constFnNames, scopedLocals)
+            }
+        },
+        AstNUnary | AstNBinary | AstNParen | AstNTurbofish -> {
+            constFnWalkExpr(cx, arena, node.left, fnName, constFnNames, locals)
+            if node.right >= 0 {
+                constFnWalkExpr(cx, arena, node.right, fnName, constFnNames, locals)
+            }
+            for childIdx in node.children {
+                constFnWalkExpr(cx, arena, childIdx, fnName, constFnNames, locals)
+            }
+        },
+        AstNExprStmt -> constFnWalkExpr(cx, arena, node.left, fnName, constFnNames, locals),
+        AstNList | AstNTuple -> {
+            for elIdx in node.children {
+                constFnWalkExpr(cx, arena, elIdx, fnName, constFnNames, locals)
+            }
+        },
+        AstNMap -> {
+            for entryIdx in node.children {
+                let entry = astArenaNodeAt(arena, entryIdx)
+                constFnWalkExpr(cx, arena, entry.left, fnName, constFnNames, locals)
+                constFnWalkExpr(cx, arena, entry.right, fnName, constFnNames, locals)
+            }
+        },
+        AstNStructLit -> {
+            for fieldIdx in node.children {
+                let field = astArenaNodeAt(arena, fieldIdx)
+                if field.kind == AstNField_ {
+                    constFnWalkExpr(cx, arena, field.left, fnName, constFnNames, locals)
+                }
+            }
+        },
+        AstNStringLit -> {
+            if isAllocatingStringText(node.text) {
+                cx.env.local.diagnostics.push(diagConstFnDisallowed(fnName, "string concatenation/interpolation", node.start, node.end))
+            }
+        },
+        _ -> {
+        },
+    }
+}
+// ---------------------------------------------------------------------
+// G31 — Enum integer discriminant validation gate (§3.5)
+// ---------------------------------------------------------------------
+fn runEnumDiscriminantGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        if node.kind != AstNEnumDecl {
+            continue
+        }
+        enumCheckDiscriminants(cx, arena, node)
+    }
+}
+fn enumCheckDiscriminants(cx: ElabCx, arena: AstArena, enumNode: AstNode) {
+    let enumName = enumNode.text
+    let mut seen: Map<Int, String> = {:}
+    for variantIdx in enumNode.children {
+        let variant = astArenaNodeAt(arena, variantIdx)
+        if variant.kind != AstNVariant {
+            continue
+        }
+        let variantName = variant.text
+        let hasPayload = variant.children.len() > 0
+        let discValue = enumVariantDiscriminant(arena, variant)
+        if discValue >= 0 {
+            if hasPayload {
+                cx.env.local.diagnostics.push(diagEnumDiscriminantOnPayload(variantName, enumName, variant.start, variant.end))
+            }
+            match seen.get(discValue) {
+                Some(otherName) -> {
+                    cx.env.local.diagnostics.push(diagEnumDiscriminantDuplicate(variantName, otherName, discValue, enumName, variant.start, variant.end))
+                },
+                None -> {
+                    seen.insert(discValue, variantName)
+                },
+            }
+        }
+    }
+}
+fn enumVariantDiscriminant(arena: AstArena, variant: AstNode) -> Int {
+    if variant.right < 0 {
+        return -1
+    }
+    let rhs = astArenaNodeAt(arena, variant.right)
+    if rhs.kind == AstNIntLit {
+        let val = checkGateParseInt(rhs.text)
+        return val
+    }
+    -1
+}
+fn checkGateParseInt(text: String) -> Int {
+    let mut value = 0
+    let mut sign = 1
+    let mut i = 0
+    let units = strings.split(text, "")
+    if i < units.len() && units[i] == "-" {
+        sign = -1
+        i = i + 1
+    }
+    for i < units.len() {
+        let ch = units[i]
+        if ch >= "0" && ch <= "9" {
+            value = value * 10 + (checkGateCharToInt(ch) - checkGateCharToInt("0"))
+        } else {
+            return -1
+        }
+        i = i + 1
+    }
+    sign * value
+}
+fn checkGateCharToInt(ch: String) -> Int {
+    let mut n = 0
+    for unit in strings.split("\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f", "") {
+        if unit == ch {
+            return n
+        }
+        n = n + 1
+    }
+    -1
+}
+// ---------------------------------------------------------------------
+// G35 — Bounded operator overload validation gate (§3.8 / §14.2)
+// ---------------------------------------------------------------------
+fn runOpAnnotationGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        match node.kind {
+            AstNStructDecl | AstNEnumDecl -> opAnnotationCheckType(cx, arena, node),
+            AstNFnDecl -> opAnnotationCheckFn(cx, arena, node, ""),
+            _ -> {
+            },
+        }
+    }
+}
+fn opAllowedOperators() -> List<String> {
+    ["+", "-", "*", "/", "%"]
+}
+fn opAnnotationCheckType(cx: ElabCx, arena: AstArena, typeNode: AstNode) {
+    let typeName = typeNode.text
+    let mut seen: Map<String, String> = {:}
+    for memberIdx in typeNode.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind != AstNFnDecl {
+            continue
+        }
+        let opName = opAnnotationName(arena, member)
+        if opName == "" {
+            continue
+        }
+        if !(listContainsString(opAllowedOperators(), opName)) {
+            cx.env.local.diagnostics.push(diagOpNotAllowed(opName, member.start, member.end))
+            continue
+        }
+        match seen.get(opName) {
+            Some(firstFn) -> {
+                cx.env.local.diagnostics.push(diagOpDuplicate(opName, typeName, firstFn, member.start, member.end))
+            },
+            None -> {
+                seen.insert(opName, member.text)
+            },
+        }
+        opAnnotationCheckSignature(cx, arena, member, opName)
+    }
+}
+fn opAnnotationCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, owner: String) {
+    let opName = opAnnotationName(arena, fn_)
+    if opName == "" {
+        return
+    }
+    if !(listContainsString(opAllowedOperators(), opName)) {
+        cx.env.local.diagnostics.push(diagOpNotAllowed(opName, fn_.start, fn_.end))
+        return
+    }
+    opAnnotationCheckSignature(cx, arena, fn_, opName)
+}
+fn opAnnotationName(arena: AstArena, fn_: AstNode) -> String {
+    if fn_.extra < 0 {
+        return ""
+    }
+    let anns = srCollectAnnotationNodes(AstFile {arena}, fn_.extra)
+    for ann in anns {
+        if ann.text != "op" {
+            continue
+        }
+        if ann.children.len() > 0 {
+            let arg = astArenaNodeAt(arena, ann.children[0])
+            return arg.text
+        }
+        return ann.text
+    }
+    ""
+}
+fn opAnnotationCheckSignature(cx: ElabCx, arena: AstArena, fn_: AstNode, opName: String) {
+    let fnName = fn_.text
+    let mut paramCount = 0
+    let mut hasSelf = false
+    for paramIdx in fn_.children {
+        let param = astArenaNodeAt(arena, paramIdx)
+        if param.kind != AstNParam {
+            continue
+        }
+        if param.text == "self" {
+            hasSelf = true
+        } else {
+            paramCount = paramCount + 1
+        }
+    }
+    if opName == "-" && paramCount == 0 && hasSelf {
+        return
+    }
+    if !hasSelf {
+        cx.env.local.diagnostics.push(diagOpAnnotationBadSignature(fnName, opName, fn_.start, fn_.end))
+        return
+    }
+    if paramCount != 1 {
+        cx.env.local.diagnostics.push(diagOpAnnotationBadSignature(fnName, opName, fn_.start, fn_.end))
+        return
     }
 }
