@@ -2865,6 +2865,71 @@ func TestLowerStringSliceLetBindingTypeRecoveredFromIndexExpr(t *testing.T) {
 	}
 }
 
+// TestRecoverOperandTypeBinaryArithRecursesIntoFieldExprs verifies the
+// recovery path for `let size = node.end - node.start` where both
+// operands are FieldExpr with stale `.T` (ErrType after the checker
+// dropped them). recoverOperandType's BinaryExpr case must recurse
+// through the operand FieldExprs via `bs.fieldExprType` instead of
+// trusting the raw `x.Left.Type()`. Without this recovery the
+// let-binding inherits ErrType and stage0 cannot lower the function.
+func TestRecoverOperandTypeBinaryArithRecursesIntoFieldExprs(t *testing.T) {
+	nodeTy := &ir.NamedType{Name: "Node"}
+	fn := &ir.FnDecl{
+		Name:   "spanSize",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "node", Type: nodeTy}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "size",
+					// No annotation — let-stmt should infer from value.
+					Value: &ir.BinaryExpr{
+						Op:    ir.BinSub,
+						T:     ir.ErrTypeVal, // stale: should be Int
+						Left:  &ir.FieldExpr{X: &ir.Ident{Name: "node", Kind: ir.IdentParam, T: nodeTy}, Name: "end", T: ir.ErrTypeVal},
+						Right: &ir.FieldExpr{X: &ir.Ident{Name: "node", Kind: ir.IdentParam, T: nodeTy}, Name: "start", T: ir.ErrTypeVal},
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "size", Kind: ir.IdentLocal, T: ir.TInt},
+		},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.StructDecl{
+				Name: "Node",
+				Fields: []*ir.Field{
+					{Name: "start", Type: ir.TInt},
+					{Name: "end", Type: ir.TInt},
+				},
+			},
+			fn,
+		},
+	}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	mirFn := out.LookupFunction("spanSize")
+	if mirFn == nil {
+		t.Fatal("missing spanSize")
+	}
+	var sizeLocal *Local
+	for _, l := range mirFn.Locals {
+		if l != nil && l.Name == "size" {
+			sizeLocal = l
+			break
+		}
+	}
+	if sizeLocal == nil {
+		t.Fatalf("expected `size` local:\n%s", PrintFunction(mirFn))
+	}
+	if prim, ok := sizeLocal.Type.(*ir.PrimType); !ok || prim.Kind != ir.PrimInt {
+		t.Fatalf("size local should be Int, got %T (%v):\n%s", sizeLocal.Type, sizeLocal.Type, PrintFunction(mirFn))
+	}
+}
+
 func TestLowerStdlibStringsTrimSpaceFreeFn(t *testing.T) {
 	useDecl := &ir.UseDecl{
 		Path:    []string{"std", "strings"},

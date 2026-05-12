@@ -3214,7 +3214,12 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			return ir.TBool
 		}
 		// Arithmetic / bitwise: recover from whichever operand still
-		// carries a concrete type.
+		// carries a concrete type. Try the raw `.Type()` first (cheap),
+		// then recurse through `recoverOperandType` for operands whose
+		// IR-level Type is poisoned but whose shape (FieldExpr,
+		// MethodCall, …) can still be recovered. Without this, `let
+		// size = node.end - node.start` keeps stale ErrType when both
+		// FieldExpr operands had their checker types dropped.
 		lt := x.Left.Type()
 		rt := x.Right.Type()
 		if !isPoisonType(lt) {
@@ -3222,6 +3227,12 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		}
 		if !isPoisonType(rt) {
 			return rt
+		}
+		if recovered := bs.recoverOperandType(x.Left); !isPoisonType(recovered) {
+			return recovered
+		}
+		if recovered := bs.recoverOperandType(x.Right); !isPoisonType(recovered) {
+			return recovered
 		}
 	case *ir.StructLit:
 		// `StructName { ... }` whose checker-side type got poisoned.
