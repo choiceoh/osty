@@ -37,6 +37,7 @@
 
 #if !defined(_WIN32)
 #include <zlib.h>
+#include <execinfo.h>
 #endif
 
 #if !defined(_WIN32)
@@ -7691,6 +7692,32 @@ static OSTY_HOT_INLINE void osty_rt_list_reserve(osty_rt_list *list, int64_t min
     }
     if (list->elem_size == 0) {
         osty_rt_abort("list element size is zero");
+    }
+    /* Bootstrap-debug guard: when stage0-emitted IR funnels a bogus
+     * (garbage / sign-extended / off-by-many) capacity argument into
+     * `osty_rt_list_reserve`, the doubling loop below silently chews
+     * its way to 16 GB before `malloc()` finally returns NULL — making
+     * the failure look like a real OOM instead of a stage0 emit bug.
+     * The 1 GB / 1B-element ceiling here trips on any plausibly-real
+     * workload that's actually buggy long before the host runs out of
+     * memory, and prints the offending capacity + element size so the
+     * IR site is identifiable. Toggle off by setting
+     * `OSTY_RT_LIST_RESERVE_NO_GUARD=1` for workloads that legitimately
+     * need >1 G elements. */
+    if (min_cap > (int64_t)1 << 30 && getenv("OSTY_RT_LIST_RESERVE_NO_GUARD") == NULL) {
+        fprintf(stderr,
+                "osty llvm runtime: list_reserve called with min_cap=%lld "
+                "elem_size=%lld list=%p len=%lld cap=%lld "
+                "(>1G elements)\n",
+                (long long)min_cap, (long long)list->elem_size,
+                (void *)list, (long long)list->len, (long long)list->cap);
+        void *bt[32];
+        int n = backtrace(bt, 32);
+        if (n > 0) {
+            fprintf(stderr, "osty llvm runtime: backtrace (%d frames):\n", n);
+            backtrace_symbols_fd(bt, n, 2);
+        }
+        osty_rt_abort("list allocation request exceeds 1G elements");
     }
     /* Inline-storage fast path. While the requested element count
      * fits in OSTY_RT_LIST_INLINE_BYTES, just bump `cap` to the
