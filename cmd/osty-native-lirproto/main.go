@@ -83,11 +83,14 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		return nativelirproto.Response{Declined: true, Error: err.Error()}, nil
 	}
 	sourcePath, cleanup, err := stageInput(req)
-	if cleanup != nil {
+	if cleanup != nil && os.Getenv("OSTY_LIRPROTO_KEEP_STAGED") == "" {
 		defer cleanup()
 	}
 	if err != nil {
 		return nativelirproto.Response{}, err
+	}
+	if dbg := os.Getenv("OSTY_LIRPROTO_DEBUG"); dbg != "" {
+		fmt.Fprintf(os.Stderr, "[lirproto-debug] staged source=%s\n", sourcePath)
 	}
 
 	pkgName := req.PackageName
