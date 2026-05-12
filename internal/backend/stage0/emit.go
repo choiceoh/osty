@@ -414,12 +414,9 @@ func newModuleCtx(module *mir.Module) *moduleCtx {
 // hint to stderr then calls `abort()`.
 //
 // Returns false when any param or return type can't be classified —
-// such functions stay declined and accept the link gap. Aggregate
-// returns are handled via sret matching how `emitGenericScalarCFG`
-// renders the FIRST-pass aggregate path; tuple/struct/enum returns
-// that need a `%TypeName` reference need the type emitted into
-// `extraDecls` first via `mctx.emitStructDef`, which we skip here
-// (tracked separately for follow-up).
+// such functions stay declined and accept the link gap. Tuple returns
+// use the same by-value `%Tuple` ABI as their callers; named aggregate
+// returns are classified as opaque pointers by scalarFromType.
 func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
 	if fn == nil || mctx == nil || fn.Name == "" {
 		return "", false
@@ -438,23 +435,20 @@ func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
 		}
 		paramLLVM = append(paramLLVM, ty.llvm())
 	}
-	// Return type: void / scalar / aggregate. The aggregate case uses
-	// LLVM's sret calling convention — `define void @sym(ptr sret(%T)
-	// %sret.result, ...)` — matching how `emitDirectAggregateCall`
-	// and friends emit real aggregate returns. The named type
-	// `%T` is registered in `extraDecls` via `classifyAggregateReturnType`'s
-	// `mctx.emitStructDef` call.
+	// Return type: void / scalar / aggregate. Tuple aggregate stubs must
+	// match call sites, which use in-register `%Tuple` returns.
 	retLLVM := "void"
-	useSret := false
-	sretTypeName := ""
 	if fn.ReturnType != nil && !isUnitType(fn.ReturnType) {
 		ty := mctx.scalarFromType(fn.ReturnType, true)
 		if ty == scalarUnknown {
 			// Try aggregate / tuple. classifyAggregateReturnType also
 			// emits the struct type def into extraDecls when needed.
 			if name, _, ok := classifyAggregateReturnType(fn.ReturnType, mctx); ok {
-				useSret = true
-				sretTypeName = name
+				if aggregateReturnIsHeapPtr(fn.ReturnType) {
+					retLLVM = "ptr"
+				} else {
+					retLLVM = "%" + name
+				}
 			} else {
 				// Truly unsupported — bail.
 				return "", false
@@ -464,23 +458,14 @@ func emitDeclineStub(fn *mir.Function, mctx *moduleCtx) (string, bool) {
 		}
 	}
 	var b strings.Builder
-	if useSret {
-		// sret: hidden first parameter is `ptr sret(%T) %sret.result`,
-		// real params follow. Function returns void.
-		fmt.Fprintf(&b, "define void @%s(ptr sret(%%%s) %%sret.result", fn.Name, sretTypeName)
-		for i, p := range paramLLVM {
-			fmt.Fprintf(&b, ", %s %%p%d", p, i)
+	fmt.Fprintf(&b, "define %s @%s(", retLLVM, fn.Name)
+	for i, p := range paramLLVM {
+		if i > 0 {
+			b.WriteString(", ")
 		}
-	} else {
-		fmt.Fprintf(&b, "define %s @%s(", retLLVM, fn.Name)
-		for i, p := range paramLLVM {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			// Use generated names %p0, %p1, … — the body never references
-			// them so any unique LLVM identifier works.
-			fmt.Fprintf(&b, "%s %%p%d", p, i)
-		}
+		// Use generated names %p0, %p1, … — the body never references
+		// them so any unique LLVM identifier works.
+		fmt.Fprintf(&b, "%s %%p%d", p, i)
 	}
 	b.WriteString(") {\n")
 	b.WriteString("entry:\n")
@@ -7930,10 +7915,10 @@ type whileLoopEmitCtx struct {
 	nextSSA    *int
 	aggregates map[mir.LocalID]aggregateBinding
 
-	// aggRetSRet is true when the function uses sret for aggregate
-	// return. In this mode, the return local is a ptr sret slot and
-	// AggregateRV writes go through the enum/struct aggregate emitter.
-	aggRetSRet bool
+	// aggRetValueTypeName is set for generic CFG tuple-return functions.
+	// Tuple call sites use the in-register `%Tuple` ABI, so generic CFG
+	// return terms must return the aggregate value directly.
+	aggRetValueTypeName string
 }
 
 // emitWhileBlock walks an entry / body block and returns the rendered
@@ -9138,30 +9123,22 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		return true
 	}
 
-	// Aggregate return local: dest is an opaque-ptr sret slot.
-	// Handle AggregateRV writes by emitting the aggregate value
-	// and storing it to the sret pointer.
-	if ctx.aggRetSRet && destID == ctx.fn.ReturnLocal {
-		sd, ok := ctx.stack[destID]
-		if !ok || sd.ty != scalarOpaquePtr {
-			return false
-		}
+	// Generic CFG tuple return local: capture the built aggregate value
+	// so the ReturnTerm can emit `ret %Tuple %value`.
+	if ctx.aggRetValueTypeName != "" && destID == ctx.fn.ReturnLocal {
 		agg, ok := ai.Src.(*mir.AggregateRV)
-		if !ok {
+		if !ok || agg.Kind != mir.AggTuple {
 			return false
-		}
-		// For tuple aggregates the value is built inline (not
-		// heap-allocated), so emitWhileAggregateRValue stores it
-		// directly to the sret slot internally.
-		if agg.Kind == mir.AggTuple {
-			_, _, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
-			return ok
 		}
 		expr, ty, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
 		if !ok || ty != scalarOpaquePtr {
 			return false
 		}
-		fmt.Fprintf(out, "  store ptr %s, ptr %%%s\n", expr, sd.name)
+		typeName, fields, ok := classifyAggregateReturnType(destLocal.Type, ctx.mctx)
+		if !ok || typeName != ctx.aggRetValueTypeName {
+			return false
+		}
+		ctx.aggregates[destID] = aggregateBinding{typeName: typeName, reg: expr, fields: fields}
 		return true
 	}
 
@@ -9666,9 +9643,8 @@ func emitWhileAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *
 	if agg != nil && agg.Kind == mir.AggStruct && destType == scalarOpaquePtr {
 		return emitWhileStructAggregateRValue(ctx, out, agg)
 	}
-	// Tuple construction: emit insertvalue chain when the dest is an
-	// sret aggregate-return slot, or build an SSA value for
-	// intermediate tuple locals.
+	// Tuple construction: emit an insertvalue chain and return the SSA
+	// aggregate value to the caller.
 	if agg != nil && agg.Kind == mir.AggTuple {
 		tupleTy, ok := agg.T.(*ir.TupleType)
 		if !ok || tupleTy == nil {
@@ -9700,15 +9676,6 @@ func emitWhileAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *
 			reg := freshReg(ctx)
 			fmt.Fprintf(out, "  %s = insertvalue %%%s %s, %s %s, %d\n", reg, typeN, result, fields[i].llvm(), fe, i)
 			result = reg
-		}
-		// Store the built tuple value directly to the sret slot.
-		if ctx.aggRetSRet {
-			for _, sd := range ctx.stack {
-				if sd.id == ctx.fn.ReturnLocal && sd.ty == scalarOpaquePtr {
-					fmt.Fprintf(out, "  store %%%s %s, ptr %%%s\n", typeN, result, sd.name)
-					break
-				}
-			}
 		}
 		return result, scalarOpaquePtr, true
 	}
@@ -13452,10 +13419,8 @@ type genericCFGPattern struct {
 	syntheticXReturns         map[mir.BlockID]PayloadType
 
 	// aggRetTypeName and aggRetFieldTypes are set when the function's
-	// return type is an aggregate (enum/struct/tuple) that stage0 can
-	// lower via sret. The function signature becomes
-	//   define void @fn(%struct.Name* sret(%struct.Name), ...)
-	// and each block returns void.
+	// return type is a tuple aggregate that stage0 can lower by value.
+	// Named aggregate returns are scalar opaque pointers in generic CFG.
 	aggRetTypeName   string
 	aggRetFieldTypes []scalarType
 }
@@ -13476,8 +13441,8 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	if !pat.returnsVoid {
 		pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 		if pat.retType == scalarUnknown {
-			// Check if the return type is an aggregate (enum/struct/tuple)
-			// that we can handle via sret.
+			// Check if the return type is a tuple aggregate that generic
+			// CFG can return by value.
 			typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
 			if !ok {
 				if targetFn != "" {
@@ -13487,7 +13452,6 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			}
 			pat.aggRetTypeName = typeName
 			pat.aggRetFieldTypes = fieldTypes
-			pat.returnsVoid = true // sret functions return void
 		}
 	}
 	if len(fn.Blocks) == 1 && !genericSingleBlockHasExtendedSurface(fn, fn.Blocks[0]) {
@@ -13538,8 +13502,8 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if tupleTy, ok := l.Type.(*ir.TupleType); ok && tupleTy != nil && genericTupleLocalIsAggregateOnly(fn, l.ID) {
 				continue
 			}
-			// Aggregate return local: skip scalar stack allocation;
-			// the sret path handles it through the aggregates map.
+			// Aggregate return local: skip scalar stack allocation; the
+			// generic tuple path tracks the SSA aggregate separately.
 			if pat.aggRetTypeName != "" && l.ID == fn.ReturnLocal {
 				continue
 			}
@@ -13568,7 +13532,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		pat.stackDecls[i] = sd
 		stack[sd.id] = sd
 	}
-	if !pat.returnsVoid {
+	if !pat.returnsVoid && pat.aggRetTypeName == "" {
 		if _, ok := stack[fn.ReturnLocal]; !ok {
 			if targetFn != "" {
 				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 8)
@@ -13594,14 +13558,8 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		nextSSA:    &nextSSA,
 		aggregates: map[mir.LocalID]aggregateBinding{},
 	}
-	// Aggregate return: the return local is an sret destination.
-	// Bind it as an opaque-ptr stack slot so emitWhileAssign can write
-	// the aggregate value via the sret pointer.
 	if pat.aggRetTypeName != "" {
-		sretName := "sret.result"
-		ctx.stack[fn.ReturnLocal] = stackDecl{id: fn.ReturnLocal, name: sretName, ty: scalarOpaquePtr}
-		ctx.bindings[fn.ReturnLocal] = localBinding{expr: "%" + sretName, ty: scalarOpaquePtr, defined: true, isStack: true}
-		ctx.aggRetSRet = true
+		ctx.aggRetValueTypeName = pat.aggRetTypeName
 	}
 
 	blocks := genericBlockOrder(fn)
@@ -15440,6 +15398,14 @@ func genericBlockOrder(fn *mir.Function) []*mir.BasicBlock {
 func emitGenericTerm(ctx *whileLoopEmitCtx, out *strings.Builder, term mir.Terminator, retType scalarType, returnsVoid bool) bool {
 	switch t := term.(type) {
 	case *mir.ReturnTerm:
+		if ctx.aggRetValueTypeName != "" {
+			agg, ok := ctx.aggregates[ctx.fn.ReturnLocal]
+			if !ok || agg.typeName != ctx.aggRetValueTypeName || agg.reg == "" {
+				return false
+			}
+			fmt.Fprintf(out, "  ret %%%s %s\n", agg.typeName, agg.reg)
+			return true
+		}
 		if returnsVoid {
 			out.WriteString("  ret void\n")
 			return true
@@ -15493,10 +15459,12 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 	}
 
 	if pat.aggRetTypeName != "" {
-		// Aggregate return: emit sret parameter.
-		fmt.Fprintf(out, "define void @%s(ptr sret(%%%s) %%sret.result", fn.Name, pat.aggRetTypeName)
+		fmt.Fprintf(out, "define %%%s @%s(", pat.aggRetTypeName, fn.Name)
 		for i, name := range pat.paramNames {
-			fmt.Fprintf(out, ", %s %%%s", pat.paramTypes[i].llvm(), name)
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 		}
 		out.WriteString(") {\n")
 	} else {
