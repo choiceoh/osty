@@ -220,11 +220,43 @@ func LocateProjectRoot(start string) (string, error) {
 	if root, err := manifest.FindRoot(start); err == nil {
 		return root, nil
 	}
+	// Fallback path: this repo lays out `toolchain/osty.toml` as the
+	// only manifest, with no top-level `osty.toml`. `manifest.FindRoot`
+	// therefore fails when callers (tests, in particular) invoke from
+	// a subdir like `internal/backend/` — walking up never finds a
+	// manifest in any ancestor. Without this branch, the fallback
+	// `abs(start)` becomes a garbage "project root" and downstream
+	// `ComputeKey` chokes on the missing `toolchain/` directory.
+	//
+	// Walk up looking for a directory that contains `toolchain/osty.toml`
+	// (or, equivalently, a `toolchain/` subdir on the bootstrap path)
+	// and treat that as the project root.
+	if root, ok := findToolchainRoot(start); ok {
+		return root, nil
+	}
 	abs, err := filepath.Abs(start)
 	if err != nil {
 		return "", fmt.Errorf("selfhostcache: locate project root: %w", err)
 	}
 	return abs, nil
+}
+
+func findToolchainRoot(start string) (string, bool) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	for {
+		candidate := filepath.Join(dir, "toolchain", "osty.toml")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 // Install copies `binPath` into the cache for `key`. It is
