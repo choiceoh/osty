@@ -2865,6 +2865,67 @@ func TestLowerStringSliceLetBindingTypeRecoveredFromIndexExpr(t *testing.T) {
 	}
 }
 
+// TestLowerLetFieldExprRecoversStaleType verifies the `let kind =
+// token.kind` shape: when the check pass forces FieldExpr.T to a
+// defaulted String (post-unification with an enum-variant comparison
+// RHS), the let-binding must reach into the struct layout for the
+// authoritative field type. Pre-patch the binding inherited the stale
+// String even though the actual field projection produced FrontTokenKind.
+func TestLowerLetFieldExprRecoversStaleType(t *testing.T) {
+	tokenTy := &ir.NamedType{Name: "Token"}
+	kindTy := &ir.NamedType{Name: "TokenKind"}
+	fn := &ir.FnDecl{
+		Name:   "kindOf",
+		Return: kindTy,
+		Params: []*ir.Param{{Name: "tok", Type: tokenTy}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "kind",
+					Value: &ir.FieldExpr{
+						X:    &ir.Ident{Name: "tok", Kind: ir.IdentParam, T: tokenTy},
+						Name: "kind",
+						T:    ir.TString, // stale — should be TokenKind
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "kind", Kind: ir.IdentLocal, T: kindTy},
+		},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.StructDecl{
+				Name:   "Token",
+				Fields: []*ir.Field{{Name: "kind", Type: kindTy}},
+			},
+			&ir.EnumDecl{
+				Name:     "TokenKind",
+				Variants: []*ir.Variant{{Name: "VDot"}, {Name: "VSlash"}},
+			},
+			fn,
+		},
+	}
+	out := Lower(mod)
+	mirFn := out.LookupFunction("kindOf")
+	if mirFn == nil {
+		t.Fatal("missing kindOf")
+	}
+	var kindLocal *Local
+	for _, l := range mirFn.Locals {
+		if l != nil && l.Name == "kind" {
+			kindLocal = l
+			break
+		}
+	}
+	if kindLocal == nil {
+		t.Fatalf("expected `kind` local:\n%s", PrintFunction(mirFn))
+	}
+	if named, ok := kindLocal.Type.(*ir.NamedType); !ok || named.Name != "TokenKind" {
+		t.Fatalf("kind local should be TokenKind, got %T (%v):\n%s", kindLocal.Type, kindLocal.Type, PrintFunction(mirFn))
+	}
+}
+
 // TestRecoverOperandTypeBinaryArithRecursesIntoFieldExprs verifies the
 // recovery path for `let size = node.end - node.start` where both
 // operands are FieldExpr with stale `.T` (ErrType after the checker
