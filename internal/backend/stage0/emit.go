@@ -4260,6 +4260,27 @@ func resolveOperandWithPrelude(fn *mir.Function, op mir.Operand, bindings map[mi
 		}
 		return resolveProjectedFieldOperand(fn, cp.Place, bindings, mctx)
 	}
+	// Stack-allocated locals carry the alloca pointer (e.g. `%idx.slot`)
+	// in `b.expr` and the scalar type in `b.ty`. The while-context
+	// reader (`resolveOperandWithLoad` + `loadFromStack`) materialises
+	// the load before use; the sequential reader (`resolveOperand`)
+	// returns `b.expr` directly, which silently produces calls like
+	// `call ptr @osty_rt_strings_ConcatI64Left(i64 %idx.slot, …)` —
+	// passing the slot pointer where an `i64` value is expected and
+	// failing clang's `defined with type 'ptr' but expected 'i64'`
+	// verifier. Insert the load into the prelude so any caller
+	// (including the sequential classifiers reached from
+	// `forInListIntrinsic` → `classifyStringConcatIntrinsic`) sees a
+	// proper SSA value. The projection / index paths above already
+	// load through their own helpers, so this only fires for the
+	// bare-local case.
+	if cp, ok := op.(*mir.CopyOp); ok && !cp.Place.HasProjections() && mctx != nil {
+		if b, found := bindings[cp.Place.Local]; found && b.defined && b.isStack {
+			reg := mctx.freshTempName("local.load")
+			prelude := fmt.Sprintf("  %s = load %s, ptr %s\n", reg, b.ty.llvm(), b.expr)
+			return prelude, reg, b.ty, true
+		}
+	}
 	expr, ty, ok := resolveOperand(op, bindings, mctx)
 	return "", expr, ty, ok
 }
