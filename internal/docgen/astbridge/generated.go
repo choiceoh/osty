@@ -316,6 +316,10 @@ func AnnotationArgNode(pos Pos, key string, value Expr) AnnotationArg {
 	return &ast.AnnotationArg{PosV: pos, Key: key, Value: value}
 }
 
+func AnnotationComposeArgNode(pos Pos, op string, children []AnnotationArg) AnnotationArg {
+	return &ast.AnnotationArg{PosV: pos, Key: op, Compose: compactAnnotationArgs(children)}
+}
+
 func NamedTypeNode(pos, end Pos, path []string, args []Type) Type {
 	return &ast.NamedType{PosV: pos, EndV: end, Path: compactStrings(path), Args: compactTypes(args)}
 }

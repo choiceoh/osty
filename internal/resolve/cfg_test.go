@@ -48,6 +48,128 @@ fn main() {}
 	}
 }
 
+func TestCfgCompositionAllPasses(t *testing.T) {
+	env := testCfgEnv()
+	env.Features["debug"] = true
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(all(os = "linux", arch = "amd64"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if !pass {
+		t.Fatal("all(os=linux, arch=amd64) should pass on linux/amd64")
+	}
+}
+
+func TestCfgCompositionAllFailsOnOne(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(all(os = "linux", arch = "arm64"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if pass {
+		t.Fatal("all(os=linux, arch=arm64) should fail on amd64")
+	}
+}
+
+func TestCfgCompositionAnyPasses(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(any(os = "windows", arch = "amd64"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if !pass {
+		t.Fatal("any(os=windows, arch=amd64) should pass on linux/amd64")
+	}
+}
+
+func TestCfgCompositionAnyFails(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(any(os = "windows", os = "darwin"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if pass {
+		t.Fatal("any(os=windows, os=darwin) should fail on linux")
+	}
+}
+
+func TestCfgCompositionNot(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(not(os = "windows"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if !pass {
+		t.Fatal("not(os=windows) should pass on linux")
+	}
+}
+
+func TestCfgCompositionNotFails(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(not(os = "linux"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if pass {
+		t.Fatal("not(os=linux) should fail on linux")
+	}
+}
+
+func TestCfgCompositionNestedAllNot(t *testing.T) {
+	env := testCfgEnv() // linux/amd64
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(all(os = "linux", not(arch = "arm64")))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if !pass {
+		t.Fatal("all(os=linux, not(arch=arm64)) should pass on linux/amd64")
+	}
+}
+
+func TestCfgCompositionFeature(t *testing.T) {
+	env := testCfgEnv()
+	env.Features["simd"] = true
+
+	decl := parseSingleDeclForCfgTest(t, `#[cfg(all(os = "linux", feature = "simd"))]
+fn guarded() {}
+`)
+	pass, ds := evaluateCfgOnDecl(decl, env)
+	if len(ds) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", ds)
+	}
+	if !pass {
+		t.Fatal("all(os=linux, feature=simd) should pass when simd is enabled")
+	}
+}
+
 func TestEvaluateCfgOnDeclSuggestsNearestSupportedComposition(t *testing.T) {
 	decl := &ast.FnDecl{Annotations: []*ast.Annotation{{
 		Name: "cfg",
