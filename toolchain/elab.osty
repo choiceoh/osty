@@ -1394,6 +1394,23 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
         }
+        // §A.8 / §17 prelude formatters (`print` / `println` / `eprint`
+        // / `eprintln`) accept `T: ToString` rather than a concrete
+        // `String`. The check side skips the param-type comparison
+        // (see `elabCallArgsMonomorphicWithNames`'s `skipParamCheck`
+        // branch), but historically the call still lowered as a
+        // regular `CoreCall(println, …)` → `MIR CallInstr(println, …)`
+        // → `call void @println(i64 …)` at the LIR Proto layer. That
+        // bare `@println` symbol does not exist in the runtime, so
+        // the link fails with `undefined symbol: println`. Route the
+        // formatter calls through `coreIntrinsic` so the downstream
+        // HIR / MIR / LIR pipeline picks up the intrinsic dispatch
+        // table (`lirLowerMirPrintIntrinsic` → `@osty_rt_io_write`
+        // with the ToString-coercing prelude in front).
+        if elabIsToStringFormatter(baseCallee.text) {
+            let coreIntr = coreIntrinsic(cx.core, baseCallee.text, coreArgs, retTy, node.start, node.end)
+            return ElabResult {node: coreIntr, ty: retTy}
+        }
         let coreCallNode = coreCall(cx.core, coreFn, coreArgs, [], retTy, node.start, node.end)
         return ElabResult {node: coreCallNode, ty: retTy}
     }
