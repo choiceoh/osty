@@ -37,6 +37,14 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // first place — see internal/backend/bootstrap.go).
 const ListAllDeclinesEnv = "OSTY_STAGE0_LIST_ALL_DECLINES"
 
+// IsListAllDeclines reports whether `OSTY_STAGE0_LIST_ALL_DECLINES=1`
+// is set. The bootstrap dispatcher (`emitLLVMFallback`) consults this
+// to decide whether to accept partial IR with declines as a
+// best-effort emit for `osty install-self` on fresh clones.
+func IsListAllDeclines() bool {
+	return listAllDeclinesEnabled()
+}
+
 func listAllDeclinesEnabled() bool {
 	switch strings.TrimSpace(os.Getenv(ListAllDeclinesEnv)) {
 	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
