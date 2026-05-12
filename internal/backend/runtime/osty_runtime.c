@@ -37,7 +37,14 @@
 
 #if !defined(_WIN32)
 #include <zlib.h>
+#if !defined(OSTY_RT_HAS_BACKTRACE) && (defined(__GLIBC__) || defined(__APPLE__))
 #include <execinfo.h>
+#define OSTY_RT_HAS_BACKTRACE 1
+#endif
+#endif
+
+#ifndef OSTY_RT_HAS_BACKTRACE
+#define OSTY_RT_HAS_BACKTRACE 0
 #endif
 
 #if !defined(_WIN32)
@@ -7711,12 +7718,14 @@ static OSTY_HOT_INLINE void osty_rt_list_reserve(osty_rt_list *list, int64_t min
                 "(>1G elements)\n",
                 (long long)min_cap, (long long)list->elem_size,
                 (void *)list, (long long)list->len, (long long)list->cap);
+#if OSTY_RT_HAS_BACKTRACE
         void *bt[32];
         int n = backtrace(bt, 32);
         if (n > 0) {
             fprintf(stderr, "osty llvm runtime: backtrace (%d frames):\n", n);
             backtrace_symbols_fd(bt, n, 2);
         }
+#endif
         osty_rt_abort("list allocation request exceeds 1G elements");
     }
     /* Inline-storage fast path. While the requested element count
