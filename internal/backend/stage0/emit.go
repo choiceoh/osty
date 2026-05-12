@@ -679,6 +679,46 @@ func (m *moduleCtx) freshTempName(label string) string {
 	return name
 }
 
+// aggregateReturnIsHeapPtr reports whether stage0 should box a
+// function's aggregate return value through `osty_rt_stage0_alloc`
+// and return the pointer. Named struct / payloadful-enum returns go
+// through the pointer ABI so the rest of stage0 (which treats user
+// struct/enum values as opaque `ptr` at call sites) sees a matching
+// ABI. Tuple returns keep their in-register struct-by-value ABI
+// because tuple-aware call sites bind the SSA register directly.
+//
+// See: the segfault audit at `frontIdentScan` → `frontScanResult`
+// where `define %FrontScanResult` collided with `call ptr` and LLVM
+// silently lowered the def with sret + the call without. The fix is
+// to make every NamedType aggregate return go through the same
+// pointer convention as the call sites already expect.
+func aggregateReturnIsHeapPtr(retT mir.Type) bool {
+	_, isTuple := retT.(*ir.TupleType)
+	return !isTuple
+}
+
+// emitAggregateValueToPtrReturn closes out an aggregate-returning
+// function body by allocating a managed slot, storing the SSA struct
+// value, and emitting `ret ptr <slot>`. Used by the 6 aggregate
+// emitters whose function signature became `define ptr @fn(...)` —
+// the in-register `%T` value built by the existing insertvalue chain
+// is boxed exactly once at the return seam.
+//
+// `retval` is the SSA register holding the fully populated `%T`
+// struct value (e.g. `%7` or `%retval`). `typeName` is the struct's
+// LLVM type name (without `%`).
+func emitAggregateValueToPtrReturn(out *strings.Builder, mctx *moduleCtx, typeName, retval string) {
+	declareRuntimePrototype(mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	sizePtr := mctx.freshTempName("agg.ret.sizeof.ptr")
+	size := mctx.freshTempName("agg.ret.sizeof")
+	slot := mctx.freshTempName("agg.ret.slot")
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", slot, size)
+	fmt.Fprintf(out, "  store %%%s %s, ptr %s\n", typeName, retval, slot)
+	fmt.Fprintf(out, "  ret ptr %s\n", slot)
+}
+
 // internStringConst interns `value` and returns the LLVM operand
 // expression for it (e.g., `@.str.0`). The byte sequence is emitted
 // into `mctx.extraDecls` as a private unnamed_addr constant
@@ -855,7 +895,7 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 		return emitListLiteralLen(out, fn, pat)
 	}
 	if pat, ok := matchAggregateConstructor(fn, mctx); ok {
-		return emitAggregateConstructor(out, fn, pat)
+		return emitAggregateConstructor(out, fn, pat, mctx)
 	}
 	if pat, ok := matchListLiteralIndexGet(fn, mctx); ok {
 		return emitListLiteralIndexGet(out, fn, pat)
@@ -6061,7 +6101,12 @@ func classifyAggregateBranch(fn *mir.Function, bb *mir.BasicBlock, label string,
 
 func emitIfElseAggregateReturn(out *strings.Builder, fn *mir.Function, pat ifElseAggregatePattern, mctx *moduleCtx) error {
 	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	if heapPtr {
+		fmt.Fprintf(out, "define ptr @%s(", fn.Name)
+	} else {
+		fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	}
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -6099,7 +6144,11 @@ func emitIfElseAggregateReturn(out *strings.Builder, fn *mir.Function, pat ifEls
 		pat.thenBranch.resultExpr, pat.thenBranch.predLabelOut,
 		pat.elseBranch.resultExpr, pat.elseBranch.predLabelOut,
 	)
-	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	if heapPtr {
+		emitAggregateValueToPtrReturn(out, mctx, pat.typeName, "%retval")
+	} else {
+		fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -6370,7 +6419,12 @@ func matchOrShortCircuitIfElseAggregate(fn *mir.Function, mctx *moduleCtx) (orSh
 
 func emitOrShortCircuitIfElseAggregate(out *strings.Builder, fn *mir.Function, pat orShortCircuitPattern, mctx *moduleCtx) error {
 	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	if heapPtr {
+		fmt.Fprintf(out, "define ptr @%s(", fn.Name)
+	} else {
+		fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	}
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -6423,7 +6477,11 @@ func emitOrShortCircuitIfElseAggregate(out *strings.Builder, fn *mir.Function, p
 		pat.thenBranch.resultExpr, pat.thenBranch.predLabelOut,
 		pat.elseBranch.resultExpr, pat.elseBranch.predLabelOut,
 	)
-	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	if heapPtr {
+		emitAggregateValueToPtrReturn(out, mctx, pat.typeName, "%retval")
+	} else {
+		fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -6709,7 +6767,12 @@ func classifyChainAggregateArm(fn *mir.Function, arm, returnBlock *mir.BasicBloc
 
 func emitElseIfChainAggregate(out *strings.Builder, fn *mir.Function, pat elseIfChainPattern, mctx *moduleCtx) error {
 	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	if heapPtr {
+		fmt.Fprintf(out, "define ptr @%s(", fn.Name)
+	} else {
+		fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	}
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -6755,7 +6818,11 @@ func emitElseIfChainAggregate(out *strings.Builder, fn *mir.Function, pat elseIf
 		fmt.Fprintf(out, " [ %s, %%%s ]", arm.resultExpr, arm.label)
 	}
 	out.WriteString("\n")
-	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	if heapPtr {
+		emitAggregateValueToPtrReturn(out, mctx, pat.typeName, "%retval")
+	} else {
+		fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -7062,7 +7129,12 @@ func matchOrChainAggregate(fn *mir.Function, mctx *moduleCtx) (orChainPattern, b
 
 func emitOrChainAggregate(out *strings.Builder, fn *mir.Function, pat orChainPattern, mctx *moduleCtx) error {
 	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	if heapPtr {
+		fmt.Fprintf(out, "define ptr @%s(", fn.Name)
+	} else {
+		fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	}
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -7135,7 +7207,11 @@ func emitOrChainAggregate(out *strings.Builder, fn *mir.Function, pat orChainPat
 		fmt.Fprintf(out, " [ %s, %%%s ]", arm.resultExpr, arm.label)
 	}
 	out.WriteString("\n")
-	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	if heapPtr {
+		emitAggregateValueToPtrReturn(out, mctx, pat.typeName, "%retval")
+	} else {
+		fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -7259,7 +7335,14 @@ func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregat
 	// Always declare the callee prototype before the call site. This keeps
 	// partial/list-all-declines modules parseable even when the referenced
 	// helper function declined and therefore has no local `define` body.
-	declareAggregateFunctionPrototype(mctx, ref.Symbol, typeName, args)
+	// Named-aggregate callees (struct / payloadful-enum) return ptr after
+	// the ABI fix in aggregateReturnIsHeapPtr; tuple callees keep the
+	// in-register struct-by-value ABI.
+	if aggregateReturnIsHeapPtr(fn.ReturnType) {
+		declareAggregateFunctionPrototype(mctx, ref.Symbol, "ptr", args)
+	} else {
+		declareAggregateFunctionPrototype(mctx, ref.Symbol, "%"+typeName, args)
+	}
 
 	pat.callSymbol = ref.Symbol
 	pat.callArgs = args
@@ -7267,11 +7350,12 @@ func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregat
 	return pat, true
 }
 
-// declareAggregateFunctionPrototype emits a `declare %TypeName @symbol(...)`
+// declareAggregateFunctionPrototype emits a `declare <retLLVM> @symbol(...)`
 // line into extraDecls for callee functions whose return type is an aggregate
-// (struct or tuple) rather than a scalar.
-func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, typeName string, args []callArg) {
-	if mctx == nil || symbol == "" || typeName == "" {
+// (struct or tuple) rather than a scalar. `retLLVM` is the literal LLVM
+// return-type token (e.g. `ptr` or `%TypeName`).
+func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, retLLVM string, args []callArg) {
+	if mctx == nil || symbol == "" || retLLVM == "" {
 		return
 	}
 	if mctx.definedFnSyms[symbol] {
@@ -7286,7 +7370,7 @@ func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, typeName string,
 		return
 	}
 	mctx.emittedStructs[key] = true
-	fmt.Fprintf(mctx.extraDecls, "declare %%%s @%s(", typeName, symbol)
+	fmt.Fprintf(mctx.extraDecls, "declare %s @%s(", retLLVM, symbol)
 	for i, a := range args {
 		if i > 0 {
 			mctx.extraDecls.WriteString(", ")
@@ -7298,7 +7382,12 @@ func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, typeName string,
 
 func emitDirectAggregateCall(out *strings.Builder, fn *mir.Function, pat directAggregateCallPattern, mctx *moduleCtx) error {
 	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	retLLVM := "%" + pat.typeName
+	if heapPtr {
+		retLLVM = "ptr"
+	}
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -7309,9 +7398,7 @@ func emitDirectAggregateCall(out *strings.Builder, fn *mir.Function, pat directA
 	out.WriteString("entry:\n")
 
 	out.WriteString(pat.callPrelude)
-	out.WriteString("  %0 = call %")
-	out.WriteString(pat.typeName)
-	fmt.Fprintf(out, " @%s(", pat.callSymbol)
+	fmt.Fprintf(out, "  %%0 = call %s @%s(", retLLVM, pat.callSymbol)
 	for i, a := range pat.callArgs {
 		if i > 0 {
 			out.WriteString(", ")
@@ -7319,7 +7406,7 @@ func emitDirectAggregateCall(out *strings.Builder, fn *mir.Function, pat directA
 		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
 	}
 	out.WriteString(")\n")
-	fmt.Fprintf(out, "  ret %%%s %%0\n", pat.typeName)
+	fmt.Fprintf(out, "  ret %s %%0\n", retLLVM)
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -12984,9 +13071,18 @@ func payloadlessEnumVariantIndexByName(mctx *moduleCtx, enumName, variantName st
 	return 0, false
 }
 
-func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggregateConstructorPattern) error {
-	// Function signature.
-	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggregateConstructorPattern, mctx *moduleCtx) error {
+	// Function signature. Named struct / enum returns are boxed
+	// through `osty_rt_stage0_alloc` and returned as `ptr` so call
+	// sites (which already treat user-named aggregates as opaque
+	// pointers — see `scalarFromTypeInternal`) see a matching ABI.
+	// Tuple returns keep the in-register struct-by-value ABI.
+	heapPtr := aggregateReturnIsHeapPtr(fn.ReturnType)
+	if heapPtr {
+		fmt.Fprintf(out, "define ptr @%s(", fn.Name)
+	} else {
+		fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	}
 	for i, name := range pat.paramNames {
 		if i > 0 {
 			out.WriteString(", ")
@@ -13009,7 +13105,11 @@ func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggreg
 		fmt.Fprintf(out, "  %%%d = insertvalue %%%s %s, %s %s, %d\n", reg, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
 		prev = fmt.Sprintf("%%%d", reg)
 	}
-	fmt.Fprintf(out, "  ret %%%s %s\n", pat.typeName, prev)
+	if heapPtr {
+		emitAggregateValueToPtrReturn(out, mctx, pat.typeName, prev)
+	} else {
+		fmt.Fprintf(out, "  ret %%%s %s\n", pat.typeName, prev)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
