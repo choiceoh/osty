@@ -933,9 +933,21 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	// scalar element type — the recovery returns the original `x.T`
 	// when no slicing/list rule applies, so non-slice indexes are
 	// unaffected.
+	//
+	// The same stale-Type pattern bites `let kind = parser.peek().kind`:
+	// FieldExpr.T may be a defaulted String when the checker's
+	// post-unification step forced kind's type to match an enum-variant
+	// comparison RHS that lowered as a String const. `fieldExprType`
+	// resolves via the struct layout (authoritative) and falls through
+	// to x.T otherwise, so non-stale FieldExprs are unaffected.
 	if let.Value != nil {
-		if ix, ok := let.Value.(*ir.IndexExpr); ok {
-			if recovered := bs.indexExprType(ix); !isPoisonType(recovered) {
+		switch v := let.Value.(type) {
+		case *ir.IndexExpr:
+			if recovered := bs.indexExprType(v); !isPoisonType(recovered) {
+				t = recovered
+			}
+		case *ir.FieldExpr:
+			if recovered := bs.fieldExprType(v); !isPoisonType(recovered) {
 				t = recovered
 			}
 		}
