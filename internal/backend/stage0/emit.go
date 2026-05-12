@@ -13685,6 +13685,44 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			}
 		}
 	}
+	// Mixed-tail inference: even when the function has at least one
+	// explicit `ReturnTerm` block (e.g. an early-`return` guard before
+	// the body), other match arms can still funnel into a single
+	// storage-only-unreachable sink via `goto exit`. Without this pass,
+	// `classifyVoidCallLine` lowers each arm's last call as a void call
+	// and the join block stays `unreachable`, producing the classic
+	// "call elabInferIntLit; int3" crash chain — see the elabInferImpl
+	// match-on-AstNodeKind shape that surfaced as `Trace/breakpoint
+	// trap` across ~56 backend tests once the by-value ABI fix (#1713)
+	// stopped masking it with OOM. Populate `syntheticCallReturns` /
+	// `syntheticIntrinsicReturns` for the arms whose final discarded
+	// call/intrinsic can be re-emitted as `ret <retType> %call_result`,
+	// leaving the explicit-return blocks alone.
+	// Mixed-tail inference: even when the function has at least one
+	// explicit `ReturnTerm` block (e.g. an early-`return` guard before
+	// the body), other match arms can still funnel into a
+	// storage-only-unreachable sink via `goto exit`. Without this pass,
+	// `classifyVoidCallLine` lowers each arm's last call as a void
+	// call and the join block stays `unreachable`, producing the
+	// classic "call elabInferIntLit; int3" crash chain — see the
+	// elabInferImpl match-on-AstNodeKind shape that surfaced as
+	// `Trace/breakpoint trap` across ~56 backend tests once the
+	// by-value ABI fix (#1713) stopped masking it with OOM.
+	//
+	// We tolerate >1 storage-only-unreachable sink (e.g. elabInferImpl
+	// has two: the match-join and an end-of-function `unreachable`)
+	// because the per-arm rewrite only needs *some* such exit to
+	// target — the second sink stays as bare `unreachable`, which is
+	// already correct.
+	if !pat.returnsVoid && pat.syntheticCallReturns == nil && pat.syntheticIntrinsicReturns == nil && pat.syntheticReturns == nil {
+		callMap, intrMap := genericInferMixedTailDiscardedReturns(fn, mctx, pat.retType)
+		if len(callMap) > 0 {
+			pat.syntheticCallReturns = callMap
+		}
+		if len(intrMap) > 0 {
+			pat.syntheticIntrinsicReturns = intrMap
+		}
+	}
 	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
 	for _, bb := range blocks {
 		if bb == nil {
@@ -14139,6 +14177,58 @@ func genericInferDiscardedCallSyntheticReturn(fn *mir.Function, mctx *moduleCtx,
 		return 0, nil, false
 	}
 	return exitID, exitCall, true
+}
+
+// genericInferMixedTailDiscardedReturns rewrites match-arm-style
+// blocks that funnel a discarded `call <ret-type-matching-fn>(...)`
+// (or runtime intrinsic) into a storage-only-`unreachable` sink. The
+// pre-existing `…PreExitDiscarded*SyntheticReturns` helpers require
+// exactly one storage-only-unreachable exit AND no explicit
+// `ReturnTerm` elsewhere; this variant accepts any number of such
+// exits and leaves other blocks alone, which is the shape produced
+// by Osty source that mixes an early-`return` guard with a match
+// whose arms are tail calls (e.g. `elabInferImpl`,
+// `elabPatternMode`, `hirLowerStmt`).
+func genericInferMixedTailDiscardedReturns(fn *mir.Function, mctx *moduleCtx, retType scalarType) (map[mir.BlockID]*mir.CallInstr, map[mir.BlockID]*mir.IntrinsicInstr) {
+	if fn == nil || mctx == nil || retType == scalarUnknown {
+		return nil, nil
+	}
+	exits := map[mir.BlockID]bool{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); !unreachable {
+			continue
+		}
+		if !blockHasOnlyStorageMarkers(bb) {
+			continue
+		}
+		exits[bb.ID] = true
+	}
+	if len(exits) == 0 {
+		return nil, nil
+	}
+	calls := map[mir.BlockID]*mir.CallInstr{}
+	intrs := map[mir.BlockID]*mir.IntrinsicInstr{}
+	for _, bb := range fn.Blocks {
+		if bb == nil || exits[bb.ID] {
+			continue
+		}
+		gt, ok := bb.Term.(*mir.GotoTerm)
+		if !ok || !exits[gt.Target] {
+			continue
+		}
+		if call, ok := finalDiscardedCallInstr(bb); ok && discardedCallCanReturnScalar(fn, call, retType, mctx) {
+			calls[bb.ID] = call
+			continue
+		}
+		if ii, ok := finalDiscardedIntrinsicInstr(bb); ok && discardedIntrinsicCanReturnScalar(ii, retType) {
+			intrs[bb.ID] = ii
+			continue
+		}
+	}
+	return calls, intrs
 }
 
 func genericInferPreExitDiscardedCallSyntheticReturns(fn *mir.Function, mctx *moduleCtx, retType scalarType) (map[mir.BlockID]*mir.CallInstr, bool) {
