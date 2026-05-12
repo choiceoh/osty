@@ -1679,7 +1679,7 @@ func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
 	// whether `(a, b)` / `x + y` / `obj.field` is the block's value, so
 	// classify by shape. Mirrors the additions in `expressionYieldsValue`
 	// — same rationale (always-yields-value syntactic shapes in Osty).
-	switch last.X.(type) {
+	switch x := last.X.(type) {
 	case *ast.TupleExpr, *ast.ListExpr, *ast.MapExpr, *ast.StructLit, *ast.RangeExpr,
 		*ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.BoolLit,
 		*ast.BinaryExpr, *ast.UnaryExpr, *ast.FieldExpr, *ast.IndexExpr,
@@ -1689,6 +1689,22 @@ func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
 		// almost always a value (function references are a theoretical
 		// false positive but harmless — they're FnType-valued).
 		return true
+	case *ast.IfExpr:
+		// Nested `if … { … } else { … }` at the block's tail — recurse
+		// so the enclosing block is still classified as value-yielding
+		// when every nested arm itself yields a value. Without this
+		// case, `if outer { if inner { a } else { b } } else { c }`
+		// drops the outer expression to an IfStmt and the function's
+		// return value never gets wired up. Audit-driven discovery:
+		// `frontStringContentStart` in toolchain/frontend.osty has
+		// exactly this shape (`if kind == FrontRawString { if triple
+		// { start + 4 } else { start + 2 } } else if … else …`).
+		return astIfLooksLikeValueExpr(x)
+	case *ast.MatchExpr:
+		// Same rationale as IfExpr: a trailing `match` at the block's
+		// tail yields a value when at least one arm does. Mirrors the
+		// post-#1645 syntactic-shape classification path for match.
+		return astMatchLooksLikeValueExpr(x)
 	}
 	return false
 }

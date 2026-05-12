@@ -1457,6 +1457,79 @@ fn main() {}`, "List<(Int, Int)>"},
 
 // `if let Some(x) = opt { x } else { default }` is a value expression
 // just like a regular `if ... else`. The pre-fix
+// TestLowerNestedIfElseTailYieldsValue covers the audit-discovered
+// `frontStringContentStart` shape: a function whose body is an
+// outer if-else chain where one of the arms' tail expression is
+// itself a nested if-else. Before #1705+1 (this commit),
+// `astBlockTailLooksLikeValueConstructor`'s syntactic switch
+// omitted `*ast.IfExpr` / `*ast.MatchExpr`, so the outer if
+// dropped to an IfStmt and the function's return local was never
+// assigned → MIR UnreachableTerm → stage0 decline at run time
+// (`osty-self: stage0 declined function: frontStringContentStart`).
+func TestLowerNestedIfElseTailYieldsValue(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			// Direct nested-if mirror of frontStringContentStart's
+			// then-branch shape.
+			"nested_if_in_then_arm",
+			`fn pick(kind: Int, triple: Bool, start: Int) -> Int {
+    if kind == 1 {
+        if triple { start + 4 } else { start + 2 }
+    } else if kind == 2 {
+        start + 2
+    } else if triple {
+        start + 3
+    } else {
+        start + 1
+    }
+}
+fn main() {}`,
+		},
+		{
+			// Nested match at the block tail.
+			"nested_match_in_then_arm",
+			`fn pick(tag: Int, x: Int) -> Int {
+    if tag > 0 {
+        match x {
+            0 -> 100,
+            _ -> 200,
+        }
+    } else {
+        -1
+    }
+}
+fn main() {}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, _ := parser.ParseDiagnostics([]byte(tt.src))
+			res := resolve.ResolveFileSourceDefault([]byte(tt.src), file, stdlib.LoadCached())
+			reg := stdlib.LoadCached()
+			chk := check.SelfhostFile(file, res, check.Opts{
+				Stdlib:        reg,
+				Primitives:    reg.Primitives,
+				ResultMethods: reg.ResultMethods,
+				Source:        []byte(tt.src),
+				Privileged:    true,
+			})
+			mod, _ := Lower("main", file, res, chk)
+			for _, decl := range mod.Decls {
+				fn, ok := decl.(*FnDecl)
+				if !ok || fn.Name == "main" {
+					continue
+				}
+				if fn.Body == nil || fn.Body.Result == nil {
+					t.Errorf("fn %s: body.Result = nil — outer if-else dropped to IfStmt (nested-if/match tail regression)", fn.Name)
+				}
+			}
+		})
+	}
+}
+
 // `astIfLooksLikeValueExpr` short-circuited on `IsIfLet → false`,
 // dropping the trailing if-let expression to ExprStmt → MIR
 // UnreachableTerm. Also covers the case where a then-branch's tail
