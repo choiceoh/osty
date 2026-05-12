@@ -5719,6 +5719,66 @@ func TestStage0P29GenericCFGTupleReturnProjection(t *testing.T) {
 	}
 }
 
+func TestStage0GenericCFGTupleReturnMatchesCallerABI(t *testing.T) {
+	t.Parallel()
+	tupleTy := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TBool}}
+	callee := makeWhileLoopFn(
+		"makePairLoop",
+		tupleTy,
+		[]paramSpec{{name: "keepGoing", ty: ir.TBool}},
+		nil,
+		nil,
+		nil,
+		paramCopy(1, ir.TBool),
+		nil,
+		[]mir.Instr{
+			assign(0, &mir.AggregateRV{
+				Kind:   mir.AggTuple,
+				Fields: []mir.Operand{intConst(7), boolConst(true)},
+				T:      tupleTy,
+			}),
+		},
+	)
+	caller := &mir.Function{
+		Name:        "wrapPair",
+		ReturnType:  tupleTy,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: tupleTy, IsReturn: true},
+			{ID: 1, Name: "keepGoing", Type: ir.TBool, IsParam: true},
+		},
+		Params: []mir.LocalID{1},
+		Entry:  0,
+		Blocks: []*mir.BasicBlock{{
+			ID: 0,
+			Instrs: []mir.Instr{
+				&mir.CallInstr{
+					Dest:   &mir.Place{Local: 0},
+					Callee: &mir.FnRef{Symbol: "makePairLoop", Type: &ir.FnType{Params: []ir.Type{ir.TBool}, Return: tupleTy}},
+					Args:   []mir.Operand{paramCopy(1, ir.TBool)},
+				},
+			},
+			Term: &mir.ReturnTerm{},
+		}},
+	}
+	got := emit(t, trivialMainFn(), callee, caller)
+	for _, want := range []string{
+		"%.tuple.0 = type { i64, i1 }",
+		"define %.tuple.0 @makePairLoop(i1 %keepGoing)",
+		"ret %.tuple.0 %",
+		"define %.tuple.0 @wrapPair(i1 %keepGoing)",
+		"%0 = call %.tuple.0 @makePairLoop(i1 %keepGoing)",
+		"ret %.tuple.0 %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "sret") {
+		t.Fatalf("tuple-return stage0 IR unexpectedly used sret:\n%s", got)
+	}
+}
+
 func TestStage0OptionalAggregateRecoversPoisonTypeFromDest(t *testing.T) {
 	t.Parallel()
 	optString := &ir.OptionalType{Inner: ir.TString}

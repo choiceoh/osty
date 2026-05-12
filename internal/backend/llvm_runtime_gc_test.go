@@ -158,6 +158,18 @@ int main(void) {
 	}
 }
 
+func TestBundledRuntimeListReserveBacktraceIsOptional(t *testing.T) {
+	for _, want := range []string{
+		"#ifndef OSTY_RT_HAS_BACKTRACE\n#define OSTY_RT_HAS_BACKTRACE 0\n#endif",
+		"#if OSTY_RT_HAS_BACKTRACE\n        void *bt[32];",
+		"#endif\n        osty_rt_abort(\"list allocation request exceeds 1G elements\");",
+	} {
+		if !strings.Contains(bundledRuntimeSource, want) {
+			t.Fatalf("bundled runtime source missing %q", want)
+		}
+	}
+}
+
 func TestBundledRuntimeListStringSkipsInlineBarriers(t *testing.T) {
 	parallelClangBackendTest(t)
 
