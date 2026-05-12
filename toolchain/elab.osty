@@ -2045,6 +2045,11 @@ fn elabRecordMethodCalleeType(cx: ElabCx, callNode: AstNode, fieldNode: AstNode,
 /// first-class function value (ident resolves to an `fn(...) -> R`
 /// type). No generic inference is performed — `fn(...)` values carry
 /// no type-parameter metadata after erasure.
+///
+/// G20: when the fn-type carries parameter names and call-site args
+/// include keyword arguments, match names and reorder to positional
+/// form. Keyword args whose name is absent from the fn-type metadata
+/// emit E0769.
 fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected: Int) -> ElabResult {
     let _ = expected
     let callee = elabInfer(cx, node.left)
@@ -2063,6 +2068,36 @@ fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected:
     if wantCount != gotCount {
         cx.env.local.diagnostics.push(diagArgCount("", wantCount, gotCount, node.start, node.end))
     }
+    // G20: detect keyword arguments and reorder to positional form.
+    let fnNames = tyFnParamNamesAt(cx.env.tys, fnTy)
+    let hasKeywordArgs = fnArgListHasKeyword(cx, argIdxs)
+    if hasKeywordArgs {
+        if fnNames.len() == 0 {
+            // Function value has no param-name metadata — keyword
+            // args cannot be resolved. Emit E0769 on the first
+            // keyword arg found.
+            let _ = elabEmitFnValueKeywordDiag(cx, argIdxs, fnNames, node.start, node.end)
+        } else {
+            let reordered = elabReorderKeywordArgs(cx, argIdxs, fnNames, node.start, node.end)
+            if reordered.len() > 0 {
+                let mut coreArgs: List<Int> = []
+                let mut i = 0
+                for argIdx in reordered {
+                    if i < wantCount {
+                        let r = elabCheck(cx, argIdx, checkIntListAt(paramTys, i))
+                        coreArgs.push(r.node)
+                    } else {
+                        let r = elabInfer(cx, argIdx)
+                        coreArgs.push(r.node)
+                    }
+                    i = i + 1
+                }
+                let coreCallNode = coreCall(cx.core, callee.node, coreArgs, [], retTy, node.start, node.end)
+                return ElabResult {node: coreCallNode, ty: retTy}
+            }
+        }
+    }
+    // Fallthrough: positional-only or keyword-reorder failed.
     let mut coreArgs: List<Int> = []
     let mut i = 0
     for argIdx in argIdxs {
@@ -2077,6 +2112,98 @@ fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected:
     }
     let coreCallNode = coreCall(cx.core, callee.node, coreArgs, [], retTy, node.start, node.end)
     ElabResult {node: coreCallNode, ty: retTy}
+}
+
+/// fnArgListHasKeyword returns true when any arg in `argIdxs` is an
+/// AstNField_ node with a non-empty text (call-site keyword argument).
+fn fnArgListHasKeyword(cx: ElabCx, argIdxs: List<Int>) -> Bool {
+    for argIdx in argIdxs {
+        let argNode = astArenaNodeAt(cx.ast.arena, argIdx)
+        if argNode.kind == AstNField_ && argNode.text != "" {
+            return true
+        }
+    }
+    false
+}
+
+/// elabEmitFnValueKeywordDiag emits E0769 for the first keyword arg
+/// when the fn-type carries no parameter names. Returns false so
+/// callers can fall through to positional processing.
+fn elabEmitFnValueKeywordDiag(cx: ElabCx, argIdxs: List<Int>, fnNames: List<String>, start: Int, end: Int) -> Bool {
+    for argIdx in argIdxs {
+        let argNode = astArenaNodeAt(cx.ast.arena, argIdx)
+        if argNode.kind == AstNField_ && argNode.text != "" {
+            cx.env.local.diagnostics.push(diagFnValueKeywordNameMismatch(argNode.text, start, end))
+            return false
+        }
+    }
+    false
+}
+
+/// elabReorderKeywordArgs builds a positional arg list from a mixture
+/// of positional and keyword arguments. Keyword args are matched
+/// against `fnNames` by name; positional args fill remaining slots in
+/// order. Returns empty list on failure (diagnostics already emitted).
+fn elabReorderKeywordArgs(cx: ElabCx, argIdxs: List<Int>, fnNames: List<String>, start: Int, end: Int) -> List<Int> {
+    let nParams = fnNames.len()
+    // reordered[i] = argIdx for param i, or -1 if unfilled.
+    let mut reordered: List<Int> = []
+    let mut i = 0
+    for i < nParams {
+        reordered.push(-1)
+        i = i + 1
+    }
+    let mut seenKeyword = false
+    let mut positionalCursor = 0
+    for argIdx in argIdxs {
+        let argNode = astArenaNodeAt(cx.ast.arena, argIdx)
+        if argNode.kind == AstNField_ && argNode.text != "" {
+            // Keyword argument.
+            seenKeyword = true
+            let name = argNode.text
+            let targetIdx = checkIndexOfString(fnNames, name)
+            if targetIdx < 0 {
+                cx.env.local.diagnostics.push(diagFnValueKeywordNameMismatch(name, start, end))
+                return []
+            }
+            if targetIdx < nParams && checkIntListAt(reordered, targetIdx) >= 0 {
+                // Duplicate keyword arg for same parameter.
+                cx.env.local.diagnostics.push(diagFnValueKeywordNameMismatch(name, start, end))
+                return []
+            }
+            if targetIdx < nParams {
+                reordered[targetIdx] = argIdx
+            }
+        } else if seenKeyword {
+            // Positional argument after a keyword argument — E0733.
+            cx.env.local.diagnostics.push(diagPositionalAfterKw(argNode.start, argNode.end))
+            return []
+        } else {
+            // Positional argument — fill the next unfilled slot.
+            if positionalCursor < nParams {
+                reordered[positionalCursor] = argIdx
+                positionalCursor = positionalCursor + 1
+            }
+        }
+    }
+    // Fill any remaining -1 slots with the next positional arg.
+    // (This shouldn't happen if arg count == param count, but be safe.)
+    let mut result: List<Int> = []
+    for slot in reordered {
+        if slot >= 0 {
+            result.push(slot)
+        }
+    }
+    // If any slots remain unfilled and there are remaining args,
+    // push them in order.
+    let mut j = 0
+    for argIdx in argIdxs {
+        if !(listContainsInt(result, argIdx)) {
+            result.push(argIdx)
+        }
+        j = j + 1
+    }
+    result
 }
 /// elabCallArgs runs the bidirectional loop over a call's arguments:
 /// for each arg, compute the substituted parameter type from the

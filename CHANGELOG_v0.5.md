@@ -59,12 +59,12 @@ bodies exist so the stub checker accepts imports.
   compiler-inserted warmup of `clamp(N/10, 1, 1000)` iterations runs
   before the first clock sample. `?` inside the closure is supported
   and, on `Err` / `None`, prints
-  `bench ?` propagated failure at <abs-path>:<line>` and exits the
-  bench with failure status. `--benchtime <dur>` (Go-style duration,
-  requires `--bench`) activates auto-tuning: a 10-iteration probe
-  estimates the iteration count that fills the duration, clamped to
-  `[10, 100_000_000]`. `--bench` and `--doc` are mutually exclusive
-  (exit 2). In default test mode `bench*` functions are skipped so an
+  `bench \`?\` propagated failure at <abs-path>:<line>`and exits the
+bench with failure status.`--benchtime <dur>`(Go-style duration,
+requires`--bench`) activates auto-tuning: a 10-iteration probe
+estimates the iteration count that fills the duration, clamped to
+`[10, 100_000_000]`. `--bench`and`--doc`are mutually exclusive
+(exit 2). In default test mode`bench\*` functions are skipped so an
   errant benchmark never runs as a regular test.
 - **`testing.snapshot(name, output)`** — golden-file testing. LLVM
   lowers the call to `osty_rt_test_snapshot` which resolves
@@ -81,16 +81,16 @@ bodies exist so the stub checker accepts imports.
   intercept), and [`cmd/osty/test_native.go`](./cmd/osty/test_native.go)
   (CLI flag).
 - **`env.args()` end-to-end through the LLVM backend** — `use std.env`
-  + `let args = env.args()` now compiles to a real argv lookup instead
-  of the LLVM015 "call target *ast.FieldExpr (env.args)" wall.
-  [`internal/llvmgen/stdlib_env_shim.go`](./internal/llvmgen/stdlib_env_shim.go)
-  routes the call to `osty_rt_env_args`, and
-  [`internal/llvmgen/decl.go`](./internal/llvmgen/decl.go) widens `main`
-  to `(i32 argc, ptr argv)` with an `osty_rt_env_args_init` prologue
-  whenever the package imports `std.env`. Each `env.args()` invocation
-  returns a fresh GC-managed `List<String>` (copies of process argv, so
-  the result is safe to mutate). Packages that don't import `std.env`
-  keep the bare `define i32 @main()` signature.
+  - `let args = env.args()` now compiles to a real argv lookup instead
+    of the LLVM015 "call target \*ast.FieldExpr (env.args)" wall.
+    [`internal/llvmgen/stdlib_env_shim.go`](./internal/llvmgen/stdlib_env_shim.go)
+    routes the call to `osty_rt_env_args`, and
+    [`internal/llvmgen/decl.go`](./internal/llvmgen/decl.go) widens `main`
+    to `(i32 argc, ptr argv)` with an `osty_rt_env_args_init` prologue
+    whenever the package imports `std.env`. Each `env.args()` invocation
+    returns a fresh GC-managed `List<String>` (copies of process argv, so
+    the result is safe to mutate). Packages that don't import `std.env`
+    keep the bare `define i32 @main()` signature.
 - **Structural diff on `testing.assertEq`** — on failure, the
   emitted message now includes a line-level diff (`- left` / `+ right`
   with up to 3 context lines) whenever both operands share a
@@ -112,8 +112,8 @@ function (`!llvm.loop.vectorize.enable, i1 true` metadata + per-iteration
 GC safepoint poll skip) without the user typing anything.
 `#[no_vectorize]` opts out, `#[vectorize(scalable, predicate, width = N)]`
 refines strategy. Backend implementation:
-[`internal/llvmgen/`](./internal/llvmgen/) (vectorize_*, parallel_*,
-unroll_*, inline_*, hot_cold_*, target_feature_*, noalias_*, pure_*
+[`internal/llvmgen/`](./internal/llvmgen/) (vectorize*\*, parallel*\_,
+unroll\__, inline*\*, hot_cold*_, target*feature*\_, noalias*\*, pure*\*
 files). Spec: [`LANG_SPEC_v0.5/03-declarations.md`](./LANG_SPEC_v0.5/03-declarations.md)
 §3.8.3–§3.8.12. Soundness gate: `runPureGate` (E0775) at
 [`toolchain/check_gates.osty`](./toolchain/check_gates.osty).
@@ -125,7 +125,7 @@ files). Spec: [`LANG_SPEC_v0.5/03-declarations.md`](./LANG_SPEC_v0.5/03-declarat
 | `E0405`           | Unknown `#[cfg]` key                                                                     | `internal/resolve/cfg.go` |
 | `E0552`           | `pub use` cycle                                                                          | resolver re-export walk   |
 | `E0553`           | `pub use` of a private symbol                                                            | resolver                  |
-| `E0554`           | Duplicate item in scoped `use path:{...}`                                               | resolver                  |
+| `E0554`           | Duplicate item in scoped `use path::{...}`                                               | resolver                  |
 | `E0754`–`E0756`   | `#[op(...)]` signature / duplicate / not-allowed — reserved for G35                      | `internal/diag/codes.go`  |
 | `E0757`           | `as?` on a non-`Error` expression — reserved for G27                                     | `internal/diag/codes.go`  |
 | `E0758` / `E0759` | Enum integer discriminant on payload variant / duplicate discriminant — reserved for G31 | `internal/diag/codes.go`  |
@@ -212,7 +212,7 @@ short; `git log <hash>` for the full message.
 
 - **014a6fe** — `err.downcast::<T>()` LLVM lowering (backend half of G27 / §7.4)
 - **607eb19** — `use path.X as Y` stable-alias rewrite migrates from Go side to the self-hosted parser
-- **af371d1** — `use path:{ ... }` scoped-use handling migrates to the self-hosted parser; `internal/parser/scoped_imports.go` retired
+- **af371d1** — `use path::{ ... }` scoped-use handling migrates to the self-hosted parser; `internal/parser/scoped_imports.go` retired
 - **15cd35a** — `pub use` handling migrates to the self-hosted parser; `internal/parser/pub_use.go` retired
 - **f38be21** — Bootstrap-gen regen pipeline grows a build gate + checker-miss fallback (narrowed #362)
 - **6fd09bb / 23b3f26 / f69461d** — AST-native package checker bridge + prelude-function registration + package-native external checker requests (all three prerequisites for shipping checker halves of the "Not yet shipped" items)

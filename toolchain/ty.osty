@@ -435,6 +435,11 @@ pub fn tyArgsAt(arena: TyArena, idx: Int) -> List<Int> {
 pub fn tyRetAt(arena: TyArena, idx: Int) -> Int {
     tyGet(arena, idx).ret
 }
+/// tyFnParamNamesAt returns the G20 parameter names for a TkFn node.
+/// Returns an empty list for non-TkFn nodes or when no names are stored.
+pub fn tyFnParamNamesAt(arena: TyArena, idx: Int) -> List<String> {
+    tyGet(arena, idx).fnParamNames
+}
 pub fn tyInnerAt(arena: TyArena, idx: Int) -> Int {
     let node = tyGet(arena, idx)
     if node.kind == TkOptional {

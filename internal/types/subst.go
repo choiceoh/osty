@@ -46,7 +46,8 @@ func Substitute(t Type, subs map[*resolve.Symbol]Type) Type {
 		for i, p := range x.Params {
 			params[i] = Substitute(p, subs)
 		}
-		return &FnType{Params: params, Return: Substitute(x.Return, subs)}
+		// G20: carry parameter names through substitution.
+		return &FnType{Params: params, ParamNames: x.ParamNames, Return: Substitute(x.Return, subs)}
 	case *Named:
 		if len(x.Args) == 0 {
 			return x
