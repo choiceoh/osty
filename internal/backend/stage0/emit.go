@@ -2521,6 +2521,9 @@ func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 	if ii.Kind == mir.IntrinsicLikely || ii.Kind == mir.IntrinsicUnlikely {
 		return classifyBranchHintIntrinsic(fn, ii, destID, destType, bindings, mctx)
 	}
+	if ii.Kind == mir.IntrinsicStringSubstring && len(ii.Args) == 2 {
+		return classifyStringSubstring2ArgIntrinsic(fn, ii, destID, destType, bindings, mctx)
+	}
 
 	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
 	if !ok || spec.ret != destType || len(spec.args) != len(ii.Args) {
@@ -2544,6 +2547,51 @@ func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 		callArgs:   args,
 		resultType: destType,
 	}, destID, destType, true
+}
+
+// classifyStringSubstring2ArgIntrinsic handles the `s.substring(start)`
+// shape (one-arg method on `String`) which lowers to a 2-arg MIR
+// IntrinsicStringSubstring. The 3-arg form `s.substring(start, end)`
+// goes through the generic `intrinsicRuntimeCallSpec` dispatcher and
+// maps directly onto `osty_rt_strings_Slice(s, start, end)`. The
+// 2-arg form needs an additional `osty_rt_strings_ByteLen(s)` call
+// to synthesise the implicit `end` argument before the slice call.
+//
+// Surfaced when stage0 audit (`toolchain/check.osty`) tried to emit
+// `collectFnDecl` and its siblings, all of which use the bare
+// `name.substring(idx)` pattern — without this branch every checker
+// function that takes a substring of an identifier name to drop a
+// prefix declined the generic dispatcher's strict arity check.
+func classifyStringSubstring2ArgIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
+	if destType != scalarString || len(ii.Args) != 2 {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	sPrelude, sExpr, sTy, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+	if !ok || sTy != scalarString {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	startPrelude, startExpr, startTy, ok := resolveOperandWithPrelude(fn, ii.Args[1], bindings, mctx)
+	if !ok || startTy != scalarInt {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	declareRuntimePrototype(mctx, "osty_rt_strings_ByteLen", scalarInt, []callArg{{ty: "ptr"}})
+	declareRuntimePrototype(mctx, "osty_rt_strings_Slice", scalarString, []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: "i64"}})
+	endReg := mctx.freshTempName("substring.end")
+	var prelude strings.Builder
+	prelude.WriteString(sPrelude)
+	prelude.WriteString(startPrelude)
+	fmt.Fprintf(&prelude, "  %s = call i64 @osty_rt_strings_ByteLen(ptr %s)\n", endReg, sExpr)
+	return pendingInstr{
+		kind:       instrCall,
+		prelude:    prelude.String(),
+		callSymbol: "osty_rt_strings_Slice",
+		callArgs: []callArg{
+			{expr: sExpr, ty: "ptr"},
+			{expr: startExpr, ty: "i64"},
+			{expr: endReg, ty: "i64"},
+		},
+		resultType: scalarString,
+	}, destID, scalarString, true
 }
 
 func classifyListIsEmptyIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
@@ -8376,6 +8424,25 @@ func emitWhileValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 		}
 		declareRuntimePrototype(ctx.mctx, symbol, scalarInt, []callArg{{ty: "ptr"}, {ty: "ptr"}})
 		return emitWhileOptionI64FromRuntime(ctx, out, destID, symbol, args)
+	case mir.IntrinsicStringSubstring:
+		// 2-arg form `s.substring(start)` — synthesise `end` via
+		// `osty_rt_strings_ByteLen(s)` and route through the same
+		// `osty_rt_strings_Slice` 3-arg call as the explicit-range form.
+		// The 3-arg form falls through to the generic
+		// `intrinsicRuntimeCallSpec` dispatcher below.
+		if destType != scalarString || len(ii.Args) != 2 {
+			break
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarString, scalarInt})
+		if !ok {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, "osty_rt_strings_ByteLen", scalarInt, []callArg{{ty: "ptr"}})
+		declareRuntimePrototype(ctx.mctx, "osty_rt_strings_Slice", scalarString, []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: "i64"}})
+		endReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_strings_ByteLen(ptr %s)\n", endReg, args[0].expr)
+		sliceArgs := []callArg{args[0], args[1], {expr: endReg, ty: "i64"}}
+		return emitWhileCallResult(ctx, out, destID, destType, "osty_rt_strings_Slice", sliceArgs)
 	}
 
 	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
