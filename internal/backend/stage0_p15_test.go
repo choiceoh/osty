@@ -21,11 +21,11 @@ fn main() {}`
 	}
 	wants := []string{
 		"%Point = type { i64, i64 }",
-		"define i64 @pointSum(%Point %p) {",
-		"%0 = extractvalue %Point %p, 0",
-		"%1 = extractvalue %Point %p, 1",
-		"%2 = add i64 %0, %1",
-		"ret i64 %2",
+		"define i64 @pointSum(ptr %p) {",
+		"getelementptr inbounds %Point, ptr %p, i32 0, i32 0",
+		"getelementptr inbounds %Point, ptr %p, i32 0, i32 1",
+		"load i64",
+		"add i64",
 	}
 	got := string(out)
 	for _, want := range wants {
@@ -45,9 +45,9 @@ fn main() {}`
 		t.Fatalf("stage0 declined: %v", err)
 	}
 	wants := []string{
-		"define i1 @boundsOk(%Bounds %b) {",
-		"extractvalue %Bounds %b, 0",
-		"extractvalue %Bounds %b, 1",
+		"define i1 @boundsOk(ptr %b) {",
+		"getelementptr inbounds %Bounds, ptr %b, i32 0, i32 0",
+		"getelementptr inbounds %Bounds, ptr %b, i32 0, i32 1",
 		"icmp slt i64",
 	}
 	got := string(out)
@@ -68,8 +68,8 @@ fn main() {}`
 		t.Fatalf("stage0 declined: %v", err)
 	}
 	wants := []string{
-		"define i64 @bump(%Counter %c) {",
-		"extractvalue %Counter %c, 0",
+		"define i64 @bump(ptr %c) {",
+		"getelementptr inbounds %Counter, ptr %c, i32 0, i32 0",
 		"add i64",
 		", 1",
 	}

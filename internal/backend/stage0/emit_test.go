@@ -2819,10 +2819,11 @@ func TestStage0P25StructFieldListLen(t *testing.T) {
 	for _, want := range []string{
 		"%FrontCheckResult = type { ptr }",
 		"declare i64 @osty_rt_list_len(ptr)",
-		"define i64 @frontCheckResultTypedNodeCount(%FrontCheckResult %result)",
-		"%0 = extractvalue %FrontCheckResult %result, 0",
-		"%1 = call i64 @osty_rt_list_len(ptr %0)",
-		"ret i64 %1",
+		"define i64 @frontCheckResultTypedNodeCount(ptr %result)",
+		"%0 = getelementptr inbounds %FrontCheckResult, ptr %result, i32 0, i32 0",
+		"%1 = load ptr, ptr %0",
+		"%2 = call i64 @osty_rt_list_len(ptr %1)",
+		"ret i64 %2",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)
