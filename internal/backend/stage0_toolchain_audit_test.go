@@ -250,10 +250,15 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		}
 		return buckets[i].key < buckets[j].key
 	})
-	t.Logf("decline reasons (top 30):")
-	max := 30
+	maxDeclines := 30
+	if v := os.Getenv("OSTY_STAGE0_AUDIT_DECLINE_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxDeclines = n
+		}
+	}
+	t.Logf("decline reasons (top %d):", maxDeclines)
 	for i, b := range buckets {
-		if i >= max {
+		if i >= maxDeclines {
 			break
 		}
 		t.Logf("  %4d  %s", b.count, b.key)
