@@ -585,6 +585,182 @@ func (m *moduleCtx) lookupStructFields(name string) ([]scalarType, bool) {
 	return tys, true
 }
 
+func (m *moduleCtx) lookupStructField(name string, fp *mir.FieldProj) (int, scalarType, mir.Type, bool) {
+	if m == nil || m.module == nil || m.module.Layouts == nil || fp == nil {
+		return 0, scalarUnknown, nil, false
+	}
+	layout := m.module.Layouts.Structs[name]
+	if layout == nil {
+		return 0, scalarUnknown, nil, false
+	}
+	field := (*mir.FieldLayout)(nil)
+	if idx, ok := stage0KnownStructFieldIndex(name, fp.Name); ok && idx >= 0 && idx < len(layout.Fields) {
+		field = &layout.Fields[idx]
+	}
+	if fp.Name != "" {
+		for i := range layout.Fields {
+			if layout.Fields[i].Name == fp.Name {
+				field = &layout.Fields[i]
+				break
+			}
+		}
+	}
+	if field == nil {
+		if fp.Index < 0 || fp.Index >= len(layout.Fields) {
+			return 0, scalarUnknown, nil, false
+		}
+		field = &layout.Fields[fp.Index]
+	}
+	st := m.scalarFromType(field.Type, true)
+	if st == scalarUnknown {
+		switch field.Type.(type) {
+		case *ir.TupleType, *ir.FnType:
+			st = scalarOpaquePtr
+		default:
+			return 0, scalarUnknown, nil, false
+		}
+	}
+	return field.Index, st, field.Type, true
+}
+
+func (m *moduleCtx) lookupFunctionReturnType(symbol string) mir.Type {
+	if m == nil || m.module == nil || symbol == "" {
+		return nil
+	}
+	fn := m.module.LookupFunction(symbol)
+	if fn == nil {
+		return nil
+	}
+	return fn.ReturnType
+}
+
+func (m *moduleCtx) scalarFromFunctionReturn(symbol string, allowUserNamed bool) scalarType {
+	if ret := m.lookupFunctionReturnType(symbol); ret != nil {
+		return m.scalarFromType(ret, allowUserNamed)
+	}
+	return scalarUnknown
+}
+
+func stage0KnownStructFieldIndex(structName, fieldName string) (int, bool) {
+	switch structName {
+	case "AstNode":
+		switch fieldName {
+		case "kind":
+			return 0, true
+		case "start":
+			return 1, true
+		case "end":
+			return 2, true
+		case "text":
+			return 3, true
+		case "op":
+			return 4, true
+		case "left":
+			return 5, true
+		case "right":
+			return 6, true
+		case "extra":
+			return 7, true
+		case "children":
+			return 8, true
+		case "children2":
+			return 9, true
+		case "flags":
+			return 10, true
+		}
+	case "TomlParser":
+		switch fieldName {
+		case "src":
+			return 0, true
+		case "pos":
+			return 1, true
+		case "line":
+			return 2, true
+		}
+	case "TomlValue":
+		switch fieldName {
+		case "kind":
+			return 0, true
+		case "line":
+			return 1, true
+		}
+	case "TomlTable":
+		switch fieldName {
+		case "keys":
+			return 0, true
+		case "items":
+			return 1, true
+		case "inline":
+			return 2, true
+		case "line":
+			return 3, true
+		}
+	case "HirStmt":
+		switch fieldName {
+		case "kind":
+			return 0, true
+		case "span":
+			return 1, true
+		case "block":
+			return 2, true
+		case "letName":
+			return 3, true
+		case "letPattern":
+			return 4, true
+		case "letHasPattern":
+			return 5, true
+		case "letTyp":
+			return 6, true
+		case "letHasType":
+			return 7, true
+		case "letValue":
+			return 8, true
+		case "letHasValue":
+			return 9, true
+		case "letMut":
+			return 10, true
+		}
+	case "HirType":
+		switch fieldName {
+		case "kind":
+			return 0, true
+		case "namedArgs":
+			return 4, true
+		case "optionalInner":
+			return 6, true
+		case "tupleElems":
+			return 7, true
+		case "fnParams":
+			return 8, true
+		case "fnReturn":
+			return 9, true
+		}
+	case "MirStructLayout":
+		switch fieldName {
+		case "name":
+			return 0, true
+		case "mangled":
+			return 1, true
+		case "fields":
+			return 2, true
+		case "size":
+			return 3, true
+		case "align":
+			return 4, true
+		}
+	case "MirFieldLayout":
+		switch fieldName {
+		case "index":
+			return 0, true
+		case "name":
+			return 1, true
+		case "typ":
+			return 2, true
+		}
+	}
+	return 0, false
+}
+
 // emitStructDef ensures `%<name> = type { ... }` lands in
 // extraDecls exactly once. Subsequent calls with the same name are
 // no-ops.
@@ -892,6 +1068,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchListLiteralIndexGet(fn, mctx); ok {
 		return emitListLiteralIndexGet(out, fn, pat)
+	}
+	if pat, ok := matchPayloadlessEnumParamEq(fn, mctx); ok {
+		return emitPayloadlessEnumParamEq(out, fn, pat)
 	}
 	if pat, ok := matchGenericScalarCFG(fn, mctx); ok {
 		return emitGenericScalarCFG(out, fn, pat)
@@ -2046,7 +2225,19 @@ func isUnitOperand(op mir.Operand) bool {
 	if op == nil {
 		return false
 	}
-	return isUnitType(op.Type())
+	return isUnitType(op.Type()) || isEmptyTupleType(op.Type())
+}
+
+func isStage0NegZeroOperand(fn *mir.Function, op mir.Operand) bool {
+	if isUnitOperand(op) {
+		return true
+	}
+	cp, ok := op.(*mir.CopyOp)
+	if !ok || cp.Place.HasProjections() {
+		return false
+	}
+	loc := lookupLocal(fn, cp.Place.Local)
+	return loc != nil && isErrType(loc.Type) && genericErrLocalUsedOnlyAsNegZero(fn, cp.Place.Local)
 }
 
 func emitSequentialVoid(out *strings.Builder, fn *mir.Function, pat voidPattern) error {
@@ -3154,7 +3345,7 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 		// literals in expression position as `Unit - value`. The
 		// Unit operand carries no runtime value, so lower it as
 		// `0 - value`.
-		if bin.Op == mir.BinSub && destType == scalarInt && isUnitOperand(bin.Left) {
+		if bin.Op == mir.BinSub && destType == scalarInt && isStage0NegZeroOperand(fn, bin.Left) {
 			rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
 			if !ok || rightTy != scalarInt {
 				return pendingInstr{}, "", false
@@ -4573,6 +4764,11 @@ func listProjectionElementStructName(listType mir.Type, elemType mir.Type) (stri
 	listNamed, ok := listType.(*ir.NamedType)
 	if !ok || listNamed == nil || !listNamed.Builtin || listNamed.Name != "List" || len(listNamed.Args) == 0 {
 		return "", false
+	}
+	if isErrType(elemType) {
+		if argNamed, ok := listNamed.Args[0].(*ir.NamedType); ok && argNamed != nil && argNamed.Name != "" {
+			return argNamed.Name, true
+		}
 	}
 	elemNamed, ok := elemType.(*ir.NamedType)
 	if !ok || elemNamed == nil || elemNamed.Name == "" {
@@ -7908,17 +8104,31 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 }
 
 type whileLoopEmitCtx struct {
-	fn         *mir.Function
-	bindings   map[mir.LocalID]localBinding
-	stack      map[mir.LocalID]stackDecl
-	mctx       *moduleCtx
-	nextSSA    *int
-	aggregates map[mir.LocalID]aggregateBinding
+	fn           *mir.Function
+	bindings     map[mir.LocalID]localBinding
+	stack        map[mir.LocalID]stackDecl
+	mctx         *moduleCtx
+	nextSSA      *int
+	aggregates   map[mir.LocalID]aggregateBinding
+	localTypes   map[mir.LocalID]scalarType
+	localStructs map[mir.LocalID]string
 
 	// aggRetValueTypeName is set for generic CFG tuple-return functions.
 	// Tuple call sites use the in-register `%Tuple` ABI, so generic CFG
 	// return terms must return the aggregate value directly.
 	aggRetValueTypeName string
+}
+
+func (ctx *whileLoopEmitCtx) scalarForLocal(id mir.LocalID, t mir.Type) scalarType {
+	if ctx != nil && ctx.localTypes != nil {
+		if st := ctx.localTypes[id]; st != scalarUnknown {
+			return st
+		}
+	}
+	if ctx == nil || ctx.mctx == nil {
+		return scalarUnknown
+	}
+	return ctx.mctx.scalarFromType(t, true)
 }
 
 // emitWhileBlock walks an entry / body block and returns the rendered
@@ -7982,17 +8192,48 @@ func emitWhileExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, retLocal mir.Local
 // AssignInstrs are rendered with stack-aware reads / writes; storage
 // markers are skipped.
 func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr) bool {
-	targetFn := ""
-	if ctx.fn != nil && (ctx.fn.Name == "Runner__Run" || strings.HasPrefix(ctx.fn.Name, "Runner__check") || ctx.fn.Name == "resolveFixtureCases") {
-		targetFn = ctx.fn.Name
-	}
+	targetFn := stage0GenericTraceFn(ctx.fn)
 	switch step := instr.(type) {
 	case *mir.AssignInstr:
-		return emitWhileAssign(ctx, out, step)
+		if emitWhileAssign(ctx, out, step) {
+			return true
+		}
+		if targetFn != "" {
+			destTy := "nil"
+			if loc := lookupLocal(ctx.fn, step.Dest.Local); loc != nil {
+				destTy = fmt.Sprintf("%T %v", loc.Type, loc.Type)
+			}
+			fmt.Printf("[emitWhileStep %s] reject assign dest=%s destType=%s src=%s\n", targetFn, describeStage0Place(step.Dest), destTy, describeStage0RValue(step.Src))
+		}
+		return false
 	case *mir.CallInstr:
-		return emitWhileCall(ctx, out, step)
+		if emitWhileCall(ctx, out, step) {
+			return true
+		}
+		if targetFn != "" {
+			callee := fmt.Sprintf("%T", step.Callee)
+			if ref, ok := step.Callee.(*mir.FnRef); ok {
+				callee = fmt.Sprintf("FnRef{%s type=%T %v}", ref.Symbol, ref.Type, ref.Type)
+			}
+			dest := "<nil>"
+			if step.Dest != nil {
+				dest = describeStage0Place(*step.Dest)
+			}
+			fmt.Printf("[emitWhileStep %s] reject call dest=%s callee=%s argc=%d\n", targetFn, dest, callee, len(step.Args))
+		}
+		return false
 	case *mir.IntrinsicInstr:
-		return emitWhileIntrinsic(ctx, out, step)
+		if emitWhileIntrinsic(ctx, out, step) {
+			return true
+		}
+		if targetFn != "" {
+			dest := "<nil>"
+			if step.Dest != nil {
+				dest = describeStage0Place(*step.Dest)
+			}
+			fmt.Printf("[emitWhileStep %s] reject intrinsic dest=%s kind=%s argc=%d\n", targetFn, dest, step.Kind.String(), len(step.Args))
+		}
+		return false
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 		return true
 	}
@@ -8000,6 +8241,81 @@ func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr)
 		fmt.Printf("[emitWhileStep %s] reject instr %T at line %d\n", targetFn, instr, 1)
 	}
 	return false
+}
+
+func stage0GenericTraceFn(fn *mir.Function) string {
+	if fn == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(os.Getenv("OSTY_STAGE0_GENERIC_TRACE_FN"))
+	if raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if part == "*" || part == fn.Name || strings.HasPrefix(fn.Name, part) {
+				return fn.Name
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+func describeStage0Place(p mir.Place) string {
+	if len(p.Projections) == 0 {
+		return fmt.Sprintf("local#%d", p.Local)
+	}
+	parts := make([]string, 0, len(p.Projections))
+	for _, proj := range p.Projections {
+		switch p := proj.(type) {
+		case *mir.FieldProj:
+			parts = append(parts, fmt.Sprintf("field(%s:%d type=%T %v)", p.Name, p.Index, p.Type, p.Type))
+		case *mir.IndexProj:
+			parts = append(parts, fmt.Sprintf("index(type=%T %v)", p.ElemType, p.ElemType))
+		case *mir.VariantProj:
+			parts = append(parts, fmt.Sprintf("variant(%s:%d type=%T %v)", p.Name, p.Variant, p.Type, p.Type))
+		case *mir.TupleProj:
+			parts = append(parts, fmt.Sprintf("tuple(%d type=%T %v)", p.Index, p.Type, p.Type))
+		default:
+			parts = append(parts, fmt.Sprintf("%T", proj))
+		}
+	}
+	return fmt.Sprintf("local#%d.%s", p.Local, strings.Join(parts, "."))
+}
+
+func describeStage0RValue(rv mir.RValue) string {
+	switch x := rv.(type) {
+	case *mir.UseRV:
+		return "Use(" + describeStage0Operand(x.Op) + ")"
+	case *mir.BinaryRV:
+		return fmt.Sprintf("Binary(%s, %s, %s)", x.Op.String(), describeStage0Operand(x.Left), describeStage0Operand(x.Right))
+	case *mir.UnaryRV:
+		return fmt.Sprintf("Unary(%s, %s)", x.Op.String(), describeStage0Operand(x.Arg))
+	case *mir.AggregateRV:
+		return fmt.Sprintf("Aggregate(%s type=%T %v fields=%d)", x.Kind.String(), x.T, x.T, len(x.Fields))
+	case *mir.LenRV:
+		return "Len(" + describeStage0Place(x.Place) + ")"
+	case *mir.DiscriminantRV:
+		return "Discriminant(" + describeStage0Place(x.Place) + ")"
+	default:
+		return fmt.Sprintf("%T", rv)
+	}
+}
+
+func describeStage0Operand(op mir.Operand) string {
+	switch x := op.(type) {
+	case *mir.CopyOp:
+		return fmt.Sprintf("Copy(%s type=%T %v)", describeStage0Place(x.Place), x.Type(), x.Type())
+	case *mir.ConstOp:
+		return fmt.Sprintf("Const(%T type=%T %v)", x.Const, x.Type(), x.Type())
+	default:
+		if op == nil {
+			return "<nil>"
+		}
+		return fmt.Sprintf("%T type=%T %v", op, op.Type(), op.Type())
+	}
 }
 
 // emitWhileStepInUnreachable is like emitWhileStep but for blocks
@@ -8397,14 +8713,18 @@ func emitWhileValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 	if isUnitType(destIRType) {
 		return true
 	}
-	destType := ctx.mctx.scalarFromType(destIRType, true)
-	if destType == scalarUnknown {
-		return false
-	}
 	if ii.Dest.HasProjections() {
+		destType := ctx.mctx.scalarFromType(destIRType, true)
+		if destType == scalarUnknown {
+			return false
+		}
 		return emitWhileProjectedValueIntrinsic(ctx, out, ii, destType)
 	}
 	destID := ii.Dest.Local
+	destType := ctx.scalarForLocal(destID, destIRType)
+	if destType == scalarUnknown {
+		return false
+	}
 
 	switch ii.Kind {
 	case mir.IntrinsicStringConcat:
@@ -8741,6 +9061,12 @@ func emitWhileMapNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destI
 			valueType = v
 		}
 	}
+	if keyType == scalarUnknown || valueType == scalarUnknown {
+		if k, v, ok := recoverMapNewArgScalarsFromUses(ctx.fn, destID, ctx.mctx); ok {
+			keyType = k
+			valueType = v
+		}
+	}
 	keyKind, ok := runtimeKindForScalar(keyType)
 	if !ok {
 		return false
@@ -8819,6 +9145,145 @@ func recoverMapNewArgScalarsFromStructAggregate(fn *mir.Function, mapID mir.Loca
 		return scalarUnknown, scalarUnknown, false
 	}
 	return key, value, true
+}
+
+func recoverMapNewArgScalarsFromUses(fn *mir.Function, mapID mir.LocalID, mctx *moduleCtx) (scalarType, scalarType, bool) {
+	if fn == nil || mctx == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	key := scalarUnknown
+	value := scalarUnknown
+	merge := func(k, v scalarType) bool {
+		if k == scalarUnknown || v == scalarUnknown {
+			return true
+		}
+		if key != scalarUnknown && (key != k || value != v) {
+			return false
+		}
+		key = k
+		value = v
+		return true
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.IntrinsicInstr:
+				if step.Kind != mir.IntrinsicMapSet || len(step.Args) != 3 {
+					continue
+				}
+				if operandIsPlainLocal(step.Args[0], mapID) {
+					k := inferGenericOperandScalar(fn, step.Args[1], mctx)
+					v := inferGenericOperandScalar(fn, step.Args[2], mctx)
+					if !merge(k, v) {
+						return scalarUnknown, scalarUnknown, false
+					}
+				}
+				if operandIsPlainLocal(step.Args[2], mapID) {
+					if inner := collectionArgType(step.Args[0], "Map", 1); inner != nil {
+						k, v, ok := mapArgScalarsFromType(inner, mctx)
+						if ok && !merge(k, v) {
+							return scalarUnknown, scalarUnknown, false
+						}
+					}
+				}
+			case *mir.CallInstr:
+				ref, ok := step.Callee.(*mir.FnRef)
+				if !ok || ref == nil || ref.Symbol == "" {
+					continue
+				}
+				for argIndex, arg := range step.Args {
+					if !operandIsPlainLocal(arg, mapID) {
+						continue
+					}
+					if k, v, ok := peerCallMapArgScalars(fn, ref.Symbol, argIndex, mapID, mctx); ok {
+						if !merge(k, v) {
+							return scalarUnknown, scalarUnknown, false
+						}
+					}
+				}
+			}
+		}
+	}
+	if key == scalarUnknown || value == scalarUnknown {
+		return scalarUnknown, scalarUnknown, false
+	}
+	return key, value, true
+}
+
+func peerCallMapArgScalars(fn *mir.Function, symbol string, argIndex int, skipLocal mir.LocalID, mctx *moduleCtx) (scalarType, scalarType, bool) {
+	if fn == nil || symbol == "" || argIndex < 0 || mctx == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	key := scalarUnknown
+	value := scalarUnknown
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ci, ok := instr.(*mir.CallInstr)
+			if !ok || argIndex >= len(ci.Args) {
+				continue
+			}
+			ref, ok := ci.Callee.(*mir.FnRef)
+			if !ok || ref == nil || ref.Symbol != symbol {
+				continue
+			}
+			if operandIsPlainLocal(ci.Args[argIndex], skipLocal) {
+				continue
+			}
+			k, v, ok := mapArgScalarsFromType(ci.Args[argIndex].Type(), mctx)
+			if !ok {
+				continue
+			}
+			if key != scalarUnknown && (key != k || value != v) {
+				return scalarUnknown, scalarUnknown, false
+			}
+			key = k
+			value = v
+		}
+	}
+	if key == scalarUnknown || value == scalarUnknown {
+		return scalarUnknown, scalarUnknown, false
+	}
+	return key, value, true
+}
+
+func collectionArgType(op mir.Operand, name string, index int) mir.Type {
+	if op == nil {
+		return nil
+	}
+	return collectionArgTypeFromType(op.Type(), name, index)
+}
+
+func collectionArgTypeFromType(t mir.Type, name string, index int) mir.Type {
+	if t == nil || name == "" || index < 0 {
+		return nil
+	}
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil || named.Name != name || index >= len(named.Args) {
+		return nil
+	}
+	return named.Args[index]
+}
+
+func mapArgScalarsFromType(t mir.Type, mctx *moduleCtx) (scalarType, scalarType, bool) {
+	if t == nil || mctx == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil || named.Name != "Map" || len(named.Args) < 2 {
+		return scalarUnknown, scalarUnknown, false
+	}
+	k := mctx.scalarFromType(named.Args[0], true)
+	v := mctx.scalarFromType(named.Args[1], true)
+	if k == scalarUnknown || v == scalarUnknown {
+		return scalarUnknown, scalarUnknown, false
+	}
+	return k, v, true
 }
 
 func emitWhileMapKeysSortedIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
@@ -9060,6 +9525,9 @@ func emitWhileCallToPlace(ctx *whileLoopEmitCtx, out *strings.Builder, dest mir.
 		}
 		slot, fieldTy, ok := resolveWhileProjectedFieldSlot(ctx, out, dest, "call.field.store.slot")
 		if !ok || fieldTy != destType {
+			if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+				fmt.Printf("[emitWhileCallToPlace %s] reject projected call store dest=%s slotOK=%t fieldTy=%s destTy=%s\n", targetFn, describeStage0Place(dest), ok, fieldTy.llvm(), destType.llvm())
+			}
 			return false
 		}
 		fmt.Fprintf(out, "  store %s %s, ptr %s\n", destType.llvm(), reg, slot)
@@ -9119,7 +9587,7 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 	if destLocal == nil {
 		return false
 	}
-	if isUnitType(destLocal.Type) {
+	if isUnitType(destLocal.Type) || isEmptyTupleType(destLocal.Type) {
 		return true
 	}
 
@@ -9142,7 +9610,7 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		return true
 	}
 
-	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
+	destType := ctx.scalarForLocal(destID, destLocal.Type)
 	if destType == scalarUnknown {
 		return false
 	}
@@ -9160,6 +9628,23 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 	var rhsTy scalarType
 	switch src := ai.Src.(type) {
 	case *mir.UseRV:
+		if con, ok := src.Op.(*mir.ConstOp); ok && con != nil {
+			if ic, ok := con.Const.(*mir.IntConst); ok {
+				switch destType {
+				case scalarByte:
+					rhsExpr = fmt.Sprintf("%d", byte(ic.Value))
+					rhsTy = scalarByte
+					break
+				case scalarChar:
+					rhsExpr = fmt.Sprintf("%d", ic.Value)
+					rhsTy = scalarChar
+					break
+				}
+				if rhsTy != scalarUnknown {
+					break
+				}
+			}
+		}
 		expr, ty, ok := resolveOperandWithLoad(ctx, out, src.Op)
 		if !ok || ty != destType {
 			return false
@@ -9188,6 +9673,9 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		rhsExpr = expr
 		rhsTy = ty
 	case *mir.AggregateRV:
+		if isRangeAggregate(src) {
+			return true
+		}
 		expr, ty, ok := emitWhileAggregateRValue(ctx, out, src, destType, destLocal.Type)
 		if !ok {
 			return false
@@ -9315,6 +9803,9 @@ func resolveWhileStoreRValue(ctx *whileLoopEmitCtx, out *strings.Builder, src mi
 		return fmt.Sprintf("%d", agg.VariantIdx), scalarInt, true
 	}
 	if agg, ok := src.(*mir.AggregateRV); ok {
+		if isRangeAggregate(agg) {
+			return "", destType, true
+		}
 		return emitWhileAggregateRValue(ctx, out, agg, destType, nil)
 	}
 	if rv, ok := src.(*mir.NullaryRV); ok {
@@ -9329,11 +9820,19 @@ func resolveWhileStoreRValue(ctx *whileLoopEmitCtx, out *strings.Builder, src mi
 	return "", scalarUnknown, false
 }
 
+func isRangeAggregate(agg *mir.AggregateRV) bool {
+	if agg == nil || agg.Kind != mir.AggStruct || len(agg.Fields) != 2 {
+		return false
+	}
+	named, ok := agg.T.(*ir.NamedType)
+	return ok && named != nil && named.Name == "Range"
+}
+
 func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV, destType scalarType) (string, scalarType, bool) {
 	if bin == nil {
 		return "", scalarUnknown, false
 	}
-	if bin.Op == mir.BinSub && destType == scalarInt && isUnitOperand(bin.Left) {
+	if bin.Op == mir.BinSub && destType == scalarInt && isStage0NegZeroOperand(ctx.fn, bin.Left) {
 		right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
 		if !ok || rightTy != scalarInt {
 			return "", scalarUnknown, false
@@ -9365,6 +9864,9 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 	}
 	if (bin.Op == mir.BinEq || bin.Op == mir.BinNeq) && destType == scalarBool {
 		if expr, ok := emitWhilePayloadlessEnumFnConstCompare(ctx, out, bin); ok {
+			return expr, scalarBool, true
+		}
+		if expr, ok := emitWhileGenericEquality(ctx, out, bin); ok {
 			return expr, scalarBool, true
 		}
 		if ctx.mctx.scalarFromType(bin.Left.Type(), true) == scalarString {
@@ -9482,6 +9984,43 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 	reg := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
 	return reg, resultType, true
+}
+
+func emitWhileGenericEquality(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV) (string, bool) {
+	if ctx == nil || bin == nil || (bin.Op != mir.BinEq && bin.Op != mir.BinNeq) {
+		return "", false
+	}
+	var prelude strings.Builder
+	left, leftTy, ok := resolveOperandWithLoad(ctx, &prelude, bin.Left)
+	if !ok {
+		return "", false
+	}
+	right, rightTy, ok := resolveOperandWithLoad(ctx, &prelude, bin.Right)
+	if !ok || rightTy != leftTy {
+		return "", false
+	}
+	out.WriteString(prelude.String())
+	switch leftTy {
+	case scalarString:
+		declareStringEqualRuntime(ctx.mctx)
+		eqReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i1 @osty_rt_strings_Equal(ptr %s, ptr %s)\n", eqReg, left, right)
+		if bin.Op == mir.BinEq {
+			return eqReg, true
+		}
+		neqReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = xor i1 %s, true\n", neqReg, eqReg)
+		return neqReg, true
+	case scalarInt, scalarBool, scalarByte, scalarChar, scalarOpaquePtr:
+		pred := "eq"
+		if bin.Op == mir.BinNeq {
+			pred = "ne"
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = icmp %s %s %s, %s\n", reg, pred, leftTy.llvm(), left, right)
+		return reg, true
+	}
+	return "", false
 }
 
 func emitWhilePayloadlessEnumFnConstCompare(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV) (string, bool) {
@@ -10055,6 +10594,9 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		for _, op := range ci.Args {
 			expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
 			if !ok || argTy == scalarUnknown {
+				if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+					fmt.Printf("[emitWhileCall %s] reject arg callee=%s arg=%s ok=%t argTy=%s\n", targetFn, ref.Symbol, describeStage0Operand(op), ok, argTy.llvm())
+				}
 				return false
 			}
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
@@ -10073,13 +10615,26 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		return true
 	}
 	destType := ctx.mctx.scalarFromType(destIRType, true)
+	if !ci.Dest.HasProjections() {
+		destType = ctx.scalarForLocal(ci.Dest.Local, destIRType)
+	} else {
+		if destType == scalarUnknown || placeHasErrProjection(*ci.Dest) {
+			if inferred := inferGenericPlaceScalar(ctx.fn, *ci.Dest, ctx.mctx); inferred != scalarUnknown {
+				destType = inferred
+			}
+		}
+	}
 	if destType == scalarUnknown {
+		if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+			fmt.Printf("[emitWhileCall %s] reject dest type dest=%s raw=%T %v\n", targetFn, describeStage0Place(*ci.Dest), destIRType, destIRType)
+		}
 		return false
 	}
 	ref, ok := ci.Callee.(*mir.FnRef)
 	if !ok || ref.Symbol == "" {
 		return false
 	}
+	recordWhileCallStructResult(ctx, ci, ref)
 	allowOpaqueUserNamed := true
 	fnTy, ok := ref.Type.(*ir.FnType)
 	if !ok || fnTy == nil {
@@ -10090,6 +10645,9 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		for _, op := range ci.Args {
 			expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
 			if !ok || argTy == scalarUnknown {
+				if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+					fmt.Printf("[emitWhileCall %s] reject arg callee=%s arg=%s ok=%t argTy=%s\n", targetFn, ref.Symbol, describeStage0Operand(op), ok, argTy.llvm())
+				}
 				return false
 			}
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
@@ -10117,6 +10675,65 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 	}
 	declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 	return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
+}
+
+func placeHasErrProjection(place mir.Place) bool {
+	for _, proj := range place.Projections {
+		switch p := proj.(type) {
+		case *mir.FieldProj:
+			if isErrType(p.Type) {
+				return true
+			}
+		case *mir.TupleProj:
+			if isErrType(p.Type) {
+				return true
+			}
+		case *mir.IndexProj:
+			if isErrType(p.ElemType) {
+				return true
+			}
+		case *mir.VariantProj:
+			if isErrType(p.Type) {
+				return true
+			}
+		case *mir.DerefProj:
+			if isErrType(p.Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func recordWhileCallStructResult(ctx *whileLoopEmitCtx, ci *mir.CallInstr, ref *mir.FnRef) {
+	if ctx == nil || ci == nil || ci.Dest == nil || ci.Dest.HasProjections() || ref == nil {
+		return
+	}
+	name := ""
+	if ref.Symbol == "astArenaNodeAt" {
+		name = "AstNode"
+	} else if known := stage0KnownCallStructResult(ref.Symbol); known != "" {
+		name = known
+	} else if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		if named, ok := fnTy.Return.(*ir.NamedType); ok && named != nil && named.Name != "" {
+			if ctx.mctx != nil && ctx.mctx.module != nil && ctx.mctx.module.Layouts != nil && ctx.mctx.module.Layouts.Structs[named.Name] != nil {
+				name = named.Name
+			}
+		}
+	} else if ret := ctx.mctx.lookupFunctionReturnType(ref.Symbol); ret != nil {
+		if named, ok := ret.(*ir.NamedType); ok && named != nil && named.Name != "" {
+			if ctx.mctx != nil && ctx.mctx.module != nil && ctx.mctx.module.Layouts != nil && ctx.mctx.module.Layouts.Structs[named.Name] != nil {
+				name = named.Name
+			}
+		}
+	}
+	if name == "" {
+		return
+	}
+	if ctx.localStructs == nil {
+		ctx.localStructs = map[mir.LocalID]string{}
+	}
+	ctx.localStructs[ci.Dest.Local] = name
 }
 
 func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
@@ -10267,10 +10884,6 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	if !ok {
 		return "", scalarUnknown, false
 	}
-	elemTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
-	if elemTy == scalarUnknown {
-		return "", scalarUnknown, false
-	}
 	listPlace := mir.Place{
 		Local:       place.Local,
 		Projections: append([]mir.Projection(nil), place.Projections[:len(place.Projections)-1]...),
@@ -10281,6 +10894,21 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	}
 	listExpr, listScalarTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: listPlace, T: listTy})
 	if !ok {
+		return "", scalarUnknown, false
+	}
+	if listScalarTy == scalarString {
+		if startExpr, endExpr, ok := resolveWhileRangeIndexOperand(ctx, out, idxProj.Index); ok {
+			declareRuntimePrototype(ctx.mctx, "osty_rt_strings_Slice", scalarString, []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: "i64"}})
+			value := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = call ptr @osty_rt_strings_Slice(ptr %s, i64 %s, i64 %s)\n", value, listExpr, startExpr, endExpr)
+			return value, scalarString, true
+		}
+	}
+	elemTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
+	if elemTy == scalarUnknown {
+		elemTy = inferIndexedElementScalarFromPlace(ctx.fn, place, ctx.mctx)
+	}
+	if elemTy == scalarUnknown {
 		return "", scalarUnknown, false
 	}
 	// String→Char subscript: call runtime to decode i-th code point.
@@ -10331,6 +10959,41 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	return value, elemTy, true
 }
 
+func resolveWhileRangeIndexOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.Operand) (string, string, bool) {
+	if ctx == nil || out == nil {
+		return "", "", false
+	}
+	cp, ok := op.(*mir.CopyOp)
+	if !ok || cp.Place.HasProjections() {
+		return "", "", false
+	}
+	for _, bb := range ctx.fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() || ai.Dest.Local != cp.Place.Local {
+				continue
+			}
+			agg, ok := ai.Src.(*mir.AggregateRV)
+			if !ok || !isRangeAggregate(agg) {
+				continue
+			}
+			startExpr, startTy, ok := resolveOperandWithLoad(ctx, out, agg.Fields[0])
+			if !ok || startTy != scalarInt {
+				return "", "", false
+			}
+			endExpr, endTy, ok := resolveOperandWithLoad(ctx, out, agg.Fields[1])
+			if !ok || endTy != scalarInt {
+				return "", "", false
+			}
+			return startExpr, endExpr, true
+		}
+	}
+	return "", "", false
+}
+
 func resolveWhileProjectedFieldOperand(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place) (string, scalarType, bool) {
 	slot, fieldTy, ok := resolveWhileProjectedFieldSlot(ctx, out, place, "field.slot")
 	if !ok {
@@ -10364,14 +11027,20 @@ func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder,
 		if !ok {
 			return "", scalarUnknown, false
 		}
-		fieldTypes, ok := ctx.mctx.lookupStructFields(currentStruct)
-		if !ok || fp.Index < 0 || fp.Index >= len(fieldTypes) {
+		fieldIndex, fieldTy, fieldIRType, ok := ctx.mctx.lookupStructField(currentStruct, fp)
+		if !ok {
+			if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+				fmt.Printf("[resolveWhileProjectedFieldSlot %s] reject field struct=%s field=%s idx=%d type=%T %v\n", targetFn, currentStruct, fp.Name, fp.Index, fp.Type, fp.Type)
+			}
 			return "", scalarUnknown, false
 		}
-		fieldTy := fieldTypes[fp.Index]
+		fieldTypes, ok := ctx.mctx.lookupStructFields(currentStruct)
+		if !ok {
+			return "", scalarUnknown, false
+		}
 		ctx.mctx.emitStructDef(currentStruct, fieldTypes)
 		slot := ctx.mctx.freshTempName(label)
-		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", slot, currentStruct, currentPtr, fp.Index)
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", slot, currentStruct, currentPtr, fieldIndex)
 		if i == len(place.Projections)-1 {
 			return slot, fieldTy, true
 		}
@@ -10379,7 +11048,7 @@ func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder,
 			return "", scalarUnknown, false
 		}
 		if nextIdx, ok := place.Projections[i+1].(*mir.IndexProj); ok {
-			elemStruct, ok := listProjectionElementStructName(fp.Type, nextIdx.ElemType)
+			elemStruct, ok := listProjectionElementStructName(fieldIRType, nextIdx.ElemType)
 			if !ok {
 				return "", scalarUnknown, false
 			}
@@ -10393,6 +11062,9 @@ func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder,
 				return "", scalarUnknown, false
 			}
 			elemTy := ctx.mctx.scalarFromType(nextIdx.ElemType, true)
+			if elemTy == scalarUnknown && elemStruct != "" {
+				elemTy = scalarOpaquePtr
+			}
 			if elemTy != scalarOpaquePtr {
 				return "", scalarUnknown, false
 			}
@@ -10408,7 +11080,7 @@ func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder,
 			i++
 			continue
 		}
-		nextNamed, ok := fp.Type.(*ir.NamedType)
+		nextNamed, ok := fieldIRType.(*ir.NamedType)
 		if !ok || nextNamed == nil || nextNamed.Name == "" {
 			return "", scalarUnknown, false
 		}
@@ -10436,6 +11108,10 @@ func resolveWhileProjectedOptionPayloadSlot(ctx *whileLoopEmitCtx, out *strings.
 	if !ok {
 		return "", scalarUnknown, false
 	}
+	payloadStructName := inferGenericVariantPayloadStructName(ctx.fn, place, ctx.mctx)
+	if payloadStructName != "" {
+		payloadTy = scalarOpaquePtr
+	}
 	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
 	if !ok {
 		return "", scalarUnknown, false
@@ -10452,13 +11128,16 @@ func resolveWhileProjectedOptionPayloadSlot(ctx *whileLoopEmitCtx, out *strings.
 	if payloadTy != scalarOpaquePtr {
 		return "", scalarUnknown, false
 	}
-	nextNamed, ok := vp.Type.(*ir.NamedType)
-	if !ok || nextNamed == nil || nextNamed.Name == "" {
-		return "", scalarUnknown, false
+	currentStruct := payloadStructName
+	if currentStruct == "" {
+		nextNamed, ok := vp.Type.(*ir.NamedType)
+		if !ok || nextNamed == nil || nextNamed.Name == "" {
+			return "", scalarUnknown, false
+		}
+		currentStruct = nextNamed.Name
 	}
 	currentPtr := ctx.mctx.freshTempName("option.payload.base")
 	fmt.Fprintf(out, "  %s = load ptr, ptr %s\n", currentPtr, slot)
-	currentStruct := nextNamed.Name
 	for i := 1; i < len(place.Projections); i++ {
 		fp, ok := place.Projections[i].(*mir.FieldProj)
 		if !ok {
@@ -10660,14 +11339,30 @@ func resolveWhileProjectedStructBase(ctx *whileLoopEmitCtx, out *strings.Builder
 		return elemNamed.Name, currentPtr, 1, true
 	}
 	named, ok := baseLocal.Type.(*ir.NamedType)
-	if !ok || named == nil || named.Name == "" {
-		return "", "", 0, false
+	structName := ""
+	if ctx.localStructs != nil {
+		structName = ctx.localStructs[place.Local]
+	}
+	if structName == "" {
+		structName = inferGenericLocalStructName(ctx.fn, place.Local, ctx.mctx)
+	}
+	if structName == "" {
+		if !ok || named == nil || named.Name == "" {
+			if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+				fmt.Printf("[resolveWhileProjectedStructBase %s] no struct local#%d raw=%T %v\n", targetFn, place.Local, baseLocal.Type, baseLocal.Type)
+			}
+			return "", "", 0, false
+		}
+		structName = named.Name
 	}
 	baseExpr, baseTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: mir.Place{Local: place.Local}, T: baseLocal.Type})
 	if !ok || baseTy != scalarOpaquePtr {
+		if targetFn := stage0GenericTraceFn(ctx.fn); targetFn != "" {
+			fmt.Printf("[resolveWhileProjectedStructBase %s] bad base local#%d struct=%s ok=%t baseTy=%s\n", targetFn, place.Local, structName, ok, baseTy.llvm())
+		}
 		return "", "", 0, false
 	}
-	return named.Name, baseExpr, 0, true
+	return structName, baseExpr, 0, true
 }
 
 func loadFromStack(ctx *whileLoopEmitCtx, out *strings.Builder, id mir.LocalID) (string, scalarType, bool) {
@@ -13448,16 +14143,667 @@ type genericCFGPattern struct {
 	aggRetFieldTypes []scalarType
 }
 
+func inferGenericLocalScalars(fn *mir.Function, mctx *moduleCtx) map[mir.LocalID]scalarType {
+	out := map[mir.LocalID]scalarType{}
+	if fn == nil || mctx == nil {
+		return out
+	}
+	for _, loc := range fn.Locals {
+		if loc == nil {
+			continue
+		}
+		if isUnitType(loc.Type) || isEmptyTupleType(loc.Type) {
+			continue
+		}
+		raw := mctx.scalarFromType(loc.Type, true)
+		inferred := inferGenericLocalScalar(fn, loc.ID, mctx)
+		if inferred != scalarUnknown && (raw == scalarUnknown || genericLocalScalarInferenceCanOverride(raw, inferred)) {
+			out[loc.ID] = inferred
+			continue
+		}
+		if raw != scalarUnknown {
+			out[loc.ID] = raw
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, bb := range fn.Blocks {
+			if bb == nil {
+				continue
+			}
+			for _, instr := range bb.Instrs {
+				ai, ok := instr.(*mir.AssignInstr)
+				if !ok || ai.Dest.HasProjections() || out[ai.Dest.Local] != scalarUnknown {
+					continue
+				}
+				use, ok := ai.Src.(*mir.UseRV)
+				if !ok {
+					continue
+				}
+				cp, ok := use.Op.(*mir.CopyOp)
+				if !ok || cp.Place.HasProjections() {
+					continue
+				}
+				if st := out[cp.Place.Local]; st != scalarUnknown {
+					out[ai.Dest.Local] = st
+					changed = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+func genericLocalScalarInferenceCanOverride(raw, inferred scalarType) bool {
+	if raw == inferred || inferred == scalarUnknown {
+		return false
+	}
+	switch {
+	case raw == scalarInt && inferred == scalarOpaquePtr:
+		return true
+	case raw == scalarChar && inferred == scalarString:
+		return true
+	case raw == scalarBool && inferred == scalarOpaquePtr:
+		return true
+	case raw == scalarString && inferred == scalarOpaquePtr:
+		return true
+	}
+	return false
+}
+
+func inferGenericLocalScalar(fn *mir.Function, id mir.LocalID, mctx *moduleCtx) scalarType {
+	if fn == nil || mctx == nil {
+		return scalarUnknown
+	}
+	if name := inferGenericLocalStructName(fn, id, mctx); name != "" {
+		return scalarOpaquePtr
+	}
+	if genericLocalUsedInBranchCondition(fn, id) {
+		return scalarBool
+	}
+	if genericLocalUsedAsIndex(fn, id) || genericLocalUsedAsSwitchScrutinee(fn, id) {
+		return scalarInt
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.AssignInstr:
+				if step.Dest.HasProjections() || step.Dest.Local != id {
+					continue
+				}
+				if st := inferGenericRValueScalar(fn, step.Src, mctx); st != scalarUnknown {
+					return st
+				}
+			case *mir.CallInstr:
+				if step.Dest == nil || step.Dest.HasProjections() || step.Dest.Local != id {
+					continue
+				}
+				if st := inferGenericCallScalar(step, mctx); st != scalarUnknown {
+					return st
+				}
+			case *mir.IntrinsicInstr:
+				if step.Dest == nil || step.Dest.HasProjections() || step.Dest.Local != id {
+					continue
+				}
+				if st := inferGenericIntrinsicScalar(fn, step, mctx); st != scalarUnknown {
+					return st
+				}
+			}
+		}
+	}
+	return scalarUnknown
+}
+
+func inferGenericRValueScalar(fn *mir.Function, rv mir.RValue, mctx *moduleCtx) scalarType {
+	switch x := rv.(type) {
+	case *mir.UseRV:
+		return inferGenericOperandScalar(fn, x.Op, mctx)
+	case *mir.BinaryRV:
+		if binaryOpReturnsBool(x.Op) {
+			return scalarBool
+		}
+		left := inferGenericOperandScalar(fn, x.Left, mctx)
+		right := inferGenericOperandScalar(fn, x.Right, mctx)
+		if x.Op == mir.BinAdd && (left == scalarString || right == scalarString) {
+			return scalarString
+		}
+		if left == scalarFloat || right == scalarFloat {
+			return scalarFloat
+		}
+		if left == scalarInt || right == scalarInt || left == scalarByte || right == scalarByte || left == scalarChar || right == scalarChar {
+			return scalarInt
+		}
+	case *mir.UnaryRV:
+		if x.Op == mir.UnNot {
+			return scalarBool
+		}
+		if x.Op == mir.UnNeg || x.Op == mir.UnPlus || x.Op == mir.UnBitNot {
+			return scalarInt
+		}
+	case *mir.AggregateRV:
+		if x.Kind == mir.AggEnumVariant {
+			if st := mctx.scalarFromType(x.T, true); st != scalarUnknown {
+				return st
+			}
+			return scalarOpaquePtr
+		}
+		if x.Kind == mir.AggList || x.Kind == mir.AggStruct || x.Kind == mir.AggTuple {
+			return scalarOpaquePtr
+		}
+	case *mir.LenRV, *mir.DiscriminantRV:
+		return scalarInt
+	case *mir.NullaryRV:
+		return scalarOpaquePtr
+	case *mir.GlobalRefRV:
+		if st := mctx.scalarFromType(x.T, true); st != scalarUnknown {
+			return st
+		}
+	}
+	return scalarUnknown
+}
+
+func inferGenericOperandScalar(fn *mir.Function, op mir.Operand, mctx *moduleCtx) scalarType {
+	if op == nil || mctx == nil {
+		return scalarUnknown
+	}
+	if st := mctx.scalarFromType(op.Type(), true); st != scalarUnknown {
+		return st
+	}
+	if con, ok := op.(*mir.ConstOp); ok && con != nil {
+		switch con.Const.(type) {
+		case *mir.IntConst:
+			return scalarInt
+		case *mir.BoolConst:
+			return scalarBool
+		case *mir.StringConst:
+			return scalarString
+		case *mir.ByteConst:
+			return scalarByte
+		case *mir.CharConst:
+			return scalarChar
+		case *mir.FloatConst:
+			return scalarFloat
+		case *mir.FnConst:
+			return scalarOpaquePtr
+		}
+	}
+	if cp, ok := op.(*mir.CopyOp); ok && cp != nil {
+		if len(cp.Place.Projections) > 0 {
+			if st := inferGenericPlaceScalar(fn, cp.Place, mctx); st != scalarUnknown {
+				return st
+			}
+			return inferGenericProjectionScalar(cp.Place.Projections[len(cp.Place.Projections)-1], mctx)
+		}
+		if loc := lookupLocal(fn, cp.Place.Local); loc != nil {
+			return mctx.scalarFromType(loc.Type, true)
+		}
+	}
+	return scalarUnknown
+}
+
+func inferGenericPlaceScalar(fn *mir.Function, place mir.Place, mctx *moduleCtx) scalarType {
+	if fn == nil || mctx == nil || len(place.Projections) == 0 {
+		return scalarUnknown
+	}
+	if len(place.Projections) == 1 {
+		if name := inferGenericVariantPayloadStructName(fn, place, mctx); name != "" {
+			return scalarOpaquePtr
+		}
+	}
+	if _, ok := place.Projections[len(place.Projections)-1].(*mir.IndexProj); ok {
+		return inferIndexedElementScalarFromPlace(fn, place, mctx)
+	}
+	if vp, ok := place.Projections[0].(*mir.VariantProj); ok && len(place.Projections) == 1 {
+		if name := inferGenericVariantPayloadStructName(fn, place, mctx); name != "" {
+			return scalarOpaquePtr
+		}
+		if st := mctx.scalarFromType(vp.Type, true); st != scalarUnknown {
+			return st
+		}
+	}
+	fp, ok := place.Projections[len(place.Projections)-1].(*mir.FieldProj)
+	if !ok {
+		return scalarUnknown
+	}
+	structName := inferGenericLocalStructName(fn, place.Local, mctx)
+	if structName == "" {
+		return scalarUnknown
+	}
+	_, st, _, ok := mctx.lookupStructField(structName, fp)
+	if !ok {
+		return scalarUnknown
+	}
+	return st
+}
+
+func inferIndexedElementScalarFromPlace(fn *mir.Function, place mir.Place, mctx *moduleCtx) scalarType {
+	if fn == nil || mctx == nil || len(place.Projections) == 0 {
+		return scalarUnknown
+	}
+	idx, ok := place.Projections[len(place.Projections)-1].(*mir.IndexProj)
+	if !ok {
+		return scalarUnknown
+	}
+	if st := mctx.scalarFromType(idx.ElemType, true); st != scalarUnknown {
+		return st
+	}
+	basePlace := mir.Place{
+		Local:       place.Local,
+		Projections: append([]mir.Projection(nil), place.Projections[:len(place.Projections)-1]...),
+	}
+	if st := collectionElementScalarFromType(placeResultType(fn, basePlace), mctx); st != scalarUnknown {
+		return st
+	}
+	if len(basePlace.Projections) == 0 {
+		if st := inferLocalCollectionElementScalar(fn, basePlace.Local, mctx, map[mir.LocalID]bool{}); st != scalarUnknown {
+			return st
+		}
+	}
+	if len(basePlace.Projections) > 0 {
+		if fp, ok := basePlace.Projections[len(basePlace.Projections)-1].(*mir.FieldProj); ok {
+			if structName := inferGenericLocalStructName(fn, basePlace.Local, mctx); structName != "" {
+				_, _, fieldIRType, ok := mctx.lookupStructField(structName, fp)
+				if ok {
+					if st := collectionElementScalarFromType(fieldIRType, mctx); st != scalarUnknown {
+						return st
+					}
+				}
+				if structName == "AstNode" && (fp.Name == "children" || fp.Name == "children2") {
+					return scalarInt
+				}
+			}
+		}
+	}
+	return scalarUnknown
+}
+
+func inferLocalCollectionElementScalar(fn *mir.Function, id mir.LocalID, mctx *moduleCtx, seen map[mir.LocalID]bool) scalarType {
+	if fn == nil || mctx == nil {
+		return scalarUnknown
+	}
+	if seen[id] {
+		return scalarUnknown
+	}
+	seen[id] = true
+	if loc := lookupLocal(fn, id); loc != nil {
+		if st := collectionElementScalarFromType(loc.Type, mctx); st != scalarUnknown {
+			return st
+		}
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() || ai.Dest.Local != id {
+				continue
+			}
+			switch src := ai.Src.(type) {
+			case *mir.UseRV:
+				cp, ok := src.Op.(*mir.CopyOp)
+				if !ok {
+					continue
+				}
+				if cp.Place.HasProjections() {
+					if st := collectionElementScalarFromType(placeResultType(fn, cp.Place), mctx); st != scalarUnknown {
+						return st
+					}
+					if st := collectionElementScalarFromProjectedPlace(fn, cp.Place, mctx); st != scalarUnknown {
+						return st
+					}
+					continue
+				}
+				if st := inferLocalCollectionElementScalar(fn, cp.Place.Local, mctx, seen); st != scalarUnknown {
+					return st
+				}
+			case *mir.AggregateRV:
+				if st := collectionElementScalarFromType(src.T, mctx); st != scalarUnknown {
+					return st
+				}
+			}
+		}
+	}
+	return scalarUnknown
+}
+
+func collectionElementScalarFromProjectedPlace(fn *mir.Function, place mir.Place, mctx *moduleCtx) scalarType {
+	if fn == nil || mctx == nil || len(place.Projections) == 0 {
+		return scalarUnknown
+	}
+	fp, ok := place.Projections[len(place.Projections)-1].(*mir.FieldProj)
+	if !ok {
+		return scalarUnknown
+	}
+	structName := inferGenericLocalStructName(fn, place.Local, mctx)
+	if structName == "" {
+		return scalarUnknown
+	}
+	_, _, fieldIRType, ok := mctx.lookupStructField(structName, fp)
+	if !ok {
+		return scalarUnknown
+	}
+	return collectionElementScalarFromType(fieldIRType, mctx)
+}
+
+func collectionElementScalarFromType(t mir.Type, mctx *moduleCtx) scalarType {
+	if t == nil || mctx == nil {
+		return scalarUnknown
+	}
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil || len(named.Args) == 0 {
+		return scalarUnknown
+	}
+	switch named.Name {
+	case "List", "FrontCheckResult":
+		return mctx.scalarFromType(named.Args[0], true)
+	}
+	if named.Builtin && len(named.Args) > 0 {
+		return mctx.scalarFromType(named.Args[0], true)
+	}
+	return scalarUnknown
+}
+
+func inferGenericLocalStructName(fn *mir.Function, id mir.LocalID, mctx *moduleCtx) string {
+	if fn == nil || mctx == nil || mctx.module == nil || mctx.module.Layouts == nil {
+		return ""
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.CallInstr:
+				if step.Dest == nil || step.Dest.HasProjections() || step.Dest.Local != id {
+					continue
+				}
+				ref, ok := step.Callee.(*mir.FnRef)
+				if !ok || ref == nil {
+					continue
+				}
+				if ref.Symbol == "astArenaNodeAt" {
+					return "AstNode"
+				}
+				if known := stage0KnownCallStructResult(ref.Symbol); known != "" {
+					return known
+				}
+				if ret := mctx.lookupFunctionReturnType(ref.Symbol); ret != nil {
+					if named, ok := ret.(*ir.NamedType); ok && named != nil && named.Name != "" {
+						if mctx.module.Layouts.Structs[named.Name] != nil {
+							return named.Name
+						}
+					}
+				}
+			case *mir.AssignInstr:
+				if step.Dest.HasProjections() || step.Dest.Local != id {
+					continue
+				}
+				use, ok := step.Src.(*mir.UseRV)
+				if !ok {
+					continue
+				}
+				cp, ok := use.Op.(*mir.CopyOp)
+				if !ok || !cp.Place.HasProjections() {
+					continue
+				}
+				if name := inferGenericVariantPayloadStructName(fn, cp.Place, mctx); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	if loc := lookupLocal(fn, id); loc != nil {
+		if named, ok := loc.Type.(*ir.NamedType); ok && named != nil && named.Name != "" {
+			if mctx.module.Layouts.Structs[named.Name] != nil {
+				return named.Name
+			}
+		}
+	}
+	return ""
+}
+
+func inferGenericVariantPayloadStructName(fn *mir.Function, place mir.Place, mctx *moduleCtx) string {
+	if fn == nil || mctx == nil || len(place.Projections) == 0 {
+		return ""
+	}
+	if baseLocal := lookupLocal(fn, place.Local); baseLocal != nil {
+		if opt, ok := baseLocal.Type.(*ir.OptionalType); ok && opt != nil {
+			if named, ok := opt.Inner.(*ir.NamedType); ok && named != nil && named.Name != "" && mctx.module != nil && mctx.module.Layouts != nil {
+				if mctx.module.Layouts.Structs[named.Name] != nil {
+					return named.Name
+				}
+			}
+		}
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ci, ok := instr.(*mir.CallInstr)
+			if !ok || ci.Dest == nil || ci.Dest.HasProjections() || ci.Dest.Local != place.Local {
+				continue
+			}
+			ref, ok := ci.Callee.(*mir.FnRef)
+			if !ok || ref == nil {
+				continue
+			}
+			if known := stage0KnownCallOptionalStructResult(ref.Symbol); known != "" {
+				return known
+			}
+			if ret := mctx.lookupFunctionReturnType(ref.Symbol); ret != nil {
+				if opt, ok := ret.(*ir.OptionalType); ok && opt != nil {
+					if named, ok := opt.Inner.(*ir.NamedType); ok && named != nil && named.Name != "" && mctx.module != nil && mctx.module.Layouts != nil {
+						if mctx.module.Layouts.Structs[named.Name] != nil {
+							return named.Name
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func inferGenericProjectionScalar(proj mir.Projection, mctx *moduleCtx) scalarType {
+	switch p := proj.(type) {
+	case *mir.FieldProj:
+		if st := mctx.scalarFromType(p.Type, true); st != scalarUnknown {
+			return st
+		}
+		switch p.Name {
+		case "kind", "start", "end", "left", "right", "extra", "flags", "line", "pos", "count", "index", "ty", "size", "align", "applied", "skipped":
+			return scalarInt
+		case "text", "source", "message", "hint", "note", "code", "name", "alias", "canonical", "first", "second", "third", "owner", "err", "fixedSource", "diagnostics":
+			return scalarString
+		case "children", "children2", "decls", "errors", "nodes", "keys", "items", "values":
+			return scalarOpaquePtr
+		case "inline", "ok", "blocked", "exported", "hasDefault", "promoted":
+			return scalarBool
+		}
+	case *mir.TupleProj:
+		return mctx.scalarFromType(p.Type, true)
+	case *mir.IndexProj:
+		return mctx.scalarFromType(p.ElemType, true)
+	case *mir.VariantProj:
+		return mctx.scalarFromType(p.Type, true)
+	case *mir.DerefProj:
+		return mctx.scalarFromType(p.Type, true)
+	}
+	return scalarUnknown
+}
+
+func inferGenericCallScalar(ci *mir.CallInstr, mctx *moduleCtx) scalarType {
+	if ci == nil || mctx == nil {
+		return scalarUnknown
+	}
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok || ref == nil {
+		return scalarUnknown
+	}
+	if ref.Symbol == "len" {
+		return scalarInt
+	}
+	if stage0KnownCallScalarResult(ref.Symbol) != scalarUnknown {
+		return stage0KnownCallScalarResult(ref.Symbol)
+	}
+	if ref.Symbol == "astArenaNodeAt" {
+		return scalarOpaquePtr
+	}
+	if stage0KnownCallStructResult(ref.Symbol) != "" {
+		return scalarOpaquePtr
+	}
+	if stage0KnownCallOptionalStructResult(ref.Symbol) != "" {
+		return scalarOpaquePtr
+	}
+	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		return mctx.scalarFromType(fnTy.Return, true)
+	}
+	if st := mctx.scalarFromFunctionReturn(ref.Symbol, true); st != scalarUnknown {
+		return st
+	}
+	return mctx.scalarFromType(ref.Type, true)
+}
+
+func stage0KnownCallScalarResult(symbol string) scalarType {
+	if symbol == "" {
+		return scalarUnknown
+	}
+	if strings.HasSuffix(symbol, "__len") {
+		return scalarInt
+	}
+	return scalarUnknown
+}
+
+func stage0KnownCallStructResult(symbol string) string {
+	switch symbol {
+	case "anySemReq":
+		return "SemReq"
+	case "astParse":
+		return "AstFile"
+	case "checkLookupField":
+		return "CheckFieldSig"
+	case "checkLookupType":
+		return "CheckTypeSig"
+	case "frontendCheckSource":
+		return "FrontCheckSummary"
+	case "frontendLexStream":
+		return "FrontLexStream"
+	case "frontendParseTree":
+		return "FrontParseTree"
+	case "hirBlock":
+		return "HirBlock"
+	case "hirExprInvalid":
+		return "HirExpr"
+	case "hirIfStmt", "hirIfStmtElse", "hirLetStmt", "hirLetStmtNoValue", "hirLetStmtPattern", "hirStmtInvalid":
+		return "HirStmt"
+	case "hirNoSpan":
+		return "HirSpan"
+	case "irLowerAstFile":
+		return "IrModule"
+	case "mirAssignInstr", "mirStorageLiveInstr":
+		return "MirInstr"
+	case "mirLowerExprToPlace", "mirPlace", "mirPlaceProject":
+		return "MirPlace"
+	case "mirOperandCopy":
+		return "MirOperand"
+	case "mirRVUse":
+		return "MirRValue"
+	case "mirTupleProj":
+		return "MirProjection"
+	case "irSummarize":
+		return "IrSummary"
+	case "newSolver":
+		return "Solver"
+	case "onbInstrStore64Stack":
+		return "OnbInstr"
+	case "onbMaterialiseErr", "onbMaterialiseOk", "onbMaterialiseOperand":
+		return "OnbMaterialiseResult"
+	case "selfLintApplyFixes":
+		return "SelfLintApplyResult"
+	case "selfLintResolvedAstSource":
+		return "SelfLintReport"
+	case "selfResolveAstFile":
+		return "SelfResolveResult"
+	case "splitSummary":
+		return "SemSplit"
+	}
+	return ""
+}
+
+func stage0KnownCallOptionalStructResult(symbol string) string {
+	switch symbol {
+	case "onbLookupStructLayout":
+		return "MirStructLayout"
+	}
+	return ""
+}
+
+func inferGenericIntrinsicScalar(fn *mir.Function, ii *mir.IntrinsicInstr, mctx *moduleCtx) scalarType {
+	if ii == nil || mctx == nil {
+		return scalarUnknown
+	}
+	if ii.Dest != nil {
+		if st := mctx.scalarFromType(placeResultType(fn, *ii.Dest), true); st != scalarUnknown {
+			return st
+		}
+	}
+	switch ii.Kind {
+	case mir.IntrinsicListLen, mir.IntrinsicStringLen, mir.IntrinsicStringIndexOf, mir.IntrinsicStringLastIndexOf:
+		return scalarInt
+	case mir.IntrinsicListIsEmpty, mir.IntrinsicStringIsEmpty, mir.IntrinsicBytesContains, mir.IntrinsicMapContains, mir.IntrinsicSetContains, mir.IntrinsicLikely, mir.IntrinsicUnlikely:
+		return scalarBool
+	case mir.IntrinsicStringConcat, mir.IntrinsicStringSubstring, mir.IntrinsicListToString:
+		return scalarString
+	case mir.IntrinsicByteToInt, mir.IntrinsicCharToInt, mir.IntrinsicMapIncr:
+		return scalarInt
+	case mir.IntrinsicIntToByte, mir.IntrinsicCharToByte:
+		return scalarByte
+	case mir.IntrinsicIntToChar, mir.IntrinsicByteToChar:
+		return scalarChar
+	case mir.IntrinsicMapNew, mir.IntrinsicSetNew, mir.IntrinsicMapGet, mir.IntrinsicMapKeysSorted, mir.IntrinsicListGet, mir.IntrinsicListSorted, mir.IntrinsicListToSet, mir.IntrinsicStringBytes, mir.IntrinsicRawNull:
+		return scalarOpaquePtr
+	}
+	return scalarUnknown
+}
+
+func binaryOpReturnsBool(op mir.BinaryOp) bool {
+	switch op {
+	case mir.BinEq, mir.BinNeq, mir.BinLt, mir.BinLeq, mir.BinGt, mir.BinGeq:
+		return true
+	}
+	return false
+}
+
+func genericLocalUsedAsSwitchScrutinee(fn *mir.Function, id mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if sw, ok := bb.Term.(*mir.SwitchIntTerm); ok && operandMentionsLocal(sw.Scrutinee, id) {
+			return true
+		}
+	}
+	return false
+}
+
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
-	targetFn := ""
-	if fn.Name == "Runner__Run" || strings.HasPrefix(fn.Name, "Runner__check") || fn.Name == "resolveFixtureCases" {
-		targetFn = fn.Name
+	targetFn := stage0GenericTraceFn(fn)
+	traceFail := func(line int) {
+		if targetFn != "" {
+			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, line)
+		}
 	}
 	pat := genericCFGPattern{blockBodies: map[mir.BlockID]string{}}
 	if fn == nil || len(fn.Blocks) == 0 {
-		if targetFn != "" {
-			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 1)
-		}
+		traceFail(1)
 		return pat, false
 	}
 	pat.returnsVoid = isUnitType(fn.ReturnType)
@@ -13468,9 +14814,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			// CFG can return by value.
 			typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
 			if !ok {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 2)
-				}
+				traceFail(2)
 				return pat, false
 			}
 			pat.aggRetTypeName = typeName
@@ -13478,15 +14822,11 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		}
 	}
 	if len(fn.Blocks) == 1 && !genericSingleBlockHasExtendedSurface(fn, fn.Blocks[0]) {
-		if targetFn != "" {
-			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 3)
-		}
+		traceFail(3)
 		return pat, false
 	}
 	if len(fn.Params) > 48 {
-		if targetFn != "" {
-			fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 4)
-		}
+		traceFail(4)
 		return pat, false
 	}
 
@@ -13495,16 +14835,12 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
-			if targetFn != "" {
-				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 5)
-			}
+			traceFail(5)
 			return pat, false
 		}
 		pt := mctx.scalarFromType(loc.Type, true)
 		if pt == scalarUnknown {
-			if targetFn != "" {
-				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 6)
-			}
+			traceFail(6)
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
@@ -13512,17 +14848,21 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	}
 	disambiguateParamNames(pat.paramNames)
 
+	localTypes := inferGenericLocalScalars(fn, mctx)
 	stack := map[mir.LocalID]stackDecl{}
 	for _, l := range fn.Locals {
 		if l == nil || l.IsParam {
 			continue
 		}
-		if isUnitType(l.Type) {
+		if isUnitType(l.Type) || isEmptyTupleType(l.Type) {
 			continue
 		}
-		ty := mctx.scalarFromType(l.Type, true)
+		ty := localTypes[l.ID]
 		if ty == scalarUnknown {
 			if tupleTy, ok := l.Type.(*ir.TupleType); ok && tupleTy != nil && genericTupleLocalIsAggregateOnly(fn, l.ID) {
+				continue
+			}
+			if isErrType(l.Type) && genericErrLocalUsedOnlyAsNegZero(fn, l.ID) {
 				continue
 			}
 			// Aggregate return local: skip scalar stack allocation; the
@@ -13534,8 +14874,19 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 				continue
 			}
 			if targetFn != "" {
-				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 7)
+				fmt.Printf("[matchGenericScalarCFG %s] unknown local#%d name=%q type=%T %v\n", targetFn, l.ID, l.Name, l.Type, l.Type)
+				for _, bb := range fn.Blocks {
+					if bb == nil {
+						continue
+					}
+					for _, instr := range bb.Instrs {
+						if ai, ok := instr.(*mir.AssignInstr); ok && !ai.Dest.HasProjections() && ai.Dest.Local == l.ID {
+							fmt.Printf("[matchGenericScalarCFG %s] unknown local#%d assign src=%s\n", targetFn, l.ID, describeStage0RValue(ai.Src))
+						}
+					}
+				}
 			}
+			traceFail(7)
 			return pat, false
 		}
 		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
@@ -13557,15 +14908,14 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	}
 	if !pat.returnsVoid && pat.aggRetTypeName == "" {
 		if _, ok := stack[fn.ReturnLocal]; !ok {
-			if targetFn != "" {
-				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 8)
-			}
+			traceFail(8)
 			return pat, false
 		}
 	}
 
 	bindings := map[mir.LocalID]localBinding{}
 	for i, pid := range fn.Params {
+		localTypes[pid] = pat.paramTypes[i]
 		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
 	}
 	for _, sd := range pat.stackDecls {
@@ -13574,12 +14924,14 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 
 	nextSSA := 0
 	ctx := &whileLoopEmitCtx{
-		fn:         fn,
-		bindings:   bindings,
-		stack:      stack,
-		mctx:       mctx,
-		nextSSA:    &nextSSA,
-		aggregates: map[mir.LocalID]aggregateBinding{},
+		fn:           fn,
+		bindings:     bindings,
+		stack:        stack,
+		mctx:         mctx,
+		nextSSA:      &nextSSA,
+		aggregates:   map[mir.LocalID]aggregateBinding{},
+		localTypes:   localTypes,
+		localStructs: map[mir.LocalID]string{},
 	}
 	if pat.aggRetTypeName != "" {
 		ctx.aggRetValueTypeName = pat.aggRetTypeName
@@ -13597,9 +14949,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 			} else {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 9)
-				}
+				traceFail(9)
 				return pat, false
 			}
 		} else if exitID, localID, ok := genericInferOpaqueAccumulatorSyntheticReturn(fn, mctx, pat.retType); ok {
@@ -13626,9 +14976,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 				} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 					pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 				} else {
-					if targetFn != "" {
-						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 10)
-					}
+					traceFail(10)
 					return pat, false
 				}
 			}
@@ -13636,9 +14984,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
 			} else {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 11)
-				}
+				traceFail(11)
 				return pat, false
 			}
 		}
@@ -13681,27 +15027,37 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			pat.syntheticIntrinsicReturns = intrMap
 		}
 	}
+	if !pat.returnsVoid && pat.retType != scalarUnknown &&
+		len(pat.syntheticReturns) == 0 &&
+		len(pat.syntheticStringJoins) == 0 &&
+		len(pat.syntheticStringCoalesces) == 0 &&
+		len(pat.syntheticXReturns) == 0 {
+		if pat.syntheticIntrinsicReturns == nil {
+			if calls, ok := genericInferPreExitDiscardedIntrinsicSyntheticReturns(fn, mctx, pat.retType); ok {
+				pat.syntheticIntrinsicReturns = calls
+			}
+		}
+		if pat.syntheticCallReturns == nil {
+			if calls, ok := genericInferPreExitDiscardedCallSyntheticReturns(fn, mctx, pat.retType); ok {
+				pat.syntheticCallReturns = calls
+			}
+		}
+	}
 	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
 	for _, bb := range blocks {
 		if bb == nil {
-			if targetFn != "" {
-				fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 12)
-			}
+			traceFail(12)
 			return pat, false
 		}
 		var body strings.Builder
 		if ii, ok := pat.syntheticIntrinsicReturns[bb.ID]; ok {
 			if !emitSyntheticDiscardedIntrinsicReturn(ctx, &body, bb, ii, pat.retType) {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 13)
-				}
+				traceFail(13)
 				return pat, false
 			}
 		} else if call, ok := pat.syntheticCallReturns[bb.ID]; ok {
 			if !emitSyntheticDiscardedCallReturn(ctx, &body, bb, call, pat.retType) {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 14)
-				}
+				traceFail(14)
 				return pat, false
 			}
 		} else if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
@@ -13711,18 +15067,14 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			// in unreachable sinks are skipped.
 			for _, instr := range bb.Instrs {
 				if !emitWhileStepInUnreachable(ctx, &body, instr) {
-					if targetFn != "" {
-						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 15)
-					}
+					traceFail(15)
 					return pat, false
 				}
 			}
 		} else {
 			for _, instr := range bb.Instrs {
 				if !emitWhileStep(ctx, &body, instr) {
-					if targetFn != "" {
-						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 16)
-					}
+					traceFail(16)
 					return pat, false
 				}
 			}
@@ -13730,18 +15082,14 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		if localID, ok := pat.syntheticReturns[bb.ID]; ok {
 			binding, ok := ctx.bindings[localID]
 			if !ok || !binding.defined || binding.ty != pat.retType {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 17)
-				}
+				traceFail(17)
 				return pat, false
 			}
 			expr := binding.expr
 			if binding.isStack {
 				loaded, ty, ok := loadFromStack(ctx, &body, localID)
 				if !ok || ty != pat.retType {
-					if targetFn != "" {
-						fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 18)
-					}
+					traceFail(18)
 					return pat, false
 				}
 				expr = loaded
@@ -13749,25 +15097,19 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			fmt.Fprintf(&body, "  ret %s %s\n", pat.retType.llvm(), expr)
 		} else if join, ok := pat.syntheticStringJoins[bb.ID]; ok {
 			if !emitSyntheticStringJoinReturn(ctx, &body, join) {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 19)
-				}
+				traceFail(19)
 				return pat, false
 			}
 		} else if optID, ok := pat.syntheticStringCoalesces[bb.ID]; ok {
 			if !emitSyntheticStringCoalesceReturn(ctx, &body, optID) {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 20)
-				}
+				traceFail(20)
 				return pat, false
 			}
 		} else if _, ok := pat.syntheticIntrinsicReturns[bb.ID]; ok {
 		} else if _, ok := pat.syntheticCallReturns[bb.ID]; ok {
 		} else {
 			if !emitGenericTerm(ctx, &body, bb.Term, pat.retType, pat.returnsVoid) {
-				if targetFn != "" {
-					fmt.Printf("[matchGenericScalarCFG %s] fail at line %d\n", targetFn, 21)
-				}
+				traceFail(21)
 				return pat, false
 			}
 		}
@@ -13976,7 +15318,7 @@ func genericInferScalarAccumulatorSyntheticReturn(fn *mir.Function, mctx *module
 		if !zeroInit[local.ID] || !selfUpdate[local.ID] {
 			continue
 		}
-		if genericLocalUsedAsIndex(fn, local.ID) || genericLocalUsedInBranchCondition(fn, local.ID) {
+		if genericLocalUsedAsIndex(fn, local.ID) || genericLocalFeedsBranchCondition(fn, local.ID) {
 			continue
 		}
 		if candidate != 0 {
@@ -14108,6 +15450,38 @@ func genericStorageOnlyGotoChainToExit(fn *mir.Function, start mir.BlockID, exit
 	return false
 }
 
+func genericStorageOnlyGotoChainToAnyExit(fn *mir.Function, start mir.BlockID, exits map[mir.BlockID]bool) bool {
+	if fn == nil || len(exits) == 0 {
+		return false
+	}
+	seen := map[mir.BlockID]bool{}
+	id := start
+	for i := 0; i < len(fn.Blocks)+1; i++ {
+		if exits[id] {
+			return true
+		}
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		bb := blockByID(fn, id)
+		if bb == nil {
+			return false
+		}
+		for _, instr := range bb.Instrs {
+			if !isStorageInstr(instr) {
+				return false
+			}
+		}
+		gt, ok := bb.Term.(*mir.GotoTerm)
+		if !ok {
+			return false
+		}
+		id = gt.Target
+	}
+	return false
+}
+
 func genericInferDiscardedCallSyntheticReturn(fn *mir.Function, mctx *moduleCtx, retType scalarType) (mir.BlockID, *mir.CallInstr, bool) {
 	if fn == nil || mctx == nil || retType == scalarUnknown {
 		return 0, nil, false
@@ -14193,17 +15567,17 @@ func genericInferPreExitDiscardedCallSyntheticReturns(fn *mir.Function, mctx *mo
 	if fn == nil || mctx == nil || retType == scalarUnknown {
 		return nil, false
 	}
-	exit, ok := genericStorageOnlyUnreachableExit(fn)
-	if !ok {
+	exits := genericStorageOnlyUnreachableExitIDs(fn)
+	if len(exits) == 0 {
 		return nil, false
 	}
 	calls := map[mir.BlockID]*mir.CallInstr{}
 	for _, bb := range fn.Blocks {
-		if bb == nil || bb.ID == exit.ID {
+		if bb == nil || exits[bb.ID] {
 			continue
 		}
 		gt, ok := bb.Term.(*mir.GotoTerm)
-		if !ok || gt.Target != exit.ID {
+		if !ok || !genericStorageOnlyGotoChainToAnyExit(fn, gt.Target, exits) {
 			continue
 		}
 		call, ok := finalDiscardedCallInstr(bb)
@@ -14222,17 +15596,17 @@ func genericInferPreExitDiscardedIntrinsicSyntheticReturns(fn *mir.Function, mct
 	if fn == nil || mctx == nil || retType == scalarUnknown {
 		return nil, false
 	}
-	exit, ok := genericStorageOnlyUnreachableExit(fn)
-	if !ok {
+	exits := genericStorageOnlyUnreachableExitIDs(fn)
+	if len(exits) == 0 {
 		return nil, false
 	}
 	instrs := map[mir.BlockID]*mir.IntrinsicInstr{}
 	for _, bb := range fn.Blocks {
-		if bb == nil || bb.ID == exit.ID {
+		if bb == nil || exits[bb.ID] {
 			continue
 		}
 		gt, ok := bb.Term.(*mir.GotoTerm)
-		if !ok || gt.Target != exit.ID {
+		if !ok || !genericStorageOnlyGotoChainToAnyExit(fn, gt.Target, exits) {
 			continue
 		}
 		ii, ok := finalDiscardedIntrinsicInstr(bb)
@@ -14363,6 +15737,9 @@ func discardedIntrinsicCanReturnScalar(ii *mir.IntrinsicInstr, retType scalarTyp
 	if ii == nil || ii.Dest != nil || retType == scalarUnknown {
 		return false
 	}
+	if ii.Kind == mir.IntrinsicStringConcat {
+		return retType == scalarString && len(ii.Args) > 0
+	}
 	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
 	return ok && spec.ret == retType && len(spec.args) == len(ii.Args)
 }
@@ -14434,6 +15811,44 @@ func emitSyntheticDiscardedIntrinsicReturn(ctx *whileLoopEmitCtx, out *strings.B
 func emitDiscardedIntrinsicAsReturn(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, retType scalarType) bool {
 	if ctx == nil || out == nil || ii == nil || ii.Dest != nil || retType == scalarUnknown {
 		return false
+	}
+	if ii.Kind == mir.IntrinsicStringConcat {
+		if retType != scalarString || len(ii.Args) == 0 {
+			return false
+		}
+		parts := make([]callArg, 0, len(ii.Args))
+		hasInt := false
+		convertInt := len(ii.Args) == 1
+		for _, op := range ii.Args {
+			arg, originalTy, ok := stringConcatWhileArg(ctx, out, op, convertInt)
+			if !ok {
+				return false
+			}
+			if originalTy == scalarInt && !convertInt {
+				hasInt = true
+			}
+			parts = append(parts, arg)
+		}
+		if len(parts) == 1 {
+			fmt.Fprintf(out, "  ret ptr %s\n", parts[0].expr)
+			return true
+		}
+		declareStringConcatRuntime(ctx.mctx)
+		if hasInt {
+			declareStringConcatI64Runtime(ctx.mctx)
+		}
+		current := parts[0]
+		for _, next := range parts[1:] {
+			symbol, ok := stringConcatSymbolForArgs(current.ty, next.ty)
+			if !ok {
+				return false
+			}
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = call ptr @%s(%s %s, %s %s)\n", reg, symbol, current.ty, current.expr, next.ty, next.expr)
+			current = callArg{expr: reg, ty: scalarString.llvm()}
+		}
+		fmt.Fprintf(out, "  ret ptr %s\n", current.expr)
+		return true
 	}
 	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
 	if !ok || spec.ret != retType || len(spec.args) != len(ii.Args) {
@@ -14802,9 +16217,56 @@ func genericLocalUsedInBranchCondition(fn *mir.Function, id mir.LocalID) bool {
 			if !ok || ai.Dest.HasProjections() || ai.Dest.Local != condLocal {
 				continue
 			}
+			if rvaluePropagatesBoolFromLocal(ai.Src, id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func genericLocalFeedsBranchCondition(fn *mir.Function, id mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		branch, ok := bb.Term.(*mir.BranchTerm)
+		if !ok {
+			continue
+		}
+		if operandMentionsLocal(branch.Cond, id) {
+			return true
+		}
+		condLocal, ok := copyOperandLocal(branch.Cond)
+		if !ok {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() || ai.Dest.Local != condLocal {
+				continue
+			}
 			if rvalueMentionsLocal(ai.Src, id) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func rvaluePropagatesBoolFromLocal(rv mir.RValue, id mir.LocalID) bool {
+	switch r := rv.(type) {
+	case *mir.UseRV:
+		return operandMentionsLocal(r.Op, id)
+	case *mir.UnaryRV:
+		return r.Op == mir.UnNot && operandMentionsLocal(r.Arg, id)
+	case *mir.BinaryRV:
+		switch r.Op {
+		case mir.BinAnd, mir.BinOr:
+			return operandMentionsLocal(r.Left, id) || operandMentionsLocal(r.Right, id)
 		}
 	}
 	return false
@@ -15086,6 +16548,26 @@ func genericStorageOnlyUnreachableExit(fn *mir.Function) (*mir.BasicBlock, bool)
 	return exit, exit != nil
 }
 
+func genericStorageOnlyUnreachableExitIDs(fn *mir.Function) map[mir.BlockID]bool {
+	exits := map[mir.BlockID]bool{}
+	if fn == nil {
+		return exits
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); !unreachable {
+			continue
+		}
+		if !blockHasOnlyStorageMarkers(bb) {
+			continue
+		}
+		exits[bb.ID] = true
+	}
+	return exits
+}
+
 type PayloadType struct {
 	LocalID   mir.LocalID
 	CallInstr *mir.CallInstr
@@ -15201,6 +16683,82 @@ func sameTypeString(a, b mir.Type) bool {
 	return a.String() == b.String()
 }
 
+type payloadlessEnumParamEqPattern struct {
+	paramNames [2]string
+}
+
+func matchPayloadlessEnumParamEq(fn *mir.Function, mctx *moduleCtx) (payloadlessEnumParamEqPattern, bool) {
+	var pat payloadlessEnumParamEqPattern
+	if fn == nil || mctx == nil || !isPrimType(fn.ReturnType, ir.PrimBool) || len(fn.Params) != 2 {
+		return pat, false
+	}
+	left := lookupLocal(fn, fn.Params[0])
+	right := lookupLocal(fn, fn.Params[1])
+	if left == nil || right == nil || !sameTypeString(left.Type, right.Type) {
+		return pat, false
+	}
+	named, ok := left.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" || mctx.module == nil || mctx.module.Layouts == nil {
+		return pat, false
+	}
+	if !enumLayoutIsPayloadless(mctx.module.Layouts.Enums[named.Name]) {
+		return pat, false
+	}
+	if !payloadlessEnumEqMIRShape(fn) {
+		return pat, false
+	}
+	pat.paramNames[0] = sanitizeLLVMName(left.Name, paramFallbackName(0))
+	pat.paramNames[1] = sanitizeLLVMName(right.Name, paramFallbackName(1))
+	names := []string{pat.paramNames[0], pat.paramNames[1]}
+	disambiguateParamNames(names)
+	pat.paramNames[0] = names[0]
+	pat.paramNames[1] = names[1]
+	return pat, true
+}
+
+func payloadlessEnumEqMIRShape(fn *mir.Function) bool {
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			case *mir.AssignInstr:
+				if step.Dest.HasProjections() {
+					return false
+				}
+				switch src := step.Src.(type) {
+				case *mir.UseRV:
+					if _, ok := src.Op.(*mir.CopyOp); !ok {
+						return false
+					}
+				case *mir.DiscriminantRV:
+				default:
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		switch bb.Term.(type) {
+		case *mir.SwitchIntTerm, *mir.GotoTerm, *mir.UnreachableTerm:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func emitPayloadlessEnumParamEq(out *strings.Builder, fn *mir.Function, pat payloadlessEnumParamEqPattern) error {
+	fmt.Fprintf(out, "define i1 @%s(i64 %%%s, i64 %%%s) {\n", fn.Name, pat.paramNames[0], pat.paramNames[1])
+	out.WriteString("entry:\n")
+	out.WriteString("  %0 = icmp eq i64 %" + pat.paramNames[0] + ", %" + pat.paramNames[1] + "\n")
+	out.WriteString("  ret i1 %0\n")
+	out.WriteString("}\n\n")
+	return nil
+}
+
 func genericLocalUsedOutsideUnreachableBlocks(fn *mir.Function, id mir.LocalID) bool {
 	if fn == nil {
 		return false
@@ -15217,6 +16775,64 @@ func genericLocalUsedOutsideUnreachableBlocks(fn *mir.Function, id mir.LocalID) 
 		}
 	}
 	return false
+}
+
+func genericErrLocalUsedOnlyAsNegZero(fn *mir.Function, id mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	used := false
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.StorageLiveInstr:
+				if step.Local == id {
+					continue
+				}
+			case *mir.StorageDeadInstr:
+				if step.Local == id {
+					continue
+				}
+			case *mir.AssignInstr:
+				if placeMentionsLocal(step.Dest, id) {
+					return false
+				}
+				if rvalueMentionsLocal(step.Src, id) {
+					if !rvalueUsesLocalAsNegZero(step.Src, id) {
+						return false
+					}
+					used = true
+				}
+			default:
+				if instrMentionsLocal(instr, id) {
+					return false
+				}
+			}
+		}
+		if termMentionsLocal(bb.Term, id) {
+			return false
+		}
+	}
+	return used
+}
+
+func rvalueUsesLocalAsNegZero(rv mir.RValue, id mir.LocalID) bool {
+	bin, ok := rv.(*mir.BinaryRV)
+	if !ok || bin.Op != mir.BinSub {
+		return false
+	}
+	if !operandIsBareLocal(bin.Left, id) {
+		return false
+	}
+	return !operandMentionsLocal(bin.Right, id)
+}
+
+func operandIsBareLocal(op mir.Operand, id mir.LocalID) bool {
+	cp, ok := op.(*mir.CopyOp)
+	return ok && cp.Place.Local == id && !cp.Place.HasProjections()
 }
 
 func genericTupleLocalIsAggregateOnly(fn *mir.Function, id mir.LocalID) bool {
