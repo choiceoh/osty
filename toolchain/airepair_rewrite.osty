@@ -151,3 +151,249 @@ pub fn isRewritableLengthTypeKind(kind: String, name: String) -> Bool {
     }
     false
 }
+/// LoopRewrite is the outcome of a single foreign-loop-shape
+/// rewriter (JS-for-of, Python-range, Python-enumerate). `ok ==
+/// false` leaves `rewritten` empty and signals "I do not recognise
+/// this header — try a different shape".
+pub struct LoopRewrite {
+    pub rewritten: String,
+    pub ok: Bool,
+}
+/// ForeignLoopRewrite is the dispatcher result. `kind` and
+/// `message` are populated only when `ok` is true so the host can
+/// shape the diag the user sees without guessing which sub-rewriter
+/// fired.
+pub struct ForeignLoopRewrite {
+    pub rewritten: String,
+    pub kind: String,
+    pub message: String,
+    pub ok: Bool,
+}
+/// TupleBindingNormalize is the outcome of normalising a comma-
+/// separated tuple-loop binding list (e.g. `i, value` or `[i, v]`
+/// stripped of brackets). `joined` is the trimmed-and-rejoined form
+/// the rewriter will splice into the generated header.
+pub struct TupleBindingNormalize {
+    pub joined: String,
+    pub ok: Bool,
+}
+/// normalizeTupleLoopBindings parses a `binding, binding, ...`
+/// payload from a tuple-loop header. Every comma-separated piece
+/// must be a simple identifier binding (`isSimpleIdentifierBinding`)
+/// otherwise we refuse the rewrite — the source likely has a
+/// pattern shape we'd silently corrupt.
+pub fn normalizeTupleLoopBindings(src: String) -> TupleBindingNormalize {
+    let parts = splitTopLevelComma(src)
+    if parts.len() < 2 {
+        return TupleBindingNormalize {joined: "", ok: false}
+    }
+    let mut normalized: List<String> = []
+    for part in parts {
+        let trimmed = strings.trimSpace(part)
+        if !isSimpleIdentifierBinding(trimmed) {
+            return TupleBindingNormalize {joined: "", ok: false}
+        }
+        normalized.push(trimmed)
+    }
+    TupleBindingNormalize {joined: strings.join(normalized, ", "), ok: true}
+}
+/// airepairByteIndexOf is a byte-faithful substring search over
+/// `haystack` for `needle`. Returns -1 when not found.
+///
+/// `strings.indexOf` returns char (not byte) indexes, which would
+/// desync with `strings.slice`'s byte-indexed slicing on multi-
+/// byte input. The airepair rewriters splice slices around the
+/// search hit, so we need a byte-correct index that matches Go's
+/// `strings.Index` semantics exactly.
+fn airepairByteIndexOf(haystack: String, needle: String) -> Int {
+    let hbs = haystack.bytes()
+    let nbs = needle.bytes()
+    let h = hbs.len()
+    let n = nbs.len()
+    if n == 0 {
+        return 0
+    }
+    if n > h {
+        return -1
+    }
+    let last = h - n
+    let mut i = 0
+    for i <= last {
+        let mut matched = true
+        let mut j = 0
+        for j < n {
+            if hbs[i + j].toInt() != nbs[j].toInt() {
+                matched = false
+                break
+            }
+            j = j + 1
+        }
+        if matched {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+/// rewriteJSForOfHeader recognises a JS `for (... of ...) {` loop
+/// header and emits the Osty equivalent. Recognises bare `let` /
+/// `const` / `var` keyword prefixes on the binding side and
+/// `[a, b]` array-destructure shapes (rewritten to Osty tuple
+/// destructuring).
+pub fn rewriteJSForOfHeader(trimmed: String) -> LoopRewrite {
+    if !strings.hasPrefix(trimmed, "for ") || !strings.hasSuffix(trimmed, "\{") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let withoutFor = strings.trimPrefix(trimmed, "for ")
+    let body = strings.trimSpace(strings.trimSuffix(withoutFor, "\{"))
+    if !strings.hasPrefix(body, "(") || !strings.hasSuffix(body, ")") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let inner = strings.trimSpace(strings.slice(body, 1, body.len() - 1))
+    let ofIdx = airepairByteIndexOf(inner, " of ")
+    if ofIdx <= 0 {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let mut lhs = strings.trimSpace(strings.slice(inner, 0, ofIdx))
+    let rhs = strings.trimSpace(strings.slice(inner, ofIdx + 4, inner.len()))
+    if strings.hasPrefix(lhs, "const ") {
+        lhs = strings.trimSpace(strings.trimPrefix(lhs, "const "))
+    } else if strings.hasPrefix(lhs, "let ") {
+        lhs = strings.trimSpace(strings.trimPrefix(lhs, "let "))
+    } else if strings.hasPrefix(lhs, "var ") {
+        lhs = strings.trimSpace(strings.trimPrefix(lhs, "var "))
+    }
+    if lhs == "" || rhs == "" {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    if strings.hasPrefix(lhs, "[") && strings.hasSuffix(lhs, "]") {
+        let inside = strings.trimSpace(strings.slice(lhs, 1, lhs.len() - 1))
+        let normalized = normalizeTupleLoopBindings(inside)
+        if !normalized.ok {
+            return LoopRewrite {rewritten: "", ok: false}
+        }
+        return LoopRewrite {rewritten: "for (" + normalized.joined + ") in " + rhs + " \{", ok: true}
+    }
+    if !isSimpleIdentifierBinding(lhs) {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    LoopRewrite {rewritten: "for " + lhs + " in " + rhs + " \{", ok: true}
+}
+/// rewritePythonRangeLoopHeader recognises a `for X in range(...) {`
+/// loop header and emits an Osty `for X in start..end` form. The
+/// 3-arg form (`range(start, end, step)`) is only accepted when
+/// `step == 1`; non-unit strides have no concise Osty surface and
+/// are left for the user to translate by hand.
+pub fn rewritePythonRangeLoopHeader(trimmed: String) -> LoopRewrite {
+    if !strings.hasPrefix(trimmed, "for ") || !strings.hasSuffix(trimmed, "\{") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let withoutFor = strings.trimPrefix(trimmed, "for ")
+    let body = strings.trimSpace(strings.trimSuffix(withoutFor, "\{"))
+    let inIdx = airepairByteIndexOf(body, " in ")
+    if inIdx <= 0 {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let lhs = strings.trimSpace(strings.slice(body, 0, inIdx))
+    let rhs = strings.trimSpace(strings.slice(body, inIdx + 4, body.len()))
+    if !isSimpleIdentifierBinding(lhs) || !strings.hasPrefix(rhs, "range(") || !strings.hasSuffix(rhs, ")") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let argsPayload = strings.trimSpace(strings.slice(rhs, 6, rhs.len() - 1))
+    let args = splitTopLevelComma(argsPayload)
+    let mut start = ""
+    let mut end = ""
+    if args.len() == 1 {
+        start = "0"
+        end = strings.trimSpace(args[0])
+    } else if args.len() == 2 {
+        start = strings.trimSpace(args[0])
+        end = strings.trimSpace(args[1])
+    } else if args.len() == 3 {
+        start = strings.trimSpace(args[0])
+        end = strings.trimSpace(args[1])
+        if strings.trimSpace(args[2]) != "1" {
+            return LoopRewrite {rewritten: "", ok: false}
+        }
+    } else {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    if start == "" || end == "" {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    LoopRewrite {rewritten: "for " + lhs + " in " + start + ".." + end + " \{", ok: true}
+}
+/// rewritePythonEnumerateLoopHeader recognises
+/// `for i, v in enumerate(xs) {` and emits an Osty enumerate-shape
+/// header. Both bare-tuple (`i, v`) and parenthesised (`(i, v)`)
+/// binding shapes are accepted.
+pub fn rewritePythonEnumerateLoopHeader(trimmed: String) -> LoopRewrite {
+    if !strings.hasPrefix(trimmed, "for ") || !strings.hasSuffix(trimmed, "\{") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let withoutFor = strings.trimPrefix(trimmed, "for ")
+    let body = strings.trimSpace(strings.trimSuffix(withoutFor, "\{"))
+    let inIdx = airepairByteIndexOf(body, " in ")
+    if inIdx <= 0 {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let lhs = strings.trimSpace(strings.slice(body, 0, inIdx))
+    let rhs = strings.trimSpace(strings.slice(body, inIdx + 4, body.len()))
+    if !strings.hasPrefix(rhs, "enumerate(") || !strings.hasSuffix(rhs, ")") {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    let iterable = strings.trimSpace(strings.slice(rhs, 10, rhs.len() - 1))
+    if iterable == "" {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    if strings.hasPrefix(lhs, "(") && strings.hasSuffix(lhs, ")") {
+        let inside = strings.trimSpace(strings.slice(lhs, 1, lhs.len() - 1))
+        let normalized = normalizeTupleLoopBindings(inside)
+        if !normalized.ok {
+            return LoopRewrite {rewritten: "", ok: false}
+        }
+        return LoopRewrite {rewritten: "for (" + normalized.joined + ") in " + iterable + ".enumerate() \{", ok: true}
+    }
+    let normalized = normalizeTupleLoopBindings(lhs)
+    if !normalized.ok {
+        return LoopRewrite {rewritten: "", ok: false}
+    }
+    LoopRewrite {rewritten: "for (" + normalized.joined + ") in " + iterable + ".enumerate() \{", ok: true}
+}
+/// rewriteForeignLoopHeader is the dispatcher that asks each
+/// shape-specific rewriter in turn. Order matters: JS `for-of`
+/// runs first because its `for (X of Y)` envelope is the only
+/// shape that requires the parenthesised body — it would never
+/// match `range(...)` / `enumerate(...)`. Among the Python shapes,
+/// enumerate is checked before range so a bare `range` inside an
+/// `enumerate(...)` argument is not partially matched.
+pub fn rewriteForeignLoopHeader(trimmed: String) -> ForeignLoopRewrite {
+    let js = rewriteJSForOfHeader(trimmed)
+    if js.ok {
+        return ForeignLoopRewrite {
+            rewritten: js.rewritten,
+            kind: "js_for_of_loop",
+            message: "replace JS-style `for (... of ...)` loop with Osty `for ... in` syntax",
+            ok: true,
+        }
+    }
+    let enumerated = rewritePythonEnumerateLoopHeader(trimmed)
+    if enumerated.ok {
+        return ForeignLoopRewrite {
+            rewritten: enumerated.rewritten,
+            kind: "python_enumerate_loop",
+            message: "replace Python `enumerate(...)` loop with Osty `.enumerate()` iteration",
+            ok: true,
+        }
+    }
+    let ranged = rewritePythonRangeLoopHeader(trimmed)
+    if ranged.ok {
+        return ForeignLoopRewrite {
+            rewritten: ranged.rewritten,
+            kind: "python_range_loop",
+            message: "replace Python `range(...)` loop with Osty range syntax",
+            ok: true,
+        }
+    }
+    ForeignLoopRewrite {rewritten: "", kind: "", message: "", ok: false}
+}

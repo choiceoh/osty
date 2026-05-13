@@ -124,3 +124,120 @@ fn testIsRewritableLengthTypeKindRejectsUnknown() {
     testing.assert(!(isRewritableLengthTypeKind("", "")))
     testing.assert(!(isRewritableLengthTypeKind("primitive", "")))
 }
+fn testNormalizeTupleLoopBindingsRejectsSingle() {
+    let r = normalizeTupleLoopBindings("only_one")
+    testing.assert(!(r.ok))
+}
+fn testNormalizeTupleLoopBindingsTwoIdents() {
+    let r = normalizeTupleLoopBindings("i, value")
+    testing.assert(r.ok)
+    testing.assertEq(r.joined, "i, value")
+}
+fn testNormalizeTupleLoopBindingsTrimsParts() {
+    let r = normalizeTupleLoopBindings("  k ,  v  ")
+    testing.assert(r.ok)
+    testing.assertEq(r.joined, "k, v")
+}
+fn testNormalizeTupleLoopBindingsRejectsExpression() {
+    let r = normalizeTupleLoopBindings("i, foo(x)")
+    testing.assert(!(r.ok))
+}
+fn testRewriteJSForOfHeaderSimple() {
+    let r = rewriteJSForOfHeader("for (item of items) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for item in items \{")
+}
+fn testRewriteJSForOfHeaderConstKeyword() {
+    let r = rewriteJSForOfHeader("for (const item of items) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for item in items \{")
+}
+fn testRewriteJSForOfHeaderLetKeyword() {
+    let r = rewriteJSForOfHeader("for (let x of xs) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for x in xs \{")
+}
+fn testRewriteJSForOfHeaderVarKeyword() {
+    let r = rewriteJSForOfHeader("for (var x of xs) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for x in xs \{")
+}
+fn testRewriteJSForOfHeaderArrayDestructure() {
+    let r = rewriteJSForOfHeader("for (const [k, v] of entries) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for (k, v) in entries \{")
+}
+fn testRewriteJSForOfHeaderRejectsBareFor() {
+    let r = rewriteJSForOfHeader("for x in xs \{")
+    testing.assert(!(r.ok))
+}
+fn testRewriteJSForOfHeaderRejectsBadPatternLhs() {
+    let r = rewriteJSForOfHeader("for (foo(x) of xs) \{")
+    testing.assert(!(r.ok))
+}
+fn testRewritePythonRangeLoopHeaderOneArg() {
+    let r = rewritePythonRangeLoopHeader("for i in range(10) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for i in 0..10 \{")
+}
+fn testRewritePythonRangeLoopHeaderTwoArgs() {
+    let r = rewritePythonRangeLoopHeader("for i in range(2, 8) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for i in 2..8 \{")
+}
+fn testRewritePythonRangeLoopHeaderThreeArgsStepOne() {
+    let r = rewritePythonRangeLoopHeader("for i in range(0, 10, 1) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for i in 0..10 \{")
+}
+fn testRewritePythonRangeLoopHeaderRejectsNonUnitStride() {
+    let r = rewritePythonRangeLoopHeader("for i in range(0, 10, 2) \{")
+    testing.assert(!(r.ok))
+}
+fn testRewritePythonRangeLoopHeaderRejectsFourArgs() {
+    let r = rewritePythonRangeLoopHeader("for i in range(0, 10, 1, x) \{")
+    testing.assert(!(r.ok))
+}
+fn testRewritePythonRangeLoopHeaderRejectsBadBinding() {
+    let r = rewritePythonRangeLoopHeader("for i, j in range(10) \{")
+    testing.assert(!(r.ok))
+}
+fn testRewritePythonEnumerateLoopHeaderBareTuple() {
+    let r = rewritePythonEnumerateLoopHeader("for i, v in enumerate(xs) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for (i, v) in xs.enumerate() \{")
+}
+fn testRewritePythonEnumerateLoopHeaderParenTuple() {
+    let r = rewritePythonEnumerateLoopHeader("for (i, v) in enumerate(items) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "for (i, v) in items.enumerate() \{")
+}
+fn testRewritePythonEnumerateLoopHeaderRejectsBareIdent() {
+    let r = rewritePythonEnumerateLoopHeader("for x in enumerate(xs) \{")
+    testing.assert(!(r.ok))
+}
+fn testRewritePythonEnumerateLoopHeaderRejectsEmptyArg() {
+    let r = rewritePythonEnumerateLoopHeader("for i, v in enumerate() \{")
+    testing.assert(!(r.ok))
+}
+fn testRewriteForeignLoopHeaderJS() {
+    let r = rewriteForeignLoopHeader("for (item of items) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.kind, "js_for_of_loop")
+    testing.assertEq(r.rewritten, "for item in items \{")
+}
+fn testRewriteForeignLoopHeaderEnumerate() {
+    let r = rewriteForeignLoopHeader("for i, v in enumerate(xs) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.kind, "python_enumerate_loop")
+}
+fn testRewriteForeignLoopHeaderRange() {
+    let r = rewriteForeignLoopHeader("for i in range(10) \{")
+    testing.assert(r.ok)
+    testing.assertEq(r.kind, "python_range_loop")
+}
+fn testRewriteForeignLoopHeaderUnknown() {
+    let r = rewriteForeignLoopHeader("if cond \{")
+    testing.assert(!(r.ok))
+    testing.assertEq(r.kind, "")
+}
