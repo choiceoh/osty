@@ -1823,9 +1823,21 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
             return lirAggregateType(typeName)
         }
     }
+    // Payload-free user enums lower to `i64` discriminant; matches the
+    // function-context path. Payload-bearing enums still hit the diag
+    // below since the tag-plus-payload aggregate shape needs deeper
+    // work.
+    for layout in mir.layouts.enums {
+        if lirMirEnumLayoutMatches(layout, name) {
+            if lirMirEnumIsPayloadFree(layout) {
+                return lirIntType(64)
+            }
+        }
+    }
     let layoutCount = mir.layouts.structs.len()
     let interfaceCount = mir.layouts.interfaces.len()
-    let trace = "primitive miss; ref-builtin miss; option/result miss; " + lirIntToString(interfaceCount) + " interface layout(s) checked, no match; " + lirIntToString(layoutCount) + " struct layout(s) checked, no match"
+    let enumCount = mir.layouts.enums.len()
+    let trace = "primitive miss; ref-builtin miss; option/result miss; " + lirIntToString(interfaceCount) + " interface layout(s) checked, no match; " + lirIntToString(layoutCount) + " struct layout(s) checked, no match; " + lirIntToString(enumCount) + " enum layout(s) checked, no match"
     diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "` (" + trace + ")", path))
     lirTypeInvalid()
 }
@@ -6819,6 +6831,20 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
             return lirAggregateType(typeName)
         }
     }
+    // Payload-free user enums lower to a bare `i64` discriminant.
+    // Payload-bearing enums still surface as unsupported here — the
+    // tag-plus-payload aggregate layout needs a richer LIR mapping
+    // (and is separately handled when the enum is constructed via
+    // `lirLowerMirEnumVariantAggregate`).
+    for layout in l.mirModule.layouts.enums {
+        if lirMirEnumLayoutMatches(layout, name) {
+            if lirMirEnumIsPayloadFree(layout) {
+                return lirIntType(64)
+            }
+            // Payload-bearing: fall through to invalid below, preserving
+            // the existing "unsupported" diagnostic for that shape.
+        }
+    }
     if strings.contains(name, "(") {
         return lirFunctionType(name)
     }
@@ -6861,6 +6887,34 @@ fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
         return true
     }
     false
+}
+// Mirrors `lirMirStructLayoutMatches` for `MirEnumLayout` so the
+// type-lowering path can recognize user-defined enums.
+fn lirMirEnumLayoutMatches(layout: MirEnumLayout, name: String) -> Bool {
+    if layout.name == name || layout.mangled == name {
+        return true
+    }
+    if layout.name != "" && "%" + layout.name == name {
+        return true
+    }
+    if layout.mangled != "" && "%" + layout.mangled == name {
+        return true
+    }
+    false
+}
+// `lirMirEnumIsPayloadFree` reports whether every variant in `layout`
+// carries no payload — i.e. the enum is a flat tag-only sum
+// (`enum Color { Red, Green, Blue }`). Payload-free enums lower to a
+// bare i64 discriminant at the LLVM boundary; payload-bearing enums
+// need the `{ i64 tag, payload }` shape which is more involved and
+// stays unsupported in this entry path for now.
+fn lirMirEnumIsPayloadFree(layout: MirEnumLayout) -> Bool {
+    for variant in layout.variants {
+        if variant.payload.len() != 0 {
+            return false
+        }
+    }
+    true
 }
 fn lirMirTupleLayoutMatches(layout: MirTupleLayout, name: String) -> Bool {
     if layout.key == name || layout.mangled == name {
