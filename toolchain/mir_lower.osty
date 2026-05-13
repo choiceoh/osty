@@ -722,6 +722,7 @@ fn mirLowerCopyFnAnnotations(out: MirFunction, decl: HirFnDecl) {
 /// `newFunction`. Must run before any body lowering.
 pub fn mirLowerSeedFunction(out: MirFunction, params: List<HirParam>, retT: HirType, span: MirSpan) {
     let retLocal = mirFunctionNewLocal(out, "_return", hirTypeString(retT), true, span)
+    out.locals[retLocal].isReturn = true
     out.returnLocal = retLocal
     let mut idx = 0
     for p in params {
@@ -733,6 +734,7 @@ pub fn mirLowerSeedFunction(out: MirFunction, params: List<HirParam>, retT: HirT
         let paramTypeText = hirTypeString(p.typ)
         let paramSpan = mirSpanFromHir(p.span)
         let id = mirFunctionNewLocal(out, paramName, paramTypeText, true, paramSpan)
+        out.locals[id].isParam = true
         out.params.push(id)
         idx = idx + 1
     }
@@ -5972,9 +5974,11 @@ pub fn mirLowerClosureRValue(bs: MirLowerBodyState, e: HirExpr, hint: HirType) -
     let span = mirSpanFromHir(e.span)
     let mut lifted = mirFunction(symbol, hirTypeString(retT), span)
     let retLocal = mirFunctionNewLocal(lifted, "_return", hirTypeString(retT), true, span)
+    lifted.locals[retLocal].isReturn = true
     lifted.returnLocal = retLocal
     let envType = mirLowerClosureEnvType()
     let envLocal = mirFunctionNewLocal(lifted, "_env", hirTypeString(envType), false, span)
+    lifted.locals[envLocal].isParam = true
     lifted.params.push(envLocal)
     let mut userIdx = 0
     for p in e.closureParams {
@@ -5989,6 +5993,7 @@ pub fn mirLowerClosureRValue(bs: MirLowerBodyState, e: HirExpr, hint: HirType) -
             hirTypeErr()
         }
         let id = mirFunctionNewLocal(lifted, paramName, hirTypeString(pt), false, mirSpanFromHir(p.span))
+        lifted.locals[id].isParam = true
         lifted.params.push(id)
         userIdx = userIdx + 1
     }
