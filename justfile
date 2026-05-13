@@ -160,8 +160,17 @@ osty: build verify-selfhost
     just osty-tests
 
 osty-tests:
+    #!/usr/bin/env bash
     set -euo pipefail
     test -x {{bin}} || just build
+    # Example packages compile through the LLVM + mir-direct path, which
+    # requires a cached `osty-self` (see `just bootstrap` / `osty install-self`).
+    # Fresh checkouts should still pass `just front` / `just short` without a
+    # multi-minute toolchain build.
+    if ! {{bin}} cache-self --check >/dev/null 2>&1; then
+        echo "skip osty-tests: no selfhostcache osty-self (run \`just bootstrap\` to enable)" >&2
+        exit 0
+    fi
     for dir in {{osty_test_dirs}}; do {{bin}} test --seed 0x1 "$dir"; done
 
 test pkg="./...":
