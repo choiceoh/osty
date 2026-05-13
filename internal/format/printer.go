@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -110,47 +111,33 @@ func (p *printer) printFile(f *ast.File) {
 	})
 }
 
-// useGroupOrder bins a use decl into the canonical group order:
-// 0 = stdlib (`std.*`), 1 = external (everything else that's not
-// FFI), 2 = FFI.
+// useGroupOrder bins a use decl into the canonical group order.
+// Policy lives in toolchain/format_policy.osty; this wrapper just
+// extracts the primitive inputs the policy needs.
 func useGroupOrder(u *ast.UseDecl) int {
-	if u.IsFFI() {
-		return 2
+	firstSeg := ""
+	if len(u.Path) > 0 {
+		firstSeg = u.Path[0]
 	}
-	if len(u.Path) > 0 && u.Path[0] == "std" {
-		return 0
-	}
-	return 1
+	return runner.UseGroupOrder(u.IsFFI(), firstSeg)
 }
 
-// useSortKey is the intra-group sort key — the RawPath when set
-// (preserves github.com/... style), otherwise the dotted path.
+// useSortKey is the intra-group sort key for `use` decls. Policy
+// lives in toolchain/format_policy.osty.
 func useSortKey(u *ast.UseDecl) string {
+	ffiPath := ""
 	if u.IsFFI() {
-		return u.FFIPath()
+		ffiPath = u.FFIPath()
 	}
-	if u.RawPath != "" {
-		return u.RawPath
-	}
-	return strings.Join(u.Path, ".")
+	return runner.UseSortKey(u.IsFFI(), ffiPath, u.RawPath, strings.Join(u.Path, "."))
 }
 
-// useCSurfaceLibName recognizes a runtime FFI path of the form
-// `runtime.cabi.<lib>` (single trailing segment) and returns the
-// library name so the printer can round-trip it as `use c "<lib>"`
-// rather than the canonical runtime form. Multi-segment cabi paths
-// (e.g. `runtime.cabi.libc.subgroup`) fall through to the runtime
-// printer because `use c` only carries one library name.
+// useCSurfaceLibName recognises the `runtime.cabi.<lib>` sugar so
+// the printer can round-trip it as `use c "<lib>"`. Policy lives
+// in toolchain/format_policy.osty.
 func useCSurfaceLibName(runtimePath string) (string, bool) {
-	const prefix = "runtime.cabi."
-	if !strings.HasPrefix(runtimePath, prefix) {
-		return "", false
-	}
-	lib := runtimePath[len(prefix):]
-	if lib == "" || strings.ContainsAny(lib, "./") {
-		return "", false
-	}
-	return lib, true
+	r := runner.UseCSurfaceLibName(runtimePath)
+	return r.Lib, r.Ok
 }
 
 // chainSeg is one link in a method chain, e.g. `.map(|x| x * 2)` in
@@ -245,31 +232,21 @@ func reverseSegs(s []*chainSeg) []*chainSeg {
 }
 
 // shouldBreakChain reports whether a chain should render in the
-// leading-dot multi-line form. Two triggers fire it:
-//   - 3 or more post-base segments (regardless of source layout) —
-//     §1.8 encourages the leading-dot style for long chains.
-//   - any post-base segment's `.name` that appears on a line below
-//     where the previous segment ended — the author already broke the
-//     chain in source; preserve that layout.
-//
-// nameEnd is the end position of the `.name` portion (before the `(`),
-// so a multi-line argument block in the segment's call doesn't push
-// the measurement onto a later line and feedback-loop fmt(fmt(x)).
+// leading-dot multi-line form. Policy lives in
+// toolchain/format_policy.osty; this wrapper extracts the line
+// numbers the policy needs from the AST positions.
 func shouldBreakChain(base ast.Expr, segs []*chainSeg) bool {
 	if len(segs) == 0 {
 		return false
 	}
-	if len(segs) >= 3 {
-		return true
-	}
-	prev := base.End().Line
-	for _, s := range segs {
-		if s.nameEnd.Line != prev {
-			return true
+	lines := make([]runner.ChainSegLines, len(segs))
+	for i, s := range segs {
+		lines[i] = runner.ChainSegLines{
+			NameEndLine: s.nameEnd.Line,
+			EndLine:     s.end.Line,
 		}
-		prev = s.end.Line
 	}
-	return false
+	return runner.ShouldBreakChain(base.End().Line, lines)
 }
 
 // printMethodChain emits a chain with the base on its own line and

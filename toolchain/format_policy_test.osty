@@ -1,0 +1,84 @@
+use std.testing
+fn testUseGroupOrderStdlib() {
+    testing.assertEq(useGroupOrder(false, "std"), 0)
+}
+fn testUseGroupOrderExternal() {
+    testing.assertEq(useGroupOrder(false, "github.com"), 1)
+    testing.assertEq(useGroupOrder(false, "mypkg"), 1)
+    testing.assertEq(useGroupOrder(false, ""), 1)
+}
+fn testUseGroupOrderFFI() {
+    testing.assertEq(useGroupOrder(true, "go"), 2)
+    testing.assertEq(useGroupOrder(true, "std"), 2)
+    testing.assertEq(useGroupOrder(true, ""), 2)
+}
+fn testUseSortKeyFFI() {
+    testing.assertEq(useSortKey(true, "net/http", "ignored", "ignored.too"), "net/http")
+}
+fn testUseSortKeyRawPath() {
+    testing.assertEq(useSortKey(false, "", "github.com/x/y", "x.y"), "github.com/x/y")
+}
+fn testUseSortKeyDottedPath() {
+    testing.assertEq(useSortKey(false, "", "", "std.io"), "std.io")
+}
+fn testUseCSurfaceLibNameSimple() {
+    let r = useCSurfaceLibName("runtime.cabi.libc")
+    testing.assert(r.ok)
+    testing.assertEq(r.lib, "libc")
+}
+fn testUseCSurfaceLibNameRejectsNoPrefix() {
+    let r = useCSurfaceLibName("runtime.go.libc")
+    testing.assert(!(r.ok))
+    testing.assertEq(r.lib, "")
+}
+fn testUseCSurfaceLibNameRejectsMultiSegment() {
+    let r = useCSurfaceLibName("runtime.cabi.libc.subgroup")
+    testing.assert(!(r.ok))
+    testing.assertEq(r.lib, "")
+}
+fn testUseCSurfaceLibNameRejectsSlash() {
+    let r = useCSurfaceLibName("runtime.cabi.libc/extra")
+    testing.assert(!(r.ok))
+}
+fn testUseCSurfaceLibNameRejectsEmptyLib() {
+    let r = useCSurfaceLibName("runtime.cabi.")
+    testing.assert(!(r.ok))
+}
+fn testShouldBreakChainEmpty() {
+    let segs: List<ChainSegLines> = []
+    testing.assert(!(shouldBreakChain(1, segs)))
+}
+fn testShouldBreakChainShortSameLine() {
+    let segs: List<ChainSegLines> = [
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+    ]
+    testing.assert(!(shouldBreakChain(1, segs)))
+}
+fn testShouldBreakChainThreeOrMore() {
+    let segs: List<ChainSegLines> = [
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+    ]
+    testing.assert(shouldBreakChain(1, segs))
+}
+fn testShouldBreakChainSourceBreak() {
+    let segs: List<ChainSegLines> = [
+        ChainSegLines {nameEndLine: 2, endLine: 2},
+    ]
+    testing.assert(shouldBreakChain(1, segs))
+}
+fn testShouldBreakChainPreservesPriorBreak() {
+    let segs: List<ChainSegLines> = [
+        ChainSegLines {nameEndLine: 1, endLine: 1},
+        ChainSegLines {nameEndLine: 2, endLine: 2},
+    ]
+    testing.assert(shouldBreakChain(1, segs))
+}
+fn testShouldBreakChainMultiLineCallStaysFlat() {
+    let segs: List<ChainSegLines> = [
+        ChainSegLines {nameEndLine: 1, endLine: 5},
+    ]
+    testing.assert(!(shouldBreakChain(1, segs)))
+}
