@@ -6778,7 +6778,14 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     }
     if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
         let typeName = "%" + lirMangleAlgebraicTypeName(name)
-        lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+        // Match the module-context widening (`lirAlgebraicAggregateBody_module`
+        // at line 1868): when the payload type is a user struct, the typedef
+        // body widens to `{ i64, %StructMangled }`. The function-context path
+        // previously hardcoded `{ i64, i64 }`, truncating the payload to 8
+        // bytes — Option<BigStruct> first introduced inside a function body
+        // would mint the wrong typedef for the whole module.
+        let body = lirAlgebraicAggregateBody_module(l.out, l.mirModule, name)
+        lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, body))
         return lirAggregateType(typeName)
     }
     for layout in l.mirModule.layouts.structs {
