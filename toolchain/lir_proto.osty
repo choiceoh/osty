@@ -6944,7 +6944,11 @@ fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
     false
 }
 // Mirrors `lirMirStructLayoutMatches` for `MirEnumLayout` so the
-// type-lowering path can recognize user-defined enums.
+// type-lowering path can recognize user-defined enums. Generic
+// instantiations (`Maybe<Int>` against the bare `Maybe` declaration)
+// are linked by prefix — the layout-lookup site uses the
+// `{ i64 disc, i64 payload }` narrow shape so per-instantiation
+// field-type recursion isn't needed here.
 fn lirMirEnumLayoutMatches(layout: MirEnumLayout, name: String) -> Bool {
     if layout.name == name || layout.mangled == name {
         return true
@@ -6953,6 +6957,12 @@ fn lirMirEnumLayoutMatches(layout: MirEnumLayout, name: String) -> Bool {
         return true
     }
     if layout.mangled != "" && "%" + layout.mangled == name {
+        return true
+    }
+    if layout.name != "" && strings.startsWith(name, layout.name + "<") {
+        return true
+    }
+    if layout.mangled != "" && strings.startsWith(name, layout.mangled + "<") {
         return true
     }
     false
