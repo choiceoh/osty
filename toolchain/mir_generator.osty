@@ -17541,7 +17541,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicListLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_list_len"),
         MirIntrinsicListIsEmpty -> mirEmitListIsEmptyIntrinsic(func, instr),
         MirIntrinsicListReverse -> mirEmitListReverseIntrinsic(instr),
-        MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, instr),
+        MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicMapLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_map_len"),
         MirIntrinsicMapClear -> mirEmitMapClearIntrinsic(instr),
         MirIntrinsicMapKeys -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_keys"),
@@ -17580,15 +17580,15 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicStringLastIndexOf -> mirEmitStringLastIndexOfIntrinsic(func, instr),
         MirIntrinsicStringSplitInto -> mirEmitStringSplitIntoIntrinsic(instr),
         MirIntrinsicStringNthSegment -> mirEmitStringNthSegmentIntrinsic(func, instr),
-        MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(func, instr, true),
-        MirIntrinsicListLast -> mirEmitListEdgeIntrinsic(func, instr, false),
-        MirIntrinsicListIndexOf -> mirEmitListIndexOfIntrinsic(func, instr),
+        MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(func, blockId, instrIdx, instr, true),
+        MirIntrinsicListLast -> mirEmitListEdgeIntrinsic(func, blockId, instrIdx, instr, false),
+        MirIntrinsicListIndexOf -> mirEmitListIndexOfIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicListSorted -> mirEmitListSortedIntrinsic(func, instr),
         MirIntrinsicListToSet -> mirEmitListToSetIntrinsic(func, instr),
         MirIntrinsicListRemoveAt -> mirEmitListRemoveAtIntrinsic(func, instr),
         MirIntrinsicListReversed -> mirEmitListReversedIntrinsic(func, instr),
         MirIntrinsicListToString -> mirEmitListToStringIntrinsic(func, instr),
-        MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, instr),
+        MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicListSlice -> mirEmitListSliceIntrinsic(func, instr),
         MirIntrinsicListInsert -> mirEmitListInsertIntrinsic(instr),
         MirIntrinsicListClear -> mirEmitListClearIntrinsic(instr),
@@ -18596,6 +18596,7 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_list_to_string_byte(ptr)\n"
     out = out + "declare i1 @osty_rt_list_contains_str(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_Contains(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_strings_Equal(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)\n"
     out = out + "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)\n"
@@ -19116,18 +19117,66 @@ fn mirEmitListReverseIntrinsic(instr: MirInstr) -> String {
     let arg = mirEmitOperand(instr.args[0])
     "  call void @osty_rt_list_reverse(ptr " + arg + ")\n"
 }
-fn mirEmitListContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitListContainsIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO list contains intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let list = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
-    let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    if instr.args[1].typ == "String" {
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let mut elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    if elemLLVM == "" {
+        elemLLVM = mirEmitOperandLLVMType(instr.args[1])
+    }
+    if elemName == "String" || instr.args[1].typ == "String" {
         return "  " + dest + " = call i1 @osty_rt_list_contains_str(ptr " + list + ", ptr " + item + ")\n"
     }
-    "  ; TODO list contains inline scan for elem type \"" + itemTy + "\"\n"
+    let getSym = mirEmitListGetSymbolForType(elemName, elemLLVM)
+    if getSym == "" {
+        return "  ; TODO list contains inline scan for elem type \"" + elemLLVM + "\"\n"
+    }
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let resultSlot = base + ".contains"
+    let idxSlot = base + ".idx"
+    let lenReg = base + ".len"
+    let headLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.contains.head")
+    let bodyLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.contains.body")
+    let hitLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.contains.hit")
+    let nextLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.contains.next")
+    let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.contains.done")
+    let idxReg = base + ".i"
+    let contReg = base + ".cont"
+    let elemReg = base + ".elem"
+    let matchReg = base + ".match"
+    let nextReg = base + ".next"
+    let cmpLine = mirEmitListScanCompareLine(matchReg, elemLLVM, elemName, elemReg, item)
+    if cmpLine == "" {
+        return "  ; TODO list contains compare for elem type \"" + elemLLVM + "\"\n"
+    }
+    let mut out = "  " + resultSlot + " = alloca i1, align 1\n"
+    out = out + "  store i1 0, ptr " + resultSlot + ", align 1\n"
+    out = out + "  " + idxSlot + " = alloca i64, align 8\n"
+    out = out + "  store i64 0, ptr " + idxSlot + ", align 8\n"
+    out = out + "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + list + ")\n"
+    out = out + "  br label %" + headLabel + "\n"
+    out = out + mirLabelLine(headLabel)
+    out = out + "  " + idxReg + " = load i64, ptr " + idxSlot + ", align 8\n"
+    out = out + "  " + contReg + " = icmp slt i64 " + idxReg + ", " + lenReg + "\n"
+    out = out + "  br i1 " + contReg + ", label %" + bodyLabel + ", label %" + doneLabel + "\n"
+    out = out + mirLabelLine(bodyLabel)
+    out = out + "  " + elemReg + " = call " + elemLLVM + " @" + getSym + "(ptr " + list + ", i64 " + idxReg + ")\n"
+    out = out + cmpLine
+    out = out + "  br i1 " + matchReg + ", label %" + hitLabel + ", label %" + nextLabel + "\n"
+    out = out + mirLabelLine(hitLabel)
+    out = out + "  store i1 1, ptr " + resultSlot + ", align 1\n"
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(nextLabel)
+    out = out + "  " + nextReg + " = add i64 " + idxReg + ", 1\n"
+    out = out + "  store i64 " + nextReg + ", ptr " + idxSlot + ", align 8\n"
+    out = out + "  br label %" + headLabel + "\n"
+    out = out + mirLabelLine(doneLabel)
+    out + "  " + dest + " = load i1, ptr " + resultSlot + ", align 1\n"
 }
 fn mirEmitMapClearIntrinsic(instr: MirInstr) -> String {
     if instr.args.len() != 1 {
@@ -19143,6 +19192,44 @@ fn mirEmitContainerCopyIntrinsic(func: MirFunction, instr: MirInstr, sym: String
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
     "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
+}
+fn mirEmitIntrinsicAuxLabel(blockId: Int, instrIdx: Int, suffix: String) -> String {
+    "mir.b" + mirGenIntToString(blockId) + ".i" + mirGenIntToString(instrIdx) + "." + suffix
+}
+fn mirEmitOptionNoneToSlotLines(prefix: String, optLLVM: String, slot: String) -> String {
+    let step = prefix + ".none0"
+    let full = prefix + ".none"
+    let mut out = "  " + step + " = insertvalue " + optLLVM + " undef, i64 " + mirDiscriminantNone() + ", 0\n"
+    out = out + "  " + full + " = insertvalue " + optLLVM + " " + step + ", i64 0, 1\n"
+    out + "  store " + optLLVM + " " + full + ", ptr " + slot + ", align 8\n"
+}
+fn mirEmitOptionSomeToSlotLines(prefix: String, optLLVM: String, payloadLLVM: String, payload: String, slot: String) -> String {
+    let mut out = ""
+    let mut payloadI64 = payload
+    if payloadLLVM != "i64" {
+        payloadI64 = prefix + ".raw"
+        out = out + mirEmitWidenPayloadLine(payloadI64, payloadLLVM, payload)
+    }
+    let step = prefix + ".some0"
+    let full = prefix + ".some"
+    out = out + "  " + step + " = insertvalue " + optLLVM + " undef, i64 " + mirDiscriminantSome() + ", 0\n"
+    out = out + "  " + full + " = insertvalue " + optLLVM + " " + step + ", i64 " + payloadI64 + ", 1\n"
+    out + "  store " + optLLVM + " " + full + ", ptr " + slot + ", align 8\n"
+}
+fn mirEmitListScanCompareLine(dest: String, elemLLVM: String, elemTypeName: String, elem: String, needle: String) -> String {
+    if elemTypeName == "String" {
+        return "  " + dest + " = call i1 @osty_rt_strings_Equal(ptr " + elem + ", ptr " + needle + ")\n"
+    }
+    if elemLLVM == "double" {
+        return "  " + dest + " = fcmp oeq double " + elem + ", " + needle + "\n"
+    }
+    if elemLLVM == "ptr" {
+        return "  " + dest + " = icmp eq ptr " + elem + ", " + needle + "\n"
+    }
+    if elemLLVM == "i64" || elemLLVM == "i1" || elemLLVM == "i32" || elemLLVM == "i16" || elemLLVM == "i8" {
+        return "  " + dest + " = icmp eq " + elemLLVM + " " + elem + ", " + needle + "\n"
+    }
+    ""
 }
 // -------- String intrinsics expansion --------
 fn mirEmitStringLenIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -19334,17 +19421,129 @@ fn mirEmitStringNthSegmentIntrinsic(func: MirFunction, instr: MirInstr) -> Strin
     "  " + dest + " = call ptr @osty_rt_strings_NthSegment(ptr " + s + ", ptr " + sep + ", i64 " + idx + ")\n"
 }
 // -------- List (continued) --------
-fn mirEmitListEdgeIntrinsic(func: MirFunction, instr: MirInstr, isFirst: Bool) -> String {
+fn mirEmitListEdgeIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO list first/last intrinsic\n"
     }
-    "  ; TODO list first/last Option<T> lowering needs CFG in self-host emitter\n"
+    mirEmitListOptionProbeIntrinsic(func, blockId, instrIdx, instr, isFirst, false)
 }
-fn mirEmitListIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitListIndexOfIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO list indexOf intrinsic\n"
     }
-    "  ; TODO list indexOf inline scan in self-host emitter\n"
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO list indexOf into projected dest\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let optLLVM = mirEmitParamType(func, instr.dest.local)
+    if mirStringStartsWith(optLLVM, "\{") == false {
+        return "  ; TODO list indexOf dest type \"" + optLLVM + "\"\n"
+    }
+    let list = mirEmitOperand(instr.args[0])
+    let needle = mirEmitOperand(instr.args[1])
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let mut elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    if elemLLVM == "" {
+        elemLLVM = mirEmitOperandLLVMType(instr.args[1])
+    }
+    let getSym = mirEmitListGetSymbolForType(elemName, elemLLVM)
+    if getSym == "" {
+        return "  ; TODO list indexOf inline scan for elem type \"" + elemLLVM + "\"\n"
+    }
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let resultSlot = base + ".indexof"
+    let idxSlot = base + ".idx"
+    let lenReg = base + ".len"
+    let headLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.head")
+    let bodyLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.body")
+    let someLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.some")
+    let nextLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.next")
+    let noneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.none")
+    let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.indexOf.done")
+    let idxReg = base + ".i"
+    let contReg = base + ".cont"
+    let elemReg = base + ".elem"
+    let matchReg = base + ".match"
+    let nextReg = base + ".next"
+    let cmpLine = mirEmitListScanCompareLine(matchReg, elemLLVM, elemName, elemReg, needle)
+    if cmpLine == "" {
+        return "  ; TODO list indexOf compare for elem type \"" + elemLLVM + "\"\n"
+    }
+    let mut out = "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
+    out = out + "  " + idxSlot + " = alloca i64, align 8\n"
+    out = out + "  store i64 0, ptr " + idxSlot + ", align 8\n"
+    out = out + "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + list + ")\n"
+    out = out + "  br label %" + headLabel + "\n"
+    out = out + mirLabelLine(headLabel)
+    out = out + "  " + idxReg + " = load i64, ptr " + idxSlot + ", align 8\n"
+    out = out + "  " + contReg + " = icmp slt i64 " + idxReg + ", " + lenReg + "\n"
+    out = out + "  br i1 " + contReg + ", label %" + bodyLabel + ", label %" + noneLabel + "\n"
+    out = out + mirLabelLine(bodyLabel)
+    out = out + "  " + elemReg + " = call " + elemLLVM + " @" + getSym + "(ptr " + list + ", i64 " + idxReg + ")\n"
+    out = out + cmpLine
+    out = out + "  br i1 " + matchReg + ", label %" + someLabel + ", label %" + nextLabel + "\n"
+    out = out + mirLabelLine(someLabel)
+    out = out + mirEmitOptionSomeToSlotLines(base + ".idxhit", optLLVM, "i64", idxReg, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(nextLabel)
+    out = out + "  " + nextReg + " = add i64 " + idxReg + ", 1\n"
+    out = out + "  store i64 " + nextReg + ", ptr " + idxSlot + ", align 8\n"
+    out = out + "  br label %" + headLabel + "\n"
+    out = out + mirLabelLine(noneLabel)
+    out = out + mirEmitOptionNoneToSlotLines(base + ".idxmiss", optLLVM, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(doneLabel)
+    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+}
+fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool, popAfterRead: Bool) -> String {
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO list option probe into projected dest\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let optLLVM = mirEmitParamType(func, instr.dest.local)
+    if mirStringStartsWith(optLLVM, "\{") == false {
+        return "  ; TODO list option probe dest type \"" + optLLVM + "\"\n"
+    }
+    let list = mirEmitOperand(instr.args[0])
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    let getSym = mirEmitListGetSymbolForType(elemName, elemLLVM)
+    if getSym == "" {
+        return "  ; TODO list option probe for elem type \"" + elemName + "\"\n"
+    }
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let resultSlot = base + ".listopt"
+    let lenReg = base + ".len"
+    let emptyReg = base + ".empty"
+    let idxReg = base + ".idx"
+    let elemReg = base + ".elem"
+    let noneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.none")
+    let someLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.some")
+    let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.done")
+    let mut out = "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
+    out = out + "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + list + ")\n"
+    out = out + "  " + emptyReg + " = icmp eq i64 " + lenReg + ", 0\n"
+    out = out + "  br i1 " + emptyReg + ", label %" + noneLabel + ", label %" + someLabel + "\n"
+    out = out + mirLabelLine(noneLabel)
+    out = out + mirEmitOptionNoneToSlotLines(base + ".none", optLLVM, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(someLabel)
+    let idxValue = if isFirst {
+        "0"
+    } else {
+        idxReg
+    }
+    if isFirst == false {
+        out = out + "  " + idxReg + " = sub i64 " + lenReg + ", 1\n"
+    }
+    out = out + "  " + elemReg + " = call " + elemLLVM + " @" + getSym + "(ptr " + list + ", i64 " + idxValue + ")\n"
+    if popAfterRead {
+        out = out + "  call void @osty_rt_list_pop_discard(ptr " + list + ")\n"
+    }
+    out = out + mirEmitOptionSomeToSlotLines(base + ".some", optLLVM, elemLLVM, elemReg, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(doneLabel)
+    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
 fn mirEmitListSortedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19416,13 +19615,13 @@ fn mirEmitListToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
 }
-fn mirEmitListPopIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitListPopIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 {
         return "  ; TODO list pop intrinsic\n"
     }
     let list = mirEmitOperand(instr.args[0])
     if instr.hasDest {
-        return "  ; TODO list pop Option<T> lowering needs CFG in self-host emitter\n"
+        return mirEmitListOptionProbeIntrinsic(func, blockId, instrIdx, instr, false, true)
     }
     "  call void @osty_rt_list_pop_discard(ptr " + list + ")\n"
 }
