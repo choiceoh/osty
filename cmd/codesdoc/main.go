@@ -54,6 +54,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 func main() {
@@ -211,13 +213,10 @@ type codeEntry struct {
 }
 
 // parsedDoc is the structured content of a code's doc comment.
-type parsedDoc struct {
-	Summary string   // the first paragraph, collapsed to one line
-	Body    []string // subsequent prose paragraphs, preserved as-is
-	Spec    string   // e.g. "v0.3 §1.6.1", empty if absent
-	Example string   // raw osty code snippet, empty if absent
-	Fix     string   // the "Fix:" line's text, empty if absent
-}
+// The shape is owned by toolchain/diag_explain.osty's
+// ParsedExplainDoc; we alias it locally so call sites keep using
+// the short name and the parser implementation stays single-source.
+type parsedDoc = runner.ParsedExplainDoc
 
 // phaseGroup bundles consecutive codeEntries that share a phase heading.
 type phaseGroup struct {
@@ -440,154 +439,27 @@ func constStringValue(exprs []ast.Expr, i int) (string, bool) {
 	return strings.Trim(lit.Value, "\""), true
 }
 
-// parseDocComment turns a CommentGroup like
-//
-//	// summary line.
-//	//
-//	// body paragraph one.
-//	//
-//	// Spec: v0.3 §X.Y
-//	// Example:
-//	//   osty snippet line 1
-//	//   osty snippet line 2
-//	// Fix: remedy
-//
-// into a structured parsedDoc. Missing sections are zero-valued; missing
-// summary yields an empty Summary (the generator will surface a TODO).
+// parseDocComment strips the `//` prefix and an optional leading
+// space from each comment in `cg`, then delegates the
+// sectioning/paragraph/example-indent policy to the toolchain
+// (toolchain/diag_explain.osty via runner.ParseExplainDoc). The
+// result shape matches the runtime explain surface in
+// internal/diag — both consumers parse codes.go identically.
 func parseDocComment(cg *ast.CommentGroup) parsedDoc {
 	if cg == nil {
 		return parsedDoc{}
 	}
-	// Convert lines to plain text (strip `// ` / `//` prefixes).
 	lines := make([]string, 0, len(cg.List))
 	for _, c := range cg.List {
 		text := strings.TrimPrefix(c.Text, "//")
-		// Don't TrimSpace yet — we need to preserve indentation inside
-		// Example: blocks. But drop one leading space if present,
-		// which is the idiomatic Go comment prefix.
+		// Don't TrimSpace yet — Example: blocks need their
+		// indentation preserved. Drop one idiomatic leading space.
 		if strings.HasPrefix(text, " ") {
 			text = text[1:]
 		}
 		lines = append(lines, text)
 	}
-
-	var doc parsedDoc
-	var exampleLines []string
-	var bodyParas [][]string
-	var curPara []string
-
-	flushPara := func() {
-		if len(curPara) == 0 {
-			return
-		}
-		if doc.Summary == "" {
-			// First paragraph is the summary — collapse to one line.
-			doc.Summary = strings.TrimSuffix(
-				strings.Join(strimAll(curPara), " "), ".")
-			if doc.Summary != "" {
-				doc.Summary += "."
-			}
-		} else {
-			bodyParas = append(bodyParas, append([]string(nil), curPara...))
-		}
-		curPara = nil
-	}
-
-	section := ""
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// Section markers come first.
-		switch {
-		case strings.HasPrefix(trimmed, "Spec:"):
-			flushPara()
-			section = ""
-			doc.Spec = strings.TrimSpace(strings.TrimPrefix(trimmed, "Spec:"))
-			continue
-		case strings.HasPrefix(trimmed, "Fix:"):
-			flushPara()
-			section = ""
-			doc.Fix = strings.TrimSpace(strings.TrimPrefix(trimmed, "Fix:"))
-			continue
-		case trimmed == "Example:":
-			flushPara()
-			section = "example"
-			continue
-		}
-		if section == "example" {
-			// Preserve the original line (with its leading indentation
-			// after the `// ` prefix). Blank lines end the block ONLY if
-			// followed by a non-indented line; but to keep the format
-			// simple we take every following line up to the next
-			// section marker as part of the example.
-			exampleLines = append(exampleLines, line)
-			continue
-		}
-		if trimmed == "" {
-			flushPara()
-			continue
-		}
-		curPara = append(curPara, line)
-	}
-	flushPara()
-
-	doc.Body = joinParagraphs(bodyParas)
-	if len(exampleLines) > 0 {
-		doc.Example = trimExample(exampleLines)
-	}
-	return doc
-}
-
-// strimAll is strings.TrimSpace applied to every entry.
-func strimAll(xs []string) []string {
-	out := make([]string, len(xs))
-	for i, s := range xs {
-		out[i] = strings.TrimSpace(s)
-	}
-	return out
-}
-
-// joinParagraphs re-flows each paragraph to a single line and returns
-// the list.
-func joinParagraphs(paras [][]string) []string {
-	out := make([]string, 0, len(paras))
-	for _, p := range paras {
-		out = append(out, strings.Join(strimAll(p), " "))
-	}
-	return out
-}
-
-// trimExample removes leading/trailing empty lines and the shared
-// indentation of the example block. Comment lines are `  code` after
-// the `// ` prefix strip; we trim the common 2-space indent.
-func trimExample(lines []string) string {
-	// Trim trailing blanks.
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	// Trim leading blanks.
-	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
-		lines = lines[1:]
-	}
-	// Compute smallest leading-space count (ignoring blanks).
-	minIndent := -1
-	for _, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		count := len(l) - len(strings.TrimLeft(l, " "))
-		if minIndent < 0 || count < minIndent {
-			minIndent = count
-		}
-	}
-	if minIndent <= 0 {
-		return strings.Join(lines, "\n")
-	}
-	for i, l := range lines {
-		if len(l) >= minIndent {
-			lines[i] = l[minIndent:]
-		}
-	}
-	return strings.Join(lines, "\n")
+	return runner.ParseExplainDoc(lines)
 }
 
 // defaultHeadingFor invents a heading when the const block has no
