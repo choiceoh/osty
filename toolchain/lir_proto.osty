@@ -3601,14 +3601,24 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // the caller is responsible for zext / ptrtoint / bitcast as
 // appropriate. Returns the temporary holding the constructed aggregate.
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
-    if lirAggregateHasWidenedPayload(l.out, optType) {
-        lirLowerError(l, LirDiagUnsupported, "Option<Struct> None construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", "option.none.widened")
-        return "undef"
-    }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
-    l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), "0"), [1]))
+    let payloadOp = if lirAggregateHasWidenedPayload(l.out, optType) {
+        // Widened Option<Struct> shape: `{ i64 tag, %Struct payload }`.
+        // None's payload is logically unused so emit a `zeroinitializer`
+        // typed as the actual struct. Avoids the `undef` placeholder the
+        // pre-#1731 code would emit which violated the typedef.
+        let structRef = lirOptionResultPayloadStructRef(l.out, optType.llvm)
+        if structRef == "" {
+            lirLowerError(l, LirDiagUnsupported, "Option<Struct> None construction could not extract payload typedef from `" + optType.llvm + "`", "option.none.widened")
+            return "undef"
+        }
+        lirOperand(lirAggregateType(structRef), "zeroinitializer")
+    } else {
+        lirOperand(lirIntType(64), "0")
+    }
+    l.instrs.push(lirInsertValue(value, optType, step, payloadOp, [1]))
     value
 }
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
@@ -3659,6 +3669,38 @@ fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: S
 // Returns false when the typedef is missing (preserves existing behavior),
 // when the type ref does not start with '%' (raw type like 'i64'), or when
 // the body is the default `{ i64, i64 }` shape.
+// `lirOptionResultPayloadStructRef` extracts the `%StructMangled`
+// typedef reference from a widened Option/Result aggregate body
+// (`{ i64, %StructMangled }`). Returns the bare ref including the
+// leading `%`, or "" when `aggLLVM` is not a widened algebraic typedef.
+fn lirOptionResultPayloadStructRef(out: LirModule, aggLLVM: String) -> String {
+    let body = lirAggregateBodyForRef(out, aggLLVM)
+    if body == "" {
+        return ""
+    }
+    // Body shape produced by lirAlgebraicAggregateBody_module:
+    //   "{ i64, %Mangled }"
+    // Scan forward looking for the comma+space+percent sequence and
+    // return the `%Mangled` substring up to the trailing space or `}`.
+    let n = body.len()
+    let mut i = 0
+    for i + 2 < n {
+        if strings.slice(body, i, i + 3) == ", %" {
+            let start = i + 2
+            let mut end = start + 1
+            for end < n {
+                let ch = strings.slice(body, end, end + 1)
+                if ch == " " || ch == "}" {
+                    return strings.slice(body, start, end)
+                }
+                end = end + 1
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    ""
+}
 fn lirAggregateHasWidenedPayload(out: LirModule, aggType: LirType) -> Bool {
     if !(strings.startsWith(aggType.llvm, "%")) {
         return false
