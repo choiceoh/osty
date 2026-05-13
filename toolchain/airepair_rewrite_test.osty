@@ -241,3 +241,104 @@ fn testRewriteForeignLoopHeaderUnknown() {
     testing.assert(!(r.ok))
     testing.assertEq(r.kind, "")
 }
+fn testRewriteLetAppendLineSimple() {
+    let r = rewriteLetAppendLine("    ", "let xs = append(prev, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "    let mut xs = prev\n    xs.push(x)")
+}
+fn testRewriteLetAppendLineMutKeyword() {
+    let r = rewriteLetAppendLine("", "let mut xs = append(prev, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "let mut xs = prev\nxs.push(x)")
+}
+fn testRewriteLetAppendLineRejectsSelfBase() {
+    let r = rewriteLetAppendLine("", "let xs = append(xs, x)")
+    testing.assert(!(r.ok))
+}
+fn testRewriteLetAppendLineRejectsNonAppend() {
+    let r = rewriteLetAppendLine("", "let xs = ys")
+    testing.assert(!(r.ok))
+}
+fn testRewriteLetAppendLineRejectsBadName() {
+    let r = rewriteLetAppendLine("", "let 1xs = append(prev, x)")
+    testing.assert(!(r.ok))
+}
+fn testRewriteSelfAssignAppendLineSimple() {
+    let r = rewriteSelfAssignAppendLine("  ", "xs = append(xs, item)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "  xs.push(item)")
+}
+fn testRewriteSelfAssignAppendLineRejectsDifferentBase() {
+    let r = rewriteSelfAssignAppendLine("", "xs = append(ys, item)")
+    testing.assert(!(r.ok))
+}
+fn testRewriteSelfAssignAppendLineRejectsNonAppend() {
+    let r = rewriteSelfAssignAppendLine("", "xs = something_else")
+    testing.assert(!(r.ok))
+}
+fn testRewriteStandaloneAppendLineSimple() {
+    let r = rewriteStandaloneAppendLine("\t", "append(items, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "\titems.push(x)")
+}
+fn testRewriteStandaloneAppendLineRejectsExpressionBase() {
+    let r = rewriteStandaloneAppendLine("", "append(foo(), x)")
+    testing.assert(!(r.ok))
+}
+fn testRewriteAppendLineDispatchesToLet() {
+    let r = rewriteAppendLine("", "let xs = append(prev, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "let mut xs = prev\nxs.push(x)")
+}
+fn testRewriteAppendLineDispatchesToSelfAssign() {
+    let r = rewriteAppendLine("", "xs = append(xs, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "xs.push(x)")
+}
+fn testRewriteAppendLineDispatchesToStandalone() {
+    let r = rewriteAppendLine("", "append(xs, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.rewritten, "xs.push(x)")
+}
+fn testRewriteAppendLineSkipsLinesWithoutAppendCall() {
+    let r = rewriteAppendLine("", "let xs = ys")
+    testing.assert(!(r.ok))
+}
+fn testRewriteEnumerateLoopHeaderBareTuple() {
+    let r = rewriteEnumerateLoopHeader("    ", "for i, v in xs.enumerate() \{", 0)
+    testing.assert(r.ok)
+    testing.assertEq(r.nextCounter, 1)
+    testing.assertEq(r.rewritten, "    let _osty_enumerate0 = xs\n    for i in 0.._osty_enumerate0.len() \{\n        let v = _osty_enumerate0[i]")
+}
+fn testRewriteEnumerateLoopHeaderParenTuple() {
+    let r = rewriteEnumerateLoopHeader("", "for (i, v) in items.enumerate() \{", 7)
+    testing.assert(r.ok)
+    testing.assertEq(r.nextCounter, 8)
+    testing.assertEq(r.rewritten, "let _osty_enumerate7 = items\nfor i in 0.._osty_enumerate7.len() \{\n    let v = _osty_enumerate7[i]")
+}
+fn testRewriteEnumerateLoopHeaderWildcardIndex() {
+    let r = rewriteEnumerateLoopHeader("", "for _, v in xs.enumerate() \{", 3)
+    testing.assert(r.ok)
+    testing.assertEq(r.nextCounter, 4)
+    testing.assertEq(r.rewritten, "let _osty_enumerate3 = xs\nfor _osty_index3 in 0.._osty_enumerate3.len() \{\n    let v = _osty_enumerate3[_osty_index3]")
+}
+fn testRewriteEnumerateLoopHeaderRejectsBadIndexBinding() {
+    let r = rewriteEnumerateLoopHeader("", "for foo(x), v in xs.enumerate() \{", 0)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.nextCounter, 0)
+}
+fn testRewriteEnumerateLoopHeaderRejectsNonEnumerate() {
+    let r = rewriteEnumerateLoopHeader("", "for i, v in xs \{", 0)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.nextCounter, 0)
+}
+fn testRewriteEnumerateLoopHeaderRejectsEmptyIterable() {
+    let r = rewriteEnumerateLoopHeader("", "for i, v in .enumerate() \{", 0)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.nextCounter, 0)
+}
+fn testRewriteEnumerateLoopHeaderRejectsSingleBinding() {
+    let r = rewriteEnumerateLoopHeader("", "for i in xs.enumerate() \{", 0)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.nextCounter, 0)
+}

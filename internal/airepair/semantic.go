@@ -20,8 +20,6 @@ import (
 	"github.com/osty/osty/internal/types"
 )
 
-const semanticIndentStep = "    "
-
 type semanticEdit struct {
 	start  int
 	end    int
@@ -118,78 +116,12 @@ func rewriteEnumerateLoopsForChecker(src []byte) ([]byte, []repair.Change, bool)
 }
 
 func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair.Change, bool) {
-	trimmed := line.trimmed
-	if !strings.HasPrefix(trimmed, "for ") || !strings.HasSuffix(trimmed, "{") {
+	r := runner.RewriteEnumerateLoopHeader(line.indent, line.trimmed, *counter)
+	if !r.Ok {
 		return "", nil, false
 	}
-	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "for "), "{"))
-	inIdx := strings.Index(body, " in ")
-	if inIdx <= 0 {
-		return "", nil, false
-	}
-
-	lhs := strings.TrimSpace(body[:inIdx])
-	rhs := strings.TrimSpace(body[inIdx+4:])
-	if !strings.HasSuffix(rhs, ".enumerate()") {
-		return "", nil, false
-	}
-	iterExpr := strings.TrimSpace(strings.TrimSuffix(rhs, ".enumerate()"))
-	if iterExpr == "" {
-		return "", nil, false
-	}
-
-	if strings.HasPrefix(lhs, "(") && strings.HasSuffix(lhs, ")") {
-		lhs = strings.TrimSpace(lhs[1 : len(lhs)-1])
-	}
-	parts := runner.SplitTopLevelComma(lhs)
-	if len(parts) != 2 {
-		return "", nil, false
-	}
-
-	indexBinding := strings.TrimSpace(parts[0])
-	valueBinding := strings.TrimSpace(parts[1])
-	if valueBinding == "" {
-		return "", nil, false
-	}
-
-	indexVar := indexBinding
-	switch {
-	case indexBinding == "_":
-		indexVar = fmt.Sprintf("_osty_index%d", *counter)
-	case runner.IsSimpleIdentifierBinding(indexBinding):
-		// use the original binding directly in the rewritten loop header.
-	default:
-		return "", nil, false
-	}
-
-	next := *counter
-	*counter = next + 1
-	iterTemp := fmt.Sprintf("_osty_enumerate%d", next)
-
-	bodyIndent := line.indent + semanticIndentStep
-	var out strings.Builder
-	out.WriteString(line.indent)
-	out.WriteString("let ")
-	out.WriteString(iterTemp)
-	out.WriteString(" = ")
-	out.WriteString(iterExpr)
-	out.WriteByte('\n')
-	out.WriteString(line.indent)
-	out.WriteString("for ")
-	out.WriteString(indexVar)
-	out.WriteString(" in 0..")
-	out.WriteString(iterTemp)
-	out.WriteString(".len() {\n")
-	out.WriteString(bodyIndent)
-	out.WriteString("let ")
-	out.WriteString(valueBinding)
-	out.WriteString(" = ")
-	out.WriteString(iterTemp)
-	out.WriteByte('[')
-	out.WriteString(indexVar)
-	out.WriteByte(']')
-
-	return out.String(), []repair.Change{
+	*counter = r.NextCounter
+	return r.Rewritten, []repair.Change{
 		{
 			Kind:    "enumerate_index_loop",
 			Message: "replace `.enumerate()` tuple loop with an indexed Osty loop the native checker can validate",
@@ -241,103 +173,19 @@ func rewriteSemanticAppendLines(src []byte) ([]byte, []repair.Change, bool) {
 }
 
 func rewriteAppendLine(line sourceLine) (string, []repair.Change, bool) {
-	trimmed := line.trimmed
-	if !strings.Contains(trimmed, "append(") {
+	r := runner.RewriteAppendLine(line.indent, line.trimmed)
+	if !r.Ok {
 		return "", nil, false
 	}
-
-	if rewritten, ok := rewriteLetAppendLine(line); ok {
-		return rewritten, []repair.Change{{
-			Kind:    "builtin_append_call",
-			Message: "replace foreign `append(...)` helper with Osty list mutation",
-			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
-			},
-		}}, true
-	}
-	if rewritten, ok := rewriteSelfAssignAppendLine(line); ok {
-		return rewritten, []repair.Change{{
-			Kind:    "builtin_append_call",
-			Message: "replace foreign `append(...)` helper with Osty list mutation",
-			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
-			},
-		}}, true
-	}
-	if rewritten, ok := rewriteStandaloneAppendLine(line); ok {
-		return rewritten, []repair.Change{{
-			Kind:    "builtin_append_call",
-			Message: "replace foreign `append(...)` helper with Osty list mutation",
-			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
-			},
-		}}, true
-	}
-	return "", nil, false
-}
-
-func rewriteLetAppendLine(line sourceLine) (string, bool) {
-	trimmed := line.trimmed
-	if !strings.HasPrefix(trimmed, "let ") {
-		return "", false
-	}
-
-	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "let "))
-	if strings.HasPrefix(rest, "mut ") {
-		rest = strings.TrimSpace(strings.TrimPrefix(rest, "mut "))
-	}
-	eqIdx := strings.Index(rest, " = ")
-	if eqIdx <= 0 {
-		return "", false
-	}
-
-	name := strings.TrimSpace(rest[:eqIdx])
-	rhs := strings.TrimSpace(rest[eqIdx+3:])
-	if !runner.IsSimpleIdentifierBinding(name) {
-		return "", false
-	}
-
-	parsed := runner.ParseAppendCall(rhs)
-	if !parsed.Ok || parsed.Base == name {
-		return "", false
-	}
-
-	return line.indent + "let mut " + name + " = " + parsed.Base + "\n" +
-		line.indent + name + ".push(" + parsed.Item + ")", true
-}
-
-func rewriteSelfAssignAppendLine(line sourceLine) (string, bool) {
-	trimmed := line.trimmed
-	eqIdx := strings.Index(trimmed, " = ")
-	if eqIdx <= 0 {
-		return "", false
-	}
-	lhs := strings.TrimSpace(trimmed[:eqIdx])
-	rhs := strings.TrimSpace(trimmed[eqIdx+3:])
-	if !runner.IsSimpleIdentifierBinding(lhs) {
-		return "", false
-	}
-
-	parsed := runner.ParseAppendCall(rhs)
-	if !parsed.Ok || parsed.Base != lhs {
-		return "", false
-	}
-
-	return line.indent + lhs + ".push(" + parsed.Item + ")", true
-}
-
-func rewriteStandaloneAppendLine(line sourceLine) (string, bool) {
-	parsed := runner.ParseAppendCall(line.trimmed)
-	if !parsed.Ok || !runner.IsSimpleIdentifierBinding(parsed.Base) {
-		return "", false
-	}
-	return line.indent + parsed.Base + ".push(" + parsed.Item + ")", true
+	return r.Rewritten, []repair.Change{{
+		Kind:    "builtin_append_call",
+		Message: "replace foreign `append(...)` helper with Osty list mutation",
+		Pos: token.Pos{
+			Offset: line.start + len(line.indent),
+			Line:   line.lineNo,
+			Column: len([]rune(line.indent)) + 1,
+		},
+	}}, true
 }
 
 func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
