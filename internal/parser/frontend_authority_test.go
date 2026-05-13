@@ -198,6 +198,9 @@ func requireRecoveryForStmtWithTrailingLet(t *testing.T, result Result, declIdx 
 
 func requireFollowOnFnWithHelper(t *testing.T, result Result, fnDeclIdx int, fnBodyStmts int, helperDeclIdx int, helperBodyStmts int, helperName string, wantCodes ...string) (*ast.FnDecl, *ast.FnDecl) {
 	t.Helper()
+	if len(wantCodes) == 0 {
+		t.Fatal("requireFollowOnFnWithHelper: pass every diagnostic Code as wantCodes — empty wrongly implies zero diagnostics")
+	}
 	requireParseDiagnosticCodes(t, result, wantCodes...)
 	fn := requireFnDeclAt(t, result.File, fnDeclIdx, fnBodyStmts, "primary fn plus preserved helper fn")
 	helper := requireFnDeclAt(t, result.File, helperDeclIdx, helperBodyStmts, "preserved helper fn "+helperName)
@@ -419,10 +422,9 @@ func TestParseFollowOnRecoveryB2MatchAssignHelperTail(t *testing.T) {
 	src := fixtureFollowOnBMatchAssignHelperTail("rfB2MatchAssignHelperTail", "rfB2Tail")
 
 	result := ParseDetailed(src)
-	requireParseDiagnosticCount(t, result, 5, "follow-on diagnostics")
-	requireParseDiagnosticCodePresent(t, result, "E0100")
 	requireParseDiagnosticWithCodeAndMessage(t, result, "E0204", "expected match arm body before `->`")
-	fn, helper := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 0, "rfB2Tail")
+	// E0204×4 + E0100 — match ParseDetailed multiset for this shape.
+	fn, helper := requireFollowOnFnWithHelper(t, result, 0, 1, 1, 0, "rfB2Tail", "E0204", "E0204", "E0204", "E0204", "E0100")
 	stmt := requireExprStmtAt(t, fn.Body.Stmts, 0, "expression statement")
 	match, ok := stmt.X.(*ast.MatchExpr)
 	if !ok || len(match.Arms) != 2 {
