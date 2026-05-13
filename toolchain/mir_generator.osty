@@ -20173,7 +20173,16 @@ fn mirEmitTaskGroupIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let body = mirEmitOperand(instr.args[0])
     if instr.hasDest {
         let dest = mirEmitLocalRegName(instr.dest.local)
-        return "  " + dest + " = call i64 @osty_rt_task_group(ptr " + body + ")\n"
+        let destLLVM = mirEmitParamType(func, instr.dest.local)
+        if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+            return "  ; TODO taskGroup dest type \"" + destLLVM + "\"\n"
+        }
+        let raw = dest + ".raw"
+        let mut out = "  " + raw + " = call i64 @osty_rt_task_group(ptr " + body + ")\n"
+        if destLLVM == "i64" {
+            return out + "  " + dest + " = add i64 0, " + raw + "\n"
+        }
+        return out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)
     }
     "  call i64 @osty_rt_task_group(ptr " + body + ")\n"
 }
