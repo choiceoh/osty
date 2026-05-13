@@ -18,6 +18,8 @@ import (
 	"go/token"
 	"sort"
 	"strings"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 //go:embed codes.go
@@ -106,16 +108,16 @@ func AllCodes() []CodeDoc {
 	return out
 }
 
-// ---- parsing helpers (trimmed port of cmd/codesdoc/main.go) ----
+// ---- parsing helpers (host glue around runner.ParseExplainDoc) ----
 
-type parsedExplainDoc struct {
-	Summary string
-	Body    []string
-	Spec    string
-	Example string
-	Fix     string
-}
+// parsedExplainDoc aliases runner.ParsedExplainDoc so the local
+// init wiring keeps its existing field names. The parsing policy
+// itself lives in toolchain/diag_explain.osty.
+type parsedExplainDoc = runner.ParsedExplainDoc
 
+// parseExplainDoc strips the `//` prefix and an optional leading
+// space from each comment in `cg`, then delegates to the
+// toolchain policy for the actual sectioning.
 func parseExplainDoc(cg *ast.CommentGroup) parsedExplainDoc {
 	if cg == nil {
 		return parsedExplainDoc{}
@@ -128,102 +130,7 @@ func parseExplainDoc(cg *ast.CommentGroup) parsedExplainDoc {
 		}
 		lines = append(lines, text)
 	}
-
-	var doc parsedExplainDoc
-	var exampleLines []string
-	var bodyParas [][]string
-	var curPara []string
-
-	flushPara := func() {
-		if len(curPara) == 0 {
-			return
-		}
-		if doc.Summary == "" {
-			joined := strings.Join(trimAllLines(curPara), " ")
-			joined = strings.TrimSuffix(joined, ".")
-			if joined != "" {
-				doc.Summary = joined + "."
-			}
-		} else {
-			bodyParas = append(bodyParas, append([]string(nil), curPara...))
-		}
-		curPara = nil
-	}
-
-	section := ""
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "Spec:"):
-			flushPara()
-			section = ""
-			doc.Spec = strings.TrimSpace(strings.TrimPrefix(trimmed, "Spec:"))
-			continue
-		case strings.HasPrefix(trimmed, "Fix:"):
-			flushPara()
-			section = ""
-			doc.Fix = strings.TrimSpace(strings.TrimPrefix(trimmed, "Fix:"))
-			continue
-		case trimmed == "Example:":
-			flushPara()
-			section = "example"
-			continue
-		}
-		if section == "example" {
-			exampleLines = append(exampleLines, line)
-			continue
-		}
-		if trimmed == "" {
-			flushPara()
-			continue
-		}
-		curPara = append(curPara, line)
-	}
-	flushPara()
-
-	for _, p := range bodyParas {
-		doc.Body = append(doc.Body, strings.Join(trimAllLines(p), " "))
-	}
-	if len(exampleLines) > 0 {
-		doc.Example = trimExampleBlock(exampleLines)
-	}
-	return doc
-}
-
-func trimAllLines(xs []string) []string {
-	out := make([]string, len(xs))
-	for i, s := range xs {
-		out[i] = strings.TrimSpace(s)
-	}
-	return out
-}
-
-func trimExampleBlock(lines []string) string {
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
-		lines = lines[1:]
-	}
-	minIndent := -1
-	for _, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		count := len(l) - len(strings.TrimLeft(l, " "))
-		if minIndent < 0 || count < minIndent {
-			minIndent = count
-		}
-	}
-	if minIndent <= 0 {
-		return strings.Join(lines, "\n")
-	}
-	for i, l := range lines {
-		if len(l) >= minIndent {
-			lines[i] = l[minIndent:]
-		}
-	}
-	return strings.Join(lines, "\n")
+	return runner.ParseExplainDoc(lines)
 }
 
 func firstCommentLine(cg *ast.CommentGroup) string {
