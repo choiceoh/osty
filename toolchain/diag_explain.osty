@@ -1,0 +1,185 @@
+/// Pure doc-comment parser for the diagnostic-explanation
+/// surface (`osty explain`, LSP hover for error codes, future IDE
+/// plugins). Host code in `internal/diag/explain.go` owns the
+/// Go-AST traversal that yields the per-constant doc comment as
+/// already-preprocessed lines (leading `//` and a single space
+/// trimmed); this module decides what those lines mean —
+/// section delimiters, paragraph flow, example-block indent
+/// trimming.
+///
+/// Mirrored by `internal/runner/diag_explain_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+///
+/// Trimmed port of the same parser in `cmd/codesdoc/main.go`. The
+/// two implementations must agree byte-for-byte; the markdown
+/// reference `ERROR_CODES.md` and the runtime explain surface are
+/// regenerated from the same `codes.go` doc comments.
+use std.strings as strings
+/// ParsedExplainDoc is the structured outcome of parsing one
+/// CodeXxx constant's doc comment.
+///
+///   - `summary`: first paragraph collapsed onto one line, with a
+///     trailing `.` enforced.
+///   - `body`: zero or more subsequent prose paragraphs, each
+///     collapsed onto one line.
+///   - `spec`: the text after the literal `Spec:` line, empty
+///     when absent.
+///   - `example`: the code block under `Example:`, with the
+///     common leading whitespace stripped.
+///   - `fix`: the text after the literal `Fix:` line, empty when
+///     absent.
+pub struct ParsedExplainDoc {
+    pub summary: String,
+    pub body: List<String>,
+    pub spec: String,
+    pub example: String,
+    pub fix: String,
+}
+/// ExplainParseState holds the loop's mutable state. Threading
+/// it through pure helpers keeps `parseExplainDoc` itself a flat
+/// loop the host can reason about line-by-line.
+struct ExplainParseState {
+    summary: String,
+    spec: String,
+    fix: String,
+    bodyParas: List<List<String>>,
+    curPara: List<String>,
+    exampleLines: List<String>,
+    section: String,
+}
+/// parseExplainDoc walks a list of already-preprocessed comment
+/// lines (caller-side: `//` prefix and one optional leading space
+/// already stripped) and returns the structured doc.
+///
+/// Section markers (`Spec:` / `Fix:` / `Example:`) flush the
+/// current paragraph before redirecting subsequent lines. A blank
+/// line flushes a paragraph. The first non-empty paragraph
+/// becomes the summary (one line, trailing `.` enforced); any
+/// later paragraphs join the body.
+pub fn parseExplainDoc(lines: List<String>) -> ParsedExplainDoc {
+    let mut st = ExplainParseState {
+        summary: "",
+        spec: "",
+        fix: "",
+        bodyParas: [],
+        curPara: [],
+        exampleLines: [],
+        section: "",
+    }
+    for line in lines {
+        let trimmed = strings.trimSpace(line)
+        if strings.hasPrefix(trimmed, "Spec:") {
+            st = explainFlushPara(st)
+            st.section = ""
+            st.spec = strings.trimSpace(strings.trimPrefix(trimmed, "Spec:"))
+            continue
+        }
+        if strings.hasPrefix(trimmed, "Fix:") {
+            st = explainFlushPara(st)
+            st.section = ""
+            st.fix = strings.trimSpace(strings.trimPrefix(trimmed, "Fix:"))
+            continue
+        }
+        if trimmed == "Example:" {
+            st = explainFlushPara(st)
+            st.section = "example"
+            continue
+        }
+        if st.section == "example" {
+            st.exampleLines.push(line)
+            continue
+        }
+        if trimmed == "" {
+            st = explainFlushPara(st)
+            continue
+        }
+        st.curPara.push(line)
+    }
+    st = explainFlushPara(st)
+    let mut doc = ParsedExplainDoc {
+        summary: st.summary,
+        body: [],
+        spec: st.spec,
+        example: "",
+        fix: st.fix,
+    }
+    for para in st.bodyParas {
+        doc.body.push(strings.join(trimAllLines(para), " "))
+    }
+    if st.exampleLines.len() > 0 {
+        doc.example = trimExampleBlock(st.exampleLines)
+    }
+    doc
+}
+/// explainFlushPara dispatches `st.curPara` to summary or body,
+/// then clears `curPara`. The first non-empty paragraph becomes
+/// the summary (single line, trailing `.` enforced); subsequent
+/// paragraphs are appended to `bodyParas` for later joining.
+fn explainFlushPara(st: ExplainParseState) -> ExplainParseState {
+    if st.curPara.len() == 0 {
+        return st
+    }
+    let mut out = st
+    if out.summary == "" {
+        let joined = strings.join(trimAllLines(out.curPara), " ")
+        let stripped = strings.trimSuffix(joined, ".")
+        if stripped != "" {
+            out.summary = stripped + "."
+        }
+    } else {
+        out.bodyParas.push(out.curPara)
+    }
+    out.curPara = []
+    out
+}
+/// trimAllLines applies `strings.trimSpace` to every line. Empty
+/// input returns an empty list.
+fn trimAllLines(xs: List<String>) -> List<String> {
+    xs.map(|s| strings.trimSpace(s))
+}
+/// trimExampleBlock strips leading/trailing blank lines and a
+/// common leading-space prefix from the example block, then
+/// joins with `\n`. Tabs do not count towards the common-indent
+/// calculation — only ASCII space (0x20).
+fn trimExampleBlock(lines: List<String>) -> String {
+    let mut bs = lines
+    for bs.len() > 0 && strings.trimSpace(bs[bs.len() - 1]) == "" {
+        bs = exampleSlice(bs, 0, bs.len() - 1)
+    }
+    for bs.len() > 0 && strings.trimSpace(bs[0]) == "" {
+        bs = exampleSlice(bs, 1, bs.len())
+    }
+    let mut minIndent = -1
+    for l in bs {
+        if strings.trimSpace(l) == "" {
+            continue
+        }
+        let leadingTrimmed = strings.trimStartChars(l, " ")
+        let count = l.len() - leadingTrimmed.len()
+        if minIndent < 0 || count < minIndent {
+            minIndent = count
+        }
+    }
+    if minIndent <= 0 {
+        return strings.join(bs, "\n")
+    }
+    let mut out: List<String> = []
+    for l in bs {
+        if l.len() >= minIndent {
+            out.push(strings.slice(l, minIndent, l.len()))
+        } else {
+            out.push(l)
+        }
+    }
+    strings.join(out, "\n")
+}
+fn exampleSlice(xs: List<String>, start: Int, end: Int) -> List<String> {
+    let mut out: List<String> = []
+    let mut i = start
+    for i < end {
+        out.push(xs[i])
+        i = i + 1
+    }
+    out
+}

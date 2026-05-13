@@ -1,0 +1,98 @@
+use std.testing
+fn testParseExplainDocEmpty() {
+    let d = parseExplainDoc([])
+    testing.assertEq(d.summary, "")
+    testing.assertEq(d.body.len(), 0)
+    testing.assertEq(d.spec, "")
+    testing.assertEq(d.example, "")
+    testing.assertEq(d.fix, "")
+}
+fn testParseExplainDocSummaryAddsTrailingPeriod() {
+    let d = parseExplainDoc(["A short summary"])
+    testing.assertEq(d.summary, "A short summary.")
+}
+fn testParseExplainDocSummaryPreservesExistingPeriod() {
+    let d = parseExplainDoc(["A short summary."])
+    testing.assertEq(d.summary, "A short summary.")
+}
+fn testParseExplainDocMultilineSummary() {
+    let d = parseExplainDoc(["First line", "second line", "third"])
+    testing.assertEq(d.summary, "First line second line third.")
+    testing.assertEq(d.body.len(), 0)
+}
+fn testParseExplainDocBodyParagraph() {
+    let d = parseExplainDoc(["Summary.", "", "Body line one.", "Body line two."])
+    testing.assertEq(d.summary, "Summary.")
+    testing.assertEq(d.body.len(), 1)
+    testing.assertEq(d.body[0], "Body line one. Body line two.")
+}
+fn testParseExplainDocMultipleBodyParagraphs() {
+    let d = parseExplainDoc(["Summary.", "", "First.", "", "Second.", "Continued."])
+    testing.assertEq(d.body.len(), 2)
+    testing.assertEq(d.body[0], "First.")
+    testing.assertEq(d.body[1], "Second. Continued.")
+}
+fn testParseExplainDocSpec() {
+    let d = parseExplainDoc(["Summary.", "Spec: §1.6.3"])
+    testing.assertEq(d.summary, "Summary.")
+    testing.assertEq(d.spec, "§1.6.3")
+}
+fn testParseExplainDocFix() {
+    let d = parseExplainDoc(["Summary.", "Fix: close the string with a matching quote"])
+    testing.assertEq(d.fix, "close the string with a matching quote")
+}
+fn testParseExplainDocExampleBlock() {
+    let d = parseExplainDoc([
+        "Summary.",
+        "Example:",
+        "    let x = \"unterminated",
+        "    let y = 1",
+    ])
+    testing.assertEq(d.example, "let x = \"unterminated\nlet y = 1")
+}
+fn testParseExplainDocExampleStripsLeadingBlanks() {
+    let d = parseExplainDoc([
+        "Summary.",
+        "Example:",
+        "",
+        "    line",
+        "",
+    ])
+    testing.assertEq(d.example, "line")
+}
+fn testParseExplainDocExampleNoCommonIndent() {
+    let d = parseExplainDoc([
+        "Summary.",
+        "Example:",
+        "no leading space",
+        "    indented",
+    ])
+    testing.assertEq(d.example, "no leading space\n    indented")
+}
+fn testParseExplainDocSummaryThenSpecOnly() {
+    let d = parseExplainDoc(["A summary line.", "Spec: §X"])
+    testing.assertEq(d.summary, "A summary line.")
+    testing.assertEq(d.body.len(), 0)
+    testing.assertEq(d.spec, "§X")
+}
+fn testParseExplainDocAllSections() {
+    let d = parseExplainDoc([
+        "Headline.",
+        "",
+        "Body paragraph.",
+        "Spec: §2.2",
+        "Fix: do the right thing",
+        "Example:",
+        "    println(\"ok\")",
+    ])
+    testing.assertEq(d.summary, "Headline.")
+    testing.assertEq(d.body.len(), 1)
+    testing.assertEq(d.body[0], "Body paragraph.")
+    testing.assertEq(d.spec, "§2.2")
+    testing.assertEq(d.fix, "do the right thing")
+    testing.assertEq(d.example, "println(\"ok\")")
+}
+fn testParseExplainDocBlankSummarySkipped() {
+    let d = parseExplainDoc(["."])
+    testing.assertEq(d.summary, "")
+}
