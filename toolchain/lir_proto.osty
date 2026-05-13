@@ -6648,6 +6648,28 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
     let discText = lirIntToString(rv.aggVariantIdx)
     let step1 = lirFresh(l)
     l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), discText), [0]))
+    // Widened payload: lower the field operand directly and insert with
+    // its native struct type. Mirrors the stdlib container path
+    // (`lirEmitOptionSomeStruct` / `lirEmitResultOkStruct` in #1738) but
+    // routes user-source `Some(s)` / `Ok(o)` / `Err(e)` / `MyEnum.V(s)`
+    // literals through the struct-typed insertvalue instead of the
+    // i64-coercion path which would have truncated the payload.
+    if rv.aggFields.len() == 1 && lirAggregateHasWidenedPayload(l.out, aggType) {
+        let arg = rv.aggFields[0]
+        let argHint = lirLowerMirType(l, arg.typ)
+        let payload = lirLowerMirOperand(l, arg, arg.typ, argHint)
+        if payload.value == "" {
+            return lirOperandInvalid()
+        }
+        let structRef = lirOptionResultPayloadStructRef(l.out, aggType.llvm)
+        if structRef == "" {
+            lirLowerError(l, LirDiagUnsupported, "widened enum variant `" + typeName + "` could not extract payload typedef from `" + aggType.llvm + "`", "aggregate.enum.widened")
+            return lirOperandInvalid()
+        }
+        let value = lirFresh(l)
+        l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirAggregateType(structRef), payload.value), [1]))
+        return lirOperand(aggType, value)
+    }
     let payloadI64 = if rv.aggFields.len() == 0 {
         "0"
     } else if rv.aggFields.len() == 1 {
