@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // Formatter renders Diagnostics with source-snippet caret underlines.
@@ -390,62 +392,33 @@ func (f *Formatter) colorizeCaretRow(row string, sev Severity, _ bool) string {
 }
 
 // colToRuneIndex converts a 1-based column (counted in Unicode code
-// points) to a 0-based index into the given rune slice.
+// points) to a 0-based index into the given rune slice. Policy lives
+// in toolchain/diag_render.osty; this wrapper just hands `len(runes)`
+// over since the policy only needs the length.
 func colToRuneIndex(runes []rune, col int) int {
-	if col <= 1 {
-		return 0
-	}
-	idx := col - 1
-	if idx > len(runes) {
-		idx = len(runes)
-	}
-	return idx
+	return runner.ColToRuneIndex(len(runes), col)
 }
 
 // lineBounds returns the [start, end) byte offsets of the given 1-based
 // line in src, exclusive of the trailing newline. Returns (-1, -1) if
-// out of range.
+// out of range. Policy lives in toolchain/diag_render.osty.
 func lineBounds(src []byte, line int) (int, int) {
-	if line <= 0 {
-		return -1, -1
-	}
-	cur := 1
-	start := 0
-	for i := 0; i < len(src); i++ {
-		if cur == line && src[i] == '\n' {
-			return start, i
-		}
-		if src[i] == '\n' {
-			cur++
-			start = i + 1
-		}
-	}
-	if cur == line {
-		return start, len(src)
-	}
-	return -1, -1
+	r := runner.LineBounds(src, line)
+	return r.Start, r.End
 }
 
+// digitWidth returns the decimal-digit count for `n`. Policy lives
+// in toolchain/diag_render.osty.
 func digitWidth(n int) int {
-	if n < 10 {
-		return 1
-	}
-	w := 0
-	for n > 0 {
-		w++
-		n /= 10
-	}
-	return w
+	return runner.DigitWidth(n)
 }
 
+// padInt left-pads `n` with spaces to `width` columns. Policy lives
+// in toolchain/diag_render.osty.
 func padInt(n, width int) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) >= width {
-		return s
-	}
-	return strings.Repeat(" ", width-len(s)) + s
+	return runner.PadInt(n, width)
 }
 
-// Ensure utf8 remains imported; used by colToRuneIndex when the caller
-// passes a byte column (handled implicitly via []rune).
+// Ensure utf8 remains imported; the snippet writer still calls it
+// even though the col→rune index policy now lives in Osty.
 var _ = utf8.RuneLen
