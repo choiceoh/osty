@@ -15563,6 +15563,35 @@ func genericInferMixedTailDiscardedReturns(fn *mir.Function, mctx *moduleCtx, re
 	return calls, intrs
 }
 
+// genericPreExitBlockHasReturnTypeAssign reports whether bb is a
+// pre-exit block carrying a final non-projected assignment to a local
+// whose declared type matches fn.ReturnType. That shape is what
+// `match { ..., _ -> <bare local> }` lowers to: the wildcard arm
+// stores `walked` into the result slot, then gotos the storage-only
+// unreachable merge. If we accept call-only synthetic returns for the
+// sibling arms while leaving this block uncovered, the wildcard arm
+// silently becomes `unreachable` in the emitted IR — the crash class
+// PR #1724 worked around at the source level.
+func genericPreExitBlockHasReturnTypeAssign(fn *mir.Function, bb *mir.BasicBlock) bool {
+	if fn == nil || bb == nil {
+		return false
+	}
+	for _, instr := range bb.Instrs {
+		ai, ok := instr.(*mir.AssignInstr)
+		if !ok || ai.Dest.HasProjections() {
+			continue
+		}
+		loc := lookupLocal(fn, ai.Dest.Local)
+		if loc == nil {
+			continue
+		}
+		if sameTypeString(loc.Type, fn.ReturnType) {
+			return true
+		}
+	}
+	return false
+}
+
 func genericInferPreExitDiscardedCallSyntheticReturns(fn *mir.Function, mctx *moduleCtx, retType scalarType) (map[mir.BlockID]*mir.CallInstr, bool) {
 	if fn == nil || mctx == nil || retType == scalarUnknown {
 		return nil, false
@@ -15572,6 +15601,7 @@ func genericInferPreExitDiscardedCallSyntheticReturns(fn *mir.Function, mctx *mo
 		return nil, false
 	}
 	calls := map[mir.BlockID]*mir.CallInstr{}
+	hasUncoveredReturnAssign := false
 	for _, bb := range fn.Blocks {
 		if bb == nil || exits[bb.ID] {
 			continue
@@ -15581,12 +15611,22 @@ func genericInferPreExitDiscardedCallSyntheticReturns(fn *mir.Function, mctx *mo
 			continue
 		}
 		call, ok := finalDiscardedCallInstr(bb)
-		if !ok || !discardedCallCanReturnScalar(fn, call, retType, mctx) {
+		if ok && discardedCallCanReturnScalar(fn, call, retType, mctx) {
+			calls[bb.ID] = call
 			continue
 		}
-		calls[bb.ID] = call
+		if genericPreExitBlockHasReturnTypeAssign(fn, bb) {
+			hasUncoveredReturnAssign = true
+		}
 	}
 	if len(calls) == 0 {
+		return nil, false
+	}
+	// Refuse partial coverage only when an uncovered pre-exit block
+	// carries an assignment to a return-typed local — that's the
+	// wildcard-arm bare-local shape. Empty `goto exit` redirect blocks
+	// (e.g. precondition-unreachable paths) are fine to leave alone.
+	if hasUncoveredReturnAssign {
 		return nil, false
 	}
 	return calls, true
@@ -15601,6 +15641,7 @@ func genericInferPreExitDiscardedIntrinsicSyntheticReturns(fn *mir.Function, mct
 		return nil, false
 	}
 	instrs := map[mir.BlockID]*mir.IntrinsicInstr{}
+	hasUncoveredReturnAssign := false
 	for _, bb := range fn.Blocks {
 		if bb == nil || exits[bb.ID] {
 			continue
@@ -15610,12 +15651,19 @@ func genericInferPreExitDiscardedIntrinsicSyntheticReturns(fn *mir.Function, mct
 			continue
 		}
 		ii, ok := finalDiscardedIntrinsicInstr(bb)
-		if !ok || !discardedIntrinsicCanReturnScalar(ii, retType) {
+		if ok && discardedIntrinsicCanReturnScalar(ii, retType) {
+			instrs[bb.ID] = ii
 			continue
 		}
-		instrs[bb.ID] = ii
+		if genericPreExitBlockHasReturnTypeAssign(fn, bb) {
+			hasUncoveredReturnAssign = true
+		}
 	}
 	if len(instrs) == 0 {
+		return nil, false
+	}
+	// Same wildcard-arm bare-local guard as the call variant.
+	if hasUncoveredReturnAssign {
 		return nil, false
 	}
 	return instrs, true
