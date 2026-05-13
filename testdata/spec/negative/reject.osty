@@ -553,6 +553,42 @@ fn rmE1IfLetMalformedScrutinee() {
 }
 // === END
 
+// === CASE: E0765 === implicit narrowing Int64 -> Int32
+fn narrow(x: Int64) -> Int32 { x }
+// === END
+
+// === CASE: E0754 === #[op(+)] with wrong signature (G35)
+pub struct Vec2 { pub x: Int, pub y: Int }
+pub impl Vec2 {
+    #[op(+)]
+    pub fn wrong(self, a: Int, b: Int) -> Vec2 { self }
+}
+// === END
+
+// === CASE: E0758 === enum discriminant on payload variant (G31)
+pub enum Status: Int {
+    Ok = 200,
+    Err(Int) = 500,
+}
+// === END
+
+// === CASE: E0759 === duplicate enum discriminant (G31)
+pub enum Color: Int {
+    Red = 1,
+    Blue = 1,
+}
+// === END
+
+// === CASE: E0766 === `const fn` with disallowed body (G21)
+pub const fn add(a: Int, b: Int) -> Int {
+    if a > 0 { return a + b } else { return b }
+}
+// === END
+
+// === CASE: E0768 === `const fn` cannot be generic (G21)
+pub const fn id<T>(x: T) -> T { x }
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

@@ -40,7 +40,52 @@ var positiveWaivers = map[string][]string{}
 // declared code the test will fail, prompting waiver removal. This map
 // is intentionally churn-friendly: adding or deleting entries is the
 // normal way to track Exxxx migration work.
-var negativeWaivers = map[string][]string{}
+var negativeWaivers = map[string][]string{
+	// E0743: Handle<T> escape checking lives in the checker call
+	// path but the self-host checker adapter doesn't route through
+	// it for the single-file pipeline path.
+	"E0743/Handle<T> escapes via function return type":         {"error:-", "warning:L0003"},
+	"E0743/Handle<T> inside struct field type":                 {"error:-", "warning:L0003", "warning:L0070"},
+	"E0743/Handle<T> inside enum variant payload":              {"error:-", "warning:L0003", "warning:L0070"},
+	"E0743/Handle<T> as channel payload (call-site monomorph)": {"error:-", "warning:L0003"},
+	"E0743/type alias for Handle<T>":                           {"error:-", "warning:L0003"},
+
+	// E0745/E0700/E0702: annotation target validation changed
+	// from dedicated codes to the generic E0607/E0606 catch-all.
+	"E0745/`#[vectorize]` on struct field":            {"error:E0607", "error:-", "warning:L0070"},
+	"E0700/interface body references `self` field":    {"error:E0606", "error:-", "warning:L0070"},
+	"E0702/`#[json]` on unsupported declaration kind": {"error:E0607", "error:-", "warning:L0070"},
+
+	// E0602/E0603/E0605: control-flow diagnostics replaced by
+	// parser-level error recovery or different checker codes.
+	"E0602/`return` outside a function script body":    {"error:-"},
+	"E0603/`self` outside a method receiver context":   {"error:E0503", "error:-", "warning:L0001"},
+	"E0605/`Self` outside a nominal impl-like context": {"error:E0504", "error:-"},
+
+	// E0502/E0503/E0504: name-resolution diagnostics that the
+	// parser catches differently or emits earlier.
+	"E0502/duplicate local binding":                   {"error:E0501", "error:-", "warning:L0010", "warning:L0001", "warning:L0001"},
+	"E0504/import name conflicts with top-level decl": {"error:E0501", "error:-", "warning:L0003"},
+	"E0503/import name conflicts with local":          {"error:-", "warning:L0003", "warning:L0001"},
+
+	// E0757/E0758: as? downcast checking lives in the
+	// self-host elab.osty path but the single-file pipeline
+	// doesn't route through elabInferMethodCall's flag check.
+	"E0757/`as?` sugar requires Error bound on operand and target": {"error:-"},
+	"E0757/`as?` target must implement Error too":                  {"error:-"},
+	"E0757/`as?` with non-Error target struct":                     {"error:-", "warning:L0070"},
+	"E0758/`as?` target same as operand type is pointless":         {"error:-"},
+
+	// G21/G31/G34/G35: checker-level diagnostics whose syntax
+	// (const fn, enum discriminant, operator overload annotation,
+	// impl blocks) is not yet parsed by the single-file pipeline path.
+	"E0765/implicit narrowing Int64 -> Int32":          {"error:-"},
+	"E0754/#[op(+)] with wrong signature (G35)":        {"error:E0100", "error:E0204", "error:E0100", "error:-", "error:-", "warning:L0070", "warning:L0070"},
+	"E0758/enum discriminant on payload variant (G31)": {"error:E0204", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:-", "error:-", "warning:L0070"},
+	"E0759/duplicate enum discriminant (G31)":          {"error:E0204", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:E0108", "error:-", "error:-", "warning:L0070"},
+	"E0766/`const fn` with disallowed body (G21)":      {"error:E0100", "error:-", "error:-", "warning:L0024", "warning:L0024", "warning:L0021"},
+	"E0768/`const fn` cannot be generic (G21)":         {"error:E0100", "error:-", "error:-"},
+}
 
 // TestSpecPositive enforces that every file under
 // testdata/spec/positive/ parses with the expected diagnostic set. New
