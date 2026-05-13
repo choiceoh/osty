@@ -17657,8 +17657,8 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantNone()),
         MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantOk()),
         MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantErr()),
-        MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, instr),
-        MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, instr),
+        MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantNone(), "osty_rt_option_unwrap_none"),
+        MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantErr(), "osty_rt_result_unwrap_err"),
         MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantSome()),
         MirIntrinsicResultUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantOk()),
         MirIntrinsicRawNull -> mirEmitRawNullIntrinsic(func, instr),
@@ -18547,6 +18547,8 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
     out = out + "declare ptr @osty_rt_float_to_string(double)\n"
     out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
+    out = out + "declare void @osty_rt_option_unwrap_none()\n"
+    out = out + "declare void @osty_rt_result_unwrap_err()\n"
     out = out + "declare i64 @osty_rt_list_len(ptr)\n"
     out = out + "declare i64 @osty_rt_map_len(ptr)\n"
     out = out + "declare i64 @osty_rt_set_len(ptr)\n"
@@ -20471,9 +20473,12 @@ fn mirEmitAlgebraicPredicateIntrinsic(func: MirFunction, instr: MirInstr, wanted
     let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
     out + "  " + dest + " = icmp eq i64 " + disc + ", " + wantedTag + "\n"
 }
-fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, absentTag: String, abortSym: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO algebraic unwrap intrinsic\n"
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO algebraic unwrap into projected dest\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let value = mirEmitOperand(instr.args[0])
@@ -20482,8 +20487,20 @@ fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, instr: MirInstr) -> String
     if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
         return "  ; TODO algebraic unwrap for dest type \"" + destLLVM + "\"\n"
     }
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let disc = base + ".disc"
+    let isAbsent = base + ".absent"
+    let absentLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrap.absent")
+    let presentLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrap.present")
     let raw = dest + ".raw"
-    let mut out = "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
+    let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
+    out = out + "  " + isAbsent + " = icmp eq i64 " + disc + ", " + absentTag + "\n"
+    out = out + "  br i1 " + isAbsent + ", label %" + absentLabel + ", label %" + presentLabel + "\n"
+    out = out + mirLabelLine(absentLabel)
+    out = out + "  call void @" + abortSym + "()\n"
+    out = out + "  unreachable\n"
+    out = out + mirLabelLine(presentLabel)
+    out = out + "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
     if destLLVM == "i64" {
         return out + "  " + dest + " = add i64 0, " + raw + "\n"
     }

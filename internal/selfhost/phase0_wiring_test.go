@@ -445,6 +445,13 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, blockId, instrIdx, instr)",
 				"mirEmitIntrinsicAuxLabel(blockId, instrIdx, \"bytes.get.some\")",
 				"mirEmitOptionSomeToSlotLines(base + \".some\", optLLVM, \"i8\", byteReg, resultSlot)",
+				// Phase 2d — unwrap checks the absent tag before
+				// narrowing payloads.
+				"MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantNone(), \"osty_rt_option_unwrap_none\")",
+				"MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantErr(), \"osty_rt_result_unwrap_err\")",
+				"mirEmitIntrinsicAuxLabel(blockId, instrIdx, \"algebraic.unwrap.absent\")",
+				"declare void @osty_rt_option_unwrap_none()",
+				"declare void @osty_rt_result_unwrap_err()",
 			},
 		},
 		{
