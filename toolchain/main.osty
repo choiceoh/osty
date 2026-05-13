@@ -110,6 +110,14 @@ fn runCompile(args: List<String>) -> Int {
     }
     let hir = hirLowerSource("main", source)
     let mir = mirLowerModule(hir)
+    let mirErrs = mirValidateModule(mir)
+    if mirErrs.len() != 0 {
+        eprint("osty-self compile: MIR validation failed:\n")
+        for e in mirErrs {
+            eprint("  " + e + "\n")
+        }
+        return 1
+    }
     let opts = mirEmitOpts("main", path, "")
     let irText = mirEmitModule(mir, opts)
     print(irText)
@@ -157,6 +165,14 @@ fn runLirProtoLower(args: List<String>) -> Int {
     }
     let hir = hirLowerSource(packageName, source)
     let mir = mirLowerModule(hir)
+    let mirErrs = mirValidateModule(mir)
+    if mirErrs.len() != 0 {
+        eprint("osty-self lir-proto-lower: MIR validation failed:\n")
+        for e in mirErrs {
+            eprint("  " + e + "\n")
+        }
+        return 1
+    }
     let cfg = lirLowerConfig(packageName, path, target)
     let result = lirLowerMirModule(cfg, mir)
     if !lirLowerOK(result) {
