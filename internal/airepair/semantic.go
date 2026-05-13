@@ -12,6 +12,7 @@ import (
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/selfhost"
 	selfhostapi "github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
@@ -140,7 +141,7 @@ func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair
 	if strings.HasPrefix(lhs, "(") && strings.HasSuffix(lhs, ")") {
 		lhs = strings.TrimSpace(lhs[1 : len(lhs)-1])
 	}
-	parts := splitTopLevelComma(lhs)
+	parts := runner.SplitTopLevelComma(lhs)
 	if len(parts) != 2 {
 		return "", nil, false
 	}
@@ -155,7 +156,7 @@ func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair
 	switch {
 	case indexBinding == "_":
 		indexVar = fmt.Sprintf("_osty_index%d", *counter)
-	case isSimpleIdentifierBinding(indexBinding):
+	case runner.IsSimpleIdentifierBinding(indexBinding):
 		// use the original binding directly in the rewritten loop header.
 	default:
 		return "", nil, false
@@ -298,17 +299,17 @@ func rewriteLetAppendLine(line sourceLine) (string, bool) {
 
 	name := strings.TrimSpace(rest[:eqIdx])
 	rhs := strings.TrimSpace(rest[eqIdx+3:])
-	if !isSimpleIdentifierBinding(name) {
+	if !runner.IsSimpleIdentifierBinding(name) {
 		return "", false
 	}
 
-	base, item, ok := parseAppendCall(rhs)
-	if !ok || strings.TrimSpace(base) == name {
+	parsed := runner.ParseAppendCall(rhs)
+	if !parsed.Ok || parsed.Base == name {
 		return "", false
 	}
 
-	return line.indent + "let mut " + name + " = " + base + "\n" +
-		line.indent + name + ".push(" + item + ")", true
+	return line.indent + "let mut " + name + " = " + parsed.Base + "\n" +
+		line.indent + name + ".push(" + parsed.Item + ")", true
 }
 
 func rewriteSelfAssignAppendLine(line sourceLine) (string, bool) {
@@ -319,40 +320,24 @@ func rewriteSelfAssignAppendLine(line sourceLine) (string, bool) {
 	}
 	lhs := strings.TrimSpace(trimmed[:eqIdx])
 	rhs := strings.TrimSpace(trimmed[eqIdx+3:])
-	if !isSimpleIdentifierBinding(lhs) {
+	if !runner.IsSimpleIdentifierBinding(lhs) {
 		return "", false
 	}
 
-	base, item, ok := parseAppendCall(rhs)
-	if !ok || strings.TrimSpace(base) != lhs {
+	parsed := runner.ParseAppendCall(rhs)
+	if !parsed.Ok || parsed.Base != lhs {
 		return "", false
 	}
 
-	return line.indent + lhs + ".push(" + item + ")", true
+	return line.indent + lhs + ".push(" + parsed.Item + ")", true
 }
 
 func rewriteStandaloneAppendLine(line sourceLine) (string, bool) {
-	base, item, ok := parseAppendCall(line.trimmed)
-	if !ok || !isSimpleIdentifierBinding(strings.TrimSpace(base)) {
+	parsed := runner.ParseAppendCall(line.trimmed)
+	if !parsed.Ok || !runner.IsSimpleIdentifierBinding(parsed.Base) {
 		return "", false
 	}
-	return line.indent + strings.TrimSpace(base) + ".push(" + item + ")", true
-}
-
-func parseAppendCall(expr string) (string, string, bool) {
-	if !strings.HasPrefix(expr, "append(") || !strings.HasSuffix(expr, ")") {
-		return "", "", false
-	}
-	args := splitTopLevelComma(strings.TrimSpace(expr[len("append(") : len(expr)-1]))
-	if len(args) != 2 {
-		return "", "", false
-	}
-	base := strings.TrimSpace(args[0])
-	item := strings.TrimSpace(args[1])
-	if base == "" || item == "" {
-		return "", "", false
-	}
-	return base, item, true
+	return line.indent + parsed.Base + ".push(" + parsed.Item + ")", true
 }
 
 func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
@@ -437,27 +422,11 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 		// rewriting those to `.len()` replaces a valid field read with a
 		// missing-method call. Be conservative: protect anything that is
 		// not a known builtin.
-		if rec == nil || rec.Type == nil || !isRewritableLengthTypeRepr(rec.Type) {
+		if rec == nil || rec.Type == nil || !runner.IsRewritableLengthTypeKind(rec.Type.Kind, rec.Type.Name) {
 			skip[fe.EndV.Offset-len(fe.Name)] = true
 		}
 	})
 	return skip
-}
-
-func isRewritableLengthTypeRepr(tr *selfhostapi.TypeRepr) bool {
-	if tr == nil {
-		return false
-	}
-	switch tr.Kind {
-	case "primitive":
-		return tr.Name == "String" || tr.Name == "Bytes"
-	case "named":
-		switch tr.Name {
-		case "List", "Map", "Set", "OrderedMap":
-			return true
-		}
-	}
-	return false
 }
 
 func semanticPatternBindsNode(p ast.Pattern, target ast.Node) bool {

@@ -1,0 +1,126 @@
+use std.testing
+fn testSplitTopLevelCommaSimple() {
+    let parts = splitTopLevelComma("a, b, c")
+    testing.assertEq(parts.len(), 3)
+    testing.assertEq(parts[0], "a")
+    testing.assertEq(parts[1], " b")
+    testing.assertEq(parts[2], " c")
+}
+fn testSplitTopLevelCommaEmpty() {
+    let parts = splitTopLevelComma("")
+    testing.assertEq(parts.len(), 0)
+}
+fn testSplitTopLevelCommaWhitespaceOnly() {
+    let parts = splitTopLevelComma("   ")
+    testing.assertEq(parts.len(), 0)
+}
+fn testSplitTopLevelCommaSinglePart() {
+    let parts = splitTopLevelComma("just_one")
+    testing.assertEq(parts.len(), 1)
+    testing.assertEq(parts[0], "just_one")
+}
+fn testSplitTopLevelCommaIgnoresParens() {
+    let parts = splitTopLevelComma("a, (b, c), d")
+    testing.assertEq(parts.len(), 3)
+    testing.assertEq(parts[0], "a")
+    testing.assertEq(parts[1], " (b, c)")
+    testing.assertEq(parts[2], " d")
+}
+fn testSplitTopLevelCommaIgnoresBrackets() {
+    let parts = splitTopLevelComma("a, [b, c, d], e")
+    testing.assertEq(parts.len(), 3)
+    testing.assertEq(parts[0], "a")
+    testing.assertEq(parts[1], " [b, c, d]")
+    testing.assertEq(parts[2], " e")
+}
+fn testSplitTopLevelCommaIgnoresBraces() {
+    let parts = splitTopLevelComma("x, {a, b}, y")
+    testing.assertEq(parts.len(), 3)
+    testing.assertEq(parts[0], "x")
+    testing.assertEq(parts[1], " {a, b}")
+    testing.assertEq(parts[2], " y")
+}
+fn testSplitTopLevelCommaNested() {
+    let parts = splitTopLevelComma("foo(a, b), bar([1, 2])")
+    testing.assertEq(parts.len(), 2)
+    testing.assertEq(parts[0], "foo(a, b)")
+    testing.assertEq(parts[1], " bar([1, 2])")
+}
+fn testIsSimpleIdentifierBindingWildcard() {
+    testing.assert(isSimpleIdentifierBinding("_"))
+}
+fn testIsSimpleIdentifierBindingPlain() {
+    testing.assert(isSimpleIdentifierBinding("name"))
+    testing.assert(isSimpleIdentifierBinding("_leading"))
+    testing.assert(isSimpleIdentifierBinding("snake_case"))
+    testing.assert(isSimpleIdentifierBinding("camelCase"))
+    testing.assert(isSimpleIdentifierBinding("x123"))
+}
+fn testIsSimpleIdentifierBindingRejectsDigitFirst() {
+    testing.assert(!(isSimpleIdentifierBinding("1abc")))
+}
+fn testIsSimpleIdentifierBindingRejectsHyphen() {
+    testing.assert(!(isSimpleIdentifierBinding("with-hyphen")))
+}
+fn testIsSimpleIdentifierBindingRejectsEmpty() {
+    testing.assert(!(isSimpleIdentifierBinding("")))
+}
+fn testIsSimpleIdentifierBindingRejectsPunctuation() {
+    testing.assert(!(isSimpleIdentifierBinding("a.b")))
+    testing.assert(!(isSimpleIdentifierBinding("a,b")))
+    testing.assert(!(isSimpleIdentifierBinding("a b")))
+}
+fn testParseAppendCallSimple() {
+    let r = parseAppendCall("append(items, x)")
+    testing.assert(r.ok)
+    testing.assertEq(r.base, "items")
+    testing.assertEq(r.item, "x")
+}
+fn testParseAppendCallTrimsArgs() {
+    let r = parseAppendCall("append( xs ,  value )")
+    testing.assert(r.ok)
+    testing.assertEq(r.base, "xs")
+    testing.assertEq(r.item, "value")
+}
+fn testParseAppendCallNestedItem() {
+    let r = parseAppendCall("append(out, foo(a, b))")
+    testing.assert(r.ok)
+    testing.assertEq(r.base, "out")
+    testing.assertEq(r.item, "foo(a, b)")
+}
+fn testParseAppendCallRejectsWrongArity() {
+    let r = parseAppendCall("append(only_one)")
+    testing.assert(!(r.ok))
+}
+fn testParseAppendCallRejectsNotAppend() {
+    let r = parseAppendCall("push(xs, v)")
+    testing.assert(!(r.ok))
+}
+fn testParseAppendCallRejectsTrailingExpression() {
+    let r = parseAppendCall("append(a, b) + 1")
+    testing.assert(!(r.ok))
+}
+fn testParseAppendCallRejectsEmptyArg() {
+    let r = parseAppendCall("append(, x)")
+    testing.assert(!(r.ok))
+    let r2 = parseAppendCall("append(xs, )")
+    testing.assert(!(r2.ok))
+}
+fn testIsRewritableLengthTypeKindPrimitives() {
+    testing.assert(isRewritableLengthTypeKind("primitive", "String"))
+    testing.assert(isRewritableLengthTypeKind("primitive", "Bytes"))
+    testing.assert(!(isRewritableLengthTypeKind("primitive", "Int")))
+    testing.assert(!(isRewritableLengthTypeKind("primitive", "Float")))
+}
+fn testIsRewritableLengthTypeKindNamedContainers() {
+    testing.assert(isRewritableLengthTypeKind("named", "List"))
+    testing.assert(isRewritableLengthTypeKind("named", "Map"))
+    testing.assert(isRewritableLengthTypeKind("named", "Set"))
+    testing.assert(isRewritableLengthTypeKind("named", "OrderedMap"))
+}
+fn testIsRewritableLengthTypeKindRejectsUnknown() {
+    testing.assert(!(isRewritableLengthTypeKind("named", "MyStruct")))
+    testing.assert(!(isRewritableLengthTypeKind("generic", "List")))
+    testing.assert(!(isRewritableLengthTypeKind("", "")))
+    testing.assert(!(isRewritableLengthTypeKind("primitive", "")))
+}
