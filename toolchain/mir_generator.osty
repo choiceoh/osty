@@ -17629,7 +17629,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(func, instr),
         MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_bytes_len"),
         MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
-        MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, instr),
+        MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicBytesContains -> mirEmitBytesContainsIntrinsic(func, instr),
         MirIntrinsicBytesStartsWith -> mirEmitBytesStartsWithIntrinsic(func, instr),
         MirIntrinsicBytesEndsWith -> mirEmitBytesEndsWithIntrinsic(func, instr),
@@ -20277,14 +20277,45 @@ fn mirEmitBytesIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let mut out = "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + arg + ")\n"
     out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
 }
-fn mirEmitBytesGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO bytes get\n"
     }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO bytes get into projected dest\n"
+    }
     let dest = mirEmitLocalRegName(instr.dest.local)
+    let optLLVM = mirEmitParamType(func, instr.dest.local)
+    if mirStringStartsWith(optLLVM, "\{") == false {
+        return "  ; TODO bytes get dest type \"" + optLLVM + "\"\n"
+    }
     let bs = mirEmitOperand(instr.args[0])
     let idx = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call i8 @osty_rt_bytes_get(ptr " + bs + ", i64 " + idx + ")\n"
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let resultSlot = base + ".bytesget"
+    let lenReg = base + ".len"
+    let nonNegReg = base + ".nonneg"
+    let beforeEndReg = base + ".beforeend"
+    let inRangeReg = base + ".inrange"
+    let byteReg = base + ".byte"
+    let someLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.some")
+    let noneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.none")
+    let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.done")
+    let mut out = "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
+    out = out + "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + bs + ")\n"
+    out = out + "  " + nonNegReg + " = icmp sge i64 " + idx + ", 0\n"
+    out = out + "  " + beforeEndReg + " = icmp slt i64 " + idx + ", " + lenReg + "\n"
+    out = out + "  " + inRangeReg + " = and i1 " + nonNegReg + ", " + beforeEndReg + "\n"
+    out = out + "  br i1 " + inRangeReg + ", label %" + someLabel + ", label %" + noneLabel + "\n"
+    out = out + mirLabelLine(someLabel)
+    out = out + "  " + byteReg + " = call i8 @osty_rt_bytes_get(ptr " + bs + ", i64 " + idx + ")\n"
+    out = out + mirEmitOptionSomeToSlotLines(base + ".some", optLLVM, "i8", byteReg, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(noneLabel)
+    out = out + mirEmitOptionNoneToSlotLines(base + ".none", optLLVM, resultSlot)
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(doneLabel)
+    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
 fn mirEmitBytesIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
