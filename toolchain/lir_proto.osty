@@ -3623,7 +3623,7 @@ fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
 }
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, optType) {
-        lirLowerError(l, LirDiagUnsupported, "Option<Struct> Some construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", "option.some.widened")
+        lirLowerError(l, LirDiagUnsupported, "Option<Struct> Some construction via i64 entry on widened payload `" + optType.llvm + "` — caller should dispatch to lirEmitOptionSomeStruct", "option.some.widened")
         return "undef"
     }
     let step = lirFresh(l)
@@ -3632,9 +3632,25 @@ fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: Str
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
 }
+// `lirEmitOptionSomeStruct` builds `Some(payload)` when `optType` is
+// the widened `{ i64 disc, %Struct payload }` shape. Callers that
+// have the struct-typed payload operand on hand should dispatch here
+// instead of pre-coercing through `lirParseResultPayloadAsI64`.
+fn lirEmitOptionSomeStruct(l: LirMirFunctionLowerer, optType: LirType, payload: LirOperand) -> String {
+    let structRef = lirOptionResultPayloadStructRef(l.out, optType.llvm)
+    if structRef == "" {
+        lirLowerError(l, LirDiagUnsupported, "Option<Struct> Some construction could not extract payload typedef from `" + optType.llvm + "`", "option.some.widened")
+        return "undef"
+    }
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
+    value
+}
 fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, resultType) {
-        lirLowerError(l, LirDiagUnsupported, "Result<Struct, _> Ok construction not implemented for widened payload `" + resultType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", "result.ok.widened")
+        lirLowerError(l, LirDiagUnsupported, "Result<Struct, _> Ok construction via i64 entry on widened payload `" + resultType.llvm + "` — caller should dispatch to lirEmitResultOkStruct", "result.ok.widened")
         return "undef"
     }
     let step = lirFresh(l)
@@ -3643,15 +3659,43 @@ fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: St
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
 }
+// `lirEmitResultOkStruct` builds `Ok(payload)` when `resultType` is
+// the widened `{ i64 disc, %Struct payload }` shape.
+fn lirEmitResultOkStruct(l: LirMirFunctionLowerer, resultType: LirType, payload: LirOperand) -> String {
+    let structRef = lirOptionResultPayloadStructRef(l.out, resultType.llvm)
+    if structRef == "" {
+        lirLowerError(l, LirDiagUnsupported, "Result<Struct, _> Ok construction could not extract payload typedef from `" + resultType.llvm + "`", "result.ok.widened")
+        return "undef"
+    }
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
+    value
+}
 fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, resultType) {
-        lirLowerError(l, LirDiagUnsupported, "Result<_, Struct> Err construction not implemented for widened payload `" + resultType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", "result.err.widened")
+        lirLowerError(l, LirDiagUnsupported, "Result<_, Struct> Err construction via i64 entry on widened payload `" + resultType.llvm + "` — caller should dispatch to lirEmitResultErrStruct", "result.err.widened")
         return "undef"
     }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
+    value
+}
+// `lirEmitResultErrStruct` builds `Err(payload)` when `resultType` is
+// the widened `{ i64 disc, %Struct payload }` shape.
+fn lirEmitResultErrStruct(l: LirMirFunctionLowerer, resultType: LirType, payload: LirOperand) -> String {
+    let structRef = lirOptionResultPayloadStructRef(l.out, resultType.llvm)
+    if structRef == "" {
+        lirLowerError(l, LirDiagUnsupported, "Result<_, Struct> Err construction could not extract payload typedef from `" + resultType.llvm + "`", "result.err.widened")
+        return "undef"
+    }
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
     value
 }
 // `lirAggregateHasWidenedPayload` returns true when the typedef body for an
@@ -4555,8 +4599,12 @@ fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
     let loaded = lirFresh(l)
     l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
-    let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirEmitOptionSomeStruct(l, optType, lirOperand(valueType, loaded))
+    } else {
+        let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
+        lirEmitOptionSome(l, optType, payloadI64)
+    }
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = noneLabel
@@ -4659,8 +4707,12 @@ fn lirLowerMirListFirstOrLast(l: LirMirFunctionLowerer, instr: MirInstr, isLast:
         l.instrs.push(lirLoad(dest, elemType, slot, 0))
         dest
     }
-    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirEmitOptionSomeStruct(l, optType, lirOperand(elemType, elemReg))
+    } else {
+        let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
+        lirEmitOptionSome(l, optType, payloadI64)
+    }
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
@@ -4759,8 +4811,12 @@ fn lirLowerMirListPop(l: LirMirFunctionLowerer, instr: MirInstr) {
         dest
     }
     l.instrs.push(lirCall("", lirVoidType(), "@" + discardSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
-    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirEmitOptionSomeStruct(l, optType, lirOperand(elemType, elemReg))
+    } else {
+        let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
+        lirEmitOptionSome(l, optType, payloadI64)
+    }
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
