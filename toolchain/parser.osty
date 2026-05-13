@@ -1916,7 +1916,7 @@ fn opParseStmt(p: OstyParser) -> Int {
         return opParseForStmt(p, labelIdx)
     }
     if tok.kind == FrontLet {
-        return opParseLetStmt(p, [])
+        return opParseLetStmt(p, [], false)
     }
     if tok.kind == FrontReturn {
         return opParseReturnStmt(p)
@@ -2010,7 +2010,7 @@ fn opParseStmt(p: OstyParser) -> Int {
 // value. Plain `break` inside `for`/`while` continues without a
 // value. We parse greedily — if an expression starts on the
 // same line, capture it as the break value.
-fn opParseLetStmt(p: OstyParser, anns: List<Int>) -> Int {
+fn opParseLetStmt(p: OstyParser, anns: List<Int>, isPub: Bool) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
     let mut isMut = false
@@ -2032,9 +2032,14 @@ fn opParseLetStmt(p: OstyParser, anns: List<Int>) -> Int {
     n.children = [typeIdx]
     n.start = start
     n.end = p.pos
+    let mut flags = 0
     if isMut {
-        n.flags = 1
+        flags = flags | 1
     }
+    if isPub {
+        flags = flags | 2
+    }
+    n.flags = flags
     n.extra = opPackAnnotations(p, anns)
     opAddNode(p, n)
 }
@@ -2706,7 +2711,7 @@ fn opParseDecl(p: OstyParser) -> Int {
         return opParseUseDecl(p, isPub)
     }
     if tok.kind == FrontLet {
-        return opParseLetStmt(p, anns)
+        return opParseLetStmt(p, anns, isPub)
     }
     if tok.kind == FrontDefer {
         opErrorFull(p, "`defer` is not allowed at the top level of a script", "move this `defer` inside a function body — it binds to the enclosing function's return", "", "E0608")

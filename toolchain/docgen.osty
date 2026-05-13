@@ -994,6 +994,18 @@ fn selfDocLetType(file: AstFile, node: AstNode) -> String {
     ""
 }
 fn selfDocNodeIsPub(lexed: OstyLexResult, node: AstNode) -> Bool {
+    // AstNLet packs mut at bit 0 and pub at bit 1, unlike other decl
+    // kinds whose flag is the bare pub bit. Treat let separately so
+    // `let mut foo` (private mutable) is not mistaken for `pub let`.
+    if node.kind == AstNLet {
+        if (node.flags & 2) == 2 {
+            return true
+        }
+        if node.start > 0 {
+            return ostyLexResultTokenAt(lexed, node.start - 1).kind == FrontPub
+        }
+        return false
+    }
     if node.flags == 1 {
         return true
     }

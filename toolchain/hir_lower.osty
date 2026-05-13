@@ -2256,7 +2256,9 @@ fn hirLowerTopLevelLetDecl(cx: HirLowerContext, idx: Int, typeScope: HirLowerTyp
     } else {
         hirExprInvalid()
     }
-    hirLowerAssembleLetDecl(name, typ, hasValue, value, node.flags == 1, false, span)
+    let isMut = (node.flags & 1) == 1
+    let isPub = (node.flags & 2) == 2
+    hirLowerAssembleLetDecl(name, typ, hasValue, value, isMut, isPub, span)
 }
 fn hirLowerUseDecl(cx: HirLowerContext, idx: Int) -> HirUseDecl {
     let node = astArenaNodeAt(cx.ast.arena, idx)
