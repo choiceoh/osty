@@ -440,6 +440,11 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, blockId, instrIdx, instr)",
 				"MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, blockId, instrIdx, instr)",
 				"declare i1 @osty_rt_strings_Equal",
+				// Phase 2c — Bytes.get returns Option<Byte>
+				// instead of a naked byte load.
+				"MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, blockId, instrIdx, instr)",
+				"mirEmitIntrinsicAuxLabel(blockId, instrIdx, \"bytes.get.some\")",
+				"mirEmitOptionSomeToSlotLines(base + \".some\", optLLVM, \"i8\", byteReg, resultSlot)",
 			},
 		},
 		{
