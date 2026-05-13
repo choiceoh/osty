@@ -29483,6 +29483,9 @@ const char *osty_rt_result_unwrap_or_string(void *result, const char *fallback) 
 
 #if defined(__GNUC__) || defined(__clang__)
 
+#define OSTY_RT_AUDIT_SYMBOL(name) OSTY_GC_SYMBOL(name)
+#define OSTY_RT_AUDIT_USED __attribute__((used))
+
 /* UTF-8 encode a single Unicode codepoint into a freshly allocated
  * managed string. Invalid codepoints (>= 0x110000, surrogates) yield
  * the U+FFFD replacement character. Used by `Char.toString` and
@@ -29525,13 +29528,20 @@ static char *osty_rt_audit_char_to_string(int32_t codepoint) {
 }
 
 /* Char.toString(self) — stage0 emits the method mangle directly. */
-void *osty_rt_audit_Char_toString(int32_t codepoint) __asm__("Char__toString");
+void *osty_rt_audit_Char_toString(int32_t codepoint) __asm__(OSTY_RT_AUDIT_SYMBOL("Char__toString")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_Char_toString(int32_t codepoint) {
     return (void *)osty_rt_audit_char_to_string(codepoint);
 }
 
+/* Char.len(self) — stage0 may preserve the method mangle for string-like
+ * char helpers that have already been normalized to a String pointer. */
+int64_t osty_rt_audit_Char_len(const char *value) __asm__(OSTY_RT_AUDIT_SYMBOL("Char__len")) OSTY_RT_AUDIT_USED;
+int64_t osty_rt_audit_Char_len(const char *value) {
+    return osty_rt_strings_ByteLen(value);
+}
+
 /* std.strings.fromChar(c) — same semantics as Char.toString. */
-void *osty_rt_audit_strings_fromChar(int32_t codepoint) __asm__("std.strings.fromChar");
+void *osty_rt_audit_strings_fromChar(int32_t codepoint) __asm__(OSTY_RT_AUDIT_SYMBOL("std.strings.fromChar")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_strings_fromChar(int32_t codepoint) {
     return (void *)osty_rt_audit_char_to_string(codepoint);
 }
@@ -29539,10 +29549,18 @@ void *osty_rt_audit_strings_fromChar(int32_t codepoint) {
 /* std.strings.compare(a, b) — lexicographic byte compare matching
  * `osty_rt_strings_Compare`'s semantics (the LIR Proto path routes
  * here under a different mangle). */
-int64_t osty_rt_audit_strings_compare(const char *left, const char *right) __asm__("std.strings.compare");
+int64_t osty_rt_audit_strings_compare(const char *left, const char *right) __asm__(OSTY_RT_AUDIT_SYMBOL("std.strings.compare")) OSTY_RT_AUDIT_USED;
 int64_t osty_rt_audit_strings_compare(const char *left, const char *right) {
     return osty_rt_strings_Compare(left, right);
 }
+
+#if defined(__APPLE__)
+FILE *osty_rt_stage0_stderr_global __asm__(OSTY_RT_AUDIT_SYMBOL("stderr")) OSTY_RT_AUDIT_USED;
+__attribute__((constructor))
+static void osty_rt_stage0_init_stderr_global(void) {
+    osty_rt_stage0_stderr_global = stderr;
+}
+#endif
 
 /* Captured process argv. Populated once before main() runs via a
  * platform-specific initialiser (`.init_array` on glibc/musl,
@@ -29598,7 +29616,7 @@ static void (*osty_rt_audit_capture_argv_init_ptr)(int, char **, char **) =
  * `toolchain/main.osty:forwardedArgs` slices from index 1. Falls
  * back to an empty list if argv capture failed (unsupported host
  * or constructor skipped). */
-void *osty_rt_audit_env_args(void) __asm__("std.env.args");
+void *osty_rt_audit_env_args(void) __asm__(OSTY_RT_AUDIT_SYMBOL("std.env.args")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_env_args(void) {
     void *list = osty_rt_list_new();
     if (list == NULL || osty_rt_saved_argv == NULL) {
@@ -29620,7 +29638,7 @@ void *osty_rt_audit_env_args(void) {
  * the source/Go convention `Some=0, None=1` (see
  * `internal/mir/lower.go:7757`): tag=0 (Some) when set, tag=1
  * (None) when unset or on NULL input. */
-void *osty_rt_audit_env_get(const char *name) __asm__("std.env.get");
+void *osty_rt_audit_env_get(const char *name) __asm__(OSTY_RT_AUDIT_SYMBOL("std.env.get")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_env_get(const char *name) {
     int64_t *box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
     if (box == NULL) {
@@ -29646,14 +29664,14 @@ void *osty_rt_audit_env_get(const char *name) {
 
 /* std.os.exit(code) — terminate the process with `code`. Declared
  * `Never` on the Osty side; matches libc `exit` semantics. */
-void osty_rt_audit_os_exit(int64_t code) __asm__("std.os.exit");
+void osty_rt_audit_os_exit(int64_t code) __asm__(OSTY_RT_AUDIT_SYMBOL("std.os.exit")) OSTY_RT_AUDIT_USED;
 void osty_rt_audit_os_exit(int64_t code) {
     exit((int)code);
 }
 
 /* std.process.abort(msg) — emit `msg` to stderr and abort. Declared
  * `Never` on the Osty side. */
-void osty_rt_audit_process_abort(const char *msg) __asm__("std.process.abort");
+void osty_rt_audit_process_abort(const char *msg) __asm__(OSTY_RT_AUDIT_SYMBOL("std.process.abort")) OSTY_RT_AUDIT_USED;
 void osty_rt_audit_process_abort(const char *msg) {
     if (msg != NULL) {
         char msg_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
@@ -29667,14 +29685,14 @@ void osty_rt_audit_process_abort(const char *msg) {
 
 /* runtime.path.filepath.Base(path) — forward to the existing
  * underscore-named helper. */
-void *osty_rt_audit_filepath_Base(const char *path) __asm__("runtime.path.filepath.Base");
+void *osty_rt_audit_filepath_Base(const char *path) __asm__(OSTY_RT_AUDIT_SYMBOL("runtime.path.filepath.Base")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_filepath_Base(const char *path) {
     return (void *)osty_rt_path_filepath_Base(path);
 }
 
 /* runtime.path.filepath.Ext(path) — forward to the existing
  * underscore-named helper. */
-void *osty_rt_audit_filepath_Ext(const char *path) __asm__("runtime.path.filepath.Ext");
+void *osty_rt_audit_filepath_Ext(const char *path) __asm__(OSTY_RT_AUDIT_SYMBOL("runtime.path.filepath.Ext")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_filepath_Ext(const char *path) {
     return (void *)osty_rt_path_filepath_Ext(path);
 }
@@ -29683,14 +29701,14 @@ void *osty_rt_audit_filepath_Ext(const char *path) {
  * lowerings outside the bootstrap subset. Reached only from declined
  * paths; safe empty string keeps the binary from segfaulting if it
  * does dispatch here. */
-void *osty_rt_audit_interp_placeholder(void) __asm__("__interp");
+void *osty_rt_audit_interp_placeholder(void) __asm__(OSTY_RT_AUDIT_SYMBOL("__interp")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_interp_placeholder(void) {
     return osty_rt_string_dup_site("", 0, "stage0.audit.interp_placeholder");
 }
 
 /* i64() — same placeholder category as `__interp`; surfaces when a
  * type-name leaks into the call site via stage0 fallback. */
-void *osty_rt_audit_i64_placeholder(void) __asm__("i64");
+void *osty_rt_audit_i64_placeholder(void) __asm__(OSTY_RT_AUDIT_SYMBOL("i64")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_i64_placeholder(void) {
     return osty_rt_string_dup_site("", 0, "stage0.audit.i64_placeholder");
 }
@@ -29708,7 +29726,7 @@ void *osty_rt_audit_i64_placeholder(void) {
  * with `undefined reference to std.fs.readToString` and the
  * stage0 dispatch ceiling moves back from "binary handled
  * --selfhost-doctor" to "binary fails to link". */
-void *osty_rt_audit_fs_readToString(const char *path) __asm__("std.fs.readToString");
+void *osty_rt_audit_fs_readToString(const char *path) __asm__(OSTY_RT_AUDIT_SYMBOL("std.fs.readToString")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_fs_readToString(const char *path) {
     int64_t *box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
     if (box == NULL) {
@@ -29755,6 +29773,9 @@ void *osty_rt_audit_fs_readToString(const char *path) {
     memcpy(&box[1], &content, sizeof(content));
     return box;
 }
+
+#undef OSTY_RT_AUDIT_USED
+#undef OSTY_RT_AUDIT_SYMBOL
 
 #endif /* defined(__GNUC__) || defined(__clang__) */
 

@@ -3,12 +3,16 @@ set shell := ["bash", "-cu"]
 bin := ".bin/osty"
 checker_bin := ".osty/bin/osty-native-checker"
 front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline"
-backend_packages := "./internal/ir ./internal/mir ./internal/backend ./internal/llvmgen"
+backend_packages := "./internal/ir ./internal/mir ./internal/backend ./internal/nativellvmgen ./internal/llvmabi ./internal/toolchain ./cmd/osty-native-llvmgen"
 osty_test_dirs := "examples/int_control_e2e examples/int_methods_e2e examples/int_struct_e2e"
 test_flags := "-count=1 -vet=off"
 stdlib_matrix_fast_tests := "TestStdlibSupportMatrix"
 stdlib_matrix_backend_tests := "Test(Stdlib(CheckResult|Symbol|Method)|InjectReachableStdlib|ReachableStdlib|Phase2|LLVMBackendBinaryRunsStd(Zip|Xlsx|Image|Smtp|Crypto|Random|Term|Os)|PrepareEntryRewritesStdEncoding)"
-stdlib_matrix_llvmgen_tests := "Test(Std(Env|Io|Term|Strings|Bytes|Crypto)|UnsupportedDiagnostic)"
+native_llvm_backend_tests := "Test(LLVMBackendBinaryStd(Io|Env)|LLVMBackendBinaryRunsStd(Term|Crypto)|LLVMBackendBinaryStdCrypto|EmitLLVMIRTextPrefersNativeOwned|LLVMBackendEmitBinaryPrefersNativeOwned|UseNativeOwnedLLVMIR|LLVMBackendDispatchTraceReportsSelectedRoute|LLVMBackendMissingMIRDoesNotRetryLegacyIRBridge)"
+native_llvmgen_cmd_tests := "TestRun(EmitsLLVMIRForMIRPayload|MIRPayloadPrefersLIRProtoWhenSelected|MIRPayloadDeclinesWhenLIRProtoDeclines|RejectsInvalidJSON)"
+native_llvmgen_exec_tests := "Test(TrySourceUsesEnvBinaryAndDecodesResponse|TryPackageUsesManagedBinaryWhenEnvUnset|RequestFromMIREncodesPayload)"
+native_llvmabi_tests := "TestUnsupported"
+toolchain_native_llvmgen_tests := "Test(EnsureNativeLLVMGen|ManagedNativeLLVMGenPath)"
 selfhost_matrix_fast_tests := "Test(CheckCLIDefaultPathExitsZero|RunCheckFileDefaultPathIsAstbridgeFree|ProductionFrontendPathsDoNotCallFrontendRunFile)"
 selfhost_matrix_cmd_tests := "Test(Run(Check|Typecheck|Resolve)(File|Package|Workspace).*AstbridgeFree|CheckCLI(DefaultPathExitsZero|Native.*)|TypecheckCLI.*|ResolveCLI.*)"
 selfhost_matrix_core_tests := "Test(ParseSnapshot|CheckSnapshot|CheckStructuredFromRunIsAstbridgeFree|CheckPackageStructuredIsAstbridgeFree|CheckDiagnosticsAsDiagIsAstbridgeFree|ProductionFrontendPathsDoNotCallFrontendRunFile)"
@@ -141,7 +145,11 @@ support-stdlib-medium:
     just support-stdlib-fast
     go test {{test_flags}} ./internal/stdlib
     go test {{test_flags}} ./internal/backend -run '{{stdlib_matrix_backend_tests}}' -v
-    go test {{test_flags}} ./internal/llvmgen -run '{{stdlib_matrix_llvmgen_tests}}' -v
+    go test {{test_flags}} ./internal/llvmabi -run '{{native_llvmabi_tests}}' -v
+    go test {{test_flags}} ./cmd/osty-native-llvmgen -run '{{native_llvmgen_cmd_tests}}' -v
+    go test {{test_flags}} ./internal/nativellvmgen -run '{{native_llvmgen_exec_tests}}' -v
+    go test {{test_flags}} ./internal/toolchain -run '{{toolchain_native_llvmgen_tests}}' -v
+    go test {{test_flags}} ./internal/backend -run '{{native_llvm_backend_tests}}' -v
 
 support-selfhost-fast:
     go test {{test_flags}} ./cmd/osty ./internal/selfhost -run '{{selfhost_matrix_fast_tests}}' -v
