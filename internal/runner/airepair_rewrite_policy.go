@@ -3,7 +3,10 @@
 // the drift test in this package keeps the two in sync.
 package runner
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // AppendCallParse mirrors toolchain/airepair_rewrite.osty's
 // AppendCallParse. Empty Base/Item with Ok=false signals the
@@ -357,4 +360,191 @@ func RewriteForeignLoopHeader(trimmed string) ForeignLoopRewrite {
 		}
 	}
 	return ForeignLoopRewrite{}
+}
+
+// AppendLineRewrite mirrors toolchain/airepair_rewrite.osty's
+// AppendLineRewrite. Empty Rewritten with Ok=false means the line
+// is not a foreign `append(...)` shape this rewriter recognises.
+//
+// Osty: toolchain/airepair_rewrite.osty:411
+type AppendLineRewrite struct {
+	Rewritten string
+	Ok        bool
+}
+
+// RewriteLetAppendLine recognises `let xs = append(prev, x)` and
+// rewrites it to `let mut xs = prev` + `xs.push(x)`. Self-base
+// shapes (`let xs = append(xs, x)`) are rejected because the
+// shadowing `let mut` would break referential transparency.
+//
+// Osty: toolchain/airepair_rewrite.osty:421
+func RewriteLetAppendLine(indent, trimmed string) AppendLineRewrite {
+	if !strings.HasPrefix(trimmed, "let ") {
+		return AppendLineRewrite{}
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "let "))
+	if strings.HasPrefix(rest, "mut ") {
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "mut "))
+	}
+	eqIdx := strings.Index(rest, " = ")
+	if eqIdx <= 0 {
+		return AppendLineRewrite{}
+	}
+	name := strings.TrimSpace(rest[:eqIdx])
+	rhs := strings.TrimSpace(rest[eqIdx+3:])
+	if !IsSimpleIdentifierBinding(name) {
+		return AppendLineRewrite{}
+	}
+	parsed := ParseAppendCall(rhs)
+	if !parsed.Ok || parsed.Base == name {
+		return AppendLineRewrite{}
+	}
+	return AppendLineRewrite{
+		Rewritten: indent + "let mut " + name + " = " + parsed.Base + "\n" +
+			indent + name + ".push(" + parsed.Item + ")",
+		Ok: true,
+	}
+}
+
+// RewriteSelfAssignAppendLine recognises `xs = append(xs, item)`
+// and emits `xs.push(item)`. The `parsed.Base != lhs` check
+// rejects shapes like `xs = append(ys, item)` — those are a
+// binding swap, not a mutation.
+//
+// Osty: toolchain/airepair_rewrite.osty:451
+func RewriteSelfAssignAppendLine(indent, trimmed string) AppendLineRewrite {
+	eqIdx := strings.Index(trimmed, " = ")
+	if eqIdx <= 0 {
+		return AppendLineRewrite{}
+	}
+	lhs := strings.TrimSpace(trimmed[:eqIdx])
+	rhs := strings.TrimSpace(trimmed[eqIdx+3:])
+	if !IsSimpleIdentifierBinding(lhs) {
+		return AppendLineRewrite{}
+	}
+	parsed := ParseAppendCall(rhs)
+	if !parsed.Ok || parsed.Base != lhs {
+		return AppendLineRewrite{}
+	}
+	return AppendLineRewrite{
+		Rewritten: indent + lhs + ".push(" + parsed.Item + ")",
+		Ok:        true,
+	}
+}
+
+// RewriteStandaloneAppendLine recognises a bare expression
+// statement `append(xs, item)` and emits `xs.push(item)`. The
+// base must be a simple identifier so the rewrite stays a
+// side-effecting method call rather than a pure expression on a
+// temporary.
+//
+// Osty: toolchain/airepair_rewrite.osty:475
+func RewriteStandaloneAppendLine(indent, trimmed string) AppendLineRewrite {
+	parsed := ParseAppendCall(trimmed)
+	if !parsed.Ok || !IsSimpleIdentifierBinding(parsed.Base) {
+		return AppendLineRewrite{}
+	}
+	return AppendLineRewrite{
+		Rewritten: indent + parsed.Base + ".push(" + parsed.Item + ")",
+		Ok:        true,
+	}
+}
+
+// RewriteAppendLine is the dispatcher that asks each append-shape
+// rewriter in turn (let-binding -> self-assign -> bare statement).
+// Only fires on lines that mention `append(` to avoid running the
+// downstream parsers on plain Osty code.
+//
+// Osty: toolchain/airepair_rewrite.osty:491
+func RewriteAppendLine(indent, trimmed string) AppendLineRewrite {
+	if !strings.Contains(trimmed, "append(") {
+		return AppendLineRewrite{}
+	}
+	if r := RewriteLetAppendLine(indent, trimmed); r.Ok {
+		return r
+	}
+	if r := RewriteSelfAssignAppendLine(indent, trimmed); r.Ok {
+		return r
+	}
+	if r := RewriteStandaloneAppendLine(indent, trimmed); r.Ok {
+		return r
+	}
+	return AppendLineRewrite{}
+}
+
+// EnumerateLoopRewrite mirrors toolchain/airepair_rewrite.osty's
+// EnumerateLoopRewrite. NextCounter is the value the host should
+// thread into the next call (unchanged on reject so no name is
+// burned).
+//
+// Osty: toolchain/airepair_rewrite.osty:516
+type EnumerateLoopRewrite struct {
+	Rewritten   string
+	NextCounter int
+	Ok          bool
+}
+
+// airepairSemanticIndentStep mirrors the constant of the same name
+// in the Osty source — four spaces, the canonical body indent the
+// rewriter emits inside generated `for` blocks.
+//
+// Osty: toolchain/airepair_rewrite.osty:524
+const airepairSemanticIndentStep = "    "
+
+// RewriteEnumerateLoopHeader transforms a `for X.enumerate() {`
+// header into the indexed-loop shape the native checker can
+// validate end-to-end. Counter monotonically increments by one
+// per accepted rewrite; on reject the counter passes through
+// unchanged so the host can pass the same value to the next line.
+//
+// Osty: toolchain/airepair_rewrite.osty:540
+func RewriteEnumerateLoopHeader(indent, trimmed string, counter int) EnumerateLoopRewrite {
+	if !strings.HasPrefix(trimmed, "for ") || !strings.HasSuffix(trimmed, "{") {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "for "), "{"))
+	inIdx := strings.Index(body, " in ")
+	if inIdx <= 0 {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	lhs := strings.TrimSpace(body[:inIdx])
+	rhs := strings.TrimSpace(body[inIdx+4:])
+	if !strings.HasSuffix(rhs, ".enumerate()") {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	iterExpr := strings.TrimSpace(strings.TrimSuffix(rhs, ".enumerate()"))
+	if iterExpr == "" {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	if strings.HasPrefix(lhs, "(") && strings.HasSuffix(lhs, ")") {
+		lhs = strings.TrimSpace(lhs[1 : len(lhs)-1])
+	}
+	parts := SplitTopLevelComma(lhs)
+	if len(parts) != 2 {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	indexBinding := strings.TrimSpace(parts[0])
+	valueBinding := strings.TrimSpace(parts[1])
+	if valueBinding == "" {
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	indexVar := indexBinding
+	switch {
+	case indexBinding == "_":
+		indexVar = fmt.Sprintf("_osty_index%d", counter)
+	case IsSimpleIdentifierBinding(indexBinding):
+		// keep the original binding
+	default:
+		return EnumerateLoopRewrite{NextCounter: counter}
+	}
+	iterTemp := fmt.Sprintf("_osty_enumerate%d", counter)
+	bodyIndent := indent + airepairSemanticIndentStep
+	rewritten := indent + "let " + iterTemp + " = " + iterExpr + "\n" +
+		indent + "for " + indexVar + " in 0.." + iterTemp + ".len() {\n" +
+		bodyIndent + "let " + valueBinding + " = " + iterTemp + "[" + indexVar + "]"
+	return EnumerateLoopRewrite{
+		Rewritten:   rewritten,
+		NextCounter: counter + 1,
+		Ok:          true,
+	}
 }

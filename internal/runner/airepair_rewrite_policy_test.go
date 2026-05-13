@@ -214,6 +214,165 @@ func TestRewriteForeignLoopHeader(t *testing.T) {
 	}
 }
 
+func TestRewriteLetAppendLine(t *testing.T) {
+	cases := []struct {
+		name        string
+		indent      string
+		trimmed     string
+		ok          bool
+		want        string
+	}{
+		{"simple", "    ", "let xs = append(prev, x)", true, "    let mut xs = prev\n    xs.push(x)"},
+		{"mut-keyword", "", "let mut xs = append(prev, x)", true, "let mut xs = prev\nxs.push(x)"},
+		{"reject-self-base", "", "let xs = append(xs, x)", false, ""},
+		{"reject-non-append", "", "let xs = ys", false, ""},
+		{"reject-bad-name", "", "let 1xs = append(prev, x)", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RewriteLetAppendLine(c.indent, c.trimmed)
+			if got.Ok != c.ok {
+				t.Errorf("RewriteLetAppendLine(%q).Ok = %v, want %v", c.trimmed, got.Ok, c.ok)
+			}
+			if got.Rewritten != c.want {
+				t.Errorf("RewriteLetAppendLine(%q).Rewritten = %q, want %q", c.trimmed, got.Rewritten, c.want)
+			}
+		})
+	}
+}
+
+func TestRewriteSelfAssignAppendLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		indent  string
+		trimmed string
+		ok      bool
+		want    string
+	}{
+		{"simple", "  ", "xs = append(xs, item)", true, "  xs.push(item)"},
+		{"reject-different-base", "", "xs = append(ys, item)", false, ""},
+		{"reject-non-append", "", "xs = something_else", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RewriteSelfAssignAppendLine(c.indent, c.trimmed)
+			if got.Ok != c.ok {
+				t.Errorf("RewriteSelfAssignAppendLine(%q).Ok = %v, want %v", c.trimmed, got.Ok, c.ok)
+			}
+			if got.Rewritten != c.want {
+				t.Errorf("RewriteSelfAssignAppendLine(%q).Rewritten = %q, want %q", c.trimmed, got.Rewritten, c.want)
+			}
+		})
+	}
+}
+
+func TestRewriteStandaloneAppendLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		indent  string
+		trimmed string
+		ok      bool
+		want    string
+	}{
+		{"simple", "\t", "append(items, x)", true, "\titems.push(x)"},
+		{"reject-expression-base", "", "append(foo(), x)", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RewriteStandaloneAppendLine(c.indent, c.trimmed)
+			if got.Ok != c.ok {
+				t.Errorf("RewriteStandaloneAppendLine(%q).Ok = %v, want %v", c.trimmed, got.Ok, c.ok)
+			}
+			if got.Rewritten != c.want {
+				t.Errorf("RewriteStandaloneAppendLine(%q).Rewritten = %q, want %q", c.trimmed, got.Rewritten, c.want)
+			}
+		})
+	}
+}
+
+func TestRewriteAppendLineDispatch(t *testing.T) {
+	cases := []struct {
+		name    string
+		trimmed string
+		ok      bool
+		want    string
+	}{
+		{"let", "let xs = append(prev, x)", true, "let mut xs = prev\nxs.push(x)"},
+		{"self-assign", "xs = append(xs, x)", true, "xs.push(x)"},
+		{"standalone", "append(xs, x)", true, "xs.push(x)"},
+		{"skips-without-append", "let xs = ys", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RewriteAppendLine("", c.trimmed)
+			if got.Ok != c.ok {
+				t.Errorf("RewriteAppendLine(%q).Ok = %v, want %v", c.trimmed, got.Ok, c.ok)
+			}
+			if got.Rewritten != c.want {
+				t.Errorf("RewriteAppendLine(%q).Rewritten = %q, want %q", c.trimmed, got.Rewritten, c.want)
+			}
+		})
+	}
+}
+
+func TestRewriteEnumerateLoopHeader(t *testing.T) {
+	cases := []struct {
+		name        string
+		indent      string
+		trimmed     string
+		counter     int
+		ok          bool
+		nextCounter int
+		want        string
+	}{
+		{
+			name: "bare-tuple", indent: "    ", trimmed: "for i, v in xs.enumerate() {",
+			counter: 0, ok: true, nextCounter: 1,
+			want: "    let _osty_enumerate0 = xs\n    for i in 0.._osty_enumerate0.len() {\n        let v = _osty_enumerate0[i]",
+		},
+		{
+			name: "paren-tuple", indent: "", trimmed: "for (i, v) in items.enumerate() {",
+			counter: 7, ok: true, nextCounter: 8,
+			want: "let _osty_enumerate7 = items\nfor i in 0.._osty_enumerate7.len() {\n    let v = _osty_enumerate7[i]",
+		},
+		{
+			name: "wildcard-index", indent: "", trimmed: "for _, v in xs.enumerate() {",
+			counter: 3, ok: true, nextCounter: 4,
+			want: "let _osty_enumerate3 = xs\nfor _osty_index3 in 0.._osty_enumerate3.len() {\n    let v = _osty_enumerate3[_osty_index3]",
+		},
+		{
+			name: "reject-bad-index-binding", indent: "", trimmed: "for foo(x), v in xs.enumerate() {",
+			counter: 0, ok: false, nextCounter: 0, want: "",
+		},
+		{
+			name: "reject-non-enumerate", indent: "", trimmed: "for i, v in xs {",
+			counter: 0, ok: false, nextCounter: 0, want: "",
+		},
+		{
+			name: "reject-empty-iterable", indent: "", trimmed: "for i, v in .enumerate() {",
+			counter: 0, ok: false, nextCounter: 0, want: "",
+		},
+		{
+			name: "reject-single-binding", indent: "", trimmed: "for i in xs.enumerate() {",
+			counter: 0, ok: false, nextCounter: 0, want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RewriteEnumerateLoopHeader(c.indent, c.trimmed, c.counter)
+			if got.Ok != c.ok {
+				t.Errorf("RewriteEnumerateLoopHeader(%q).Ok = %v, want %v", c.trimmed, got.Ok, c.ok)
+			}
+			if got.NextCounter != c.nextCounter {
+				t.Errorf("RewriteEnumerateLoopHeader(%q).NextCounter = %d, want %d", c.trimmed, got.NextCounter, c.nextCounter)
+			}
+			if got.Rewritten != c.want {
+				t.Errorf("RewriteEnumerateLoopHeader(%q).Rewritten =\n%q\nwant\n%q", c.trimmed, got.Rewritten, c.want)
+			}
+		})
+	}
+}
+
 func TestIsRewritableLengthTypeKind(t *testing.T) {
 	yes := []struct{ kind, name string }{
 		{"primitive", "String"},

@@ -397,3 +397,178 @@ pub fn rewriteForeignLoopHeader(trimmed: String) -> ForeignLoopRewrite {
     }
     ForeignLoopRewrite {rewritten: "", kind: "", message: "", ok: false}
 }
+/// AppendLineRewrite is the outcome of any of the per-shape
+/// `append(base, item)` line rewriters. `ok == false` leaves
+/// `rewritten` empty and signals "this line is not a foreign
+/// `append` call I recognise — try a different shape or fall back
+/// to the original source".
+pub struct AppendLineRewrite {
+    pub rewritten: String,
+    pub ok: Bool,
+}
+/// rewriteLetAppendLine recognises a foreign-style binding like
+/// `let xs = append(prev, x)` and rewrites it to the Osty pair
+/// `let mut xs = prev` + `xs.push(x)`. The `let mut` shadowing is
+/// only emitted when `prev` differs from `xs` — otherwise it would
+/// shadow the binding being mutated and break referential
+/// transparency for callers that depend on the prior value.
+pub fn rewriteLetAppendLine(indent: String, trimmed: String) -> AppendLineRewrite {
+    if !strings.hasPrefix(trimmed, "let ") {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let mut rest = strings.trimSpace(strings.trimPrefix(trimmed, "let "))
+    if strings.hasPrefix(rest, "mut ") {
+        rest = strings.trimSpace(strings.trimPrefix(rest, "mut "))
+    }
+    let eqIdx = airepairByteIndexOf(rest, " = ")
+    if eqIdx <= 0 {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let name = strings.trimSpace(strings.slice(rest, 0, eqIdx))
+    let rhs = strings.trimSpace(strings.slice(rest, eqIdx + 3, rest.len()))
+    if !isSimpleIdentifierBinding(name) {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let parsed = parseAppendCall(rhs)
+    if !parsed.ok || parsed.base == name {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    AppendLineRewrite {
+        rewritten: indent + "let mut " + name + " = " + parsed.base + "\n" + indent + name + ".push(" + parsed.item + ")",
+        ok: true,
+    }
+}
+/// rewriteSelfAssignAppendLine recognises `xs = append(xs, item)`
+/// (re-assignment of the same binding) and emits `xs.push(item)`.
+/// The `parsed.base != lhs` check rejects shapes like
+/// `xs = append(ys, item)` — those are a binding swap, not a
+/// mutation, and Osty's `.push` would silently discard `ys`.
+pub fn rewriteSelfAssignAppendLine(indent: String, trimmed: String) -> AppendLineRewrite {
+    let eqIdx = airepairByteIndexOf(trimmed, " = ")
+    if eqIdx <= 0 {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let lhs = strings.trimSpace(strings.slice(trimmed, 0, eqIdx))
+    let rhs = strings.trimSpace(strings.slice(trimmed, eqIdx + 3, trimmed.len()))
+    if !isSimpleIdentifierBinding(lhs) {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let parsed = parseAppendCall(rhs)
+    if !parsed.ok || parsed.base != lhs {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    AppendLineRewrite {
+        rewritten: indent + lhs + ".push(" + parsed.item + ")",
+        ok: true,
+    }
+}
+/// rewriteStandaloneAppendLine recognises a bare expression
+/// statement `append(xs, item)` (no binding, no assignment) and
+/// emits `xs.push(item)`. The base must be a simple identifier so
+/// the rewrite stays a side-effecting method call rather than a
+/// pure expression on a temporary.
+pub fn rewriteStandaloneAppendLine(indent: String, trimmed: String) -> AppendLineRewrite {
+    let parsed = parseAppendCall(trimmed)
+    if !parsed.ok || !isSimpleIdentifierBinding(parsed.base) {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    AppendLineRewrite {
+        rewritten: indent + parsed.base + ".push(" + parsed.item + ")",
+        ok: true,
+    }
+}
+/// rewriteAppendLine is the dispatcher that asks each append-shape
+/// rewriter in turn (let-binding -> self-assign -> bare statement).
+/// Only fires on lines that mention `append(` to avoid running the
+/// downstream parsers on plain Osty code.
+pub fn rewriteAppendLine(indent: String, trimmed: String) -> AppendLineRewrite {
+    if !strings.contains(trimmed, "append(") {
+        return AppendLineRewrite {rewritten: "", ok: false}
+    }
+    let letCase = rewriteLetAppendLine(indent, trimmed)
+    if letCase.ok {
+        return letCase
+    }
+    let selfCase = rewriteSelfAssignAppendLine(indent, trimmed)
+    if selfCase.ok {
+        return selfCase
+    }
+    let standalone = rewriteStandaloneAppendLine(indent, trimmed)
+    if standalone.ok {
+        return standalone
+    }
+    AppendLineRewrite {rewritten: "", ok: false}
+}
+/// EnumerateLoopRewrite is the outcome of the
+/// `for (i, v) in xs.enumerate() \{` -> indexed-loop rewriter. The
+/// rewriter mints fresh `_osty_enumerate\{N\}` and `_osty_index\{N\}`
+/// names from a counter the host threads through; `nextCounter` is
+/// the value the host should pass on the next call.
+pub struct EnumerateLoopRewrite {
+    pub rewritten: String,
+    pub nextCounter: Int,
+    pub ok: Bool,
+}
+/// airepairSemanticIndentStep is the canonical body indent the
+/// rewriter emits inside generated `for` blocks — four spaces, to
+/// match the existing Osty formatter style.
+let airepairSemanticIndentStep: String = "    "
+/// rewriteEnumerateLoopHeader transforms a `for X.enumerate() \{`
+/// header into the indexed-loop shape the native checker can
+/// validate end-to-end. The new shape pre-binds the iterable to
+/// `_osty_enumerate\{N\}`, walks `0..len()`, and projects the value
+/// out via `iter[i]` so the body's `valueBinding` reads from a
+/// concrete subscript instead of a tuple destructure the checker
+/// hasn't grown.
+///
+/// `_` index bindings are replaced with a fresh `_osty_index\{N\}`
+/// so the generated code can still reference the index inside the
+/// `let value = iter[index]` projection. Counter monotonically
+/// increments by one per accepted rewrite.
+///
+/// On reject, `nextCounter` is returned unchanged so the host can
+/// pass the same value to the next line without burning a name.
+pub fn rewriteEnumerateLoopHeader(indent: String, trimmed: String, counter: Int) -> EnumerateLoopRewrite {
+    if !strings.hasPrefix(trimmed, "for ") || !strings.hasSuffix(trimmed, "\{") {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let withoutFor = strings.trimPrefix(trimmed, "for ")
+    let body = strings.trimSpace(strings.trimSuffix(withoutFor, "\{"))
+    let inIdx = airepairByteIndexOf(body, " in ")
+    if inIdx <= 0 {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let mut lhs = strings.trimSpace(strings.slice(body, 0, inIdx))
+    let rhs = strings.trimSpace(strings.slice(body, inIdx + 4, body.len()))
+    if !strings.hasSuffix(rhs, ".enumerate()") {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let iterExpr = strings.trimSpace(strings.trimSuffix(rhs, ".enumerate()"))
+    if iterExpr == "" {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    if strings.hasPrefix(lhs, "(") && strings.hasSuffix(lhs, ")") {
+        lhs = strings.trimSpace(strings.slice(lhs, 1, lhs.len() - 1))
+    }
+    let parts = splitTopLevelComma(lhs)
+    if parts.len() != 2 {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let indexBinding = strings.trimSpace(parts[0])
+    let valueBinding = strings.trimSpace(parts[1])
+    if valueBinding == "" {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let mut indexVar = indexBinding
+    if indexBinding == "_" {
+        indexVar = "_osty_index{counter}"
+    } else if !isSimpleIdentifierBinding(indexBinding) {
+        return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
+    }
+    let iterTemp = "_osty_enumerate{counter}"
+    let bodyIndent = indent + airepairSemanticIndentStep
+    let rewritten = indent + "let " + iterTemp + " = " + iterExpr + "\n" +
+        indent + "for " + indexVar + " in 0.." + iterTemp + ".len() \{\n" +
+        bodyIndent + "let " + valueBinding + " = " + iterTemp + "[" + indexVar + "]"
+    EnumerateLoopRewrite {rewritten: rewritten, nextCounter: counter + 1, ok: true}
+}
