@@ -2166,7 +2166,7 @@ pub struct MirLayoutCache {
         true
     }
     pub fn isEmpty(self) -> Bool {
-        self.enumLayoutOrder.isEmpty() && self.tupleOrder.isEmpty()
+        self.enumLayoutOrder.len() == 0 && self.tupleOrder.len() == 0
     }
 }
 /// enumLayoutOrder records enum-shaped type names in first-use
@@ -2293,7 +2293,7 @@ pub struct MirRuntimeDecls {
     pub names: List<String>,
     pub signatures: Map<String, String>,
     pub fn declare(mut self, name: String, signature: String) -> Bool {
-        if self.signatures.containsKey(name) {
+        if listContainsString(self.names, name) {
             return false
         }
         self.signatures.insert(name, signature)
@@ -2311,7 +2311,7 @@ pub struct MirRuntimeDecls {
         out
     }
     pub fn isEmpty(self) -> Bool {
-        self.names.isEmpty()
+        self.names.len() == 0
     }
 }
 /// names is the insertion-ordered list of declared runtime
@@ -2378,7 +2378,7 @@ pub struct MirStringPool {
         self.order
     }
     pub fn isEmpty(self) -> Bool {
-        self.order.isEmpty()
+        self.order.len() == 0
     }
 }
 /// byContent maps the literal content (the raw bytes between the
@@ -2425,10 +2425,10 @@ pub struct MirThunkDefs {
     pub bodies: Map<String, String>,
     pub order: List<String>,
     pub fn contains(self, symbol: String) -> Bool {
-        self.bodies.containsKey(symbol)
+        listContainsString(self.order, symbol)
     }
     pub fn register(mut self, symbol: String, body: String) -> Bool {
-        if self.bodies.containsKey(symbol) {
+        if self.contains(symbol) {
             return false
         }
         self.bodies.insert(symbol, body)
@@ -2446,7 +2446,7 @@ pub struct MirThunkDefs {
         out
     }
     pub fn isEmpty(self) -> Bool {
-        self.order.isEmpty()
+        self.order.len() == 0
     }
 }
 /// bodies maps the user-fn symbol (e.g. `main_renderReport`)
@@ -2501,7 +2501,7 @@ pub struct MirVtableRefs {
     pub seen: Map<String, Bool>,
     pub order: List<String>,
     pub fn register(mut self, symbol: String) -> Bool {
-        if self.seen.containsKey(symbol) {
+        if self.contains(symbol) {
             return false
         }
         self.seen.insert(symbol, true)
@@ -2509,13 +2509,13 @@ pub struct MirVtableRefs {
         true
     }
     pub fn contains(self, symbol: String) -> Bool {
-        self.seen.containsKey(symbol)
+        listContainsString(self.order, symbol)
     }
     pub fn orderedSymbols(self) -> List<String> {
         self.order
     }
     pub fn isEmpty(self) -> Bool {
-        self.order.isEmpty()
+        self.order.len() == 0
     }
 }
 /// seen tracks distinct `@osty.vtable.<impl>__<iface>` symbols
