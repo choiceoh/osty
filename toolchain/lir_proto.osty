@@ -3275,6 +3275,40 @@ fn lirLowerMirPrintTextOperand(l: LirMirFunctionLowerer, op: MirOperand) -> LirO
     if op.typ == "String" {
         return lirOperand(lirPtrType(), value.value)
     }
+    // Composite-container fast paths: route `println(List<T>)` /
+    // `println(Map<K,V>)` / `println(Set<T>)` through the existing
+    // runtime to_string helpers instead of bailing out as
+    // "print argument type ... is not implemented". Mirrors the
+    // explicit `xs.toString()` intrinsic path (`lirLowerMirListToString`
+    // and the map/set siblings) without requiring an MIR-level toString
+    // call wrapping the operand.
+    if strings.startsWith(op.typ, "List<") {
+        let elemName = lirListElemTypeName(op.typ)
+        let elemLir = lirContainerElemLaneType(elemName)
+        if !(lirTypeIsZero(elemLir)) && !(lirTypeIsVoid(elemLir)) {
+            let listSym = lirListToStringSymbolForLane(elemLir.llvm, lirContainerElemIsString(elemName))
+            if listSym != "" {
+                lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(listSym, lirPtrType()))
+                let dest = lirFresh(l)
+                l.instrs.push(lirCall(dest, lirPtrType(), "@" + listSym, [lirOperand(lirPtrType(), value.value)]))
+                return lirOperand(lirPtrType(), dest)
+            }
+        }
+    }
+    if strings.startsWith(op.typ, "Map<") {
+        let mapSym = "osty_rt_map_to_string"
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(mapSym, lirPtrType()))
+        let dest = lirFresh(l)
+        l.instrs.push(lirCall(dest, lirPtrType(), "@" + mapSym, [lirOperand(lirPtrType(), value.value)]))
+        return lirOperand(lirPtrType(), dest)
+    }
+    if strings.startsWith(op.typ, "Set<") {
+        let setSym = "osty_rt_set_to_string"
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(setSym, lirPtrType()))
+        let dest = lirFresh(l)
+        l.instrs.push(lirCall(dest, lirPtrType(), "@" + setSym, [lirOperand(lirPtrType(), value.value)]))
+        return lirOperand(lirPtrType(), dest)
+    }
     let symbol = lirRuntimeToStringSymbolForType(argType)
     if symbol == "" {
         lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` is not implemented", "intrinsic.print")
