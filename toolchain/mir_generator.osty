@@ -19040,6 +19040,11 @@ fn mirEmitNarrowPayloadLine(dest: String, rawReg: String, toLLVM: String) -> Str
     if toLLVM == "ptr" {
         return "  " + dest + " = inttoptr i64 " + rawReg + " to ptr\n"
     }
+    if mirStringStartsWith(toLLVM, "\{") {
+        let box = dest + ".box"
+        let mut out = "  " + box + " = inttoptr i64 " + rawReg + " to ptr\n"
+        return out + "  " + dest + " = load " + toLLVM + ", ptr " + box + ", align 8\n"
+    }
     if toLLVM == "double" {
         return "  " + dest + " = bitcast i64 " + rawReg + " to double\n"
     }
@@ -20535,7 +20540,7 @@ fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     let value = mirEmitOperand(instr.args[0])
     let aggTy = mirEmitOperandLLVMType(instr.args[0])
     let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+    if destLLVM == "void" {
         return "  ; TODO algebraic unwrap for dest type \"" + destLLVM + "\"\n"
     }
     let base = mirEmitFreshTempName(blockId, instrIdx)
