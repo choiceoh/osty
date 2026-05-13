@@ -1,0 +1,115 @@
+/// Pure layout policy for the canonical-style formatter
+/// (internal/format). Host code in printer.go owns AST traversal,
+/// trivia attachment, and the actual `strings.Builder` output;
+/// this module decides:
+///
+///   - which group a `use` declaration falls into (stdlib vs
+///     external vs FFI) for the top-of-file ordering,
+///   - the intra-group sort key per `use` decl,
+///   - whether a FFI path is the `runtime.cabi.<lib>` sugar that
+///     should round-trip as `use c "<lib>"`,
+///   - whether a method chain should render in the leading-dot
+///     multi-line form.
+///
+/// Mirrored by `internal/runner/format_policy.go`. The drift test
+/// under internal/runner keeps the two in sync — the Osty file is
+/// the source of truth at review time.
+use std.strings as strings
+/// CSurfaceLib is the outcome of inspecting a FFI runtime path
+/// for the `runtime.cabi.<lib>` sugar. `ok == false` leaves `lib`
+/// empty and signals the canonical runtime printer should run.
+pub struct CSurfaceLib {
+    pub lib: String,
+    pub ok: Bool,
+}
+/// ChainSegLines captures the line-number information from one
+/// method-chain segment that `shouldBreakChain` consumes. Host
+/// code extracts these two numbers from the segment's AST `Pos`
+/// values:
+///
+///   - `nameEndLine`: line number where the `.name` portion ends
+///     (i.e. the position right before `(args)`). Decoupling the
+///     name-end from the call-end matters because a multi-line
+///     argument block must not feedback-loop the break decision.
+///   - `endLine`: line number where the entire segment ends
+///     (after `)` for call segments, after the `.name` for bare
+///     field segments).
+pub struct ChainSegLines {
+    pub nameEndLine: Int,
+    pub endLine: Int,
+}
+/// useGroupOrder bins a use decl into the canonical group order:
+/// `0 = stdlib (std.*)`, `1 = external (everything else that's
+/// not FFI)`, `2 = FFI`. Host passes the resolved `isFFI` flag
+/// (from `UseDecl.IsFFI()`) and the first dotted-path segment
+/// (`""` when the path is empty — those bin as external).
+pub fn useGroupOrder(isFFI: Bool, firstPathSegment: String) -> Int {
+    if isFFI {
+        return 2
+    }
+    if firstPathSegment == "std" {
+        return 0
+    }
+    1
+}
+/// useSortKey is the intra-group sort key for `use` decls.
+///
+///   - FFI: the raw `FFIPath()` round-trips uniquely.
+///   - Non-FFI with `RawPath` set: keep the as-written form so
+///     `github.com/x/y` style stays the sort dimension.
+///   - Otherwise: the dotted path (`use a.b.c` → `"a.b.c"`).
+pub fn useSortKey(isFFI: Bool, ffiPath: String, rawPath: String, dottedPath: String) -> String {
+    if isFFI {
+        return ffiPath
+    }
+    if rawPath != "" {
+        return rawPath
+    }
+    dottedPath
+}
+/// useCSurfaceLibName recognises a runtime FFI path of the form
+/// `runtime.cabi.<lib>` (single trailing segment) and returns the
+/// library name so the printer can round-trip it as
+/// `use c "<lib>"`. Multi-segment cabi paths (e.g.
+/// `runtime.cabi.libc.subgroup`) and ones that smuggle a `/`
+/// through the segment fall through to the canonical runtime
+/// printer — `use c` only carries one library name.
+pub fn useCSurfaceLibName(runtimePath: String) -> CSurfaceLib {
+    let prefix = "runtime.cabi."
+    if !strings.hasPrefix(runtimePath, prefix) {
+        return CSurfaceLib {lib: "", ok: false}
+    }
+    let lib = strings.trimPrefix(runtimePath, prefix)
+    if lib == "" || strings.contains(lib, ".") || strings.contains(lib, "/") {
+        return CSurfaceLib {lib: "", ok: false}
+    }
+    CSurfaceLib {lib: lib, ok: true}
+}
+/// shouldBreakChain reports whether a method chain should render
+/// in the leading-dot multi-line form (§1.8). Two triggers fire
+/// it:
+///
+///   - 3 or more post-base segments (regardless of source layout).
+///   - any post-base segment's `.name` that sits on a line below
+///     where the previous segment ended — the author already
+///     broke the chain in source, preserve that layout.
+///
+/// `baseEndLine` is the line where the chain's base expression
+/// ends (the receiver of the first `.method`). Empty `segs`
+/// returns `false` (nothing to chain).
+pub fn shouldBreakChain(baseEndLine: Int, segs: List<ChainSegLines>) -> Bool {
+    if segs.len() == 0 {
+        return false
+    }
+    if segs.len() >= 3 {
+        return true
+    }
+    let mut prev = baseEndLine
+    for s in segs {
+        if s.nameEndLine != prev {
+            return true
+        }
+        prev = s.endLine
+    }
+    false
+}
