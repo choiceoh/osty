@@ -62,6 +62,60 @@ func ResolveFixtureCases(requested int) FixtureCaseCount {
 	return FixtureCaseCount{Count: requested, OverCap: false}
 }
 
+// ScaffoldDefaultWorkspaceMember is the directory name used for
+// the default member of a `--workspace` scaffold when the caller
+// did not supply one.
+//
+// Osty: toolchain/scaffold_policy.osty:74
+func ScaffoldDefaultWorkspaceMember() string {
+	return "core"
+}
+
+// ScaffoldRelativePaths returns the source-order list of relative
+// file paths the scaffolder will write for a project of `kind`.
+// Path separators are forward slashes (`/`); the host joins each
+// entry with the project root and converts to the platform-native
+// separator. Unknown kinds fall through to the binary layout.
+//
+// Osty: toolchain/scaffold_policy.osty:89
+func ScaffoldRelativePaths(kind, workspaceMember string) []string {
+	switch kind {
+	case "lib":
+		return []string{"osty.toml", "lib.osty", "lib_test.osty", ".gitignore"}
+	case "workspace":
+		member := workspaceMember
+		if member == "" {
+			member = ScaffoldDefaultWorkspaceMember()
+		}
+		return []string{
+			"osty.toml",
+			".gitignore",
+			member + "/osty.toml",
+			member + "/main.osty",
+			member + "/main_test.osty",
+			member + "/.gitignore",
+		}
+	case "cli":
+		return []string{"osty.toml", "main.osty", "args.osty", "app.osty", "app_test.osty", ".gitignore"}
+	case "service":
+		return []string{"osty.toml", "main.osty", "routes.osty", "routes_test.osty", ".gitignore"}
+	case "gui-qtquick":
+		return []string{"osty.toml", "main.osty", "ui/main.qml", "README.md", ".gitignore"}
+	case "gui-webview2":
+		return []string{
+			"osty.toml",
+			"src/main.osty",
+			"src/main_test.osty",
+			"ui/index.html",
+			"ui/app.css",
+			"ui/app.js",
+			"assets/.gitkeep",
+			".gitignore",
+		}
+	}
+	return []string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"}
+}
+
 func isScaffoldLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }

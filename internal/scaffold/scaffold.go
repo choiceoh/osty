@@ -99,6 +99,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/runner"
@@ -324,78 +325,41 @@ func checkNoConflicts(dir string, opts Options) *diag.Diagnostic {
 
 // expectedPaths lists every file the scaffolder will write for the
 // given options, in source order. Used by Init to pre-flight the
-// target directory for conflicts.
+// target directory for conflicts. Layout policy lives in
+// toolchain/scaffold_policy.osty; this wrapper resolves Kind → name
+// and joins each relative path with `dir`, converting any forward
+// slashes to the platform-native separator.
 func expectedPaths(dir string, opts Options) []string {
-	switch opts.Kind {
+	rels := runner.ScaffoldRelativePaths(kindName(opts.Kind), opts.WorkspaceMember)
+	out := make([]string, len(rels))
+	for i, rel := range rels {
+		// Osty emits forward slashes; split + filepath.Join produces
+		// the right separator on Windows without needing two cases.
+		segments := strings.Split(rel, "/")
+		out[i] = filepath.Join(append([]string{dir}, segments...)...)
+	}
+	return out
+}
+
+// kindName maps the Kind enum to the string the toolchain policy
+// matches on. Keep this in lock-step with
+// `toolchain/scaffold_policy.osty:scaffoldRelativePaths`.
+func kindName(k Kind) string {
+	switch k {
 	case KindLib:
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "lib.osty"),
-			filepath.Join(dir, "lib_test.osty"),
-			filepath.Join(dir, ".gitignore"),
-		}
+		return "lib"
 	case KindWorkspace:
-		member := opts.WorkspaceMember
-		if member == "" {
-			member = "core"
-		}
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, ".gitignore"),
-			filepath.Join(dir, member, "osty.toml"),
-			filepath.Join(dir, member, "main.osty"),
-			filepath.Join(dir, member, "main_test.osty"),
-			filepath.Join(dir, member, ".gitignore"),
-		}
+		return "workspace"
 	case KindCli:
-		// CLI layout splits responsibilities across three source
-		// files so the testable surface (parseArgs, run) lives apart
-		// from the process-binding `main`. The single `_test.osty`
-		// covers both halves.
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "main.osty"),
-			filepath.Join(dir, "args.osty"),
-			filepath.Join(dir, "app.osty"),
-			filepath.Join(dir, "app_test.osty"),
-			filepath.Join(dir, ".gitignore"),
-		}
+		return "cli"
 	case KindService:
-		// Service layout splits the entry point from the routing
-		// table so handlers can be added without touching `main`.
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "main.osty"),
-			filepath.Join(dir, "routes.osty"),
-			filepath.Join(dir, "routes_test.osty"),
-			filepath.Join(dir, ".gitignore"),
-		}
+		return "service"
 	case KindGUIQtQuick:
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "main.osty"),
-			filepath.Join(dir, "ui", "main.qml"),
-			filepath.Join(dir, "README.md"),
-			filepath.Join(dir, ".gitignore"),
-		}
+		return "gui-qtquick"
 	case KindGUIWebView2:
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "src", "main.osty"),
-			filepath.Join(dir, "src", "main_test.osty"),
-			filepath.Join(dir, "ui", "index.html"),
-			filepath.Join(dir, "ui", "app.css"),
-			filepath.Join(dir, "ui", "app.js"),
-			filepath.Join(dir, "assets", ".gitkeep"),
-			filepath.Join(dir, ".gitignore"),
-		}
-	default: // KindBin
-		return []string{
-			filepath.Join(dir, "osty.toml"),
-			filepath.Join(dir, "main.osty"),
-			filepath.Join(dir, "main_test.osty"),
-			filepath.Join(dir, ".gitignore"),
-		}
+		return "gui-webview2"
+	default:
+		return "bin"
 	}
 }
 
