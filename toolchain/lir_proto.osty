@@ -1795,7 +1795,8 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
 // payload field can hold the full struct value (>8 bytes). The struct type
 // must be looked up in the same layout table so the named struct typedef
 // is emitted before the Option/Result typedef references it.
-fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: String, diags: List<LirDiagnostic>) -> LirType {
+fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path: String, diags: List<LirDiagnostic>) -> LirType {
+    let name = lirCanonicalizeOptionalSugar(rawName)
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
         return primitive
@@ -5843,6 +5844,18 @@ fn lirParseResultPayloadAsI64(l: LirMirFunctionLowerer, valueReg: String, valueT
 fn lirIsOptionTypeName(name: String) -> Bool {
     strings.startsWith(name, "Option<") || strings.startsWith(name, "Maybe<")
 }
+// `lirCanonicalizeOptionalSugar` rewrites the trailing-`?` Option
+// sugar form (`T?`) into the explicit `Option<T>` spelling so the
+// rest of the LIR type-lowering machinery doesn't need a second
+// recognition path. Inner uses (`List<Int?>`, struct fields, etc.)
+// keep the sugar until their type strings are looked up directly.
+fn lirCanonicalizeOptionalSugar(name: String) -> String {
+    if name.len() > 1 && strings.hasSuffix(name, "?") {
+        let inner = strings.slice(name, 0, name.len() - 1)
+        return "Option<" + inner + ">"
+    }
+    name
+}
 // `lirAggTypeNameFromRV` resolves the target type name for an
 // aggregate / nullary rvalue: prefer `rv.typ` (set by the HIR→MIR
 // lowerer); fall back to `hintName` (passed down from the assign
@@ -6762,7 +6775,8 @@ fn lirInterfaceConcreteName(name: String) -> String {
     }
     name
 }
-fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
+fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
+    let name = lirCanonicalizeOptionalSugar(rawName)
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
         return primitive
