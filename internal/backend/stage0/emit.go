@@ -15543,6 +15543,7 @@ func genericInferMixedTailDiscardedReturns(fn *mir.Function, mctx *moduleCtx, re
 	}
 	calls := map[mir.BlockID]*mir.CallInstr{}
 	intrs := map[mir.BlockID]*mir.IntrinsicInstr{}
+	hasUncoveredReturnAssign := false
 	for _, bb := range fn.Blocks {
 		if bb == nil || exits[bb.ID] {
 			continue
@@ -15559,6 +15560,22 @@ func genericInferMixedTailDiscardedReturns(fn *mir.Function, mctx *moduleCtx, re
 			intrs[bb.ID] = ii
 			continue
 		}
+		if genericPreExitBlockHasReturnTypeAssign(fn, bb) {
+			hasUncoveredReturnAssign = true
+		}
+	}
+	// Same wildcard-arm bare-local guard as the primary inference
+	// helpers (PR #1725). If an uncovered pre-exit block carries an
+	// assignment to a return-typed local, refuse the rewrite so the
+	// outer cascade falls through to a path that emits `ret %local`
+	// at the merge instead of leaving it as `unreachable`. Without
+	// this gate, mixed-tail functions with an early-return guard and a
+	// wildcard-arm bare-local body silently produced `unreachable` in
+	// the wildcard branch (the comment block above claimed multi-sink
+	// tolerance was safe — it's only safe when uncovered blocks carry
+	// no return-typed assignment).
+	if hasUncoveredReturnAssign {
+		return nil, nil
 	}
 	return calls, intrs
 }
