@@ -1,23 +1,18 @@
 package airepair
 
 import (
-	"bytes"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
-type sourceLine struct {
-	start      int
-	text       string
-	raw        string
-	indent     string
-	trimmed    string
-	hasNewline bool
-	lineNo     int
-}
+// sourceLine aliases runner.SourceLine so the internal call sites
+// can keep using a short, package-local name. The struct shape and
+// field meanings are owned by toolchain/airepair_source.osty.
+type sourceLine = runner.SourceLine
 
 type pythonScopeKind int
 
@@ -57,19 +52,11 @@ func diagnosticGuidedSource(src []byte, diags []*diag.Diagnostic) repair.Result 
 }
 
 func wantsPythonColonBlockRepair(src []byte, diags []*diag.Diagnostic) bool {
-	if !bytes.Contains(src, []byte(":\n")) {
-		return false
-	}
-	for _, d := range diags {
-		if d != nil && d.Severity == diag.Error {
-			return true
-		}
-	}
-	return false
+	return runner.SrcWantsPythonColonBlockRepair(src) && diagsHaveError(diags)
 }
 
 func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
-	lines := splitSourceLines(src)
+	lines := runner.SplitSourceLines(src)
 	if len(lines) == 0 {
 		return src, nil, false
 	}
@@ -82,8 +69,8 @@ func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
 	)
 
 	for _, line := range lines {
-		if line.trimmed == "" || isIgnorablePythonLine(line.trimmed) {
-			out.WriteString(line.raw)
+		if line.Trimmed == "" || runner.IsIgnorablePythonLine(line.Trimmed) {
+			out.WriteString(line.Raw)
 			continue
 		}
 
@@ -91,12 +78,12 @@ func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
 			closings []pythonBlockScope
 			ok       bool
 		)
-		stack, closings, ok = preparePythonBlockClosings(stack, line.indent)
+		stack, closings, ok = preparePythonBlockClosings(stack, line.Indent)
 		if !ok {
 			return src, nil, false
 		}
 
-		header, headerOK := rewritePythonColonHeader(line.trimmed)
+		header, headerOK := rewritePythonColonHeader(line.Trimmed)
 		if headerOK && header.elseish {
 			headerOK = len(closings) > 0 && closings[len(closings)-1].kind == pythonScopeBlock
 		}
@@ -106,27 +93,27 @@ func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
 		if headerOK {
 			writePythonClosings(&out, closings, !header.elseish)
 			if header.elseish && len(closings) > 0 {
-				out.WriteString(line.indent)
+				out.WriteString(line.Indent)
 				out.WriteString("} ")
 				out.WriteString(header.rewritten)
 			} else {
-				out.WriteString(line.indent)
+				out.WriteString(line.Indent)
 				out.WriteString(header.rewritten)
 			}
-			if line.hasNewline {
+			if line.HasNewline {
 				out.WriteByte('\n')
 			}
 			stack = append(stack, pythonBlockScope{
 				kind:         header.scopeKind,
-				headerIndent: line.indent,
+				headerIndent: line.Indent,
 			})
 			changes = append(changes, repair.Change{
 				Kind:    header.changeKind,
 				Message: header.message,
 				Pos: token.Pos{
-					Offset: line.start + len(line.indent),
-					Line:   line.lineNo,
-					Column: len([]rune(line.indent)) + 1,
+					Offset: line.Start + len(line.Indent),
+					Line:   line.LineNo,
+					Column: len([]rune(line.Indent)) + 1,
 				},
 			})
 			changed = true
@@ -134,7 +121,7 @@ func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
 		}
 
 		writePythonClosings(&out, closings, true)
-		out.WriteString(line.raw)
+		out.WriteString(line.Raw)
 	}
 
 	for i := len(stack) - 1; i >= 0; i-- {
@@ -157,49 +144,17 @@ func rewritePythonColonBlocks(src []byte) ([]byte, []repair.Change, bool) {
 	return []byte(out.String()), changes, true
 }
 
-func splitSourceLines(src []byte) []sourceLine {
-	if len(src) == 0 {
-		return nil
+// diagsHaveError reports whether `diags` carries at least one
+// error-severity entry. Shared by every `wantsXxxRepair` host
+// wrapper around the corresponding `runner.SrcWantsXxxRepair`
+// pure-source predicate.
+func diagsHaveError(diags []*diag.Diagnostic) bool {
+	for _, d := range diags {
+		if d != nil && d.Severity == diag.Error {
+			return true
+		}
 	}
-	var lines []sourceLine
-	start := 0
-	lineNo := 1
-	for start < len(src) {
-		end := start
-		for end < len(src) && src[end] != '\n' {
-			end++
-		}
-		rawEnd := end
-		hasNewline := false
-		if end < len(src) && src[end] == '\n' {
-			rawEnd = end + 1
-			hasNewline = true
-		}
-		text := string(src[start:end])
-		indentEnd := 0
-		for indentEnd < len(text) {
-			if text[indentEnd] != ' ' && text[indentEnd] != '\t' {
-				break
-			}
-			indentEnd++
-		}
-		lines = append(lines, sourceLine{
-			start:      start,
-			text:       text,
-			raw:        string(src[start:rawEnd]),
-			indent:     text[:indentEnd],
-			trimmed:    strings.TrimSpace(text),
-			hasNewline: hasNewline,
-			lineNo:     lineNo,
-		})
-		start = rawEnd
-		lineNo++
-	}
-	return lines
-}
-
-func isIgnorablePythonLine(trimmed string) bool {
-	return strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#")
+	return false
 }
 
 func preparePythonBlockClosings(stack []pythonBlockScope, indent string) ([]pythonBlockScope, []pythonBlockScope, bool) {

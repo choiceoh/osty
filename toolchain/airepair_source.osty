@@ -1,0 +1,146 @@
+/// Source-parsing utilities + per-rewriter src-trigger predicates
+/// shared by every airepair dispatcher (foreign-loop, semantic,
+/// tuple-loop, python-colon-block).
+///
+/// Host code (internal/airepair/*.go) owns the diag.Severity check
+/// and the per-line orchestration loop; this module decides:
+///
+///   - how to split a source byte stream into `SourceLine` records
+///     with byte offsets, indent prefixes, trimmed bodies, and
+///     trailing-newline flags;
+///   - which trimmed lines are "noise" the rewriters should skip
+///     verbatim (line comments and Python `#` shebangs / shebang
+///     blocks);
+///   - which byte markers in the source are necessary for each
+///     rewriter family to even bother running (the cheap
+///     pre-flight that lets us avoid the diag scan when there's
+///     nothing to repair).
+///
+/// Mirrored by `internal/runner/airepair_source_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// SourceLine is one line in the source byte stream. Field shapes
+/// match what the rewriter dispatchers consume:
+///
+///   - `start`: byte offset of the first byte in this line
+///     (relative to the original source). Carried so the host can
+///     compute the diag `Pos.Offset` for any `repair.Change`.
+///   - `text`: line body without the trailing newline.
+///   - `raw`: line body **with** any trailing newline still
+///     attached. Rewriters that bail on this line `out.write(raw)`
+///     to preserve byte-perfect round-tripping.
+///   - `indent`: leading whitespace prefix (tabs + spaces only).
+///   - `trimmed`: `text` with leading/trailing whitespace removed.
+///   - `hasNewline`: whether `raw` ends with `\n`.
+///   - `lineNo`: 1-based line number for diag positions.
+pub struct SourceLine {
+    pub start: Int,
+    pub text: String,
+    pub raw: String,
+    pub indent: String,
+    pub trimmed: String,
+    pub hasNewline: Bool,
+    pub lineNo: Int,
+}
+/// splitSourceLines walks `src` byte-by-byte and produces one
+/// `SourceLine` per line, splitting on `\n`. Empty input returns
+/// an empty list. The last line is reported even when it has no
+/// trailing newline (with `hasNewline = false`).
+///
+/// Byte semantics matter: the rewriters reach back into `src` via
+/// `start` offsets, so this function preserves byte boundaries
+/// exactly. Indent extraction only counts ASCII space (0x20) and
+/// tab (0x09); other whitespace bytes are left in the body so the
+/// caller's classifier (e.g. `isIgnorablePythonLine`) sees them.
+pub fn splitSourceLines(src: String) -> List<SourceLine> {
+    let mut lines: List<SourceLine> = []
+    let bs = src.bytes()
+    let n = bs.len()
+    if n == 0 {
+        return lines
+    }
+    let mut start = 0
+    let mut lineNo = 1
+    for start < n {
+        let mut end = start
+        for end < n && bs[end].toInt() != 0x0A {
+            end = end + 1
+        }
+        let mut rawEnd = end
+        let mut hasNewline = false
+        if end < n && bs[end].toInt() == 0x0A {
+            rawEnd = end + 1
+            hasNewline = true
+        }
+        let text = strings.slice(src, start, end)
+        let textBs = text.bytes()
+        let textN = textBs.len()
+        let mut indentEnd = 0
+        for indentEnd < textN {
+            let b = textBs[indentEnd].toInt()
+            if b != 0x20 && b != 0x09 {
+                break
+            }
+            indentEnd = indentEnd + 1
+        }
+        lines.push(SourceLine {
+            start: start,
+            text: text,
+            raw: strings.slice(src, start, rawEnd),
+            indent: strings.slice(text, 0, indentEnd),
+            trimmed: strings.trimSpace(text),
+            hasNewline: hasNewline,
+            lineNo: lineNo,
+        })
+        start = rawEnd
+        lineNo = lineNo + 1
+    }
+    lines
+}
+/// isIgnorablePythonLine reports whether a `trimmed` source line
+/// is "noise" the dispatchers should skip with a verbatim copy.
+/// The two recognised noise prefixes are line comments (`//`) and
+/// Python-style `#` lines (shebangs, `# -*- coding -*-`, etc.).
+pub fn isIgnorablePythonLine(trimmed: String) -> Bool {
+    strings.hasPrefix(trimmed, "//") || strings.hasPrefix(trimmed, "#")
+}
+/// srcWantsForeignLoopRepair reports whether `src` contains any
+/// of the byte markers the foreign-loop rewriter knows how to
+/// transform. Cheap pre-flight — the dispatcher uses this to
+/// decide whether to scan the diag list at all.
+pub fn srcWantsForeignLoopRepair(src: String) -> Bool {
+    if !strings.contains(src, "for ") {
+        return false
+    }
+    strings.contains(src, " of ") ||
+        strings.contains(src, "range(") ||
+        strings.contains(src, "enumerate(")
+}
+/// srcWantsSemanticRepair reports whether `src` contains any of
+/// the byte markers the semantic rewriter family needs (foreign
+/// `append(...)`, `.enumerate()` tuple loops, builtin `len(...)`
+/// calls, foreign `.length` field accesses).
+pub fn srcWantsSemanticRepair(src: String) -> Bool {
+    strings.contains(src, ".enumerate()") ||
+        strings.contains(src, "append(") ||
+        strings.contains(src, "len(") ||
+        strings.contains(src, ".length")
+}
+/// srcWantsTupleLoopRepair reports whether `src` looks like it
+/// might contain a bare-tuple `for` header (e.g. `for k, v in m
+/// {`). Requires all three of `for `, `,`, and ` in ` — without
+/// any one of those the bare-tuple shape is impossible.
+pub fn srcWantsTupleLoopRepair(src: String) -> Bool {
+    strings.contains(src, "for ") &&
+        strings.contains(src, ",") &&
+        strings.contains(src, " in ")
+}
+/// srcWantsPythonColonBlockRepair reports whether `src` contains
+/// the `:\n` byte sequence — the only universal marker for
+/// Python-style colon-terminated block headers. Does not need to
+/// distinguish `if:`/`for:`/`def:`/etc; the per-header rewriter
+/// rejects shapes it cannot translate.
+pub fn srcWantsPythonColonBlockRepair(src: String) -> Bool {
+    strings.contains(src, ":\n")
+}

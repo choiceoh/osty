@@ -62,22 +62,11 @@ func diagnosticSemanticSource(src []byte, diags []*diag.Diagnostic) repair.Resul
 }
 
 func wantsSemanticRepair(src []byte, diags []*diag.Diagnostic) bool {
-	if !bytes.Contains(src, []byte(".enumerate()")) &&
-		!bytes.Contains(src, []byte("append(")) &&
-		!bytes.Contains(src, []byte("len(")) &&
-		!bytes.Contains(src, []byte(".length")) {
-		return false
-	}
-	for _, d := range diags {
-		if d != nil && d.Severity == diag.Error {
-			return true
-		}
-	}
-	return false
+	return runner.SrcWantsSemanticRepair(src) && diagsHaveError(diags)
 }
 
 func rewriteEnumerateLoopsForChecker(src []byte) ([]byte, []repair.Change, bool) {
-	lines := splitSourceLines(src)
+	lines := runner.SplitSourceLines(src)
 	if len(lines) == 0 {
 		return src, nil, false
 	}
@@ -90,19 +79,19 @@ func rewriteEnumerateLoopsForChecker(src []byte) ([]byte, []repair.Change, bool)
 	)
 
 	for _, line := range lines {
-		if line.trimmed == "" || isIgnorablePythonLine(line.trimmed) {
-			out.WriteString(line.raw)
+		if line.Trimmed == "" || runner.IsIgnorablePythonLine(line.Trimmed) {
+			out.WriteString(line.Raw)
 			continue
 		}
 
 		rewritten, changeSet, ok := rewriteEnumerateLoopHeader(line, &counter)
 		if !ok {
-			out.WriteString(line.raw)
+			out.WriteString(line.Raw)
 			continue
 		}
 
 		out.WriteString(rewritten)
-		if line.hasNewline && !strings.HasSuffix(rewritten, "\n") {
+		if line.HasNewline && !strings.HasSuffix(rewritten, "\n") {
 			out.WriteByte('\n')
 		}
 		changes = append(changes, changeSet...)
@@ -116,7 +105,7 @@ func rewriteEnumerateLoopsForChecker(src []byte) ([]byte, []repair.Change, bool)
 }
 
 func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair.Change, bool) {
-	r := runner.RewriteEnumerateLoopHeader(line.indent, line.trimmed, *counter)
+	r := runner.RewriteEnumerateLoopHeader(line.Indent, line.Trimmed, *counter)
 	if !r.Ok {
 		return "", nil, false
 	}
@@ -126,16 +115,16 @@ func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair
 			Kind:    "enumerate_index_loop",
 			Message: "replace `.enumerate()` tuple loop with an indexed Osty loop the native checker can validate",
 			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
+				Offset: line.Start + len(line.Indent),
+				Line:   line.LineNo,
+				Column: len([]rune(line.Indent)) + 1,
 			},
 		},
 	}, true
 }
 
 func rewriteSemanticAppendLines(src []byte) ([]byte, []repair.Change, bool) {
-	lines := splitSourceLines(src)
+	lines := runner.SplitSourceLines(src)
 	if len(lines) == 0 {
 		return src, nil, false
 	}
@@ -147,19 +136,19 @@ func rewriteSemanticAppendLines(src []byte) ([]byte, []repair.Change, bool) {
 	)
 
 	for _, line := range lines {
-		if line.trimmed == "" || isIgnorablePythonLine(line.trimmed) {
-			out.WriteString(line.raw)
+		if line.Trimmed == "" || runner.IsIgnorablePythonLine(line.Trimmed) {
+			out.WriteString(line.Raw)
 			continue
 		}
 
 		rewritten, changeSet, ok := rewriteAppendLine(line)
 		if !ok {
-			out.WriteString(line.raw)
+			out.WriteString(line.Raw)
 			continue
 		}
 
 		out.WriteString(rewritten)
-		if line.hasNewline && !strings.HasSuffix(rewritten, "\n") {
+		if line.HasNewline && !strings.HasSuffix(rewritten, "\n") {
 			out.WriteByte('\n')
 		}
 		changes = append(changes, changeSet...)
@@ -173,7 +162,7 @@ func rewriteSemanticAppendLines(src []byte) ([]byte, []repair.Change, bool) {
 }
 
 func rewriteAppendLine(line sourceLine) (string, []repair.Change, bool) {
-	r := runner.RewriteAppendLine(line.indent, line.trimmed)
+	r := runner.RewriteAppendLine(line.Indent, line.Trimmed)
 	if !r.Ok {
 		return "", nil, false
 	}
@@ -181,9 +170,9 @@ func rewriteAppendLine(line sourceLine) (string, []repair.Change, bool) {
 		Kind:    "builtin_append_call",
 		Message: "replace foreign `append(...)` helper with Osty list mutation",
 		Pos: token.Pos{
-			Offset: line.start + len(line.indent),
-			Line:   line.lineNo,
-			Column: len([]rune(line.indent)) + 1,
+			Offset: line.Start + len(line.Indent),
+			Line:   line.LineNo,
+			Column: len([]rune(line.Indent)) + 1,
 		},
 	}}, true
 }
