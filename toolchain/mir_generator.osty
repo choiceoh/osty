@@ -17205,9 +17205,9 @@ fn mirEmitParamType(func: MirFunction, paramLocal: Int) -> String {
         return "i64"
     }
     let loc = func.locals[paramLocal]
-    let prim = mirLlvmTypeForPrim(loc.typ)
-    if prim != "" {
-        return prim
+    let known = mirEmitKnownTypeLLVM(loc.typ)
+    if known != "" {
+        return known
     }
     "i64"
 }
@@ -17415,9 +17415,9 @@ fn mirBinaryOpSymbol(op: MirBinaryOp) -> String {
 /// result. Falls back to i64 when the source-level name doesn't
 /// match a known primitive — defensive only.
 fn mirEmitRValueLLVMType(rv: MirRValue) -> String {
-    let prim = mirLlvmTypeForPrim(rv.typ)
-    if prim != "" {
-        return prim
+    let known = mirEmitKnownTypeLLVM(rv.typ)
+    if known != "" {
+        return known
     }
     "i64"
 }
@@ -17425,9 +17425,9 @@ fn mirEmitRValueLLVMType(rv: MirRValue) -> String {
 /// Used by the binary-op emitter to decide between integer and
 /// float opcodes.
 fn mirEmitOperandLLVMType(op: MirOperand) -> String {
-    let prim = mirLlvmTypeForPrim(op.typ)
-    if prim != "" {
-        return prim
+    let known = mirEmitKnownTypeLLVM(op.typ)
+    if known != "" {
+        return known
     }
     "i64"
 }
@@ -17500,9 +17500,9 @@ fn mirEmitCallValueLine(dest: String, retTy: String, calleeText: String, argList
 fn mirEmitCallReturnType(func: MirFunction, instr: MirInstr) -> String {
     if instr.hasDest && instr.dest.local >= 0 && instr.dest.local < func.locals.len() {
         let loc = func.locals[instr.dest.local]
-        let prim = mirLlvmTypeForPrim(loc.typ)
-        if prim != "" {
-            return prim
+        let known = mirEmitKnownTypeLLVM(loc.typ)
+        if known != "" {
+            return known
         }
         return "ptr"
     }
@@ -17546,8 +17546,11 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicMapClear -> mirEmitMapClearIntrinsic(instr),
         MirIntrinsicMapKeys -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_keys"),
         MirIntrinsicMapValues -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_values"),
+        MirIntrinsicMapNew -> mirEmitMapNewIntrinsic(func, instr),
         MirIntrinsicSetLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_set_len"),
+        MirIntrinsicSetNew -> mirEmitSetNewIntrinsic(func, instr),
         MirIntrinsicSetToList -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_set_to_list"),
+        MirIntrinsicSetClear -> mirEmitSetClearIntrinsic(instr),
         MirIntrinsicStringLen -> mirEmitStringLenIntrinsic(func, instr),
         MirIntrinsicStringIsEmpty -> mirEmitStringIsEmptyIntrinsic(func, instr),
         MirIntrinsicStringContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_Contains"),
@@ -17564,6 +17567,19 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicStringToInt -> mirEmitStringToIntIntrinsic(func, instr),
         MirIntrinsicStringToFloat -> mirEmitStringToFloatIntrinsic(func, instr),
         MirIntrinsicStringCount -> mirEmitStringCountIntrinsic(func, instr),
+        MirIntrinsicStringJoin -> mirEmitStringJoinIntrinsic(func, instr),
+        MirIntrinsicStringSubstring -> mirEmitStringSubstringIntrinsic(func, instr),
+        MirIntrinsicStringRepeat -> mirEmitStringRepeatIntrinsic(func, instr),
+        MirIntrinsicStringTrimPrefix -> mirEmitStringBinaryIntrinsic(func, instr, "osty_rt_strings_TrimPrefix"),
+        MirIntrinsicStringTrimSuffix -> mirEmitStringBinaryIntrinsic(func, instr, "osty_rt_strings_TrimSuffix"),
+        MirIntrinsicStringTrimStart -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimStart"),
+        MirIntrinsicStringTrimEnd -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimEnd"),
+        MirIntrinsicStringReplaceAll -> mirEmitStringReplaceAllIntrinsic(func, instr),
+        MirIntrinsicStringSplitN -> mirEmitStringSplitNIntrinsic(func, instr),
+        MirIntrinsicStringFields -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_Fields"),
+        MirIntrinsicStringLastIndexOf -> mirEmitStringLastIndexOfIntrinsic(func, instr),
+        MirIntrinsicStringSplitInto -> mirEmitStringSplitIntoIntrinsic(instr),
+        MirIntrinsicStringNthSegment -> mirEmitStringNthSegmentIntrinsic(func, instr),
         MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(func, instr, true),
         MirIntrinsicListLast -> mirEmitListEdgeIntrinsic(func, instr, false),
         MirIntrinsicListIndexOf -> mirEmitListIndexOfIntrinsic(func, instr),
@@ -17572,10 +17588,16 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicListRemoveAt -> mirEmitListRemoveAtIntrinsic(func, instr),
         MirIntrinsicListReversed -> mirEmitListReversedIntrinsic(func, instr),
         MirIntrinsicListToString -> mirEmitListToStringIntrinsic(func, instr),
+        MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, instr),
+        MirIntrinsicListSlice -> mirEmitListSliceIntrinsic(func, instr),
+        MirIntrinsicListInsert -> mirEmitListInsertIntrinsic(instr),
+        MirIntrinsicListClear -> mirEmitListClearIntrinsic(instr),
         MirIntrinsicMapToString -> mirEmitMapToStringIntrinsic(func, instr),
         MirIntrinsicMapKeysSorted -> mirEmitMapKeysSortedIntrinsic(func, instr),
         MirIntrinsicMapContains -> mirEmitMapContainsIntrinsic(func, instr),
         MirIntrinsicMapRemove -> mirEmitMapRemoveIntrinsic(func, instr),
+        MirIntrinsicMapGetOr -> mirEmitMapGetOrIntrinsic(func, blockId, instrIdx, instr),
+        MirIntrinsicMapIncr -> mirEmitMapIncrIntrinsic(func, instr),
         MirIntrinsicSetInsert -> mirEmitSetInsertIntrinsic(func, instr),
         MirIntrinsicSetContains -> mirEmitSetContainsIntrinsic(func, instr),
         MirIntrinsicSetRemove -> mirEmitSetRemoveIntrinsic(func, instr),
@@ -17603,16 +17625,49 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(instr),
         MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
         MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
-        MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(func, instr),
+        MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(blockId, instrIdx, instr),
         MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(func, instr),
         MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_bytes_len"),
         MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
         MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, instr),
-        MirIntrinsicBytesContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_contains"),
-        MirIntrinsicBytesStartsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_has_prefix"),
-        MirIntrinsicBytesEndsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_has_suffix"),
+        MirIntrinsicBytesContains -> mirEmitBytesContainsIntrinsic(func, instr),
+        MirIntrinsicBytesStartsWith -> mirEmitBytesStartsWithIntrinsic(func, instr),
+        MirIntrinsicBytesEndsWith -> mirEmitBytesEndsWithIntrinsic(func, instr),
         MirIntrinsicBytesIndexOf -> mirEmitBytesIndexOfIntrinsic(func, instr),
+        MirIntrinsicBytesLastIndexOf -> mirEmitBytesLastIndexOfIntrinsic(func, instr),
         MirIntrinsicBytesSplit -> mirEmitBytesSplitIntrinsic(func, instr),
+        MirIntrinsicBytesConcat -> mirEmitBytesBinaryIntrinsic(func, instr, "osty_rt_bytes_concat"),
+        MirIntrinsicBytesJoin -> mirEmitBytesBinaryIntrinsic(func, instr, "osty_rt_bytes_join"),
+        MirIntrinsicBytesRepeat -> mirEmitBytesRepeatIntrinsic(func, instr),
+        MirIntrinsicBytesReplace -> mirEmitBytesTernaryIntrinsic(func, instr, "osty_rt_bytes_replace"),
+        MirIntrinsicBytesReplaceAll -> mirEmitBytesTernaryIntrinsic(func, instr, "osty_rt_bytes_replace_all"),
+        MirIntrinsicBytesTrimLeft -> mirEmitBytesBinaryIntrinsic(func, instr, "osty_rt_bytes_trim_left"),
+        MirIntrinsicBytesTrimRight -> mirEmitBytesBinaryIntrinsic(func, instr, "osty_rt_bytes_trim_right"),
+        MirIntrinsicBytesTrim -> mirEmitBytesBinaryIntrinsic(func, instr, "osty_rt_bytes_trim"),
+        MirIntrinsicBytesTrimSpace -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_trim_space"),
+        MirIntrinsicBytesToUpper -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_upper"),
+        MirIntrinsicBytesToLower -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_lower"),
+        MirIntrinsicBytesToHex -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_hex"),
+        MirIntrinsicBytesSlice -> mirEmitBytesSliceIntrinsic(func, instr),
+        MirIntrinsicBytesFromList -> mirEmitBytesFromListIntrinsic(func, instr),
+        MirIntrinsicBytesFromString -> mirEmitBytesFromStringIntrinsic(func, instr),
+        MirIntrinsicBytesToString -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_string"),
+        MirIntrinsicBytesFromHex -> mirEmitBytesFromHexIntrinsic(func, instr),
+        MirIntrinsicOptionIsSome -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantSome()),
+        MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantNone()),
+        MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantOk()),
+        MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantErr()),
+        MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, instr),
+        MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, instr),
+        MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantSome()),
+        MirIntrinsicResultUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantOk()),
+        MirIntrinsicRawNull -> mirEmitRawNullIntrinsic(func, instr),
+        MirIntrinsicByteToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
+        MirIntrinsicCharToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
+        MirIntrinsicIntToByte -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i8"),
+        MirIntrinsicIntToChar -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i32"),
+        MirIntrinsicByteToChar -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i32"),
+        MirIntrinsicCharToByte -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i8"),
         _ -> "  ; TODO MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
@@ -18018,6 +18073,141 @@ fn mirEmitLenSymbol(typeName: String) -> String {
 fn mirStringStartsWith(s: String, prefix: String) -> Bool {
     llvmStrings.startsWith(s, prefix)
 }
+/// mirEmitKnownTypeLLVM maps the MIR text forms this self-host
+/// emitter can name without a Go-side type tree. Unknown nominal
+/// aggregates return "" so callers keep their existing defensive
+/// fallback.
+fn mirEmitKnownTypeLLVM(typeName: String) -> String {
+    let prim = mirLlvmTypeForPrim(typeName)
+    if prim != "" {
+        return prim
+    }
+    if typeName == "i64" || typeName == "i32" || typeName == "i16" || typeName == "i8" || typeName == "i1" || typeName == "ptr" || typeName == "double" || typeName == "float" || typeName == "void" {
+        return typeName
+    }
+    let head = mirLlvmTypeHeadName(typeName)
+    if head == "List" || head == "Map" || head == "Set" || head == "Channel" || head == "Handle" || head == "Group" || head == "TaskGroup" || head == "Select" || head == "ClosureEnv" || head == "RawPtr" {
+        return "ptr"
+    }
+    if head == "Option" || head == "Maybe" || head == "Result" {
+        return "\{ i64, i64 \}"
+    }
+    ""
+}
+fn mirEmitSingleTypeArgText(typeName: String) -> String {
+    let lt = llvmStrings.indexOf(typeName, "<") ?? -1
+    if lt < 0 || !llvmStrings.hasSuffix(typeName, ">") {
+        return ""
+    }
+    let body = typeName[(lt + 1)..(typeName.len() - 1)]
+    let comma = mirTopLevelTypeCommaIndex(body)
+    if comma >= 0 {
+        return mirTrimTypeText(body[0..comma])
+    }
+    mirTrimTypeText(body)
+}
+fn mirEmitListElemTypeName(listType: String) -> String {
+    let head = mirLlvmTypeHeadName(listType)
+    if head != "List" {
+        return ""
+    }
+    mirEmitSingleTypeArgText(listType)
+}
+fn mirEmitSetElemTypeName(setType: String) -> String {
+    let head = mirLlvmTypeHeadName(setType)
+    if head != "Set" {
+        return ""
+    }
+    mirEmitSingleTypeArgText(setType)
+}
+fn mirEmitChannelElemTypeName(chanType: String) -> String {
+    let head = mirLlvmTypeHeadName(chanType)
+    if head != "Channel" {
+        return ""
+    }
+    mirEmitSingleTypeArgText(chanType)
+}
+fn mirEmitMapKeyTypeName(mapType: String) -> String {
+    let head = mirLlvmTypeHeadName(mapType)
+    if head != "Map" {
+        return ""
+    }
+    let lt = llvmStrings.indexOf(mapType, "<") ?? -1
+    if lt < 0 || !llvmStrings.hasSuffix(mapType, ">") {
+        return ""
+    }
+    let body = mapType[(lt + 1)..(mapType.len() - 1)]
+    let comma = mirTopLevelTypeCommaIndex(body)
+    if comma < 0 {
+        return ""
+    }
+    mirTrimTypeText(body[0..comma])
+}
+fn mirEmitMapValueTypeName(mapType: String) -> String {
+    let head = mirLlvmTypeHeadName(mapType)
+    if head != "Map" {
+        return ""
+    }
+    let lt = llvmStrings.indexOf(mapType, "<") ?? -1
+    if lt < 0 || !llvmStrings.hasSuffix(mapType, ">") {
+        return ""
+    }
+    let body = mapType[(lt + 1)..(mapType.len() - 1)]
+    let comma = mirTopLevelTypeCommaIndex(body)
+    if comma < 0 {
+        return ""
+    }
+    mirTrimTypeText(body[(comma + 1)..body.len()])
+}
+fn mirEmitContainerABIKind(typeName: String) -> String {
+    let llvmTy = mirEmitKnownTypeLLVM(typeName)
+    if typeName == "String" {
+        return "5"
+    }
+    if llvmTy == "i64" {
+        return "1"
+    }
+    if llvmTy == "i1" {
+        return "2"
+    }
+    if llvmTy == "double" {
+        return "3"
+    }
+    if llvmTy == "ptr" {
+        return "4"
+    }
+    "6"
+}
+fn mirEmitFixedValueSizeBytes(llvmTy: String) -> String {
+    if llvmTy == "i64" || llvmTy == "double" || llvmTy == "ptr" {
+        return "8"
+    }
+    if llvmTy == "i32" || llvmTy == "float" {
+        return "4"
+    }
+    if llvmTy == "i16" {
+        return "2"
+    }
+    if llvmTy == "i8" || llvmTy == "i1" {
+        return "1"
+    }
+    "8"
+}
+fn mirEmitRuntimeLaneSuffixForType(typeName: String, llvmTy: String) -> String {
+    if llvmTy == "i64" {
+        return "i64"
+    }
+    if llvmTy == "i1" {
+        return "i1"
+    }
+    if llvmTy == "double" {
+        return "f64"
+    }
+    if llvmTy == "ptr" {
+        return "ptr"
+    }
+    ""
+}
 // ====================================================================
 // Phase 1g — Projection chains (READ side, single-step)
 // ====================================================================
@@ -18117,7 +18307,7 @@ fn mirEmitProjectVariantLineFromHelper(target: String, src: String, proj: MirPro
 /// per-elem-type runtime helper. Element type comes from
 /// `resultLLVM`; Phase 1g supports i64 / ptr / i1 / double dispatch.
 fn mirEmitProjectIndexLine(dest: String, baseReg: String, proj: MirProjection, resultLLVM: String) -> String {
-    let elemSym = mirEmitListGetSymbol(resultLLVM)
+    let elemSym = mirEmitListGetSymbolForType(proj.typ, resultLLVM)
     if elemSym == "" {
         return "  ; TODO Phase 1h list_get for elem type \"" + resultLLVM + "\"\n"
     }
@@ -18145,6 +18335,12 @@ fn mirEmitListGetSymbol(elemLLVM: String) -> String {
         return "osty_rt_list_get_f64"
     }
     ""
+}
+fn mirEmitListGetSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_get_string"
+    }
+    mirEmitListGetSymbol(elemLLVM)
 }
 // ====================================================================
 // Phase 1h — Struct + EnumVariant aggregates
@@ -18245,7 +18441,7 @@ fn mirEmitListPushIntrinsic(instr: MirInstr) -> String {
     let listOp = instr.args[0]
     let valueOp = instr.args[1]
     let elemTy = mirEmitOperandLLVMType(valueOp)
-    let pushSym = mirEmitListPushSymbol(elemTy)
+    let pushSym = mirEmitListPushSymbolForType(valueOp.typ, elemTy)
     if pushSym == "" {
         return "  ; TODO Phase 1j list_push for elem type \"" + elemTy + "\"\n"
     }
@@ -18271,6 +18467,12 @@ fn mirEmitListPushSymbol(elemLLVM: String) -> String {
     }
     ""
 }
+fn mirEmitListPushSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_push_string"
+    }
+    mirEmitListPushSymbol(elemLLVM)
+}
 /// mirEmitListGetIntrinsic lowers `list.get(i)` as the intrinsic
 /// form of the same call Phase 1g uses for `arr[i]` projection.
 /// The intrinsic shape carries args = [list, index] and an optional
@@ -18286,8 +18488,9 @@ fn mirEmitListGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let listText = mirEmitOperand(instr.args[0])
     let idxText = mirEmitOperand(instr.args[1])
     let dest = mirEmitLocalRegName(instr.dest.local)
+    let destType = func.locals[instr.dest.local].typ
     let destLLVM = mirEmitParamType(func, instr.dest.local)
-    let getSym = mirEmitListGetSymbol(destLLVM)
+    let getSym = mirEmitListGetSymbolForType(destType, destLLVM)
     if getSym == "" {
         return "  ; TODO Phase 1j list_get for dest type \"" + destLLVM + "\"\n"
     }
@@ -18338,112 +18541,194 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     let mut out = mirModuleSectionDirective("runtime declarations")
     out = out + "declare void @osty_rt_io_write(ptr, i1, i1)\n"
     out = out + "declare void @osty_rt_abort(ptr)\n"
+    out = out + "declare void @osty_rt_panic(ptr)\n"
     out = out + "declare ptr @osty_rt_int_to_string(i64)\n"
     out = out + "declare ptr @osty_rt_bool_to_string(i1)\n"
     out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
     out = out + "declare ptr @osty_rt_float_to_string(double)\n"
+    out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
     out = out + "declare i64 @osty_rt_list_len(ptr)\n"
     out = out + "declare i64 @osty_rt_map_len(ptr)\n"
     out = out + "declare i64 @osty_rt_set_len(ptr)\n"
     out = out + "declare i64 @osty_rt_string_byte_len(ptr)\n"
     out = out + "declare i64 @osty_rt_bytes_len(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_new()\n"
     out = out + "declare i64 @osty_rt_list_get_i64(ptr, i64)\n"
     out = out + "declare i1 @osty_rt_list_get_i1(ptr, i64)\n"
     out = out + "declare ptr @osty_rt_list_get_ptr(ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_list_get_string(ptr, i64)\n"
     out = out + "declare double @osty_rt_list_get_f64(ptr, i64)\n"
     out = out + "declare void @osty_rt_list_push_i64(ptr, i64)\n"
     out = out + "declare void @osty_rt_list_push_i1(ptr, i1)\n"
     out = out + "declare void @osty_rt_list_push_ptr(ptr, ptr)\n"
+    out = out + "declare void @osty_rt_list_push_string(ptr, ptr)\n"
     out = out + "declare void @osty_rt_list_push_f64(ptr, double)\n"
+    out = out + "declare void @osty_rt_list_insert_i64(ptr, i64, i64)\n"
+    out = out + "declare void @osty_rt_list_insert_i1(ptr, i64, i1)\n"
+    out = out + "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_list_insert_string(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_list_insert_f64(ptr, i64, double)\n"
+    out = out + "declare void @osty_rt_list_set_i64(ptr, i64, i64)\n"
+    out = out + "declare void @osty_rt_list_set_i1(ptr, i64, i1)\n"
+    out = out + "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_list_set_string(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_list_set_f64(ptr, i64, double)\n"
+    out = out + "declare void @osty_rt_list_clear(ptr)\n"
+    out = out + "declare void @osty_rt_list_pop_discard(ptr)\n"
+    out = out + "declare void @osty_rt_list_remove_at_discard(ptr, i64)\n"
+    out = out + "declare void @osty_rt_list_reverse(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_reversed(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_slice(ptr, i64, i64)\n"
+    out = out + "declare ptr @osty_rt_list_sorted_i64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_sorted_i1(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_sorted_f64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_sorted_string(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_set_i64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_set_i1(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_set_f64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_set_ptr(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_set_string(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_i64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_f64(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_i1(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_string(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_char(ptr)\n"
+    out = out + "declare ptr @osty_rt_list_to_string_byte(ptr)\n"
+    out = out + "declare i1 @osty_rt_list_contains_str(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_Contains(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)\n"
     out = out + "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_strings_LastIndexOf(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_strings_Count(ptr, ptr)\n"
     out = out + "declare ptr @osty_rt_strings_TrimSpace(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_TrimStart(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_TrimEnd(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)\n"
     out = out + "declare ptr @osty_rt_strings_ToUpper(ptr)\n"
     out = out + "declare ptr @osty_rt_strings_ToLower(ptr)\n"
     out = out + "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)\n"
     out = out + "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Join(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Repeat(ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_strings_Slice(ptr, i64, i64)\n"
+    out = out + "declare ptr @osty_rt_strings_Split(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_SplitN(ptr, ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_strings_Fields(ptr)\n"
+    out = out + "declare void @osty_rt_strings_SplitInto(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_NthSegment(ptr, ptr, i64)\n"
+    out = out + "declare i64 @osty_rt_strings_ToInt(ptr)\n"
+    out = out + "declare double @osty_rt_strings_ToFloat(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Chars(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Bytes(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_ToBytes(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Concat(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)\n"
     out = out + "declare ptr @osty_rt_map_keys(ptr)\n"
     out = out + "declare ptr @osty_rt_map_values(ptr)\n"
     out = out + "declare void @osty_rt_map_clear(ptr)\n"
-    out = out + "declare ptr @osty_rt_set_to_list(ptr)\n"
-    out = out + "declare void @osty_rt_list_reverse(ptr)\n"
-    out = out + "declare i64 @osty_rt_strings_Count(ptr, ptr)\n"
-    out = out + "declare i64 @osty_rt_strings_ToInt(ptr)\n"
-    out = out + "declare double @osty_rt_strings_ToFloat(ptr)\n"
-    out = out + "declare ptr @osty_rt_strings_Split(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_strings_Chars(ptr)\n"
-    out = out + "declare ptr @osty_rt_strings_Bytes(ptr)\n"
-    out = out + "declare ptr @osty_rt_strings_Concat(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_list_first_ptr(ptr)\n"
-    out = out + "declare ptr @osty_rt_list_last_ptr(ptr)\n"
-    out = out + "declare i64 @osty_rt_list_indexOf_i64(ptr, i64)\n"
-    out = out + "declare ptr @osty_rt_list_sorted(ptr)\n"
-    out = out + "declare ptr @osty_rt_list_reversed(ptr)\n"
-    out = out + "declare ptr @osty_rt_list_to_set(ptr)\n"
-    out = out + "declare ptr @osty_rt_list_remove_at(ptr, i64)\n"
-    out = out + "declare ptr @osty_rt_list_to_string(ptr)\n"
     out = out + "declare ptr @osty_rt_map_to_string(ptr)\n"
-    out = out + "declare ptr @osty_rt_map_keys_sorted(ptr)\n"
+    out = out + "declare ptr @osty_rt_map_keys_sorted_i64(ptr)\n"
+    out = out + "declare ptr @osty_rt_map_keys_sorted_string(ptr)\n"
     out = out + "declare i1 @osty_rt_map_contains_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_map_contains_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_map_contains_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_map_contains_ptr(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_map_contains_string(ptr, ptr)\n"
-    out = out + "declare void @osty_rt_map_remove_i64(ptr, i64)\n"
-    out = out + "declare void @osty_rt_map_remove_string(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_set_insert_i64(ptr, i64)\n"
-    out = out + "declare i1 @osty_rt_set_insert_ptr(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_set_contains_i64(ptr, i64)\n"
-    out = out + "declare i1 @osty_rt_set_contains_ptr(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_set_remove_i64(ptr, i64)\n"
+    out = out + "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_map_insert_i1(ptr, i1, ptr)\n"
+    out = out + "declare void @osty_rt_map_insert_f64(ptr, double, ptr)\n"
+    out = out + "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr)\n"
+    out = out + "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_i1(ptr, i1, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_f64(ptr, double, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_ptr(ptr, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_remove_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_map_remove_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_map_remove_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_map_remove_ptr(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_remove_string(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_map_incr_i64_i64(ptr, i64, i64)\n"
+    out = out + "declare i64 @osty_rt_map_incr_i64_i1(ptr, i1, i64)\n"
+    out = out + "declare i64 @osty_rt_map_incr_i64_f64(ptr, double, i64)\n"
+    out = out + "declare i64 @osty_rt_map_incr_i64_ptr(ptr, ptr, i64)\n"
+    out = out + "declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_set_new(i64)\n"
+    out = out + "declare void @osty_rt_set_clear(ptr)\n"
+    out = out + "declare ptr @osty_rt_set_to_list(ptr)\n"
     out = out + "declare ptr @osty_rt_set_to_string(ptr)\n"
-    out = out + "declare ptr @osty_rt_chan_make(i64, i64)\n"
-    out = out + "declare void @osty_rt_chan_send(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_chan_recv(ptr)\n"
-    out = out + "declare void @osty_rt_chan_close(ptr)\n"
-    out = out + "declare i1 @osty_rt_chan_is_closed(ptr)\n"
-    out = out + "declare ptr @osty_rt_task_spawn(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_task_join(ptr)\n"
+    out = out + "declare i1 @osty_rt_set_insert_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_set_insert_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_set_insert_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_set_insert_ptr(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_insert_string(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_contains_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_set_contains_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_set_contains_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_set_contains_ptr(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_contains_string(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_remove_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_set_remove_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_set_remove_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_set_remove_ptr(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_remove_string(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_thread_chan_make(i64)\n"
+    out = out + "declare void @osty_rt_thread_chan_send_i64(ptr, i64)\n"
+    out = out + "declare void @osty_rt_thread_chan_send_i1(ptr, i1)\n"
+    out = out + "declare void @osty_rt_thread_chan_send_f64(ptr, double)\n"
+    out = out + "declare void @osty_rt_thread_chan_send_ptr(ptr, ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i64(ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i1(ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_f64(ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_ptr(ptr)\n"
+    out = out + "declare void @osty_rt_thread_chan_close(ptr)\n"
+    out = out + "declare i1 @osty_rt_thread_chan_is_closed(ptr)\n"
+    out = out + "declare i64 @osty_rt_task_group(ptr)\n"
+    out = out + "declare ptr @osty_rt_task_spawn(ptr)\n"
+    out = out + "declare ptr @osty_rt_task_group_spawn(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_task_handle_join(ptr)\n"
+    out = out + "declare void @osty_rt_task_group_cancel(ptr)\n"
+    out = out + "declare i1 @osty_rt_task_group_is_cancelled(ptr)\n"
+    out = out + "declare ptr @osty_rt_parallel(ptr, i64, ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_task_race(ptr)\n"
+    out = out + "declare ptr @osty_rt_task_collect_all(ptr)\n"
     out = out + "declare void @osty_rt_yield()\n"
     out = out + "declare void @osty_rt_sleep(i64)\n"
     out = out + "declare i1 @osty_rt_is_cancelled(ptr)\n"
     out = out + "declare void @osty_rt_check_cancelled()\n"
+    out = out + "declare void @osty_rt_select(ptr)\n"
+    out = out + "declare void @osty_rt_select_recv(ptr, ptr, ptr)\n"
+    out = out + "declare void @osty_rt_select_send_i64(ptr, ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_select_send_i1(ptr, ptr, i1, ptr)\n"
+    out = out + "declare void @osty_rt_select_send_f64(ptr, ptr, double, ptr)\n"
+    out = out + "declare void @osty_rt_select_send_ptr(ptr, ptr, ptr, ptr)\n"
+    out = out + "declare void @osty_rt_select_timeout(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_select_default(ptr, ptr)\n"
+    out = out + "declare i8 @osty_rt_bytes_get(ptr, i64)\n"
+    out = out + "declare i64 @osty_rt_bytes_index_of(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_bytes_last_index_of(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_split(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_join(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_concat(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_repeat(ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_bytes_replace(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_replace_all(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_trim_left(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_trim_right(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_trim(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_trim_space(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_to_upper(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_to_lower(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_to_hex(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_slice(ptr, i64, i64)\n"
+    out = out + "declare ptr @osty_rt_bytes_from_list(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_from_hex(ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_to_string(ptr)\n"
     out = out + "declare void @llvm.lifetime.start.p0(i64, ptr)\n"
     out = out + "declare void @llvm.lifetime.end.p0(i64, ptr)\n"
-    out = out + "declare i64 @osty_rt_task_group(ptr)\n"
-    out = out + "declare void @osty_rt_group_cancel(ptr)\n"
-    out = out + "declare i1 @osty_rt_group_is_cancelled(ptr)\n"
-    out = out + "declare ptr @osty_rt_parallel(ptr, i64)\n"
-    out = out + "declare ptr @osty_rt_race(ptr)\n"
-    out = out + "declare ptr @osty_rt_collect_all(ptr)\n"
-    out = out + "declare i64 @osty_rt_select_begin(i64)\n"
-    out = out + "declare i1 @osty_rt_select_recv(i64, ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_select_send(i64, ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_select_timeout(i64, i64)\n"
-    out = out + "declare void @osty_rt_select_default(i64)\n"
-    out = out + "declare i8 @osty_rt_bytes_get(ptr, i64)\n"
-    out = out + "declare i1 @osty_rt_bytes_contains(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_bytes_has_prefix(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_bytes_has_suffix(ptr, ptr)\n"
-    out = out + "declare i64 @osty_rt_bytes_indexOf(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_bytes_split(ptr, ptr)\n"
-    out = out + "declare void @osty_rt_set_insert_i1(ptr, i1)\n"
-    out = out + "declare void @osty_rt_set_insert_f64(ptr, double)\n"
-    out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
-    out = out + "declare ptr @osty_rt_list_new()\n"
-    out = out + "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)\n"
-    out = out + "declare i1 @osty_rt_set_contains_i1(ptr, i1)\n"
-    out = out + "declare i1 @osty_rt_set_contains_f64(ptr, double)\n"
-    out = out + "declare i1 @osty_rt_set_remove_i1(ptr, i1)\n"
-    out = out + "declare i1 @osty_rt_set_remove_ptr(ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_set_remove_f64(ptr, double)\n"
-    out = out + "declare void @osty_rt_map_insert_i64(ptr, i64, i64)\n"
-    out = out + "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)\n"
-    out = out + "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)\n"
-    out = out + "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)\n"
-    out = out + "declare void @osty_rt_list_set_i64(ptr, i64, i64)\n"
-    out = out + "declare void @osty_rt_list_set_i1(ptr, i64, i1)\n"
-    out = out + "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)\n"
-    out = out + "declare void @osty_rt_list_set_f64(ptr, i64, double)\n"
     out + "\n"
 }
 // Phase 1l additions
@@ -18484,9 +18769,9 @@ fn mirEmitGlobalLine(g: MirGlobal) -> String {
 /// to an LLVM type. Non-primitive types fall back to `ptr` (the
 /// canonical handle shape for collections / boxed values).
 fn mirEmitGlobalLLVMType(typeName: String) -> String {
-    let prim = mirLlvmTypeForPrim(typeName)
-    if prim != "" {
-        return prim
+    let known = mirEmitKnownTypeLLVM(typeName)
+    if known != "" {
+        return known
     }
     "ptr"
 }
@@ -18496,6 +18781,9 @@ fn mirEmitGlobalLLVMType(typeName: String) -> String {
 fn mirEmitGlobalInitializer(llvmTy: String) -> String {
     if llvmTy == "ptr" {
         return "null"
+    }
+    if mirStringStartsWith(llvmTy, "\{") {
+        return "zeroinitializer"
     }
     if llvmTy == "double" || llvmTy == "float" {
         return "0.0"
@@ -18575,7 +18863,7 @@ fn mirEmitProjectVariantLineFrom(target: String, src: String, proj: MirProjectio
     mirEmitProjectVariantLineFromHelper(target, src, proj)
 }
 fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection, resultLLVM: String) -> String {
-    let elemSym = mirEmitListGetSymbol(resultLLVM)
+    let elemSym = mirEmitListGetSymbolForType(proj.typ, resultLLVM)
     if elemSym == "" {
         return "  ; TODO list_get for elem type \"" + resultLLVM + "\"\n"
     }
@@ -18695,7 +18983,7 @@ fn mirProjectionKindName(k: MirProjectionKind) -> String {
 fn mirEmitOptionalWrapCast(dest: String, rv: MirRValue, argText: String) -> String {
     let aggTy = "\{ i64, i64 \}"
     let argLLVM = mirEmitOperandLLVMType(rv.arg)
-    let mut out = "  " + dest + ".w0 = insertvalue " + aggTy + " undef, i64 1, 0\n"
+    let mut out = "  " + dest + ".w0 = insertvalue " + aggTy + " undef, i64 " + mirDiscriminantSome() + ", 0\n"
     if argLLVM == "i64" {
         out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".w0, i64 " + argText + ", 1\n"
         return out
@@ -18789,7 +19077,7 @@ fn mirEmitRValueNullary(dest: String, rv: MirRValue) -> String {
     match rv.nullaryKind {
         MirNullaryNone -> {
             let aggTy = "\{ i64, i64 \}"
-            let mut out = "  " + dest + ".n0 = insertvalue " + aggTy + " undef, i64 0, 0\n"
+            let mut out = "  " + dest + ".n0 = insertvalue " + aggTy + " undef, i64 " + mirDiscriminantNone() + ", 0\n"
             out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".n0, i64 0, 1\n"
         },
         MirNullaryInvalid -> "  ; TODO invalid nullary rvalue\n",
@@ -18836,12 +19124,10 @@ fn mirEmitListContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let list = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    if itemTy != "i64" {
-        return "  ; TODO list contains for elem type \"" + itemTy + "\"\n"
+    if instr.args[1].typ == "String" {
+        return "  " + dest + " = call i1 @osty_rt_list_contains_str(ptr " + list + ", ptr " + item + ")\n"
     }
-    let idxReg = dest + ".ix"
-    let mut out = "  " + idxReg + " = call i64 @osty_rt_list_indexOf_i64(ptr " + list + ", i64 " + item + ")\n"
-    out + "  " + dest + " = icmp sge i64 " + idxReg + ", 0\n"
+    "  ; TODO list contains inline scan for elem type \"" + itemTy + "\"\n"
 }
 fn mirEmitMapClearIntrinsic(instr: MirInstr) -> String {
     if instr.args.len() != 1 {
@@ -18902,7 +19188,7 @@ fn mirEmitStringReplaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let old = mirEmitOperand(instr.args[1])
     let new_ = mirEmitOperand(instr.args[2])
-    "  " + dest + " = call ptr @osty_rt_strings_ReplaceAll(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
+    "  " + dest + " = call ptr @osty_rt_strings_Replace(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
 }
 // ====================================================================
 // Phase 1l — Mass coverage push 2 (intrinsics + storage)
@@ -18962,32 +19248,103 @@ fn mirEmitStringConcatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let b = mirEmitOperand(instr.args[1])
     "  " + dest + " = call ptr @osty_rt_strings_Concat(ptr " + a + ", ptr " + b + ")\n"
 }
+fn mirEmitStringBinaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO string binary intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let a = mirEmitOperand(instr.args[0])
+    let b = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ")\n"
+}
+fn mirEmitStringJoinIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO string join intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let parts = mirEmitOperand(instr.args[0])
+    let sep = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @osty_rt_strings_Join(ptr " + parts + ", ptr " + sep + ")\n"
+}
+fn mirEmitStringSubstringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO string substring intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let start = mirEmitOperand(instr.args[1])
+    let end = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_strings_Slice(ptr " + s + ", i64 " + start + ", i64 " + end + ")\n"
+}
+fn mirEmitStringRepeatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO string repeat intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let n = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @osty_rt_strings_Repeat(ptr " + s + ", i64 " + n + ")\n"
+}
+fn mirEmitStringReplaceAllIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO string replaceAll intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let old = mirEmitOperand(instr.args[1])
+    let new_ = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_strings_ReplaceAll(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
+}
+fn mirEmitStringSplitNIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO string splitN intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let sep = mirEmitOperand(instr.args[1])
+    let n = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_strings_SplitN(ptr " + s + ", ptr " + sep + ", i64 " + n + ")\n"
+}
+fn mirEmitStringLastIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO string lastIndexOf intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let needle = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call i64 @osty_rt_strings_LastIndexOf(ptr " + s + ", ptr " + needle + ")\n"
+}
+fn mirEmitStringSplitIntoIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO string splitInto intrinsic\n"
+    }
+    let outList = mirEmitOperand(instr.args[0])
+    let s = mirEmitOperand(instr.args[1])
+    let sep = mirEmitOperand(instr.args[2])
+    "  call void @osty_rt_strings_SplitInto(ptr " + outList + ", ptr " + s + ", ptr " + sep + ")\n"
+}
+fn mirEmitStringNthSegmentIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO string nthSegment intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let sep = mirEmitOperand(instr.args[1])
+    let idx = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_strings_NthSegment(ptr " + s + ", ptr " + sep + ", i64 " + idx + ")\n"
+}
 // -------- List (continued) --------
 fn mirEmitListEdgeIntrinsic(func: MirFunction, instr: MirInstr, isFirst: Bool) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO list first/last intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
-    let sym = if isFirst {
-        "osty_rt_list_first_ptr"
-    } else {
-        "osty_rt_list_last_ptr"
-    }
-    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
+    "  ; TODO list first/last Option<T> lowering needs CFG in self-host emitter\n"
 }
 fn mirEmitListIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO list indexOf intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let list = mirEmitOperand(instr.args[0])
-    let item = mirEmitOperand(instr.args[1])
-    let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    if itemTy != "i64" {
-        return "  ; TODO list indexOf for elem type \"" + itemTy + "\"\n"
-    }
-    "  " + dest + " = call i64 @osty_rt_list_indexOf_i64(ptr " + list + ", i64 " + item + ")\n"
+    "  ; TODO list indexOf inline scan in self-host emitter\n"
 }
 fn mirEmitListSortedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -18995,7 +19352,13 @@ fn mirEmitListSortedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_list_sorted(ptr " + arg + ")\n"
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    let sym = mirEmitListSortedSymbolForType(elemName, elemLLVM)
+    if sym == "" {
+        return "  ; TODO list sorted for elem type \"" + elemName + "\"\n"
+    }
+    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
 }
 fn mirEmitListReversedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19011,7 +19374,13 @@ fn mirEmitListToSetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_list_to_set(ptr " + arg + ")\n"
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    let sym = mirEmitListToSetSymbolForType(elemName, elemLLVM)
+    if sym == "" {
+        return "  ; TODO list toSet for elem type \"" + elemName + "\"\n"
+    }
+    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
 }
 fn mirEmitListRemoveAtIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
@@ -19021,9 +19390,17 @@ fn mirEmitListRemoveAtIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let idx = mirEmitOperand(instr.args[1])
     if instr.hasDest {
         let dest = mirEmitLocalRegName(instr.dest.local)
-        return "  " + dest + " = call ptr @osty_rt_list_remove_at(ptr " + list + ", i64 " + idx + ")\n"
+        let destType = func.locals[instr.dest.local].typ
+        let destLLVM = mirEmitParamType(func, instr.dest.local)
+        let getSym = mirEmitListGetSymbolForType(destType, destLLVM)
+        if getSym == "" {
+            return "  ; TODO list removeAt for elem type \"" + destType + "\"\n"
+        }
+        let mut out = "  " + dest + " = call " + destLLVM + " @" + getSym + "(ptr " + list + ", i64 " + idx + ")\n"
+        out = out + "  call void @osty_rt_list_remove_at_discard(ptr " + list + ", i64 " + idx + ")\n"
+        return out
     }
-    "  call ptr @osty_rt_list_remove_at(ptr " + list + ", i64 " + idx + ")\n"
+    "  call void @osty_rt_list_remove_at_discard(ptr " + list + ", i64 " + idx + ")\n"
 }
 fn mirEmitListToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19031,9 +19408,145 @@ fn mirEmitListToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_list_to_string(ptr " + arg + ")\n"
+    let elemName = mirEmitListElemTypeName(instr.args[0].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    let sym = mirEmitListToStringSymbolForType(elemName, elemLLVM)
+    if sym == "" {
+        return "  ; TODO list toString for elem type \"" + elemName + "\"\n"
+    }
+    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
+}
+fn mirEmitListPopIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO list pop intrinsic\n"
+    }
+    let list = mirEmitOperand(instr.args[0])
+    if instr.hasDest {
+        return "  ; TODO list pop Option<T> lowering needs CFG in self-host emitter\n"
+    }
+    "  call void @osty_rt_list_pop_discard(ptr " + list + ")\n"
+}
+fn mirEmitListSliceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO list slice intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let list = mirEmitOperand(instr.args[0])
+    let start = mirEmitOperand(instr.args[1])
+    let end = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_list_slice(ptr " + list + ", i64 " + start + ", i64 " + end + ")\n"
+}
+fn mirEmitListInsertIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO list insert intrinsic\n"
+    }
+    let list = mirEmitOperand(instr.args[0])
+    let idx = mirEmitOperand(instr.args[1])
+    let value = mirEmitOperand(instr.args[2])
+    let valueTy = mirEmitOperandLLVMType(instr.args[2])
+    let sym = mirEmitListInsertSymbolForType(instr.args[2].typ, valueTy)
+    if sym == "" {
+        return "  ; TODO list insert for elem type \"" + instr.args[2].typ + "\"\n"
+    }
+    "  call void @" + sym + "(ptr " + list + ", i64 " + idx + ", " + valueTy + " " + value + ")\n"
+}
+fn mirEmitListClearIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO list clear intrinsic\n"
+    }
+    let list = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_list_clear(ptr " + list + ")\n"
+}
+fn mirEmitListInsertSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_insert_string"
+    }
+    if elemLLVM == "i64" {
+        return "osty_rt_list_insert_i64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_insert_i1"
+    }
+    if elemLLVM == "ptr" {
+        return "osty_rt_list_insert_ptr"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_insert_f64"
+    }
+    ""
+}
+fn mirEmitListSortedSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_sorted_string"
+    }
+    if elemLLVM == "i64" {
+        return "osty_rt_list_sorted_i64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_sorted_i1"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_sorted_f64"
+    }
+    ""
+}
+fn mirEmitListToSetSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_to_set_string"
+    }
+    if elemLLVM == "i64" {
+        return "osty_rt_list_to_set_i64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_to_set_i1"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_to_set_f64"
+    }
+    if elemLLVM == "ptr" {
+        return "osty_rt_list_to_set_ptr"
+    }
+    ""
+}
+fn mirEmitListToStringSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_to_string_string"
+    }
+    if elemLLVM == "i64" {
+        return "osty_rt_list_to_string_i64"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_to_string_f64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_to_string_i1"
+    }
+    if elemLLVM == "i32" {
+        return "osty_rt_list_to_string_char"
+    }
+    if elemLLVM == "i8" {
+        return "osty_rt_list_to_string_byte"
+    }
+    ""
 }
 // -------- Map (continued) --------
+fn mirEmitMapNewIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 0 || instr.hasDest == false {
+        return "  ; TODO map new intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let loc = func.locals[instr.dest.local]
+    mirEmitMapNewCallLine(dest, loc.typ)
+}
+fn mirEmitMapNewCallLine(dest: String, mapType: String) -> String {
+    let keyName = mirEmitMapKeyTypeName(mapType)
+    let valueName = mirEmitMapValueTypeName(mapType)
+    let keyKind = mirEmitContainerABIKind(keyName)
+    let valueKind = mirEmitContainerABIKind(valueName)
+    let valueLLVM = mirEmitKnownTypeLLVM(valueName)
+    let valueSize = mirEmitFixedValueSizeBytes(valueLLVM)
+    "  " + dest + " = call ptr @osty_rt_map_new(i64 " + keyKind + ", i64 " + valueKind + ", i64 " + valueSize + ", ptr null)\n"
+}
 fn mirEmitMapToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO map toString intrinsic\n"
@@ -19048,7 +19561,13 @@ fn mirEmitMapKeysSortedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_map_keys_sorted(ptr " + arg + ")\n"
+    let keyName = mirEmitMapKeyTypeName(instr.args[0].typ)
+    let keyLLVM = mirEmitKnownTypeLLVM(keyName)
+    let suffix = mirMapKeySuffixForType(keyName, keyLLVM)
+    if suffix != "i64" && suffix != "string" {
+        return "  ; TODO map keysSorted for key type \"" + keyName + "\"\n"
+    }
+    "  " + dest + " = call ptr @osty_rt_map_keys_sorted_" + suffix + "(ptr " + arg + ")\n"
 }
 fn mirEmitMapContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
@@ -19058,13 +19577,11 @@ fn mirEmitMapContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let m = mirEmitOperand(instr.args[0])
     let k = mirEmitOperand(instr.args[1])
     let kTy = mirEmitOperandLLVMType(instr.args[1])
-    if kTy == "i64" {
-        return "  " + dest + " = call i1 @osty_rt_map_contains_i64(ptr " + m + ", i64 " + k + ")\n"
+    let sym = mirMapContainsSymbolForType(instr.args[1].typ, kTy)
+    if sym == "" {
+        return "  ; TODO map contains for key type \"" + instr.args[1].typ + "\"\n"
     }
-    if kTy == "ptr" {
-        return "  " + dest + " = call i1 @osty_rt_map_contains_string(ptr " + m + ", ptr " + k + ")\n"
-    }
-    "  ; TODO map contains for key type \"" + kTy + "\"\n"
+    "  " + dest + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ")\n"
 }
 fn mirEmitMapRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
@@ -19073,15 +19590,34 @@ fn mirEmitMapRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let m = mirEmitOperand(instr.args[0])
     let k = mirEmitOperand(instr.args[1])
     let kTy = mirEmitOperandLLVMType(instr.args[1])
-    if kTy == "i64" {
-        return "  call void @osty_rt_map_remove_i64(ptr " + m + ", i64 " + k + ")\n"
+    let sym = mirMapRemoveSymbolForType(instr.args[1].typ, kTy)
+    if sym == "" {
+        return "  ; TODO map remove for key type \"" + instr.args[1].typ + "\"\n"
     }
-    if kTy == "ptr" {
-        return "  call void @osty_rt_map_remove_string(ptr " + m + ", ptr " + k + ")\n"
+    if instr.hasDest {
+        let dest = mirEmitLocalRegName(instr.dest.local)
+        return "  " + dest + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ")\n"
     }
-    "  ; TODO map remove for key type \"" + kTy + "\"\n"
+    "  call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ")\n"
 }
 // -------- Set --------
+fn mirEmitSetNewIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 0 || instr.hasDest == false {
+        return "  ; TODO set new intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let loc = func.locals[instr.dest.local]
+    let elemName = mirEmitSetElemTypeName(loc.typ)
+    let elemKind = mirEmitContainerABIKind(elemName)
+    "  " + dest + " = call ptr @osty_rt_set_new(i64 " + elemKind + ")\n"
+}
+fn mirEmitSetClearIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO set clear intrinsic\n"
+    }
+    let set = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_set_clear(ptr " + set + ")\n"
+}
 fn mirEmitSetInsertIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO set insert intrinsic\n"
@@ -19089,7 +19625,7 @@ fn mirEmitSetInsertIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirSetInsertSymbolFor(itemTy)
+    let sym = mirSetInsertSymbolForType(instr.args[1].typ, itemTy)
     if sym == "" {
         return "  ; TODO set insert for elem type \"" + itemTy + "\"\n"
     }
@@ -19103,6 +19639,12 @@ fn mirEmitSetInsertIntrinsic(func: MirFunction, instr: MirInstr) -> String {
 /// keyed by element LLVM type. Phase 1m extends Phase 1l's i64-only
 /// dispatch with i1 / ptr / double / string variants.
 fn mirSetInsertSymbolFor(itemTy: String) -> String {
+    mirSetInsertSymbolForType("", itemTy)
+}
+fn mirSetInsertSymbolForType(typeName: String, itemTy: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_set_insert_string"
+    }
     if itemTy == "i64" {
         return "osty_rt_set_insert_i64"
     }
@@ -19125,13 +19667,19 @@ fn mirEmitSetContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirSetContainsSymbolFor(itemTy)
+    let sym = mirSetContainsSymbolForType(instr.args[1].typ, itemTy)
     if sym == "" {
         return "  ; TODO set contains for elem type \"" + itemTy + "\"\n"
     }
     "  " + dest + " = call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
 }
 fn mirSetContainsSymbolFor(itemTy: String) -> String {
+    mirSetContainsSymbolForType("", itemTy)
+}
+fn mirSetContainsSymbolForType(typeName: String, itemTy: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_set_contains_string"
+    }
     if itemTy == "i64" {
         return "osty_rt_set_contains_i64"
     }
@@ -19153,7 +19701,7 @@ fn mirEmitSetRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirSetRemoveSymbolFor(itemTy)
+    let sym = mirSetRemoveSymbolForType(instr.args[1].typ, itemTy)
     if sym == "" {
         return "  ; TODO set remove for elem type \"" + itemTy + "\"\n"
     }
@@ -19164,6 +19712,12 @@ fn mirEmitSetRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     "  call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
 }
 fn mirSetRemoveSymbolFor(itemTy: String) -> String {
+    mirSetRemoveSymbolForType("", itemTy)
+}
+fn mirSetRemoveSymbolForType(typeName: String, itemTy: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_set_remove_string"
+    }
     if itemTy == "i64" {
         return "osty_rt_set_remove_i64"
     }
@@ -19197,12 +19751,7 @@ fn mirEmitChanMakeIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     } else {
         "0"
     }
-    let elemKind = if instr.args.len() >= 2 {
-        mirEmitOperand(instr.args[1])
-    } else {
-        "0"
-    }
-    "  " + dest + " = call ptr @osty_rt_chan_make(i64 " + buf + ", i64 " + elemKind + ")\n"
+    "  " + dest + " = call ptr @osty_rt_thread_chan_make(i64 " + buf + ")\n"
 }
 fn mirEmitChanSendIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
@@ -19210,7 +19759,13 @@ fn mirEmitChanSendIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let chan = mirEmitOperand(instr.args[0])
     let value = mirEmitOperand(instr.args[1])
-    "  call void @osty_rt_chan_send(ptr " + chan + ", ptr " + value + ")\n"
+    let elemName = mirEmitChannelElemTypeName(instr.args[0].typ)
+    let valueTy = mirEmitOperandLLVMType(instr.args[1])
+    let suffix = mirEmitRuntimeLaneSuffixForType(elemName, valueTy)
+    if suffix == "" {
+        return "  ; TODO chan send for elem type \"" + elemName + "\"\n"
+    }
+    "  call void @osty_rt_thread_chan_send_" + suffix + "(ptr " + chan + ", " + valueTy + " " + value + ")\n"
 }
 fn mirEmitChanRecvIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19218,14 +19773,21 @@ fn mirEmitChanRecvIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let chan = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_chan_recv(ptr " + chan + ")\n"
+    let elemName = mirEmitChannelElemTypeName(instr.args[0].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    let suffix = mirEmitRuntimeLaneSuffixForType(elemName, elemLLVM)
+    if suffix == "" {
+        return "  ; TODO chan recv for elem type \"" + elemName + "\"\n"
+    }
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    "  " + dest + " = call " + destLLVM + " @osty_rt_thread_chan_recv_" + suffix + "(ptr " + chan + ")\n"
 }
 fn mirEmitChanCloseIntrinsic(instr: MirInstr) -> String {
     if instr.args.len() != 1 {
         return "  ; TODO chan close intrinsic\n"
     }
     let chan = mirEmitOperand(instr.args[0])
-    "  call void @osty_rt_chan_close(ptr " + chan + ")\n"
+    "  call void @osty_rt_thread_chan_close(ptr " + chan + ")\n"
 }
 fn mirEmitChanIsClosedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19233,16 +19795,20 @@ fn mirEmitChanIsClosedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let chan = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call i1 @osty_rt_chan_is_closed(ptr " + chan + ")\n"
+    "  " + dest + " = call i1 @osty_rt_thread_chan_is_closed(ptr " + chan + ")\n"
 }
 fn mirEmitSpawnIntrinsic(func: MirFunction, instr: MirInstr) -> String {
-    if instr.args.len() != 2 || instr.hasDest == false {
+    if (instr.args.len() != 1 && instr.args.len() != 2) || instr.hasDest == false {
         return "  ; TODO spawn intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let fnPtr = mirEmitOperand(instr.args[0])
-    let arg = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call ptr @osty_rt_task_spawn(ptr " + fnPtr + ", ptr " + arg + ")\n"
+    if instr.args.len() == 1 {
+        let body = mirEmitOperand(instr.args[0])
+        return "  " + dest + " = call ptr @osty_rt_task_spawn(ptr " + body + ")\n"
+    }
+    let group = mirEmitOperand(instr.args[0])
+    let body = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @osty_rt_task_group_spawn(ptr " + group + ", ptr " + body + ")\n"
 }
 fn mirEmitHandleJoinIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19250,7 +19816,13 @@ fn mirEmitHandleJoinIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let h = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_task_join(ptr " + h + ")\n"
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    let raw = dest + ".raw"
+    let mut out = "  " + raw + " = call i64 @osty_rt_task_handle_join(ptr " + h + ")\n"
+    if destLLVM == "i64" {
+        return out + "  " + dest + " = add i64 0, " + raw + "\n"
+    }
+    out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)
 }
 fn mirEmitYieldIntrinsic() -> String {
     "  call void @osty_rt_yield()\n"
@@ -19343,7 +19915,7 @@ fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
     let mut out = "  " + dest + " = call ptr @osty_rt_list_new()\n"
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
-        let pushSym = mirEmitListPushSymbol(fieldTy)
+        let pushSym = mirEmitListPushSymbolForType(field.typ, fieldTy)
         if pushSym == "" {
             out = out + "  ; TODO list aggregate push for elem type \"" + fieldTy + "\"\n"
             continue
@@ -19361,7 +19933,7 @@ fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
 /// unsupported keys stub TODO so the verifier flags the runtime
 /// catalog gap.
 fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
-    let mut out = "  " + dest + " = call ptr @osty_rt_map_new(i64 0, i64 0, i64 8, ptr null)\n"
+    let mut out = mirEmitMapNewCallLine(dest, rv.typ)
     let n = rv.aggFields.len()
     if n == 0 {
         return out
@@ -19378,11 +19950,15 @@ fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
         let vTy = mirEmitOperandLLVMType(vOp)
         let kText = mirEmitOperand(kOp)
         let vText = mirEmitOperand(vOp)
-        let sym = mirMapInsertSymbolFor(kTy)
+        let sym = mirMapInsertSymbolForType(kOp.typ, kTy)
         if sym == "" {
             out = out + "  ; TODO map aggregate insert for key type \"" + kTy + "\"\n"
         } else {
-            out = out + "  call void @" + sym + "(ptr " + dest + ", " + kTy + " " + kText + ", " + vTy + " " + vText + ")\n"
+            let slot = dest + ".m" + mirGenIntToString(i) + ".slot"
+            let align = mirEmitFixedValueSizeBytes(vTy)
+            out = out + "  " + slot + " = alloca " + vTy + ", align " + align + "\n"
+            out = out + "  store " + vTy + " " + vText + ", ptr " + slot + ", align " + align + "\n"
+            out = out + "  call void @" + sym + "(ptr " + dest + ", " + kTy + " " + kText + ", ptr " + slot + ")\n"
         }
         i = i + 2
     }
@@ -19405,7 +19981,7 @@ fn mirEmitGroupCancelIntrinsic(instr: MirInstr) -> String {
         return "  ; TODO group cancel intrinsic\n"
     }
     let g = mirEmitOperand(instr.args[0])
-    "  call void @osty_rt_group_cancel(ptr " + g + ")\n"
+    "  call void @osty_rt_task_group_cancel(ptr " + g + ")\n"
 }
 fn mirEmitGroupIsCancelledIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19413,20 +19989,17 @@ fn mirEmitGroupIsCancelledIntrinsic(func: MirFunction, instr: MirInstr) -> Strin
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let g = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call i1 @osty_rt_group_is_cancelled(ptr " + g + ")\n"
+    "  " + dest + " = call i1 @osty_rt_task_group_is_cancelled(ptr " + g + ")\n"
 }
 fn mirEmitParallelIntrinsic(func: MirFunction, instr: MirInstr) -> String {
-    if instr.args.len() < 1 || instr.hasDest == false {
+    if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO parallel intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let body = mirEmitOperand(instr.args[0])
-    let bound = if instr.args.len() >= 2 {
-        mirEmitOperand(instr.args[1])
-    } else {
-        "0"
-    }
-    "  " + dest + " = call ptr @osty_rt_parallel(ptr " + body + ", i64 " + bound + ")\n"
+    let items = mirEmitOperand(instr.args[0])
+    let bound = mirEmitOperand(instr.args[1])
+    let body = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_parallel(ptr " + items + ", i64 " + bound + ", ptr " + body + ")\n"
 }
 fn mirEmitRaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19434,7 +20007,8 @@ fn mirEmitRaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let bodies = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_race(ptr " + bodies + ")\n"
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    "  " + dest + " = call " + destLLVM + " @osty_rt_task_race(ptr " + bodies + ")\n"
 }
 fn mirEmitCollectAllIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -19442,53 +20016,56 @@ fn mirEmitCollectAllIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let bodies = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @osty_rt_collect_all(ptr " + bodies + ")\n"
+    "  " + dest + " = call ptr @osty_rt_task_collect_all(ptr " + bodies + ")\n"
 }
 // -------- Select family --------
 fn mirEmitSelectIntrinsic(func: MirFunction, instr: MirInstr) -> String {
-    if instr.hasDest == false {
-        return "  ; TODO select intrinsic without dest\n"
+    if instr.args.len() != 1 {
+        return "  ; TODO select intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let armCount = if instr.args.len() >= 1 {
-        mirEmitOperand(instr.args[0])
-    } else {
-        "0"
-    }
-    "  " + dest + " = call i64 @osty_rt_select_begin(i64 " + armCount + ")\n"
+    let body = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_select(ptr " + body + ")\n"
 }
 fn mirEmitSelectRecvIntrinsic(instr: MirInstr) -> String {
     if instr.args.len() != 3 {
         return "  ; TODO select recv arm\n"
     }
-    let token = mirEmitOperand(instr.args[0])
+    let builder = mirEmitOperand(instr.args[0])
     let chan = mirEmitOperand(instr.args[1])
     let body = mirEmitOperand(instr.args[2])
-    "  call i1 @osty_rt_select_recv(i64 " + token + ", ptr " + chan + ", ptr " + body + ")\n"
+    "  call void @osty_rt_select_recv(ptr " + builder + ", ptr " + chan + ", ptr " + body + ")\n"
 }
 fn mirEmitSelectSendIntrinsic(instr: MirInstr) -> String {
-    if instr.args.len() != 3 {
+    if instr.args.len() != 4 {
         return "  ; TODO select send arm\n"
     }
-    let token = mirEmitOperand(instr.args[0])
+    let builder = mirEmitOperand(instr.args[0])
     let chan = mirEmitOperand(instr.args[1])
-    let body = mirEmitOperand(instr.args[2])
-    "  call i1 @osty_rt_select_send(i64 " + token + ", ptr " + chan + ", ptr " + body + ")\n"
+    let value = mirEmitOperand(instr.args[2])
+    let body = mirEmitOperand(instr.args[3])
+    let valueTy = mirEmitOperandLLVMType(instr.args[2])
+    let suffix = mirEmitRuntimeLaneSuffixForType(instr.args[2].typ, valueTy)
+    if suffix == "" {
+        return "  ; TODO select send for elem type \"" + instr.args[2].typ + "\"\n"
+    }
+    "  call void @osty_rt_select_send_" + suffix + "(ptr " + builder + ", ptr " + chan + ", " + valueTy + " " + value + ", ptr " + body + ")\n"
 }
 fn mirEmitSelectTimeoutIntrinsic(instr: MirInstr) -> String {
-    if instr.args.len() != 2 {
+    if instr.args.len() != 3 {
         return "  ; TODO select timeout arm\n"
     }
-    let token = mirEmitOperand(instr.args[0])
+    let builder = mirEmitOperand(instr.args[0])
     let ms = mirEmitOperand(instr.args[1])
-    "  call i1 @osty_rt_select_timeout(i64 " + token + ", i64 " + ms + ")\n"
+    let body = mirEmitOperand(instr.args[2])
+    "  call void @osty_rt_select_timeout(ptr " + builder + ", i64 " + ms + ", ptr " + body + ")\n"
 }
 fn mirEmitSelectDefaultIntrinsic(instr: MirInstr) -> String {
-    if instr.args.len() != 1 {
+    if instr.args.len() != 2 {
         return "  ; TODO select default arm\n"
     }
-    let token = mirEmitOperand(instr.args[0])
-    "  call void @osty_rt_select_default(i64 " + token + ")\n"
+    let builder = mirEmitOperand(instr.args[0])
+    let body = mirEmitOperand(instr.args[1])
+    "  call void @osty_rt_select_default(ptr " + builder + ", ptr " + body + ")\n"
 }
 // -------- Bytes --------
 fn mirEmitBytesIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -19517,7 +20094,59 @@ fn mirEmitBytesIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let dest = mirEmitLocalRegName(instr.dest.local)
     let lhs = mirEmitOperand(instr.args[0])
     let rhs = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call i64 @osty_rt_bytes_indexOf(ptr " + lhs + ", ptr " + rhs + ")\n"
+    "  " + dest + " = call i64 @osty_rt_bytes_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
+}
+fn mirEmitBytesContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes contains\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bytes = mirEmitOperand(instr.args[0])
+    let needle = mirEmitOperand(instr.args[1])
+    let idx = dest + ".idx"
+    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + needle + ")\n"
+    out + "  " + dest + " = icmp sge i64 " + idx + ", 0\n"
+}
+fn mirEmitBytesStartsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes startsWith\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bytes = mirEmitOperand(instr.args[0])
+    let prefix = mirEmitOperand(instr.args[1])
+    let idx = dest + ".idx"
+    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + prefix + ")\n"
+    out + "  " + dest + " = icmp eq i64 " + idx + ", 0\n"
+}
+fn mirEmitBytesEndsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes endsWith\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bytes = mirEmitOperand(instr.args[0])
+    let suffix = mirEmitOperand(instr.args[1])
+    let idx = dest + ".idx"
+    let suffixLen = dest + ".slen"
+    let bytesLen = dest + ".blen"
+    let end = dest + ".end"
+    let nonNeg = dest + ".nonneg"
+    let atEnd = dest + ".atend"
+    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_last_index_of(ptr " + bytes + ", ptr " + suffix + ")\n"
+    out = out + "  " + suffixLen + " = call i64 @osty_rt_bytes_len(ptr " + suffix + ")\n"
+    out = out + "  " + bytesLen + " = call i64 @osty_rt_bytes_len(ptr " + bytes + ")\n"
+    out = out + "  " + end + " = add i64 " + idx + ", " + suffixLen + "\n"
+    out = out + "  " + nonNeg + " = icmp sge i64 " + idx + ", 0\n"
+    out = out + "  " + atEnd + " = icmp eq i64 " + end + ", " + bytesLen + "\n"
+    out + "  " + dest + " = and i1 " + nonNeg + ", " + atEnd + "\n"
+}
+fn mirEmitBytesLastIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes lastIndexOf\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let lhs = mirEmitOperand(instr.args[0])
+    let rhs = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call i64 @osty_rt_bytes_last_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
 fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
@@ -19527,6 +20156,182 @@ fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let lhs = mirEmitOperand(instr.args[0])
     let sep = mirEmitOperand(instr.args[1])
     "  " + dest + " = call ptr @osty_rt_bytes_split(ptr " + lhs + ", ptr " + sep + ")\n"
+}
+fn mirEmitBytesUnaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO bytes unary intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let value = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + value + ")\n"
+}
+fn mirEmitBytesBinaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes binary intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let a = mirEmitOperand(instr.args[0])
+    let b = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ")\n"
+}
+fn mirEmitBytesTernaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO bytes ternary intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let a = mirEmitOperand(instr.args[0])
+    let b = mirEmitOperand(instr.args[1])
+    let c = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ", ptr " + c + ")\n"
+}
+fn mirEmitBytesRepeatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes repeat intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bytes = mirEmitOperand(instr.args[0])
+    let n = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @osty_rt_bytes_repeat(ptr " + bytes + ", i64 " + n + ")\n"
+}
+fn mirEmitBytesSliceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO bytes slice intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bytes = mirEmitOperand(instr.args[0])
+    let start = mirEmitOperand(instr.args[1])
+    let end = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_bytes_slice(ptr " + bytes + ", i64 " + start + ", i64 " + end + ")\n"
+}
+fn mirEmitBytesFromListIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO bytes fromList intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let list = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @osty_rt_bytes_from_list(ptr " + list + ")\n"
+}
+fn mirEmitBytesFromStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO bytes fromString intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @osty_rt_strings_ToBytes(ptr " + s + ")\n"
+}
+fn mirEmitBytesFromHexIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO bytes fromHex intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @osty_rt_bytes_from_hex(ptr " + s + ")\n"
+}
+// ====================================================================
+// Phase 2a — Straight-line intrinsic emission
+// ====================================================================
+fn mirEmitAlgebraicPredicateIntrinsic(func: MirFunction, instr: MirInstr, wantedTag: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO algebraic predicate intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let value = mirEmitOperand(instr.args[0])
+    let aggTy = mirEmitOperandLLVMType(instr.args[0])
+    let disc = dest + ".disc"
+    let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
+    out + "  " + dest + " = icmp eq i64 " + disc + ", " + wantedTag + "\n"
+}
+fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO algebraic unwrap intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let value = mirEmitOperand(instr.args[0])
+    let aggTy = mirEmitOperandLLVMType(instr.args[0])
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+        return "  ; TODO algebraic unwrap for dest type \"" + destLLVM + "\"\n"
+    }
+    let raw = dest + ".raw"
+    let mut out = "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
+    if destLLVM == "i64" {
+        return out + "  " + dest + " = add i64 0, " + raw + "\n"
+    }
+    out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)
+}
+fn mirEmitAlgebraicUnwrapOrIntrinsic(func: MirFunction, instr: MirInstr, presentTag: String) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO algebraic unwrapOr intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let value = mirEmitOperand(instr.args[0])
+    let fallback = mirEmitOperand(instr.args[1])
+    let aggTy = mirEmitOperandLLVMType(instr.args[0])
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+        return "  ; TODO algebraic unwrapOr for dest type \"" + destLLVM + "\"\n"
+    }
+    let disc = dest + ".disc"
+    let present = dest + ".present"
+    let raw = dest + ".raw"
+    let hit = dest + ".hit"
+    let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
+    out = out + "  " + present + " = icmp eq i64 " + disc + ", " + presentTag + "\n"
+    out = out + "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
+    if destLLVM == "i64" {
+        out = out + "  " + hit + " = add i64 0, " + raw + "\n"
+    } else {
+        out = out + mirEmitNarrowPayloadLine(hit, raw, destLLVM)
+    }
+    out + "  " + dest + " = select i1 " + present + ", " + destLLVM + " " + hit + ", " + destLLVM + " " + fallback + "\n"
+}
+fn mirEmitRawNullIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 0 || instr.hasDest == false {
+        return "  ; TODO raw null intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    "  " + dest + " = inttoptr i64 0 to ptr\n"
+}
+fn mirEmitPrimitiveConversionIntrinsic(func: MirFunction, instr: MirInstr, toLLVM: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO primitive conversion intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let value = mirEmitOperand(instr.args[0])
+    let fromLLVM = mirEmitOperandLLVMType(instr.args[0])
+    if fromLLVM == toLLVM {
+        if toLLVM == "i1" {
+            return "  " + dest + " = or i1 0, " + value + "\n"
+        }
+        return "  " + dest + " = add " + toLLVM + " 0, " + value + "\n"
+    }
+    let fromWidth = mirEmitIntLLVMWidth(fromLLVM)
+    let toWidth = mirEmitIntLLVMWidth(toLLVM)
+    if fromWidth == 0 || toWidth == 0 {
+        return "  ; TODO primitive conversion from " + fromLLVM + " to " + toLLVM + "\n"
+    }
+    if fromWidth < toWidth {
+        return "  " + dest + " = zext " + fromLLVM + " " + value + " to " + toLLVM + "\n"
+    }
+    "  " + dest + " = trunc " + fromLLVM + " " + value + " to " + toLLVM + "\n"
+}
+fn mirEmitIntLLVMWidth(llvmTy: String) -> Int {
+    if llvmTy == "i1" {
+        return 1
+    }
+    if llvmTy == "i8" {
+        return 8
+    }
+    if llvmTy == "i16" {
+        return 16
+    }
+    if llvmTy == "i32" {
+        return 32
+    }
+    if llvmTy == "i64" {
+        return 64
+    }
+    0
 }
 // ====================================================================
 // Phase 1n — Misc gap closures + module init
@@ -19544,9 +20349,10 @@ fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
 //   - mirEmitMapSet / mirEmitMapGet — the previously-unhandled
 //     entries on the intrinsic dispatcher.
 // -------- Map intrinsics (insert / get with key dispatch) --------
-/// mirEmitMapSetIntrinsic lowers `m.insert(k, v)`. Dispatch by key
-/// LLVM type — i64 / string supported today; others stub TODO.
-fn mirEmitMapSetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+/// mirEmitMapSetIntrinsic lowers `m.insert(k, v)`. The runtime value
+/// ABI takes an out-pointer, so the value is first spilled to a stack
+/// slot regardless of its scalar lane.
+fn mirEmitMapSetIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 {
         return "  ; TODO map insert/set intrinsic (args=" + mirGenIntToString(instr.args.len()) + ")\n"
     }
@@ -19555,11 +20361,15 @@ fn mirEmitMapSetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let kTy = mirEmitOperandLLVMType(instr.args[1])
     let v = mirEmitOperand(instr.args[2])
     let vTy = mirEmitOperandLLVMType(instr.args[2])
-    let sym = mirMapInsertSymbolFor(kTy)
+    let sym = mirMapInsertSymbolForType(instr.args[1].typ, kTy)
     if sym == "" {
         return "  ; TODO map insert for key type \"" + kTy + "\"\n"
     }
-    "  call void @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", " + vTy + " " + v + ")\n"
+    let slot = mirEmitFreshTempName(blockId, instrIdx) + ".mapv"
+    let align = mirEmitFixedValueSizeBytes(vTy)
+    let mut out = "  " + slot + " = alloca " + vTy + ", align " + align + "\n"
+    out = out + "  store " + vTy + " " + v + ", ptr " + slot + ", align " + align + "\n"
+    out + "  call void @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
 }
 /// mirEmitMapGetIntrinsic lowers `m.get(k) -> V?`. The runtime
 /// returns a present flag plus an out-pointer via osty_rt_map_get_*.
@@ -19575,33 +20385,135 @@ fn mirEmitMapGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let m = mirEmitOperand(instr.args[0])
     let k = mirEmitOperand(instr.args[1])
     let kTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirMapGetSymbolFor(kTy)
+    let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
     if sym == "" {
         return "  ; TODO map get for key type \"" + kTy + "\"\n"
     }
+    let valueName = mirEmitMapValueTypeName(instr.args[0].typ)
+    let valueLLVM = mirEmitKnownTypeLLVM(valueName)
+    if valueLLVM == "" || valueLLVM == "void" || mirStringStartsWith(valueLLVM, "\{") {
+        return "  ; TODO map get for value type \"" + valueName + "\"\n"
+    }
     let slot = dest + ".slot"
-    let mut out = "  " + slot + " = alloca i64, align 8\n"
-    out = out + "  " + dest + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    let align = mirEmitFixedValueSizeBytes(valueLLVM)
+    let mut out = "  " + slot + " = alloca " + valueLLVM + ", align " + align + "\n"
+    let present = dest + ".present"
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    if mirStringStartsWith(destLLVM, "\{") {
+        let loaded = dest + ".val"
+        let raw = dest + ".raw"
+        let disc = dest + ".disc"
+        let payload = dest + ".payload"
+        let step = dest + ".m0"
+        out = out + "  " + loaded + " = load " + valueLLVM + ", ptr " + slot + ", align " + align + "\n"
+        out = out + mirEmitWidenPayloadLine(raw, valueLLVM, loaded)
+        out = out + "  " + disc + " = select i1 " + present + ", i64 " + mirDiscriminantSome() + ", i64 " + mirDiscriminantNone() + "\n"
+        out = out + "  " + payload + " = select i1 " + present + ", i64 " + raw + ", i64 0\n"
+        out = out + "  " + step + " = insertvalue " + destLLVM + " undef, i64 " + disc + ", 0\n"
+        out = out + "  " + dest + " = insertvalue " + destLLVM + " " + step + ", i64 " + payload + ", 1\n"
+        return out
+    }
+    out = out + "  " + dest + " = select i1 true, i1 " + present + ", i1 " + present + "\n"
     out
 }
 // Emit a slot that the runtime fills in.
 fn mirMapInsertSymbolFor(kTy: String) -> String {
+    mirMapInsertSymbolForType("", kTy)
+}
+fn mirMapGetSymbolFor(kTy: String) -> String {
+    mirMapGetSymbolForType("", kTy)
+}
+fn mirMapKeySuffixForType(typeName: String, kTy: String) -> String {
+    if typeName == "String" {
+        return "string"
+    }
     if kTy == "i64" {
-        return "osty_rt_map_insert_i64"
+        return "i64"
+    }
+    if kTy == "i1" {
+        return "i1"
+    }
+    if kTy == "double" {
+        return "f64"
     }
     if kTy == "ptr" {
-        return "osty_rt_map_insert_string"
+        return "ptr"
     }
     ""
 }
-fn mirMapGetSymbolFor(kTy: String) -> String {
-    if kTy == "i64" {
-        return "osty_rt_map_get_i64"
+fn mirMapInsertSymbolForType(typeName: String, kTy: String) -> String {
+    let suffix = mirMapKeySuffixForType(typeName, kTy)
+    if suffix == "" {
+        return ""
     }
-    if kTy == "ptr" {
-        return "osty_rt_map_get_string"
+    "osty_rt_map_insert_" + suffix
+}
+fn mirMapGetSymbolForType(typeName: String, kTy: String) -> String {
+    let suffix = mirMapKeySuffixForType(typeName, kTy)
+    if suffix == "" {
+        return ""
     }
-    ""
+    "osty_rt_map_get_" + suffix
+}
+fn mirMapContainsSymbolForType(typeName: String, kTy: String) -> String {
+    let suffix = mirMapKeySuffixForType(typeName, kTy)
+    if suffix == "" {
+        return ""
+    }
+    "osty_rt_map_contains_" + suffix
+}
+fn mirMapRemoveSymbolForType(typeName: String, kTy: String) -> String {
+    let suffix = mirMapKeySuffixForType(typeName, kTy)
+    if suffix == "" {
+        return ""
+    }
+    "osty_rt_map_remove_" + suffix
+}
+fn mirEmitMapGetOrIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO map getOr intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let m = mirEmitOperand(instr.args[0])
+    let k = mirEmitOperand(instr.args[1])
+    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
+    if sym == "" {
+        return "  ; TODO map getOr for key type \"" + instr.args[1].typ + "\"\n"
+    }
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+        return "  ; TODO map getOr for dest type \"" + destLLVM + "\"\n"
+    }
+    let fallback = mirEmitOperand(instr.args[2])
+    let slot = mirEmitFreshTempName(blockId, instrIdx) + ".getor"
+    let align = mirEmitFixedValueSizeBytes(destLLVM)
+    let present = dest + ".present"
+    let loaded = dest + ".hit"
+    let mut out = "  " + slot + " = alloca " + destLLVM + ", align " + align + "\n"
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    out = out + "  " + loaded + " = load " + destLLVM + ", ptr " + slot + ", align " + align + "\n"
+    out + "  " + dest + " = select i1 " + present + ", " + destLLVM + " " + loaded + ", " + destLLVM + " " + fallback + "\n"
+}
+fn mirEmitMapIncrIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO map incr intrinsic\n"
+    }
+    let m = mirEmitOperand(instr.args[0])
+    let k = mirEmitOperand(instr.args[1])
+    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let delta = mirEmitOperand(instr.args[2])
+    let suffix = mirMapKeySuffixForType(instr.args[1].typ, kTy)
+    if suffix == "" {
+        return "  ; TODO map incr for key type \"" + instr.args[1].typ + "\"\n"
+    }
+    let sym = "osty_rt_map_incr_i64_" + suffix
+    if instr.hasDest {
+        let dest = mirEmitLocalRegName(instr.dest.local)
+        return "  " + dest + " = call i64 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", i64 " + delta + ")\n"
+    }
+    "  call i64 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", i64 " + delta + ")\n"
 }
 // -------- Module init dispatcher --------
 /// mirEmitModuleInitDispatcher emits `@osty_module_init` — a void
@@ -19736,7 +20648,7 @@ fn mirEmitIndexWriteLine(instr: MirInstr, proj: MirProjection) -> String {
     } else {
         mirGenIntToString(proj.indexConst)
     }
-    let setSym = mirEmitListSetSymbol(valueTy)
+    let setSym = mirEmitListSetSymbolForType(instr.src.typ, valueTy)
     if setSym == "" {
         out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
         return out
@@ -19766,6 +20678,12 @@ fn mirEmitListSetSymbol(elemLLVM: String) -> String {
         return "osty_rt_list_set_f64"
     }
     ""
+}
+fn mirEmitListSetSymbolForType(typeName: String, elemLLVM: String) -> String {
+    if typeName == "String" {
+        return "osty_rt_list_set_string"
+    }
+    mirEmitListSetSymbol(elemLLVM)
 }
 // ====================================================================
 // Phase 1p — String pool population, type defs, multi-step I/D write
@@ -19917,7 +20835,7 @@ fn mirEmitMultiStepIndexWrite(instr: MirInstr) -> String {
     } else {
         mirGenIntToString(lastProj.indexConst)
     }
-    let setSym = mirEmitListSetSymbol(valueTy)
+    let setSym = mirEmitListSetSymbolForType(instr.src.typ, valueTy)
     if setSym == "" {
         out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
         return out
