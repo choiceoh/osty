@@ -253,6 +253,19 @@ fn assertLirLoweredDiagnosticsContain(m: MirModule, needle: String) {
     testing.assert(lirLowerHasErrors(result))
     assertLirDiagnosticsContain(result.diagnostics, needle)
 }
+fn testLirProtoLowersCanonicalAlgebraicConstructorTagsOstyOwned() {
+    let resultLowered = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_result_tags.osty", ""), lirParityBuildStringToIntModule())
+    testing.assert(!(lirLowerHasErrors(resultLowered)))
+    let resultIR = lirRenderModule(resultLowered.module)
+    assertLirContains(resultIR, "insertvalue %Result.Int_Error undef, i64 0, 0")
+    assertLirContains(resultIR, "insertvalue %Result.Int_Error undef, i64 1, 0")
+
+    let optionLowered = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_option_tags.osty", ""), lirParityBuildListIndexOfStringModule())
+    testing.assert(!(lirLowerHasErrors(optionLowered)))
+    let optionIR = lirRenderModule(optionLowered.module)
+    assertLirContains(optionIR, "insertvalue %Option.Int undef, i64 0, 0")
+    assertLirContains(optionIR, "insertvalue %Option.Int undef, i64 1, 0")
+}
 fn lirTestFunction(name: String, retType: String) -> MirFunction {
     let mut fn_ = mirFunction(name, retType, mirNoSpan())
     let ret = mirFunctionNewLocal(fn_, "_return", retType, false, mirNoSpan())
