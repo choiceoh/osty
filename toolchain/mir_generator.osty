@@ -17603,7 +17603,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicSetRemove -> mirEmitSetRemoveIntrinsic(func, instr),
         MirIntrinsicSetToString -> mirEmitSetToStringIntrinsic(func, instr),
         MirIntrinsicChanMake -> mirEmitChanMakeIntrinsic(func, instr),
-        MirIntrinsicChanSend -> mirEmitChanSendIntrinsic(func, instr),
+        MirIntrinsicChanSend -> mirEmitChanSendIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicChanRecv -> mirEmitChanRecvIntrinsic(func, instr),
         MirIntrinsicChanClose -> mirEmitChanCloseIntrinsic(instr),
         MirIntrinsicChanIsClosed -> mirEmitChanIsClosedIntrinsic(func, instr),
@@ -17622,7 +17622,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicCollectAll -> mirEmitCollectAllIntrinsic(func, instr),
         MirIntrinsicSelect -> mirEmitSelectIntrinsic(func, instr),
         MirIntrinsicSelectRecv -> mirEmitSelectRecvIntrinsic(instr),
-        MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(instr),
+        MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(blockId, instrIdx, instr),
         MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
         MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
         MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(blockId, instrIdx, instr),
@@ -18683,10 +18683,12 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_thread_chan_send_i1(ptr, i1)\n"
     out = out + "declare void @osty_rt_thread_chan_send_f64(ptr, double)\n"
     out = out + "declare void @osty_rt_thread_chan_send_ptr(ptr, ptr)\n"
+    out = out + "declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)\n"
     out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i64(ptr)\n"
     out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i1(ptr)\n"
     out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_f64(ptr)\n"
     out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_ptr(ptr)\n"
+    out = out + "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_bytes_v1(ptr)\n"
     out = out + "declare void @osty_rt_thread_chan_close(ptr)\n"
     out = out + "declare i1 @osty_rt_thread_chan_is_closed(ptr)\n"
     out = out + "declare i64 @osty_rt_task_group(ptr)\n"
@@ -18708,6 +18710,7 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_select_send_i1(ptr, ptr, i1, ptr)\n"
     out = out + "declare void @osty_rt_select_send_f64(ptr, ptr, double, ptr)\n"
     out = out + "declare void @osty_rt_select_send_ptr(ptr, ptr, ptr, ptr)\n"
+    out = out + "declare void @osty_rt_select_send_bytes_v1(ptr, ptr, ptr, i64, ptr)\n"
     out = out + "declare void @osty_rt_select_timeout(ptr, i64, ptr)\n"
     out = out + "declare void @osty_rt_select_default(ptr, ptr)\n"
     out = out + "declare i8 @osty_rt_bytes_get(ptr, i64)\n"
@@ -19954,17 +19957,32 @@ fn mirEmitChanMakeIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     "  " + dest + " = call ptr @osty_rt_thread_chan_make(i64 " + buf + ")\n"
 }
-fn mirEmitChanSendIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitChanSendIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO chan send intrinsic\n"
     }
     let chan = mirEmitOperand(instr.args[0])
     let value = mirEmitOperand(instr.args[1])
     let elemName = mirEmitChannelElemTypeName(instr.args[0].typ)
-    let valueTy = mirEmitOperandLLVMType(instr.args[1])
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    if elemLLVM == "" || elemLLVM == "void" {
+        return "  ; TODO chan send for elem type \"" + elemName + "\"\n"
+    }
+    let valueTy = elemLLVM
     let suffix = mirEmitRuntimeLaneSuffixForType(elemName, valueTy)
     if suffix == "" {
-        return "  ; TODO chan send for elem type \"" + elemName + "\"\n"
+        if mirStringStartsWith(valueTy, "\{") == false {
+            return "  ; TODO chan send for elem type \"" + elemName + "\"\n"
+        }
+        let base = mirEmitFreshTempName(blockId, instrIdx)
+        let slot = base + ".chansend"
+        let gep = base + ".chansend.gep"
+        let size = base + ".chansend.size"
+        let align = mirEmitFixedValueSizeBytes(valueTy)
+        let mut out = "  " + slot + " = alloca " + valueTy + ", align " + align + "\n"
+        out = out + "  store " + valueTy + " " + value + ", ptr " + slot + ", align " + align + "\n"
+        out = out + mirSizeOfLines(gep, size, valueTy)
+        return out + "  call void @osty_rt_thread_chan_send_bytes_v1(ptr " + chan + ", ptr " + slot + ", i64 " + size + ")\n"
     }
     "  call void @osty_rt_thread_chan_send_" + suffix + "(ptr " + chan + ", " + valueTy + " " + value + ")\n"
 }
@@ -19976,12 +19994,20 @@ fn mirEmitChanRecvIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let chan = mirEmitOperand(instr.args[0])
     let elemName = mirEmitChannelElemTypeName(instr.args[0].typ)
     let elemLLVM = mirEmitKnownTypeLLVM(elemName)
-    let suffix = mirEmitRuntimeLaneSuffixForType(elemName, elemLLVM)
-    if suffix == "" {
+    if elemLLVM == "" || elemLLVM == "void" {
         return "  ; TODO chan recv for elem type \"" + elemName + "\"\n"
     }
+    let suffix = mirEmitRuntimeLaneSuffixForType(elemName, elemLLVM)
+    let runtimeSuffix = if suffix == "" {
+        if mirStringStartsWith(elemLLVM, "\{") == false {
+            return "  ; TODO chan recv for elem type \"" + elemName + "\"\n"
+        }
+        "bytes_v1"
+    } else {
+        suffix
+    }
     let destLLVM = mirEmitParamType(func, instr.dest.local)
-    "  " + dest + " = call " + destLLVM + " @osty_rt_thread_chan_recv_" + suffix + "(ptr " + chan + ")\n"
+    "  " + dest + " = call " + destLLVM + " @osty_rt_thread_chan_recv_" + runtimeSuffix + "(ptr " + chan + ")\n"
 }
 fn mirEmitChanCloseIntrinsic(instr: MirInstr) -> String {
     if instr.args.len() != 1 {
@@ -20245,7 +20271,7 @@ fn mirEmitSelectRecvIntrinsic(instr: MirInstr) -> String {
     let body = mirEmitOperand(instr.args[2])
     "  call void @osty_rt_select_recv(ptr " + builder + ", ptr " + chan + ", ptr " + body + ")\n"
 }
-fn mirEmitSelectSendIntrinsic(instr: MirInstr) -> String {
+fn mirEmitSelectSendIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 4 {
         return "  ; TODO select send arm\n"
     }
@@ -20253,10 +20279,26 @@ fn mirEmitSelectSendIntrinsic(instr: MirInstr) -> String {
     let chan = mirEmitOperand(instr.args[1])
     let value = mirEmitOperand(instr.args[2])
     let body = mirEmitOperand(instr.args[3])
-    let valueTy = mirEmitOperandLLVMType(instr.args[2])
-    let suffix = mirEmitRuntimeLaneSuffixForType(instr.args[2].typ, valueTy)
+    let elemName = mirEmitChannelElemTypeName(instr.args[1].typ)
+    let elemLLVM = mirEmitKnownTypeLLVM(elemName)
+    if elemLLVM == "" || elemLLVM == "void" {
+        return "  ; TODO select send for elem type \"" + elemName + "\"\n"
+    }
+    let valueTy = elemLLVM
+    let suffix = mirEmitRuntimeLaneSuffixForType(elemName, valueTy)
     if suffix == "" {
-        return "  ; TODO select send for elem type \"" + instr.args[2].typ + "\"\n"
+        if mirStringStartsWith(valueTy, "\{") == false {
+            return "  ; TODO select send for elem type \"" + elemName + "\"\n"
+        }
+        let base = mirEmitFreshTempName(blockId, instrIdx)
+        let slot = base + ".selsend"
+        let gep = base + ".selsend.gep"
+        let size = base + ".selsend.size"
+        let align = mirEmitFixedValueSizeBytes(valueTy)
+        let mut out = "  " + slot + " = alloca " + valueTy + ", align " + align + "\n"
+        out = out + "  store " + valueTy + " " + value + ", ptr " + slot + ", align " + align + "\n"
+        out = out + mirSizeOfLines(gep, size, valueTy)
+        return out + "  call void @osty_rt_select_send_bytes_v1(ptr " + builder + ", ptr " + chan + ", ptr " + slot + ", i64 " + size + ", ptr " + body + ")\n"
     }
     "  call void @osty_rt_select_send_" + suffix + "(ptr " + builder + ", ptr " + chan + ", " + valueTy + " " + value + ", ptr " + body + ")\n"
 }
