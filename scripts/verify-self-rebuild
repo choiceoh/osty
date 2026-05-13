@@ -326,8 +326,15 @@ run_gates() {
 	log "selfhost snapshot parity"
 	go test -count=1 -vet=off ./internal/ci ./internal/runner -run 'SnapshotParity|CoreSnapshotParity'
 
-	log "merged native toolchain MIR pipeline"
-	go test -count=1 -vet=off ./internal/llvmgen -run 'TestNativeToolchainMergedMIRPipelineIsClean|TestNativeToolchainMergedMIRErrTypeFloor'
+	log "stage0 toolchain audit"
+	OSTY_STAGE0_AUDIT=1 go test -count=1 -vet=off ./internal/backend -run 'TestStage0ToolchainAudit' -v
+
+	log "native llvmgen route probes"
+	go test -count=1 -vet=off ./internal/llvmabi -run 'TestUnsupported'
+	go test -count=1 -vet=off ./cmd/osty-native-llvmgen -run 'TestRun(EmitsLLVMIRForMIRPayload|MIRPayloadPrefersLIRProtoWhenSelected|MIRPayloadDeclinesWhenLIRProtoDeclines|RejectsInvalidJSON)' -v
+	go test -count=1 -vet=off ./internal/nativellvmgen -run 'Test(TrySourceUsesEnvBinaryAndDecodesResponse|TryPackageUsesManagedBinaryWhenEnvUnset|RequestFromMIREncodesPayload)' -v
+	go test -count=1 -vet=off ./internal/toolchain -run 'Test(EnsureNativeLLVMGen|ManagedNativeLLVMGenPath)' -v
+	go test -count=1 -vet=off ./internal/backend -run 'Test(EmitLLVMIRTextPrefersNativeOwned|LLVMBackendEmitBinaryPrefersNativeOwned|UseNativeOwnedLLVMIR|LLVMBackendDispatchTraceReportsSelectedRoute|LLVMBackendMissingMIRDoesNotRetryLegacyIRBridge)' -v
 }
 
 require_exec "$host_bin" "host osty"
@@ -365,6 +372,8 @@ fi
 # (older host osty binaries). On a fresh build we promote the result
 # into both caches so the next ratchet hits the fast path.
 selfhostcache_hit=""
+cache_stage1_after_smoke=0
+install_selfhostcache_after_smoke=0
 if [[ "$reuse_stage1" == "1" ]]; then
 	if selfhostcache_hit="$(selfhostcache_check)" && [[ -n "$selfhostcache_hit" ]]; then
 		log "stage1: reuse selfhostcache $selfhostcache_hit"
@@ -372,18 +381,26 @@ if [[ "$reuse_stage1" == "1" ]]; then
 	elif [[ -x "$stage1_cache" ]] && stage1_cache_fresh; then
 		log "stage1: reuse cache $stage1_cache"
 		copy_override_binary "$stage1_cache" "$stage1" "osty-self-1 cache"
+		install_selfhostcache_after_smoke=1
 	else
 		[[ -x "$stage1_cache" ]] && log "stage1: cache stale; rebuild $stage1_cache"
 		build_self_binary "$host_bin" "stage1" "$stage1"
-		cache_stage1_binary "$stage1"
-		install_into_selfhostcache "$stage1"
+		cache_stage1_after_smoke=1
+		install_selfhostcache_after_smoke=1
 	fi
 else
 	build_self_binary "$host_bin" "stage1" "$stage1"
-	install_into_selfhostcache "$stage1"
+	install_selfhostcache_after_smoke=1
 fi
 
 smoke_self_driver "$stage1" "stage1"
+
+if [[ "$cache_stage1_after_smoke" == "1" ]]; then
+	cache_stage1_binary "$stage1"
+fi
+if [[ "$install_selfhostcache_after_smoke" == "1" ]]; then
+	install_into_selfhostcache "$stage1"
+fi
 
 if [[ "$mode" == "stage1" ]]; then
 	log "stage1-only complete: $stage1"
