@@ -56,3 +56,84 @@ fn testResolveFixtureCasesClampsOverCap() {
     testing.assertEq(big.count, 64)
     testing.assert(big.overCap)
 }
+fn testScaffoldDefaultWorkspaceMember() {
+    testing.assertEq(scaffoldDefaultWorkspaceMember(), "core")
+}
+fn testScaffoldRelativePathsBin() {
+    let paths = scaffoldRelativePaths("bin", "")
+    testing.assertEq(paths.len(), 4)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "main.osty")
+    testing.assertEq(paths[2], "main_test.osty")
+    testing.assertEq(paths[3], ".gitignore")
+}
+fn testScaffoldRelativePathsLib() {
+    let paths = scaffoldRelativePaths("lib", "")
+    testing.assertEq(paths.len(), 4)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "lib.osty")
+    testing.assertEq(paths[2], "lib_test.osty")
+    testing.assertEq(paths[3], ".gitignore")
+}
+fn testScaffoldRelativePathsWorkspaceDefaultsMember() {
+    let paths = scaffoldRelativePaths("workspace", "")
+    testing.assertEq(paths.len(), 6)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], ".gitignore")
+    testing.assertEq(paths[2], "core/osty.toml")
+    testing.assertEq(paths[3], "core/main.osty")
+    testing.assertEq(paths[4], "core/main_test.osty")
+    testing.assertEq(paths[5], "core/.gitignore")
+}
+fn testScaffoldRelativePathsWorkspaceCustomMember() {
+    let paths = scaffoldRelativePaths("workspace", "alpha")
+    testing.assertEq(paths.len(), 6)
+    testing.assertEq(paths[2], "alpha/osty.toml")
+    testing.assertEq(paths[3], "alpha/main.osty")
+}
+fn testScaffoldRelativePathsCli() {
+    let paths = scaffoldRelativePaths("cli", "")
+    testing.assertEq(paths.len(), 6)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "main.osty")
+    testing.assertEq(paths[2], "args.osty")
+    testing.assertEq(paths[3], "app.osty")
+    testing.assertEq(paths[4], "app_test.osty")
+    testing.assertEq(paths[5], ".gitignore")
+}
+fn testScaffoldRelativePathsService() {
+    let paths = scaffoldRelativePaths("service", "")
+    testing.assertEq(paths.len(), 5)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "main.osty")
+    testing.assertEq(paths[2], "routes.osty")
+    testing.assertEq(paths[3], "routes_test.osty")
+    testing.assertEq(paths[4], ".gitignore")
+}
+fn testScaffoldRelativePathsGuiQtQuick() {
+    let paths = scaffoldRelativePaths("gui-qtquick", "")
+    testing.assertEq(paths.len(), 5)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "main.osty")
+    testing.assertEq(paths[2], "ui/main.qml")
+    testing.assertEq(paths[3], "README.md")
+    testing.assertEq(paths[4], ".gitignore")
+}
+fn testScaffoldRelativePathsGuiWebView2() {
+    let paths = scaffoldRelativePaths("gui-webview2", "")
+    testing.assertEq(paths.len(), 8)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "src/main.osty")
+    testing.assertEq(paths[2], "src/main_test.osty")
+    testing.assertEq(paths[3], "ui/index.html")
+    testing.assertEq(paths[4], "ui/app.css")
+    testing.assertEq(paths[5], "ui/app.js")
+    testing.assertEq(paths[6], "assets/.gitkeep")
+    testing.assertEq(paths[7], ".gitignore")
+}
+fn testScaffoldRelativePathsUnknownFallsBackToBin() {
+    let paths = scaffoldRelativePaths("nonsense", "")
+    testing.assertEq(paths.len(), 4)
+    testing.assertEq(paths[0], "osty.toml")
+    testing.assertEq(paths[1], "main.osty")
+}

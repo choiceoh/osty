@@ -53,3 +53,80 @@ func TestScaffoldFixtureCapsMatchOstyConstants(t *testing.T) {
 		t.Errorf("ScaffoldFixtureCasesMax = %d, want 64", ScaffoldFixtureCasesMax)
 	}
 }
+
+func TestScaffoldDefaultWorkspaceMember(t *testing.T) {
+	if got := ScaffoldDefaultWorkspaceMember(); got != "core" {
+		t.Errorf("ScaffoldDefaultWorkspaceMember() = %q, want %q", got, "core")
+	}
+}
+
+func TestScaffoldRelativePaths(t *testing.T) {
+	cases := []struct {
+		name    string
+		kind    string
+		member  string
+		want    []string
+	}{
+		{
+			"bin", "bin", "",
+			[]string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"},
+		},
+		{
+			"lib", "lib", "",
+			[]string{"osty.toml", "lib.osty", "lib_test.osty", ".gitignore"},
+		},
+		{
+			"workspace-default-member", "workspace", "",
+			[]string{
+				"osty.toml", ".gitignore",
+				"core/osty.toml", "core/main.osty", "core/main_test.osty", "core/.gitignore",
+			},
+		},
+		{
+			"workspace-custom-member", "workspace", "alpha",
+			[]string{
+				"osty.toml", ".gitignore",
+				"alpha/osty.toml", "alpha/main.osty", "alpha/main_test.osty", "alpha/.gitignore",
+			},
+		},
+		{
+			"cli", "cli", "",
+			[]string{"osty.toml", "main.osty", "args.osty", "app.osty", "app_test.osty", ".gitignore"},
+		},
+		{
+			"service", "service", "",
+			[]string{"osty.toml", "main.osty", "routes.osty", "routes_test.osty", ".gitignore"},
+		},
+		{
+			"gui-qtquick", "gui-qtquick", "",
+			[]string{"osty.toml", "main.osty", "ui/main.qml", "README.md", ".gitignore"},
+		},
+		{
+			"gui-webview2", "gui-webview2", "",
+			[]string{
+				"osty.toml",
+				"src/main.osty", "src/main_test.osty",
+				"ui/index.html", "ui/app.css", "ui/app.js",
+				"assets/.gitkeep", ".gitignore",
+			},
+		},
+		{
+			"unknown-falls-back-to-bin", "nonsense", "",
+			[]string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ScaffoldRelativePaths(c.kind, c.member)
+			if len(got) != len(c.want) {
+				t.Fatalf("ScaffoldRelativePaths(%q, %q) length = %d, want %d\n got: %v\nwant: %v",
+					c.kind, c.member, len(got), len(c.want), got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("path[%d] = %q, want %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}

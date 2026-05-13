@@ -62,3 +62,67 @@ fn scaffoldIsLetter(unit: String) -> Bool {
 fn scaffoldIsDigit(unit: String) -> Bool {
     unit >= "0" && unit <= "9"
 }
+/// scaffoldDefaultWorkspaceMember is the directory name used for
+/// the default member of a `--workspace` scaffold when the caller
+/// did not supply one. Exported as policy so cmd/osty's flag default
+/// and the scaffolder agree.
+pub fn scaffoldDefaultWorkspaceMember() -> String {
+    "core"
+}
+/// scaffoldRelativePaths returns the source-order list of relative
+/// file paths the scaffolder will write for a project of `kind`.
+/// Path separators are forward slashes (`/`); the host joins each
+/// entry with the project root and converts to the platform-native
+/// separator. Used by `Init` to pre-flight the target directory
+/// for conflicts.
+///
+/// `kind` matches the host's `Kind` enum stringified
+/// (`bin`/`lib`/`workspace`/`cli`/`service`/`gui-qtquick`/
+/// `gui-webview2`). Unknown kinds fall through to the binary layout
+/// so a typo can't crash the scaffolder.
+///
+/// `workspaceMember` is the sub-directory name for the default
+/// workspace member; empty string resolves to
+/// `scaffoldDefaultWorkspaceMember()`. Ignored for non-workspace
+/// kinds.
+pub fn scaffoldRelativePaths(kind: String, workspaceMember: String) -> List<String> {
+    if kind == "lib" {
+        return ["osty.toml", "lib.osty", "lib_test.osty", ".gitignore"]
+    }
+    if kind == "workspace" {
+        let mut member = workspaceMember
+        if member == "" {
+            member = scaffoldDefaultWorkspaceMember()
+        }
+        return [
+            "osty.toml",
+            ".gitignore",
+            member + "/osty.toml",
+            member + "/main.osty",
+            member + "/main_test.osty",
+            member + "/.gitignore",
+        ]
+    }
+    if kind == "cli" {
+        return ["osty.toml", "main.osty", "args.osty", "app.osty", "app_test.osty", ".gitignore"]
+    }
+    if kind == "service" {
+        return ["osty.toml", "main.osty", "routes.osty", "routes_test.osty", ".gitignore"]
+    }
+    if kind == "gui-qtquick" {
+        return ["osty.toml", "main.osty", "ui/main.qml", "README.md", ".gitignore"]
+    }
+    if kind == "gui-webview2" {
+        return [
+            "osty.toml",
+            "src/main.osty",
+            "src/main_test.osty",
+            "ui/index.html",
+            "ui/app.css",
+            "ui/app.js",
+            "assets/.gitkeep",
+            ".gitignore",
+        ]
+    }
+    ["osty.toml", "main.osty", "main_test.osty", ".gitignore"]
+}
