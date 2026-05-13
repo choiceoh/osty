@@ -314,9 +314,12 @@ fn ostyAstStmt(f: OstyAstFormatter, idx: Int) -> String {
     }
 }
 fn ostyAstLetStmt(f: OstyAstFormatter, node: AstNode) -> String {
-    let mut text = "let "
-    if node.flags == 1 {
-        text = "let mut "
+    let isMut = (node.flags & 1) == 1
+    let isPub = (node.flags & 2) == 2
+    let mut text = if isPub {
+        if isMut { "pub let mut " } else { "pub let " }
+    } else {
+        if isMut { "let mut " } else { "let " }
     }
     text = strings.join([text, ostyAstPattern(f, node.left)], "")
     let typeIdx = ostyAstChildAt(node, 0)
