@@ -3,10 +3,10 @@ package airepair
 import (
 	"bytes"
 	"strings"
-	"unicode"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -134,7 +134,7 @@ func rewriteJSForOfHeader(trimmed string) (string, bool) {
 		}
 		return "for (" + normalized + ") in " + rhs + " {", true
 	}
-	if !isSimpleIdentifierBinding(lhs) {
+	if !runner.IsSimpleIdentifierBinding(lhs) {
 		return "", false
 	}
 	return "for " + lhs + " in " + rhs + " {", true
@@ -151,11 +151,11 @@ func rewritePythonRangeLoopHeader(trimmed string) (string, bool) {
 	}
 	lhs := strings.TrimSpace(body[:inIdx])
 	rhs := strings.TrimSpace(body[inIdx+4:])
-	if !isSimpleIdentifierBinding(lhs) || !strings.HasPrefix(rhs, "range(") || !strings.HasSuffix(rhs, ")") {
+	if !runner.IsSimpleIdentifierBinding(lhs) || !strings.HasPrefix(rhs, "range(") || !strings.HasSuffix(rhs, ")") {
 		return "", false
 	}
 
-	args := splitTopLevelComma(strings.TrimSpace(rhs[len("range(") : len(rhs)-1]))
+	args := runner.SplitTopLevelComma(strings.TrimSpace(rhs[len("range(") : len(rhs)-1]))
 	var start, end string
 	switch len(args) {
 	case 1:
@@ -213,80 +213,18 @@ func rewritePythonEnumerateLoopHeader(trimmed string) (string, bool) {
 	return "for (" + normalized + ") in " + iterable + ".enumerate() {", true
 }
 
-func splitTopLevelComma(src string) []string {
-	if strings.TrimSpace(src) == "" {
-		return nil
-	}
-
-	var (
-		parts        []string
-		start        int
-		parenDepth   int
-		bracketDepth int
-		braceDepth   int
-	)
-
-	for i, r := range src {
-		switch r {
-		case '(':
-			parenDepth++
-		case ')':
-			if parenDepth > 0 {
-				parenDepth--
-			}
-		case '[':
-			bracketDepth++
-		case ']':
-			if bracketDepth > 0 {
-				bracketDepth--
-			}
-		case '{':
-			braceDepth++
-		case '}':
-			if braceDepth > 0 {
-				braceDepth--
-			}
-		case ',':
-			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
-				parts = append(parts, src[start:i])
-				start = i + 1
-			}
-		}
-	}
-	parts = append(parts, src[start:])
-	return parts
-}
-
 func normalizeTupleLoopBindings(src string) (string, bool) {
-	parts := splitTopLevelComma(src)
+	parts := runner.SplitTopLevelComma(src)
 	if len(parts) < 2 {
 		return "", false
 	}
 	normalized := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if !isSimpleIdentifierBinding(part) {
+		if !runner.IsSimpleIdentifierBinding(part) {
 			return "", false
 		}
 		normalized = append(normalized, part)
 	}
 	return strings.Join(normalized, ", "), true
-}
-
-func isSimpleIdentifierBinding(part string) bool {
-	if part == "_" {
-		return true
-	}
-	for i, r := range part {
-		if i == 0 {
-			if r != '_' && !unicode.IsLetter(r) {
-				return false
-			}
-			continue
-		}
-		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return part != ""
 }
