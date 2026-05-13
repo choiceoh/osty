@@ -17659,8 +17659,8 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantErr()),
         MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantNone(), "osty_rt_option_unwrap_none"),
         MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantErr(), "osty_rt_result_unwrap_err"),
-        MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantSome()),
-        MirIntrinsicResultUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, instr, mirDiscriminantOk()),
+        MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantSome()),
+        MirIntrinsicResultUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantOk()),
         MirIntrinsicRawNull -> mirEmitRawNullIntrinsic(func, instr),
         MirIntrinsicByteToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
         MirIntrinsicCharToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
@@ -20572,7 +20572,7 @@ fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     }
     out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)
 }
-fn mirEmitAlgebraicUnwrapOrIntrinsic(func: MirFunction, instr: MirInstr, presentTag: String) -> String {
+fn mirEmitAlgebraicUnwrapOrIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, presentTag: String) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO algebraic unwrapOr intrinsic\n"
     }
@@ -20581,7 +20581,7 @@ fn mirEmitAlgebraicUnwrapOrIntrinsic(func: MirFunction, instr: MirInstr, present
     let fallback = mirEmitOperand(instr.args[1])
     let aggTy = mirEmitOperandLLVMType(instr.args[0])
     let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+    if destLLVM == "void" {
         return "  ; TODO algebraic unwrapOr for dest type \"" + destLLVM + "\"\n"
     }
     let disc = dest + ".disc"
@@ -20591,6 +20591,23 @@ fn mirEmitAlgebraicUnwrapOrIntrinsic(func: MirFunction, instr: MirInstr, present
     let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
     out = out + "  " + present + " = icmp eq i64 " + disc + ", " + presentTag + "\n"
     out = out + "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
+    if mirStringStartsWith(destLLVM, "\{") {
+        let slot = dest + ".slot"
+        let hitLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrapOr.hit")
+        let fallbackLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrapOr.fallback")
+        let joinLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrapOr.join")
+        let mut branchOut = out + "  " + slot + " = alloca " + destLLVM + ", align 8\n"
+        branchOut = branchOut + "  br i1 " + present + ", label %" + hitLabel + ", label %" + fallbackLabel + "\n"
+        branchOut = branchOut + mirLabelLine(hitLabel)
+        branchOut = branchOut + mirEmitNarrowPayloadLine(hit, raw, destLLVM)
+        branchOut = branchOut + "  store " + destLLVM + " " + hit + ", ptr " + slot + ", align 8\n"
+        branchOut = branchOut + "  br label %" + joinLabel + "\n"
+        branchOut = branchOut + mirLabelLine(fallbackLabel)
+        branchOut = branchOut + "  store " + destLLVM + " " + fallback + ", ptr " + slot + ", align 8\n"
+        branchOut = branchOut + "  br label %" + joinLabel + "\n"
+        branchOut = branchOut + mirLabelLine(joinLabel)
+        return branchOut + "  " + dest + " = load " + destLLVM + ", ptr " + slot + ", align 8\n"
+    }
     if destLLVM == "i64" {
         out = out + "  " + hit + " = add i64 0, " + raw + "\n"
     } else {
