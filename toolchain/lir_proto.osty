@@ -1824,15 +1824,22 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
             return lirAggregateType(typeName)
         }
     }
-    // Payload-free user enums lower to `i64` discriminant; matches the
-    // function-context path. Payload-bearing enums still hit the diag
-    // below since the tag-plus-payload aggregate shape needs deeper
-    // work.
+    // Payload-free user enums lower to `i64` discriminant; payload-
+    // bearing user enums to `{ i64 disc, i64 payload }`. Composite
+    // payloads (struct / nested enum) get the narrow slot, same caveat
+    // as the function-context path.
     for layout in mir.layouts.enums {
         if lirMirEnumLayoutMatches(layout, name) {
             if lirMirEnumIsPayloadFree(layout) {
                 return lirIntType(64)
             }
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            lirModuleDeclareTypeDef(out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+            return lirAggregateType(typeName)
         }
     }
     let layoutCount = mir.layouts.structs.len()
@@ -6887,17 +6894,24 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
         }
     }
     // Payload-free user enums lower to a bare `i64` discriminant.
-    // Payload-bearing enums still surface as unsupported here — the
-    // tag-plus-payload aggregate layout needs a richer LIR mapping
-    // (and is separately handled when the enum is constructed via
-    // `lirLowerMirEnumVariantAggregate`).
+    // Payload-bearing enums lower to `{ i64 disc, i64 payload }` —
+    // same shape Option/Result already use. Composite payloads (struct
+    // / nested enum) still get the narrow i64 payload slot, which is
+    // a known limitation tracked separately; primitive and pointer
+    // payloads (Int/Bool/Char/Byte/Float64/String/List/etc.) round-trip
+    // correctly.
     for layout in l.mirModule.layouts.enums {
         if lirMirEnumLayoutMatches(layout, name) {
             if lirMirEnumIsPayloadFree(layout) {
                 return lirIntType(64)
             }
-            // Payload-bearing: fall through to invalid below, preserving
-            // the existing "unsupported" diagnostic for that shape.
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+            return lirAggregateType(typeName)
         }
     }
     if strings.contains(name, "(") {
