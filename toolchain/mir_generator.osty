@@ -18542,6 +18542,7 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_io_write(ptr, i1, i1)\n"
     out = out + "declare void @osty_rt_abort(ptr)\n"
     out = out + "declare void @osty_rt_panic(ptr)\n"
+    out = out + "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)\n"
     out = out + "declare ptr @osty_rt_int_to_string(i64)\n"
     out = out + "declare ptr @osty_rt_bool_to_string(i1)\n"
     out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
@@ -19020,6 +19021,15 @@ fn mirEmitOptionalUnwrapCast(dest: String, rv: MirRValue, argText: String, fromL
 fn mirEmitWidenPayloadLine(widenedReg: String, payloadTy: String, payloadOp: String) -> String {
     if payloadTy == "ptr" {
         return "  " + widenedReg + " = ptrtoint ptr " + payloadOp + " to i64\n"
+    }
+    if mirStringStartsWith(payloadTy, "\{") {
+        let gep = widenedReg + ".box.gep"
+        let size = widenedReg + ".box.size"
+        let box = widenedReg + ".box"
+        let mut out = mirSizeOfLines(gep, size, payloadTy)
+        out = out + "  " + box + " = call ptr @osty.gc.alloc_v1(i64 0, i64 " + size + ", ptr null)\n"
+        out = out + "  store " + payloadTy + " " + payloadOp + ", ptr " + box + ", align 8\n"
+        return out + "  " + widenedReg + " = ptrtoint ptr " + box + " to i64\n"
     }
     if payloadTy == "double" {
         return "  " + widenedReg + " = bitcast double " + payloadOp + " to i64\n"
