@@ -428,6 +428,18 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"declare ptr @osty_rt_bytes_from_hex",
 				"declare ptr @osty_rt_strings_SplitN",
 				"declare ptr @osty_rt_set_new",
+				// Phase 2b — control-flow-backed List option
+				// probes and scalar scans.
+				"mirEmitIntrinsicAuxLabel(",
+				"mirEmitOptionSomeToSlotLines(",
+				"mirEmitOptionNoneToSlotLines(",
+				"mirEmitListOptionProbeIntrinsic(",
+				"mirEmitListScanCompareLine(",
+				"MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(func, blockId, instrIdx, instr, true)",
+				"MirIntrinsicListIndexOf -> mirEmitListIndexOfIntrinsic(func, blockId, instrIdx, instr)",
+				"MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, blockId, instrIdx, instr)",
+				"MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, blockId, instrIdx, instr)",
+				"declare i1 @osty_rt_strings_Equal",
 			},
 		},
 		{
