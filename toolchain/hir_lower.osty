@@ -2358,7 +2358,7 @@ fn hirLowerStmt(cx: HirLowerContext, idx: Int, stmtScope: HirLowerStmtScope, typ
         } else {
             hirExprInvalid()
         }
-        return hirLowerAssembleLetStmt(pattern, typ, hasValue, value, node.flags == 1, span)
+        return hirLowerAssembleLetStmt(pattern, typ, hasValue, value, (node.flags & 1) == 1, span)
     }
     if node.kind == AstNAssign {
         let target = hirLowerExpr(cx, node.left, typeScope)
@@ -3592,7 +3592,7 @@ fn hirLowerCoreIdentCaptureKind(cx: HirLowerContext, coreIdx: Int, name: String)
 // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn hirLowerBindingMutable(node: AstNode) -> Bool {
     if node.kind == AstNLet {
-        return node.flags == 1
+        return (node.flags & 1) == 1
     }
     if node.kind == AstNParam {
         return node.flags == 1

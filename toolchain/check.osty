@@ -945,7 +945,7 @@ fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
         cx.env.local.diagnostics.push(diagNonEscapingEscape(tyToString(cx.env.tys, ty), "module-level binding", node.start, node.end))
     }
-    checkBindSpan(cx.env, name, ty, node.flags == 1, node.start, node.end)
+    checkBindSpan(cx.env, name, ty, (node.flags & 1) == 1, node.start, node.end)
     checkRecordSymbol(cx.env, declIdx, "let", name, "", ty, node.start, node.end)
 }
 // §8.1 G13 / E0743: a module-scope `let` outlives any individual
