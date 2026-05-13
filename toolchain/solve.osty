@@ -261,13 +261,19 @@ fn zonkAt(env: CheckEnv, solver: Solver, ty: Int, depth: Int) -> Int {
     }
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
-    match kind {
-        TkNamed -> zonkAtNamed(env, solver, walked, depth),
-        TkTuple -> zonkAtTuple(env, solver, walked, depth),
-        TkFn -> zonkAtFn(env, solver, walked, depth),
-        TkOptional -> tyOptional(env.tys, zonkAt(env, solver, tyInnerAt(env.tys, walked), depth + 1)),
-        _ -> walked,
+    if kind == TkNamed {
+        return zonkAtNamed(env, solver, walked, depth)
     }
+    if kind == TkTuple {
+        return zonkAtTuple(env, solver, walked, depth)
+    }
+    if kind == TkFn {
+        return zonkAtFn(env, solver, walked, depth)
+    }
+    if kind == TkOptional {
+        return tyOptional(env.tys, zonkAt(env, solver, tyInnerAt(env.tys, walked), depth + 1))
+    }
+    walked
 }
 fn zonkAtNamed(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
     let args = tyArgsAt(env.tys, walked)
