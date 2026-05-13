@@ -1,0 +1,104 @@
+/// Pure renderer helpers shared by the diagnostic formatter
+/// (internal/diag/format.go). The host owns ANSI escape emission,
+/// snippet extraction, and the actual `bytes.Buffer` writes; this
+/// module decides the tiny arithmetic / lookup pieces:
+///
+///   - mapping a 1-based column to a 0-based rune index,
+///   - computing the gutter width for line numbers,
+///   - padding integers to a fixed column width,
+///   - locating the byte range of a 1-based line in a source
+///     buffer.
+///
+/// Mirrored by `internal/runner/diag_render_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// LineBoundsResult is `[start, end)` byte offsets of a 1-based
+/// line in a source buffer, exclusive of the trailing newline.
+/// Both fields are `-1` when the line is out of range; callers
+/// check `start < 0` to detect the miss.
+pub struct LineBoundsResult {
+    pub start: Int,
+    pub end: Int,
+}
+/// colToRuneIndex converts a 1-based column (counted in Unicode
+/// scalar values) to a 0-based index into a rune sequence of
+/// `runeCount` elements. Columns `<= 1` map to `0`; columns past
+/// the end clamp to `runeCount`. The actual rune values are not
+/// needed — only the length — so callers pass `runes.len()`.
+pub fn colToRuneIndex(runeCount: Int, col: Int) -> Int {
+    if col <= 1 {
+        return 0
+    }
+    let mut idx = col - 1
+    if idx > runeCount {
+        idx = runeCount
+    }
+    idx
+}
+/// digitWidth returns the number of decimal digits needed to
+/// render `n`. Used to size the gutter for the line-number
+/// column. Mirrors the Go original exactly:
+///
+///   - `n < 10` returns `1` (covers `0` and any small negative).
+///   - Otherwise count the decimal digits by repeated division.
+///
+/// Negative `n` >= 10 is not exercised by the formatter (line
+/// numbers are always positive), so the underflow behaviour is
+/// not specified here.
+pub fn digitWidth(n: Int) -> Int {
+    if n < 10 {
+        return 1
+    }
+    let mut w = 0
+    let mut x = n
+    for x > 0 {
+        w = w + 1
+        x = x / 10
+    }
+    w
+}
+/// padInt renders `n` and left-pads it with spaces to `width`
+/// columns. When the rendered number already has at least
+/// `width` characters the unpadded form is returned.
+pub fn padInt(n: Int, width: Int) -> String {
+    let s = "{n}"
+    if s.len() >= width {
+        return s
+    }
+    strings.repeat(" ", width - s.len()) + s
+}
+/// lineBounds returns the `[start, end)` byte offsets of the
+/// 1-based `line` in `src`, exclusive of the trailing newline.
+/// Returns `start = -1, end = -1` when:
+///
+///   - `line <= 0`,
+///   - the source has fewer than `line` lines.
+///
+/// The final line is reported even when it has no trailing
+/// newline.
+pub fn lineBounds(src: String, line: Int) -> LineBoundsResult {
+    if line <= 0 {
+        return LineBoundsResult {start: -1, end: -1}
+    }
+    let bs = src.bytes()
+    let n = bs.len()
+    let mut cur = 1
+    let mut start = 0
+    let mut i = 0
+    for i < n {
+        let b = bs[i].toInt()
+        if cur == line && b == 0x0A {
+            return LineBoundsResult {start: start, end: i}
+        }
+        if b == 0x0A {
+            cur = cur + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if cur == line {
+        return LineBoundsResult {start: start, end: n}
+    }
+    LineBoundsResult {start: -1, end: -1}
+}

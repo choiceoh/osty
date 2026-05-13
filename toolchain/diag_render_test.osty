@@ -1,0 +1,87 @@
+use std.testing
+fn testColToRuneIndexClampsAtZero() {
+    testing.assertEq(colToRuneIndex(10, 1), 0)
+    testing.assertEq(colToRuneIndex(10, 0), 0)
+    testing.assertEq(colToRuneIndex(10, -5), 0)
+}
+fn testColToRuneIndexMidColumn() {
+    testing.assertEq(colToRuneIndex(10, 5), 4)
+    testing.assertEq(colToRuneIndex(10, 10), 9)
+}
+fn testColToRuneIndexPastEndClamps() {
+    testing.assertEq(colToRuneIndex(10, 11), 10)
+    testing.assertEq(colToRuneIndex(10, 100), 10)
+}
+fn testColToRuneIndexEmpty() {
+    testing.assertEq(colToRuneIndex(0, 1), 0)
+    testing.assertEq(colToRuneIndex(0, 5), 0)
+}
+fn testDigitWidthSingleDigits() {
+    testing.assertEq(digitWidth(0), 1)
+    testing.assertEq(digitWidth(1), 1)
+    testing.assertEq(digitWidth(9), 1)
+}
+fn testDigitWidthMultiDigit() {
+    testing.assertEq(digitWidth(10), 2)
+    testing.assertEq(digitWidth(99), 2)
+    testing.assertEq(digitWidth(100), 3)
+    testing.assertEq(digitWidth(1234), 4)
+    testing.assertEq(digitWidth(99999), 5)
+}
+fn testPadIntPadsLeftWithSpaces() {
+    testing.assertEq(padInt(5, 3), "  5")
+    testing.assertEq(padInt(42, 4), "  42")
+}
+fn testPadIntNoPaddingWhenWideEnough() {
+    testing.assertEq(padInt(123, 3), "123")
+    testing.assertEq(padInt(1234, 3), "1234")
+}
+fn testPadIntZeroWidth() {
+    testing.assertEq(padInt(7, 0), "7")
+}
+fn testLineBoundsFirstLine() {
+    let r = lineBounds("alpha\nbeta\ngamma", 1)
+    testing.assertEq(r.start, 0)
+    testing.assertEq(r.end, 5)
+}
+fn testLineBoundsMidLine() {
+    let r = lineBounds("alpha\nbeta\ngamma", 2)
+    testing.assertEq(r.start, 6)
+    testing.assertEq(r.end, 10)
+}
+fn testLineBoundsLastLineNoNewline() {
+    let r = lineBounds("alpha\nbeta\ngamma", 3)
+    testing.assertEq(r.start, 11)
+    testing.assertEq(r.end, 16)
+}
+fn testLineBoundsLastLineWithNewline() {
+    let r = lineBounds("alpha\nbeta\n", 2)
+    testing.assertEq(r.start, 6)
+    testing.assertEq(r.end, 10)
+}
+fn testLineBoundsOutOfRange() {
+    let r = lineBounds("alpha\nbeta\n", 5)
+    testing.assertEq(r.start, -1)
+    testing.assertEq(r.end, -1)
+}
+fn testLineBoundsNonPositiveLine() {
+    let r = lineBounds("alpha\nbeta\n", 0)
+    testing.assertEq(r.start, -1)
+    let r2 = lineBounds("alpha\nbeta\n", -3)
+    testing.assertEq(r2.start, -1)
+}
+fn testLineBoundsBlankLine() {
+    let r = lineBounds("a\n\nb", 2)
+    testing.assertEq(r.start, 2)
+    testing.assertEq(r.end, 2)
+}
+fn testLineBoundsEmptySourceLineOneSpansEmpty() {
+    let r = lineBounds("", 1)
+    testing.assertEq(r.start, 0)
+    testing.assertEq(r.end, 0)
+}
+fn testLineBoundsEmptySourceLineTwoMisses() {
+    let r = lineBounds("", 2)
+    testing.assertEq(r.start, -1)
+    testing.assertEq(r.end, -1)
+}
