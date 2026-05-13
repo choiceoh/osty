@@ -452,6 +452,10 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirEmitIntrinsicAuxLabel(blockId, instrIdx, \"algebraic.unwrap.absent\")",
 				"declare void @osty_rt_option_unwrap_none()",
 				"declare void @osty_rt_result_unwrap_err()",
+				// Phase 2e — taskGroup result payloads use the same
+				// i64 raw lane narrowing as handle.join.
+				"return out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)",
+				"TODO taskGroup dest type",
 			},
 		},
 		{
