@@ -1790,6 +1790,13 @@ void osty_rt_option_unwrap_none(void) {
     osty_rt_abort("called unwrap on None");
 }
 
+// Public abort helper called from LLVM IR when `Result.unwrap()` fires on
+// an Err value. Kept separate from the Option helper so diagnostics preserve
+// the source-level construct that failed.
+void osty_rt_result_unwrap_err(void) {
+    osty_rt_abort("called unwrap on Err");
+}
+
 // Public panic helper called from LLVM IR when source code invokes
 // the prelude `panic(message: String) -> Never`. The MIR `IntrinsicAbort`
 // lowerer emits `call void @osty_rt_panic(ptr msg) + unreachable`.
