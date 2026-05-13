@@ -6,6 +6,7 @@ import (
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -97,10 +98,10 @@ func rewriteBareTupleForHeader(trimmed string) (string, bool) {
 		return "", false
 	}
 
-	normalized, ok := normalizeTupleLoopBindings(lhs)
-	if !ok {
+	normalized := runner.NormalizeTupleLoopBindings(lhs)
+	if !normalized.Ok {
 		return "", false
 	}
 
-	return "for (" + normalized + ") in " + rhs + " {", true
+	return "for (" + normalized.Joined + ") in " + rhs + " {", true
 }
