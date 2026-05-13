@@ -3212,16 +3212,16 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         return lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat")
     }
     if kind == MirIntrinsicOptionIsSome {
-        return lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isSome")
+        return lirLowerMirAlgebraicTagCheck(l, instr, mirDiscriminantSome(), "option.isSome")
     }
     if kind == MirIntrinsicOptionIsNone {
-        return lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isNone")
+        return lirLowerMirAlgebraicTagCheck(l, instr, mirDiscriminantNone(), "option.isNone")
     }
     if kind == MirIntrinsicResultIsOk {
-        return lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isOk")
+        return lirLowerMirAlgebraicTagCheck(l, instr, mirDiscriminantOk(), "result.isOk")
     }
     if kind == MirIntrinsicResultIsErr {
-        return lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isErr")
+        return lirLowerMirAlgebraicTagCheck(l, instr, mirDiscriminantErr(), "result.isErr")
     }
     if kind == MirIntrinsicRawNull {
         return lirLowerMirRawNull(l, instr)
@@ -3239,16 +3239,16 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("SplitN"), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.splitN")
     }
     if kind == MirIntrinsicOptionUnwrap {
-        return lirLowerMirAlgebraicUnwrap(l, instr, mirRtOptionUnwrapNoneSymbol(), "option.unwrap")
+        return lirLowerMirAlgebraicUnwrap(l, instr, mirDiscriminantNone(), mirRtOptionUnwrapNoneSymbol(), "option.unwrap")
     }
     if kind == MirIntrinsicOptionUnwrapOr {
-        return lirLowerMirAlgebraicUnwrapOr(l, instr, "option.unwrapOr")
+        return lirLowerMirAlgebraicUnwrapOr(l, instr, mirDiscriminantSome(), "option.unwrapOr")
     }
     if kind == MirIntrinsicResultUnwrap {
-        return lirLowerMirAlgebraicUnwrap(l, instr, mirRtResultUnwrapErrSymbol(), "result.unwrap")
+        return lirLowerMirAlgebraicUnwrap(l, instr, mirDiscriminantErr(), mirRtResultUnwrapErrSymbol(), "result.unwrap")
     }
     if kind == MirIntrinsicResultUnwrapOr {
-        return lirLowerMirAlgebraicUnwrapOr(l, instr, "result.unwrapOr")
+        return lirLowerMirAlgebraicUnwrapOr(l, instr, mirDiscriminantOk(), "result.unwrapOr")
     }
     if kind == MirIntrinsicStringSplitInto {
         return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSplitIntoSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.splitInto")
@@ -3602,7 +3602,7 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // appropriate. Returns the temporary holding the constructed aggregate.
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), mirDiscriminantNone()), [0]))
     let value = lirFresh(l)
     let payloadOp = if lirAggregateHasWidenedPayload(l.out, optType) {
         // Widened Option<Struct> shape: `{ i64 tag, %Struct payload }`.
@@ -3627,7 +3627,7 @@ fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: Str
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), mirDiscriminantSome()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3643,7 +3643,7 @@ fn lirEmitOptionSomeStruct(l: LirMirFunctionLowerer, optType: LirType, payload: 
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), mirDiscriminantSome()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
     value
@@ -3654,7 +3654,7 @@ fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: St
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), mirDiscriminantOk()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3668,7 +3668,7 @@ fn lirEmitResultOkStruct(l: LirMirFunctionLowerer, resultType: LirType, payload:
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), mirDiscriminantOk()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
     value
@@ -3679,7 +3679,7 @@ fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: S
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), mirDiscriminantErr()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3693,7 +3693,7 @@ fn lirEmitResultErrStruct(l: LirMirFunctionLowerer, resultType: LirType, payload
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), mirDiscriminantErr()), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirAggregateType(structRef), payload.value), [1]))
     value
@@ -5421,13 +5421,12 @@ fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym
 // `lirLowerMirAlgebraicTagCheck` lowers Option / Result discriminator
 // inspection (`is_some` / `is_none` / `is_ok` / `is_err`). The four
 // intrinsics share the same shape: extract the i64 disc field at index
-// 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and icmp it
-// against `0`. `cmp` is `"ne"` for the present-tag intrinsics
-// (IsSome / IsOk; disc==1 → true) and `"eq"` for the absent-tag
-// intrinsics (IsNone / IsErr; disc==0 → true). Mirrors production
+// 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and compare it
+// against the canonical variant tag from mirDiscriminant* helpers.
+// Mirrors production
 // `emitOptionIntrinsic` / `emitResultIntrinsic`
 // (mir_generator.go:5283-5294 / similar Result block).
-fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, cmp: String, label: String) {
+fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, wantedTag: String, label: String) {
     if instr.args.len() != 1 {
         lirLowerError(l, LirDiagInvalidInput, label + " expects (option|result)", label)
         return
@@ -5444,7 +5443,7 @@ fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, cmp: 
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let cmpDest = lirFresh(l)
-    l.instrs.push(lirBinary(cmpDest, "icmp " + cmp, lirIntType(64), discReg, "0"))
+    l.instrs.push(lirBinary(cmpDest, "icmp eq", lirIntType(64), discReg, wantedTag))
     if instr.hasDest {
         lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(1), cmpDest), "Bool", label + " result")
     }
@@ -5538,14 +5537,14 @@ fn lirCutBlockUnreachable(l: LirMirFunctionLowerer, nextLabel: String) {
 }
 // `lirLowerMirAlgebraicUnwrap` lowers Option.unwrap() / Result.unwrap()
 // — the panic-on-absent variants. Shape: `extractvalue` the disc field,
-// `icmp eq` against 0 to detect the absent tag, branch to a panic arm
-// that calls the noreturn runtime helper (`osty_rt_option_unwrap_none`
+// `icmp eq` against the canonical absent tag, branch to a panic arm that
+// calls the noreturn runtime helper (`osty_rt_option_unwrap_none`
 // or `osty_rt_result_unwrap_err`) and terminates with `unreachable`,
 // then in the present arm extract the i64 payload and narrow back to
 // the dest local's declared type. Mirrors production
 // `emitOptionIntrinsic` / `emitResultIntrinsic` Unwrap branches
 // (mir_generator.go:5295-5323 + the equivalent Result block).
-fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSym: String, label: String) {
+fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentTag: String, abortSym: String, label: String) {
     if instr.args.len() != 1 {
         lirLowerError(l, LirDiagInvalidInput, label + " expects (option|result)", label)
         return
@@ -5580,7 +5579,7 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
+    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, absentTag))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     lirCutBlockCondBr(l, isAbsentReg, absentLabel, presentLabel, absentLabel)
@@ -5601,13 +5600,13 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
 // hit a type mismatch. C2 needs a struct-payload-aware unwrap that
 // either copies the struct via alloca or handles the value type.
 // `lirLowerMirAlgebraicUnwrapOr` lowers Option.unwrapOr(default) and
-// Result.unwrapOr(default) — the fallback variants. Same disc-field
-// branch as Unwrap, but the absent arm evaluates the fallback operand
-// instead of aborting; both arms merge through an alloca-backed slot
-// to a load on the join sub-block (production uses a phi node — the
+// Result.unwrapOr(default) — the fallback variants. It checks the
+// canonical present tag, stores the payload on the present arm and the
+// fallback operand on the other arm, then merges through an alloca-backed
+// slot to a load on the join sub-block (production uses a phi node — the
 // alloca shape is equivalent and matches the `lirWrapOptionFromI64Sentinel`
 // approach already in this module).
-fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label: String) {
+fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, presentTag: String, label: String) {
     if instr.args.len() != 2 {
         lirLowerError(l, LirDiagInvalidInput, label + " expects (option|result, fallback)", label)
         return
@@ -5641,21 +5640,14 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     }
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
-    let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
+    let isPresentReg = lirFresh(l)
+    l.instrs.push(lirBinary(isPresentReg, "icmp eq", lirIntType(64), discReg, presentTag))
     let mergeSlot = lirFresh(l)
     l.instrs.push(lirAlloca(mergeSlot, destType, 0))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     let endLabel = lirFreshAuxLabel(l, label + ".end")
-    lirCutBlockCondBr(l, isAbsentReg, absentLabel, presentLabel, absentLabel)
-    let fallback = lirLowerMirOperand(l, instr.args[1], loc.typ, destType)
-    if fallback.value == "" {
-        return
-    }
-    l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
-    lirCutBlockBr(l, endLabel)
-    l.currentBlockLabel = presentLabel
+    lirCutBlockCondBr(l, isPresentReg, presentLabel, absentLabel, presentLabel)
     let payloadI64 = lirFresh(l)
     l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
     let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
@@ -5664,6 +5656,13 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
         return
     }
     l.instrs.push(lirStore(lirOperand(destType, narrowed), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = absentLabel
+    let fallback = lirLowerMirOperand(l, instr.args[1], loc.typ, destType)
+    if fallback.value == "" {
+        return
+    }
+    l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
