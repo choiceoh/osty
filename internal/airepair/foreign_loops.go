@@ -1,7 +1,6 @@
 package airepair
 
 import (
-	"bytes"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
@@ -25,22 +24,11 @@ func diagnosticForeignLoopSource(src []byte, diags []*diag.Diagnostic) repair.Re
 }
 
 func wantsForeignLoopRepair(src []byte, diags []*diag.Diagnostic) bool {
-	if !bytes.Contains(src, []byte("for ")) {
-		return false
-	}
-	if !bytes.Contains(src, []byte(" of ")) && !bytes.Contains(src, []byte("range(")) && !bytes.Contains(src, []byte("enumerate(")) {
-		return false
-	}
-	for _, d := range diags {
-		if d != nil && d.Severity == diag.Error {
-			return true
-		}
-	}
-	return false
+	return runner.SrcWantsForeignLoopRepair(src) && diagsHaveError(diags)
 }
 
 func rewriteForeignLoopHeaders(src []byte) ([]byte, []repair.Change, bool) {
-	lines := splitSourceLines(src)
+	lines := runner.SplitSourceLines(src)
 	if len(lines) == 0 {
 		return src, nil, false
 	}
@@ -52,29 +40,29 @@ func rewriteForeignLoopHeaders(src []byte) ([]byte, []repair.Change, bool) {
 	)
 
 	for _, line := range lines {
-		if line.trimmed == "" || isIgnorablePythonLine(line.trimmed) {
-			out.WriteString(line.raw)
+		if line.Trimmed == "" || runner.IsIgnorablePythonLine(line.Trimmed) {
+			out.WriteString(line.Raw)
 			continue
 		}
 
-		r := runner.RewriteForeignLoopHeader(line.trimmed)
+		r := runner.RewriteForeignLoopHeader(line.Trimmed)
 		if !r.Ok {
-			out.WriteString(line.raw)
+			out.WriteString(line.Raw)
 			continue
 		}
 
-		out.WriteString(line.indent)
+		out.WriteString(line.Indent)
 		out.WriteString(r.Rewritten)
-		if line.hasNewline {
+		if line.HasNewline {
 			out.WriteByte('\n')
 		}
 		changes = append(changes, repair.Change{
 			Kind:    r.Kind,
 			Message: r.Message,
 			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
+				Offset: line.Start + len(line.Indent),
+				Line:   line.LineNo,
+				Column: len([]rune(line.Indent)) + 1,
 			},
 		})
 		changed = true

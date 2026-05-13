@@ -1,0 +1,104 @@
+use std.testing
+fn testSplitSourceLinesEmpty() {
+    let lines = splitSourceLines("")
+    testing.assertEq(lines.len(), 0)
+}
+fn testSplitSourceLinesSingleNoNewline() {
+    let lines = splitSourceLines("hello")
+    testing.assertEq(lines.len(), 1)
+    let line = lines[0]
+    testing.assertEq(line.start, 0)
+    testing.assertEq(line.text, "hello")
+    testing.assertEq(line.raw, "hello")
+    testing.assertEq(line.indent, "")
+    testing.assertEq(line.trimmed, "hello")
+    testing.assert(!(line.hasNewline))
+    testing.assertEq(line.lineNo, 1)
+}
+fn testSplitSourceLinesTwoLines() {
+    let lines = splitSourceLines("first\nsecond\n")
+    testing.assertEq(lines.len(), 2)
+    testing.assertEq(lines[0].text, "first")
+    testing.assertEq(lines[0].raw, "first\n")
+    testing.assertEq(lines[0].lineNo, 1)
+    testing.assert(lines[0].hasNewline)
+    testing.assertEq(lines[1].text, "second")
+    testing.assertEq(lines[1].raw, "second\n")
+    testing.assertEq(lines[1].lineNo, 2)
+    testing.assert(lines[1].hasNewline)
+    testing.assertEq(lines[1].start, 6)
+}
+fn testSplitSourceLinesNoTrailingNewline() {
+    let lines = splitSourceLines("a\nb")
+    testing.assertEq(lines.len(), 2)
+    testing.assert(lines[0].hasNewline)
+    testing.assert(!(lines[1].hasNewline))
+    testing.assertEq(lines[1].raw, "b")
+}
+fn testSplitSourceLinesPreservesIndent() {
+    let lines = splitSourceLines("    indented\n\tboth\n  no_tab")
+    testing.assertEq(lines[0].indent, "    ")
+    testing.assertEq(lines[0].trimmed, "indented")
+    testing.assertEq(lines[1].indent, "\t")
+    testing.assertEq(lines[1].trimmed, "both")
+    testing.assertEq(lines[2].indent, "  ")
+    testing.assertEq(lines[2].trimmed, "no_tab")
+}
+fn testSplitSourceLinesBlankLine() {
+    let lines = splitSourceLines("a\n\nb\n")
+    testing.assertEq(lines.len(), 3)
+    testing.assertEq(lines[1].text, "")
+    testing.assertEq(lines[1].trimmed, "")
+    testing.assert(lines[1].hasNewline)
+}
+fn testIsIgnorablePythonLineComment() {
+    testing.assert(isIgnorablePythonLine("// just a comment"))
+    testing.assert(isIgnorablePythonLine("//"))
+}
+fn testIsIgnorablePythonLineHash() {
+    testing.assert(isIgnorablePythonLine("#!/usr/bin/env python"))
+    testing.assert(isIgnorablePythonLine("# coding: utf-8"))
+}
+fn testIsIgnorablePythonLineRejectsCode() {
+    testing.assert(!(isIgnorablePythonLine("let x = 1")))
+    testing.assert(!(isIgnorablePythonLine("for i in xs:")))
+    testing.assert(!(isIgnorablePythonLine("")))
+    testing.assert(!(isIgnorablePythonLine("x // y")))
+}
+fn testSrcWantsForeignLoopRepairAccepts() {
+    testing.assert(srcWantsForeignLoopRepair("for (item of items) \{"))
+    testing.assert(srcWantsForeignLoopRepair("for i in range(10) \{"))
+    testing.assert(srcWantsForeignLoopRepair("for i, v in enumerate(xs) \{"))
+}
+fn testSrcWantsForeignLoopRepairRejectsMissingMarkers() {
+    testing.assert(!(srcWantsForeignLoopRepair("for i in xs \{")))
+    testing.assert(!(srcWantsForeignLoopRepair("range(10)")))
+    testing.assert(!(srcWantsForeignLoopRepair("")))
+}
+fn testSrcWantsSemanticRepairEachMarker() {
+    testing.assert(srcWantsSemanticRepair("xs.enumerate()"))
+    testing.assert(srcWantsSemanticRepair("append(xs, 1)"))
+    testing.assert(srcWantsSemanticRepair("len(xs)"))
+    testing.assert(srcWantsSemanticRepair("xs.length"))
+}
+fn testSrcWantsSemanticRepairRejectsClean() {
+    testing.assert(!(srcWantsSemanticRepair("let x = 1")))
+    testing.assert(!(srcWantsSemanticRepair("xs.push(1)")))
+}
+fn testSrcWantsTupleLoopRepairAccepts() {
+    testing.assert(srcWantsTupleLoopRepair("for k, v in m \{"))
+}
+fn testSrcWantsTupleLoopRepairRejectsMissingMarker() {
+    testing.assert(!(srcWantsTupleLoopRepair("for x in xs \{")))
+    testing.assert(!(srcWantsTupleLoopRepair("for k, v")))
+    testing.assert(!(srcWantsTupleLoopRepair("k, v in m")))
+}
+fn testSrcWantsPythonColonBlockRepairAccepts() {
+    testing.assert(srcWantsPythonColonBlockRepair("if x:\n    y"))
+    testing.assert(srcWantsPythonColonBlockRepair("for i in xs:\n    pass"))
+}
+fn testSrcWantsPythonColonBlockRepairRejectsMissingNewline() {
+    testing.assert(!(srcWantsPythonColonBlockRepair("if x: y")))
+    testing.assert(!(srcWantsPythonColonBlockRepair("type T: Int")))
+    testing.assert(!(srcWantsPythonColonBlockRepair("")))
+}

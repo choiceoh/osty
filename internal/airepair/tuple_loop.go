@@ -1,7 +1,6 @@
 package airepair
 
 import (
-	"bytes"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
@@ -25,19 +24,11 @@ func diagnosticTupleLoopSource(src []byte, diags []*diag.Diagnostic) repair.Resu
 }
 
 func wantsTupleLoopRepair(src []byte, diags []*diag.Diagnostic) bool {
-	if !bytes.Contains(src, []byte("for ")) || !bytes.Contains(src, []byte(",")) || !bytes.Contains(src, []byte(" in ")) {
-		return false
-	}
-	for _, d := range diags {
-		if d != nil && d.Severity == diag.Error {
-			return true
-		}
-	}
-	return false
+	return runner.SrcWantsTupleLoopRepair(src) && diagsHaveError(diags)
 }
 
 func rewriteBareTupleForHeaders(src []byte) ([]byte, []repair.Change, bool) {
-	lines := splitSourceLines(src)
+	lines := runner.SplitSourceLines(src)
 	if len(lines) == 0 {
 		return src, nil, false
 	}
@@ -49,29 +40,29 @@ func rewriteBareTupleForHeaders(src []byte) ([]byte, []repair.Change, bool) {
 	)
 
 	for _, line := range lines {
-		if line.trimmed == "" || isIgnorablePythonLine(line.trimmed) {
-			out.WriteString(line.raw)
+		if line.Trimmed == "" || runner.IsIgnorablePythonLine(line.Trimmed) {
+			out.WriteString(line.Raw)
 			continue
 		}
 
-		rewritten, ok := rewriteBareTupleForHeader(line.trimmed)
+		rewritten, ok := rewriteBareTupleForHeader(line.Trimmed)
 		if !ok {
-			out.WriteString(line.raw)
+			out.WriteString(line.Raw)
 			continue
 		}
 
-		out.WriteString(line.indent)
+		out.WriteString(line.Indent)
 		out.WriteString(rewritten)
-		if line.hasNewline {
+		if line.HasNewline {
 			out.WriteByte('\n')
 		}
 		changes = append(changes, repair.Change{
 			Kind:    "tuple_loop_pattern",
 			Message: "wrap a bare tuple loop binding in Osty tuple-pattern syntax",
 			Pos: token.Pos{
-				Offset: line.start + len(line.indent),
-				Line:   line.lineNo,
-				Column: len([]rune(line.indent)) + 1,
+				Offset: line.Start + len(line.Indent),
+				Line:   line.LineNo,
+				Column: len([]rune(line.Indent)) + 1,
 			},
 		})
 		changed = true
