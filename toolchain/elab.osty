@@ -726,7 +726,7 @@ fn elabLetStmt(cx: ElabCx, node: AstNode) -> Int {
         node.extra
     }
     let valueIdx = node.right
-    let mutable = node.flags == 1
+    let mutable = (node.flags & 1) == 1
     let declared = astTypeToTy(cx, typeAnnotIdx)
     let value = if declared >= 0 {
         elabCheck(cx, valueIdx, declared)
