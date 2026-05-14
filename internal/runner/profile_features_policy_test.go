@@ -87,7 +87,7 @@ func TestFileNeedsFeatures(t *testing.T) {
 		src        string
 		active     map[string]bool
 		wantOk     bool
-		wantMissin string
+		wantMissing string
 	}{
 		{"no-pragma", "let x = 1\n", map[string]bool{}, true, ""},
 		{"all-present", "// @feature: a, b\nlet x = 1\n", map[string]bool{"a": true, "b": true}, true, ""},
@@ -97,8 +97,8 @@ func TestFileNeedsFeatures(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := FileNeedsFeatures([]byte(c.src), c.active)
-			if got.Ok != c.wantOk || got.Missing != c.wantMissin {
-				t.Errorf("FileNeedsFeatures = %+v, want {ok:%v missing:%q}", got, c.wantOk, c.wantMissin)
+			if got.Ok != c.wantOk || got.Missing != c.wantMissing {
+				t.Errorf("FileNeedsFeatures = %+v, want {ok:%v missing:%q}", got, c.wantOk, c.wantMissing)
 			}
 		})
 	}
