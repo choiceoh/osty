@@ -185,3 +185,61 @@ pub fn diagSeverityAnsiColor(sev: Int) -> String {
     }
     ""
 }
+/// DiagSuggestionDisplay packages the three labels the formatter
+/// emits per Suggestion: the inline tag (`suggest` vs `fix`),
+/// the human label (Suggestion.Label or its default), and the
+/// rendered replacement (with the empty-string → "(delete)"
+/// fallback applied).
+pub struct DiagSuggestionDisplay {
+    pub tag: String,
+    pub label: String,
+    pub replacement: String,
+}
+/// diagSuggestionDisplayOf resolves a Suggestion's display
+/// strings:
+///
+///   - `tag`         = "fix" when `machineApplicable` else "suggest"
+///   - `label`       = `userLabel` when non-empty else "suggested fix"
+///   - `replacement` = `rendered` when non-empty else "(delete)"
+///
+/// `rendered` is the post-CopyFrom-template expansion (already
+/// produced by `diagRenderReplacement`); the empty-string check
+/// catches the "literal Replacement was the empty string and no
+/// CopyFrom excerpt was substituted" case so the user sees an
+/// explicit "(delete)" hint instead of a bare blank line.
+///
+/// Named `-Of` so the default Go-export capitalization rule
+/// (`DiagSuggestionDisplayOf`) doesn't collide with the
+/// `DiagSuggestionDisplay` struct in the drift parity table.
+pub fn diagSuggestionDisplayOf(userLabel: String, machineApplicable: Bool, rendered: String) -> DiagSuggestionDisplay {
+    let displayTag = if machineApplicable {
+        "fix"
+    } else {
+        "suggest"
+    }
+    let displayLabel = if userLabel == "" {
+        "suggested fix"
+    } else {
+        userLabel
+    }
+    let displayReplacement = if rendered == "" {
+        "(delete)"
+    } else {
+        rendered
+    }
+    DiagSuggestionDisplay {
+        tag: displayTag,
+        label: displayLabel,
+        replacement: displayReplacement,
+    }
+}
+/// diagNoteLabel returns the literal `"note"` used in the
+/// formatter's `= note: <text>` line.
+pub fn diagNoteLabel() -> String {
+    "note"
+}
+/// diagHelpLabel returns the literal `"help"` used in the
+/// formatter's `= help: <hint>` line.
+pub fn diagHelpLabel() -> String {
+    "help"
+}

@@ -195,3 +195,48 @@ func DiagSeverityAnsiColor(sev int) string {
 	}
 	return ""
 }
+
+// DiagSuggestionDisplay packages the three labels the formatter
+// emits per Suggestion: the inline tag, the human label, and
+// the rendered replacement.
+//
+// Osty: toolchain/diag_render.osty:193
+type DiagSuggestionDisplay struct {
+	Tag         string
+	Label       string
+	Replacement string
+}
+
+// DiagSuggestionDisplayOf resolves a Suggestion's display
+// strings (see Osty doc for the table). Named `-Of` so the
+// default capitalization rule doesn't collide with the
+// DiagSuggestionDisplay struct in the drift table.
+//
+// Osty: toolchain/diag_render.osty:214
+func DiagSuggestionDisplayOf(userLabel string, machineApplicable bool, rendered string) DiagSuggestionDisplay {
+	tag := "suggest"
+	if machineApplicable {
+		tag = "fix"
+	}
+	label := userLabel
+	if label == "" {
+		label = "suggested fix"
+	}
+	replacement := rendered
+	if replacement == "" {
+		replacement = "(delete)"
+	}
+	return DiagSuggestionDisplay{Tag: tag, Label: label, Replacement: replacement}
+}
+
+// DiagNoteLabel returns the literal "note" used in the formatter's
+// `= note: <text>` line.
+//
+// Osty: toolchain/diag_render.osty:238
+func DiagNoteLabel() string { return "note" }
+
+// DiagHelpLabel returns the literal "help" used in the formatter's
+// `= help: <hint>` line.
+//
+// Osty: toolchain/diag_render.osty:243
+func DiagHelpLabel() string { return "help" }

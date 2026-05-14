@@ -150,42 +150,29 @@ func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {
 	for _, note := range d.Notes {
 		fmt.Fprintf(b, " %s %s: %s\n",
 			f.col(ansiBlue+ansiBold, "="),
-			f.col(ansiCyan+ansiBold, "note"),
+			f.col(ansiCyan+ansiBold, runner.DiagNoteLabel()),
 			note)
 	}
 	// Hint.
 	if d.Hint != "" {
 		fmt.Fprintf(b, " %s %s: %s\n",
 			f.col(ansiBlue+ansiBold, "="),
-			f.col(ansiCyan+ansiBold, "help"),
+			f.col(ansiCyan+ansiBold, runner.DiagHelpLabel()),
 			d.Hint)
 	}
 	// Structured suggestions (auto-applicable patches).
 	for _, sug := range d.Suggestions {
-		label := sug.Label
-		if label == "" {
-			label = "suggested fix"
-		}
-		tag := "suggest"
-		if sug.MachineApplicable {
-			tag = "fix"
-		}
+		disp := runner.DiagSuggestionDisplayOf(sug.Label, sug.MachineApplicable, f.renderReplacement(sug))
 		fmt.Fprintf(b, " %s %s: %s\n",
 			f.col(ansiBlue+ansiBold, "="),
-			f.col(ansiGreen+ansiBold, tag),
-			label)
-		// Show the proposed replacement on the next line. An empty
-		// replacement is rendered as "(delete)" for clarity. Suggestions
-		// with a CopyFrom span expand the "%s" placeholder using the
-		// original source when available, so the user sees the concrete
-		// rewrite rather than the raw template.
-		repl := f.renderReplacement(sug)
-		if repl == "" {
-			repl = "(delete)"
-		}
+			f.col(ansiGreen+ansiBold, disp.Tag),
+			disp.Label)
+		// Show the proposed replacement on the next line. The
+		// `(delete)` fallback for an empty rendered replacement is
+		// applied by runner.DiagSuggestionDisplayOf.
 		fmt.Fprintf(b, "   %s %s\n",
 			f.col(ansiGreen, "→"),
-			repl)
+			disp.Replacement)
 	}
 }
 

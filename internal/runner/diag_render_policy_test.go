@@ -187,3 +187,39 @@ func TestDiagSeverityAnsiColor(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagSuggestionDisplayOf(t *testing.T) {
+	cases := []struct {
+		name              string
+		userLabel         string
+		machineApplicable bool
+		rendered          string
+		wantTag           string
+		wantLabel         string
+		wantReplacement   string
+	}{
+		{"fix-applicable", "rename to foo", true, "let foo = 1", "fix", "rename to foo", "let foo = 1"},
+		{"suggest-only", "rename to foo", false, "let foo = 1", "suggest", "rename to foo", "let foo = 1"},
+		{"empty-label", "", true, "x", "fix", "suggested fix", "x"},
+		{"empty-replacement", "rm unused", true, "", "fix", "rm unused", "(delete)"},
+		{"all-defaults", "", false, "", "suggest", "suggested fix", "(delete)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DiagSuggestionDisplayOf(c.userLabel, c.machineApplicable, c.rendered)
+			if got.Tag != c.wantTag || got.Label != c.wantLabel || got.Replacement != c.wantReplacement {
+				t.Errorf("DiagSuggestionDisplayOf = %+v, want {%q %q %q}",
+					got, c.wantTag, c.wantLabel, c.wantReplacement)
+			}
+		})
+	}
+}
+
+func TestDiagNoteHelpLabels(t *testing.T) {
+	if got := DiagNoteLabel(); got != "note" {
+		t.Errorf("DiagNoteLabel = %q, want %q", got, "note")
+	}
+	if got := DiagHelpLabel(); got != "help" {
+		t.Errorf("DiagHelpLabel = %q, want %q", got, "help")
+	}
+}
