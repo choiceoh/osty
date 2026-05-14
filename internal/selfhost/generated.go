@@ -49042,7 +49042,15 @@ func collectFnDecl(cx *ElabCx, declIdx int, node *AstNode, owner string, ownerGe
 		_ = node
 	}
 	// Osty: /tmp/selfhost_merged.osty:23845:5
-	fnTy := tyFn(cx.env.tys, sig.paramTys, sig.retTy)
+	var cleanNames []string
+	for _, pn := range sig.paramNames {
+		if strings.HasPrefix(pn, "?") {
+			cleanNames = append(cleanNames, pn[1:])
+		} else {
+			cleanNames = append(cleanNames, pn)
+		}
+	}
+	fnTy := tyFnWithNames(cx.env.tys, sig.paramTys, sig.retTy, cleanNames)
 	_ = fnTy
 	// Osty: /tmp/selfhost_merged.osty:23846:5
 	checkRecordSymbol(cx.env, declIdx, "fn", name, owner, fnTy, node.start, node.end)

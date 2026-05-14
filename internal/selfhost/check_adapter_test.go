@@ -1353,21 +1353,21 @@ fn main() {
 }
 
 // G20: keyword argument through fn-value with unknown name emits E0769.
-// Hand-port status:
-//   Parser (3 files)         ✅ creates AstNField_ for keyword args
-//   Diagnostic helpers        ✅ checkCode*, diag* functions
-//   fnArgListHasKeyword       ✅ detects AstNField_ nodes
-//   elabEmitFnValueKeywordDiag ✅ emits E0769 when fn has no param names
-//   elabReorderKeywordArgs    ✅ reorders + emits E0769 for wrong names
-//   elabInferFnValueCall      ✅ G20 keyword detection branch added
-//   fnSigToTy                 ✅ now calls tyFnWithNames (preserves names)
-//   TyNode.fnParamNames       ✅ field added
-//   tyFnWithNames/ParamNamesAt ✅ added
-//   Resolver type propagation  ❌ checkLookup returns type without names
-//
-// The resolver path checkLookup("f") returns a type created without
-// fnParamNames, so fnSigToTy is bypassed for "let f = connect".
-// Once the resolver creates fn types with tyFnWithNames, the test
-// below should assert E0769 = 1.
-//
-// func TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch(t *testing.T)
+// Full path: collectFnDecl → tyFnWithNames → checkLookup → fn-value call.
+func TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch(t *testing.T) {
+	src := []byte(`fn connect(host: String, port: Int) -> String {
+    host + ":" + port.toString()
+}
+
+fn main() {
+    let f = connect
+    let result = f("localhost", timeout: 8080)
+    println(result)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if got := checked.Summary.ErrorsByContext["E0769"]; got != 1 {
+		t.Fatalf("E0769 count = %d, want 1 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
