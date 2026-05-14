@@ -24,7 +24,7 @@ import (
 func TestSnapshotFreezeStamp(t *testing.T) {
 	root := repoRoot(t)
 	wants := map[string]string{
-		"toolchain/manifest_validation.osty": "12e221ded6a62915fc98a1fd5bdd4490324d8b3e2dd6bef6bd7662dc5072ab65",
+		"toolchain/manifest_validation.osty": "2789e1bd98bbc84c30590a67bb444648ac400b1ff8aa9278d390f1979c9bb92c",
 	}
 	for rel, want := range wants {
 		got := hashFile(t, filepath.Join(root, rel))

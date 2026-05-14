@@ -24,10 +24,10 @@ import (
 func TestSnapshotFreezeStamp(t *testing.T) {
 	root := repoRoot(t)
 	wants := map[string]string{
-		"toolchain/pkgmgr.osty":       "ee7b3812f819647fe4257ad0954060eae8fd04930be233e0b35c85cb05567771",
-		"toolchain/semver.osty":       "b08185d211c8935681a09a837922119b89101982062742c986542f8fd45c8e4d",
-		"toolchain/semver_parse.osty": "5cb4af01438bb37745793880822f50302d384f264b7e92b189d63f53d4dc346a",
-		"toolchain/semver_req.osty":   "ab41c8c6fbb8f191178f8bff85fe6c0f0ac6f3d8267b9d3bb4c1cbc2376b42f1",
+		"toolchain/pkgmgr.osty":       "fc97ce5621f9a31558b497da8f7e4f24953970a922694c75c67b1e1129a22dfc",
+		"toolchain/semver.osty":       "5e318a536f857fea19dfa8fdef16358e7bb972f4494b2a2e68dfa7ff89e1a714",
+		"toolchain/semver_parse.osty": "97ca51ea19f696fba5f8e707b4a7bc2c0ab771d110ebc753d0b004b2d51f67d4",
+		"toolchain/semver_req.osty":   "baefe843ae4c72ba661c0f0ed92c4a0fdb61f52c74622d47e89f5d01fbde8eca",
 	}
 	for rel, want := range wants {
 		got := hashSnapshotSource(t, filepath.Join(root, rel))
