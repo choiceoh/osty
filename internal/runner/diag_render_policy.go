@@ -5,6 +5,7 @@ package runner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -121,4 +122,59 @@ func DiagRenderReplacement(replacement, excerpt string, haveExcerpt bool) string
 		return body
 	}
 	return replacement[:idx] + body + replacement[idx+2:]
+}
+
+// DiagSeverity enum constants. Order matches
+// toolchain/diag_render.osty + internal/diag.Severity iota.
+// The diag package guards against drift via a compile-time
+// assertion in init() — see internal/diag/diag.go.
+const (
+	DiagSeverityError   int = 0
+	DiagSeverityWarning int = 1
+	DiagSeverityNote    int = 2
+)
+
+// DiagSeverityString maps a Severity int back to its
+// human-readable label. Unknown values collapse to "unknown".
+//
+// Osty: toolchain/diag_render.osty:148
+func DiagSeverityString(sev int) string {
+	switch sev {
+	case DiagSeverityError:
+		return "error"
+	case DiagSeverityWarning:
+		return "warning"
+	case DiagSeverityNote:
+		return "note"
+	}
+	return "unknown"
+}
+
+// DiagShortError renders the compact (*Diagnostic).Error() form:
+// `<code>: <severity> at <line>:<col>: <message>` when code is
+// set, otherwise the prefix is dropped.
+//
+// Hot path — (*Diagnostic).Error() is called from any code that
+// treats a diagnostic as an `error`, including logging. Uses a
+// single strings.Builder to avoid the intermediate string
+// allocations a `+` chain would produce.
+//
+// Osty: toolchain/diag_render.osty:164
+func DiagShortError(code string, severity, line, column int, message string) string {
+	var b strings.Builder
+	if code != "" {
+		b.Grow(len(code) + len(message) + 24)
+		b.WriteString(code)
+		b.WriteString(": ")
+	} else {
+		b.Grow(len(message) + 24)
+	}
+	b.WriteString(DiagSeverityString(severity))
+	b.WriteString(" at ")
+	b.WriteString(strconv.Itoa(line))
+	b.WriteByte(':')
+	b.WriteString(strconv.Itoa(column))
+	b.WriteString(": ")
+	b.WriteString(message)
+	return b.String()
 }
