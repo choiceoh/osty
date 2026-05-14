@@ -85,3 +85,38 @@ fn testLineBoundsEmptySourceLineTwoMisses() {
     testing.assertEq(r.start, -1)
     testing.assertEq(r.end, -1)
 }
+fn testDiagRenderReplacementNoCopyFromUsesExcerpt() {
+    // haveExcerpt=true with empty replacement → just the excerpt.
+    testing.assertEq(diagRenderReplacement("", "foo()", true), "foo()")
+}
+fn testDiagRenderReplacementFallbackWhenNoExcerpt() {
+    testing.assertEq(diagRenderReplacement("", "", false), "<expr>")
+}
+fn testDiagRenderReplacementLiteralWithoutTemplate() {
+    testing.assertEq(diagRenderReplacement("replacement-only", "foo()", true), "foo()")
+}
+fn testDiagRenderReplacementTemplateSubstitution() {
+    testing.assertEq(
+        diagRenderReplacement("wrap(%s)", "expr", true),
+        "wrap(expr)",
+    )
+}
+fn testDiagRenderReplacementTemplateAtStart() {
+    testing.assertEq(diagRenderReplacement("%s.field", "obj", true), "obj.field")
+}
+fn testDiagRenderReplacementTemplateAtEnd() {
+    testing.assertEq(diagRenderReplacement("prefix:%s", "tail", true), "prefix:tail")
+}
+fn testDiagRenderReplacementOnlyFirstOccurrence() {
+    // strings.Replace(.., 1) — second %s stays literal.
+    testing.assertEq(
+        diagRenderReplacement("%s vs %s", "expr", true),
+        "expr vs %s",
+    )
+}
+fn testDiagRenderReplacementFallbackWithTemplate() {
+    testing.assertEq(
+        diagRenderReplacement("wrap(%s)", "", false),
+        "wrap(<expr>)",
+    )
+}

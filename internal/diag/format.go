@@ -198,27 +198,22 @@ func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {
 }
 
 // renderReplacement resolves a Suggestion into the human-readable text
-// shown after the `→` marker. For plain replacements this is just the
-// literal string. For CopyFrom suggestions it expands the "%s" template
-// using the source bytes covered by CopyFrom — falling back to a
-// placeholder ("<expr>") when Source is unavailable or the span is
-// out of range.
+// shown after the `→` marker. The CopyFrom bounds check + excerpt
+// extraction is host-side; the template substitution and fallback
+// placeholder live in toolchain/diag_render.osty (`diagRenderReplacement`).
 func (f *Formatter) renderReplacement(sug Suggestion) string {
 	if sug.CopyFrom == nil {
 		return sug.Replacement
 	}
 	var excerpt string
+	haveExcerpt := false
 	cs := sug.CopyFrom.Start.Offset
 	ce := sug.CopyFrom.End.Offset
 	if len(f.Source) > 0 && cs >= 0 && ce >= cs && ce <= len(f.Source) {
 		excerpt = string(f.Source[cs:ce])
-	} else {
-		excerpt = "<expr>"
+		haveExcerpt = true
 	}
-	if sug.Replacement == "" || !strings.Contains(sug.Replacement, "%s") {
-		return excerpt
-	}
-	return strings.Replace(sug.Replacement, "%s", excerpt, 1)
+	return runner.DiagRenderReplacement(sug.Replacement, excerpt, haveExcerpt)
 }
 
 // writeSnippet renders the source lines for every span in the diagnostic.
