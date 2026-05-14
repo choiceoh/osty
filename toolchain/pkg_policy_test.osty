@@ -78,3 +78,16 @@ fn testPkgSkipDirEntryTrailingSeparator() {
     testing.assertEq(pkgSkipDirEntry("sub\\.git\\"), true)
     testing.assertEq(pkgSkipDirEntry(".osty/"), true)
 }
+fn testPkgSourceKindStringPath() {
+    testing.assertEq(pkgSourceKindString(pkgSourceKindPath), "path")
+}
+fn testPkgSourceKindStringGit() {
+    testing.assertEq(pkgSourceKindString(pkgSourceKindGit), "git")
+}
+fn testPkgSourceKindStringRegistry() {
+    testing.assertEq(pkgSourceKindString(pkgSourceKindRegistry), "registry")
+}
+fn testPkgSourceKindStringUnknown() {
+    testing.assertEq(pkgSourceKindString(99), "unknown")
+    testing.assertEq(pkgSourceKindString(-1), "unknown")
+}

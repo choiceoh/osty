@@ -96,3 +96,24 @@ func TestPkgSkipDirEntry(t *testing.T) {
 		})
 	}
 }
+
+func TestPkgSourceKindString(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want string
+	}{
+		{"path", PkgSourceKindPath, "path"},
+		{"git", PkgSourceKindGit, "git"},
+		{"registry", PkgSourceKindRegistry, "registry"},
+		{"unknown-positive", 99, "unknown"},
+		{"unknown-negative", -1, "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := PkgSourceKindString(c.in); got != c.want {
+				t.Errorf("PkgSourceKindString(%d) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
