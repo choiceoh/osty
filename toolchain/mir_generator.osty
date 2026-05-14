@@ -531,6 +531,20 @@ pub fn mirFormatFnAttrs(inlineMode: Int, hot: Bool, cold: Bool, pureFn: Bool, ta
 // we always prepend `+` after stripping any user-typed `+`.
 // Space-join the parts list. Empty list → "" so caller emits
 // the attribute-free define/declare shape.
+/// mirInlineModeDiscriminant translates a MirInlineMode enum value
+/// into the integer discriminant that `mirFormatFnAttrs` expects:
+/// 0 none / 1 soft / 2 always / 3 never. Mirrors the
+/// `ir.FnDecl.InlineMode` ordering used by the Go-side production
+/// emitter so the LLVM `inlinehint` / `alwaysinline` / `noinline`
+/// translation stays byte-stable across both ports.
+pub fn mirInlineModeDiscriminant(mode: MirInlineMode) -> Int {
+    match mode {
+        MirInlineNone -> 0,
+        MirInlineSoft -> 1,
+        MirInlineAlways -> 2,
+        MirInlineNever -> 3,
+    }
+}
 /// mirLlvmTypeHeadName strips the optional `pkg.` prefix and the
 /// `<...>` argument list from a hirTypeString-style named type
 /// text, returning just the head identifier. For `Map<String, Int>`
@@ -16781,6 +16795,28 @@ pub fn mirGcAllocBytesCallLine(dst: String, size: String) -> String {
 pub fn mirSafepointPollEmitLine(kind: String) -> String {
     "  call void @osty.gc.safepoint_v1(i64 " + kind + ", ptr null, i64 0)\n"
 }
+/// mirEntrySafepointIdString returns the safepoint-id literal for a
+/// function-entry safepoint as a decimal string. The production emit
+/// encodes the kind in the high 8 bits and a per-function serial in
+/// the low 56 bits (see lir_proto_plan.md Phase 5); for an entry
+/// safepoint the kind byte is `1` and the serial starts at `0`, so
+/// the id collapses to `1 << 56 = 72057594037927936`. Hard-coding the
+/// literal keeps the emit byte-stable against
+/// `internal/llvmgen/mir_generator_test.go:3469` which pins the same
+/// value on the Go side.
+pub fn mirEntrySafepointIdString() -> String {
+    "72057594037927936"
+}
+/// mirEmitEntryGcSafepoint renders the function-entry GC safepoint
+/// call that every emitted `define` opens with. Sits at the very
+/// front of the entry block — before parameter-binding copies, alloca
+/// preambles, and any projection stores — so the GC can observe an
+/// entered function regardless of which MIR block was tagged as
+/// `fn_.entry`. Pair with `mirRuntimeDeclareSafepointV1` in the
+/// module's runtime-decls section so the call resolves.
+pub fn mirEmitEntryGcSafepoint() -> String {
+    mirSafepointPollEmitLine(mirEntrySafepointIdString())
+}
 /// mirRegisterFromIntLiteral renders the register text form of a
 /// numeric literal: `<reg>` for non-numeric strings, returns the
 /// integer or float text directly so it can flow into a typed-arg
@@ -17038,9 +17074,11 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
 /// a body), falls back to the Phase 0 single-`entry:`+stub form.
 fn mirEmitFunctionStub(func: MirFunction) -> String {
     let paramListJoined = mirEmitParamListJoined(func)
-    let mut out = mirFunctionDefineHeader("", func.returnType, func.name, paramListJoined, "")
+    let attrs = mirEmitFnAttrsFromMir(func)
+    let mut out = mirFunctionDefineHeader("", func.returnType, func.name, paramListJoined, attrs)
     if func.blocks.len() == 0 {
         out = out + "entry:\n"
+        out = out + mirEmitEntryGcSafepoint()
         out = out + mirEmitReturnStub(func.returnType)
         return out + mirFunctionDefineFooter()
     }
@@ -17049,6 +17087,7 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
         let label = mirBlockLabelName(isEntry, mirGenIntToString(block.id))
         out = out + mirBlockHeaderLine(label)
         if isEntry {
+            out = out + mirEmitEntryGcSafepoint()
             out = out + mirEmitParamBindingPrologue(func)
         }
         let mut instrIdx = 0
@@ -17195,10 +17234,39 @@ fn mirEmitParamListJoined(func: MirFunction) -> String {
             out = out + ", "
         }
         let ty = mirEmitParamType(func, paramLocal)
-        out = out + ty + " %p" + mirGenIntToString(i)
+        let nameStr = mirEmitParamLocalName(func, paramLocal)
+        let isNoalias = mirParamIsNoalias(ty, nameStr, func.noaliasAll, func.noaliasParams)
+        let noaliasTag = if isNoalias {
+            " noalias"
+        } else {
+            ""
+        }
+        out = out + ty + noaliasTag + " %p" + mirGenIntToString(i)
         i = i + 1
     }
     out
+}
+/// mirEmitParamLocalName returns the source-level name of the
+/// parameter local, or `""` when the index is out of range. Phase 3b
+/// uses this to feed `mirParamIsNoalias` so per-name `#[noalias(p1,
+/// p2)]` selectors can match against the original Osty parameter
+/// names — the emitted LLVM register stays `%p<i>` either way.
+fn mirEmitParamLocalName(func: MirFunction, paramLocal: Int) -> String {
+    if paramLocal < 0 || paramLocal >= func.locals.len() {
+        return ""
+    }
+    func.locals[paramLocal].name
+}
+/// mirEmitFnAttrsFromMir derives the LLVM function-header attribute
+/// string from a `MirFunction`'s A8/A9/A10/A13 annotation fields and
+/// hands it to `mirFunctionDefineHeader`. Returns `""` when no
+/// attribute applies so the caller emits the attribute-free `define`
+/// shape. Phase 3a wires `#[inline(...)]` / `#[hot]` / `#[cold]` /
+/// `#[pure]` / `#[target_feature]` through this adapter; bodies are
+/// still stubbed at Phase 1+ TODO sites elsewhere in this file.
+fn mirEmitFnAttrsFromMir(func: MirFunction) -> String {
+    let disc = mirInlineModeDiscriminant(func.inlineMode)
+    mirFormatFnAttrs(disc, func.hot, func.cold, func.pure, func.targetFeatures)
 }
 fn mirEmitParamType(func: MirFunction, paramLocal: Int) -> String {
     if paramLocal < 0 || paramLocal >= func.locals.len() {
@@ -18539,6 +18607,7 @@ fn mirEmitStringPredicateIntrinsic(func: MirFunction, instr: MirInstr, runtimeSy
 /// new runtime calls land here in the same PR that adds them.
 pub fn mirEmitRuntimeDeclarationsSection() -> String {
     let mut out = mirModuleSectionDirective("runtime declarations")
+    out = out + mirRuntimeDeclareSafepointV1() + "\n"
     out = out + "declare void @osty_rt_io_write(ptr, i1, i1)\n"
     out = out + "declare void @osty_rt_abort(ptr)\n"
     out = out + "declare void @osty_rt_panic(ptr)\n"

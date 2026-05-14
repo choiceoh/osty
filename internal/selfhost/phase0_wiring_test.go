@@ -456,6 +456,46 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				// i64 raw lane narrowing as handle.join.
 				"return out + mirEmitNarrowPayloadLine(dest, raw, destLLVM)",
 				"TODO taskGroup dest type",
+				// Phase 3a/3b — function-level attribute string +
+				// param noalias threaded into the `define` header.
+				// `mirEmitFunctionStub` was passing `""` for attrs
+				// even though `mirFormatFnAttrs` was already
+				// implemented; Phase 3a wires A8/A9/A10/A13 through
+				// `mirEmitFnAttrsFromMir`, and Phase 3b extends
+				// `mirEmitParamListJoined` with the `noalias` param
+				// attribute decided by `mirParamIsNoalias`. Loss of
+				// any of these needles would silently regress the
+				// emitter back to attribute-free + alias-able
+				// signatures.
+				"pub fn mirInlineModeDiscriminant(",
+				"mirEmitFnAttrsFromMir(",
+				"mirEmitParamLocalName(",
+				"let attrs = mirEmitFnAttrsFromMir(func)",
+				"mirFunctionDefineHeader(\"\", func.returnType, func.name, paramListJoined, attrs)",
+				"mirParamIsNoalias(ty, nameStr, func.noaliasAll, func.noaliasParams)",
+				"MirInlineNone -> 0",
+				"MirInlineSoft -> 1",
+				"MirInlineAlways -> 2",
+				"MirInlineNever -> 3",
+				// Phase 3c — function-entry GC safepoint. Every
+				// emitted `define` block opens with
+				// `call void @osty.gc.safepoint_v1(i64 <entry-id>,
+				// ptr null, i64 0)` (encoded `1 << 56 =
+				// 72057594037927936` per lir_proto_plan.md Phase 5),
+				// matching the production Go emitter so the GC can
+				// observe entered functions regardless of which MIR
+				// block was tagged as `fn_.entry`. The matching
+				// runtime decl is threaded into
+				// `mirEmitRuntimeDeclarationsSection` via
+				// `mirRuntimeDeclareSafepointV1`. Loss of any of
+				// these needles silently regresses the emit to
+				// safepoint-free bodies that miss the GC observation
+				// window and produce a dangling call.
+				"pub fn mirEntrySafepointIdString(",
+				"pub fn mirEmitEntryGcSafepoint(",
+				"\"72057594037927936\"",
+				"mirEmitEntryGcSafepoint()",
+				"mirRuntimeDeclareSafepointV1()",
 			},
 		},
 		{
