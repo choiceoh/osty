@@ -1,0 +1,43 @@
+use std.testing
+fn testSanitizeIndexNameAllSafe() {
+    testing.assertEq(sanitizeIndexName("serde"), "serde")
+    testing.assertEq(sanitizeIndexName("json-ext"), "json-ext")
+    testing.assertEq(sanitizeIndexName("my_lib"), "my_lib")
+    testing.assertEq(sanitizeIndexName("serde.json"), "serde.json")
+    testing.assertEq(sanitizeIndexName("abc123"), "abc123")
+}
+fn testSanitizeIndexNameUppercasePreserved() {
+    testing.assertEq(sanitizeIndexName("CamelCase"), "CamelCase")
+}
+fn testSanitizeIndexNameEmptyCollapses() {
+    testing.assertEq(sanitizeIndexName(""), "_empty")
+}
+fn testSanitizeIndexNameSlashesEscaped() {
+    // `/` is not in the safe alphabet — codepoint 0x2F → "_2f".
+    testing.assertEq(sanitizeIndexName("a/b"), "a_2fb")
+}
+fn testSanitizeIndexNameSpacesEscaped() {
+    // Space = 0x20 → "_20".
+    testing.assertEq(sanitizeIndexName("hello world"), "hello_20world")
+}
+fn testSanitizeIndexNameSpecialChars() {
+    // `:` = 0x3a, `@` = 0x40, `(` = 0x28, `)` = 0x29
+    testing.assertEq(sanitizeIndexName("foo:bar"), "foo_3abar")
+    testing.assertEq(sanitizeIndexName("a@b"), "a_40b")
+    testing.assertEq(sanitizeIndexName("a()"), "a_28_29")
+}
+fn testSanitizeIndexNameUnicodeEscaped() {
+    // `한` = U+D55C, hex `d55c`. `글` = U+AE00, hex `ae00`.
+    testing.assertEq(sanitizeIndexName("한글"), "_d55c_ae00")
+    // Mixed: ASCII pieces stay, Unicode chars escape.
+    testing.assertEq(sanitizeIndexName("a한b"), "a_d55cb")
+}
+fn testSanitizeIndexNameDoesNotDuplicateUnderscore() {
+    // Existing underscore is safe; non-safe chars become `_<hex>` —
+    // they don't get doubly-escaped.
+    testing.assertEq(sanitizeIndexName("a_b/c"), "a_b_2fc")
+}
+fn testSanitizeIndexNameOnlyUnsafe() {
+    // All chars are unsafe → result is purely hex escapes.
+    testing.assertEq(sanitizeIndexName("//"), "_2f_2f")
+}

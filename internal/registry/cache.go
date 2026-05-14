@@ -2,10 +2,10 @@ package registry
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // DirIndexCache stores index responses on disk as one JSON file per
@@ -90,25 +90,8 @@ func (c *DirIndexCache) path(name string) string {
 	return filepath.Join(c.Root, sanitizeIndexName(name)+".json")
 }
 
-// sanitizeIndexName produces a filesystem-safe stem from a crate
-// name. Crate names per the manifest validator are restricted to
-// `[A-Za-z0-9_-]`, but defensive sanitization keeps a malicious or
-// future-permissive registry from writing outside Root.
+// sanitizeIndexName delegates to toolchain/registry_policy.osty.
+// Policy lives there; this wrapper just bridges the call.
 func sanitizeIndexName(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9',
-			r == '-' || r == '_' || r == '.':
-			b.WriteRune(r)
-		default:
-			fmt.Fprintf(&b, "_%x", r)
-		}
-	}
-	if b.Len() == 0 {
-		return "_empty"
-	}
-	return b.String()
+	return runner.SanitizeIndexName(name)
 }
