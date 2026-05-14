@@ -141,3 +141,66 @@ pub fn renderManifestDepsSection(section: String, deps: List<ManifestDepEmitSpec
     }
     strings.join(parts, "")
 }
+/// ManifestBinEmitSpec mirrors the host `manifest.BinTarget`. Empty
+/// `name`/`path` both signal "no [bin] section"; the renderer
+/// elides the entire block in that case.
+pub struct ManifestBinEmitSpec {
+    pub name: String,
+    pub path: String,
+}
+/// renderManifestBinSection emits `\n[bin]\n` + optional name +
+/// optional path. Returns the empty string when both fields are
+/// empty so the host doesn't have to gate the call (the historical
+/// Go code emitted nothing when the BinTarget pointer was nil OR
+/// both fields were empty).
+pub fn renderManifestBinSection(bin: ManifestBinEmitSpec) -> String {
+    if bin.name == "" && bin.path == "" {
+        return ""
+    }
+    let mut out = "\n[bin]\n"
+    if bin.name != "" {
+        out = out + renderManifestStringField("name", bin.name)
+    }
+    if bin.path != "" {
+        out = out + renderManifestStringField("path", bin.path)
+    }
+    out
+}
+/// ManifestLibEmitSpec mirrors the host `manifest.LibTarget`. Empty
+/// `path` signals "no [lib] section".
+pub struct ManifestLibEmitSpec {
+    pub path: String,
+}
+/// renderManifestLibSection emits `\n[lib]\npath = "..."\n` or
+/// the empty string when `path` is empty.
+pub fn renderManifestLibSection(lib: ManifestLibEmitSpec) -> String {
+    if lib.path == "" {
+        return ""
+    }
+    "\n[lib]\n" + renderManifestStringField("path", lib.path)
+}
+/// ManifestWorkspaceEmitSpec mirrors the host `manifest.Workspace`.
+/// The renderer always emits the section assuming the caller has
+/// decided it's present (the host nil-check is the gate).
+pub struct ManifestWorkspaceEmitSpec {
+    pub members: List<String>,
+}
+/// renderManifestWorkspaceSection emits `\n[workspace]\nmembers =
+/// [...]\n`. Members is always rendered even when empty — that
+/// matches the historical Go output for a present-but-empty
+/// workspace.
+pub fn renderManifestWorkspaceSection(ws: ManifestWorkspaceEmitSpec) -> String {
+    "\n[workspace]\n" + renderManifestStringArrayField("members", ws.members)
+}
+/// ManifestCapabilitiesEmitSpec mirrors the host
+/// `manifest.Capabilities`. Always emitted by the renderer when
+/// the caller passes it through; the host's nil-check controls
+/// presence.
+pub struct ManifestCapabilitiesEmitSpec {
+    pub runtime: Bool,
+}
+/// renderManifestCapabilitiesSection emits
+/// `\n[capabilities]\nruntime = true/false\n`.
+pub fn renderManifestCapabilitiesSection(caps: ManifestCapabilitiesEmitSpec) -> String {
+    "\n[capabilities]\n" + renderManifestBoolField("runtime", caps.runtime)
+}

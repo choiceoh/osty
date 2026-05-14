@@ -1007,18 +1007,16 @@ func Marshal(m *Manifest) []byte {
 			writeStringArray(&b, "keywords", m.Package.Keywords)
 		}
 	}
-	if m.Bin != nil && (m.Bin.Name != "" || m.Bin.Path != "") {
-		b.WriteString("\n[bin]\n")
-		if m.Bin.Name != "" {
-			writeString(&b, "name", m.Bin.Name)
-		}
-		if m.Bin.Path != "" {
-			writeString(&b, "path", m.Bin.Path)
-		}
+	if m.Bin != nil {
+		b.WriteString(runner.RenderManifestBinSection(runner.ManifestBinEmitSpec{
+			Name: m.Bin.Name,
+			Path: m.Bin.Path,
+		}))
 	}
-	if m.Lib != nil && m.Lib.Path != "" {
-		b.WriteString("\n[lib]\n")
-		writeString(&b, "path", m.Lib.Path)
+	if m.Lib != nil {
+		b.WriteString(runner.RenderManifestLibSection(runner.ManifestLibEmitSpec{
+			Path: m.Lib.Path,
+		}))
 	}
 	writeDeps(&b, "dependencies", m.Dependencies)
 	writeDeps(&b, "dev-dependencies", m.DevDependencies)
@@ -1032,8 +1030,9 @@ func Marshal(m *Manifest) []byte {
 		}
 	}
 	if m.Workspace != nil {
-		b.WriteString("\n[workspace]\n")
-		writeStringArray(&b, "members", m.Workspace.Members)
+		b.WriteString(runner.RenderManifestWorkspaceSection(runner.ManifestWorkspaceEmitSpec{
+			Members: m.Workspace.Members,
+		}))
 	}
 	if m.Lint != nil && (len(m.Lint.Allow) > 0 || len(m.Lint.Deny) > 0) {
 		b.WriteString("\n[lint]\n")
@@ -1045,8 +1044,9 @@ func Marshal(m *Manifest) []byte {
 		}
 	}
 	if m.Capabilities != nil {
-		b.WriteString("\n[capabilities]\n")
-		writeBool(&b, "runtime", m.Capabilities.Runtime)
+		b.WriteString(runner.RenderManifestCapabilitiesSection(runner.ManifestCapabilitiesEmitSpec{
+			Runtime: m.Capabilities.Runtime,
+		}))
 	}
 	if m.GUI != nil {
 		b.WriteString("\n[gui]\n")
