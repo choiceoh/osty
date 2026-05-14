@@ -808,50 +808,26 @@ pub fn mirTermInvalid() -> MirTerm {
     MirTerm {kind: MirTermInvalid, span: mirNoSpan(), target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
 }
 pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
-    let mut t = mirTermInvalid()
-    t.kind = MirTermGoto
-    t.target = target
-    t.span = span
-    t
+    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
 }
 /// Goto terminator that closes one iteration of an enclosing loop. The
 /// LIR-Proto backend attaches `!llvm.loop` metadata to the resulting
 /// `br label %header` so vectorize / unroll / parallel hints land on
 /// the correct back-edge.
 pub fn mirGotoBackEdgeTerm(target: Int, span: MirSpan) -> MirTerm {
-    let mut t = mirGotoTerm(target, span)
-    t.loopBackEdge = true
-    t
+    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: true}
 }
 pub fn mirBranchTerm(cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) -> MirTerm {
-    let mut t = mirTermInvalid()
-    t.kind = MirTermBranch
-    t.cond = cond
-    t.thenBlock = thenB
-    t.elseBlock = elseB
-    t.span = span
-    t
+    MirTerm {kind: MirTermBranch, span, target: -1, thenBlock: thenB, elseBlock: elseB, cases: [], cond, loopBackEdge: false}
 }
 pub fn mirSwitchIntTerm(scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) -> MirTerm {
-    let mut t = mirTermInvalid()
-    t.kind = MirTermSwitchInt
-    t.cond = scrutinee
-    t.cases = cases
-    t.target = default
-    t.span = span
-    t
+    MirTerm {kind: MirTermSwitchInt, span, target: default, thenBlock: -1, elseBlock: -1, cases, cond: scrutinee, loopBackEdge: false}
 }
 pub fn mirReturnTerm(span: MirSpan) -> MirTerm {
-    let mut t = mirTermInvalid()
-    t.kind = MirTermReturn
-    t.span = span
-    t
+    MirTerm {kind: MirTermReturn, span, target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
 }
 pub fn mirUnreachableTerm(span: MirSpan) -> MirTerm {
-    let mut t = mirTermInvalid()
-    t.kind = MirTermUnreachable
-    t.span = span
-    t
+    MirTerm {kind: MirTermUnreachable, span, target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
 }
 // ====================================================================
 // Locals, Basic blocks, Functions
@@ -877,16 +853,86 @@ pub struct MirBasicBlock {
     pub instrs: List<MirInstr>,
     pub term: MirTerm,
     pub hasTerm: Bool,
+    pub termTarget: Int,
+    pub termThenBlock: Int,
+    pub termElseBlock: Int,
+    pub termCases: List<MirSwitchCase>,
+    pub termCond: MirOperand,
+    pub termLoopBackEdge: Bool,
     pub span: MirSpan,
 }
 pub fn mirBasicBlock(id: Int, span: MirSpan) -> MirBasicBlock {
-    MirBasicBlock {id, instrs: [], term: mirTermInvalid(), hasTerm: false, span}
+    MirBasicBlock {id, instrs: [], term: mirTermInvalid(), hasTerm: false, termTarget: -1, termThenBlock: -1, termElseBlock: -1, termCases: [], termCond: mirOperandInvalid(), termLoopBackEdge: false, span}
 }
 pub fn mirBlockAppend(block: MirBasicBlock, instr: MirInstr) {
     block.instrs.push(instr)
 }
 pub fn mirBlockSetTerminator(block: MirBasicBlock, t: MirTerm) {
-    block.term = t
+    block.term.kind = t.kind
+    block.term.span = t.span
+    block.term.target = t.target
+    block.term.thenBlock = t.thenBlock
+    block.term.elseBlock = t.elseBlock
+    block.term.cases = t.cases
+    block.term.cond = t.cond
+    block.term.loopBackEdge = t.loopBackEdge
+    block.termTarget = t.target
+    block.termThenBlock = t.thenBlock
+    block.termElseBlock = t.elseBlock
+    block.termCases = t.cases
+    block.termCond = t.cond
+    block.termLoopBackEdge = t.loopBackEdge
+    block.hasTerm = true
+}
+pub fn mirBlockSetGotoTerminator(block: MirBasicBlock, target: Int, span: MirSpan, loopBackEdge: Bool) {
+    block.term.kind = MirTermGoto
+    block.term.span = span
+    block.term.target = target
+    block.term.thenBlock = -1
+    block.term.elseBlock = -1
+    block.term.cases = []
+    block.term.cond = mirOperandInvalid()
+    block.term.loopBackEdge = loopBackEdge
+    block.termTarget = target
+    block.termThenBlock = -1
+    block.termElseBlock = -1
+    block.termCases = []
+    block.termCond = mirOperandInvalid()
+    block.termLoopBackEdge = loopBackEdge
+    block.hasTerm = true
+}
+pub fn mirBlockSetBranchTerminator(block: MirBasicBlock, cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) {
+    block.term.kind = MirTermBranch
+    block.term.span = span
+    block.term.target = -1
+    block.term.thenBlock = thenB
+    block.term.elseBlock = elseB
+    block.term.cases = []
+    block.term.cond = cond
+    block.term.loopBackEdge = false
+    block.termTarget = -1
+    block.termThenBlock = thenB
+    block.termElseBlock = elseB
+    block.termCases = []
+    block.termCond = cond
+    block.termLoopBackEdge = false
+    block.hasTerm = true
+}
+pub fn mirBlockSetSwitchIntTerminator(block: MirBasicBlock, scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) {
+    block.term.kind = MirTermSwitchInt
+    block.term.span = span
+    block.term.target = default
+    block.term.thenBlock = -1
+    block.term.elseBlock = -1
+    block.term.cases = cases
+    block.term.cond = scrutinee
+    block.term.loopBackEdge = false
+    block.termTarget = default
+    block.termThenBlock = -1
+    block.termElseBlock = -1
+    block.termCases = cases
+    block.termCond = scrutinee
+    block.termLoopBackEdge = false
     block.hasTerm = true
 }
 /// MirFunction is one lowered function: parameters, return slot, locals
@@ -976,6 +1022,9 @@ pub fn mirFunctionNewLocal(func: MirFunction, name: String, typ: String, mutable
     func.locals.push(local)
     id
 }
+pub fn mirFunctionAddParam(func: MirFunction, id: Int) {
+    func.params.push(id)
+}
 /// mirFunctionNewBlock appends a fresh block with no instructions and no
 /// terminator. Callers must install a terminator before printing.
 pub fn mirFunctionNewBlock(func: MirFunction, span: MirSpan) -> Int {
@@ -995,6 +1044,24 @@ pub fn mirFunctionTerminate(func: MirFunction, blockId: Int, term: MirTerm) {
         return
     }
     mirBlockSetTerminator(func.blocks[blockId], term)
+}
+pub fn mirFunctionTerminateGoto(func: MirFunction, blockId: Int, target: Int, span: MirSpan, loopBackEdge: Bool) {
+    if blockId < 0 || blockId >= func.blocks.len() {
+        return
+    }
+    mirBlockSetGotoTerminator(func.blocks[blockId], target, span, loopBackEdge)
+}
+pub fn mirFunctionTerminateBranch(func: MirFunction, blockId: Int, cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) {
+    if blockId < 0 || blockId >= func.blocks.len() {
+        return
+    }
+    mirBlockSetBranchTerminator(func.blocks[blockId], cond, thenB, elseB, span)
+}
+pub fn mirFunctionTerminateSwitchInt(func: MirFunction, blockId: Int, scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) {
+    if blockId < 0 || blockId >= func.blocks.len() {
+        return
+    }
+    mirBlockSetSwitchIntTerminator(func.blocks[blockId], scrutinee, cases, default, span)
 }
 pub fn mirFunctionLocal(func: MirFunction, id: Int) -> MirLocal {
     if id < 0 || id >= func.locals.len() {
@@ -1134,6 +1201,27 @@ pub fn mirSuccessors(t: MirTerm) -> List<Int> {
     }
     out
 }
+pub fn mirBlockSuccessors(bb: MirBasicBlock) -> List<Int> {
+    let mut out: List<Int> = []
+    match bb.term.kind {
+        MirTermGoto -> {
+            out.push(bb.termTarget)
+        },
+        MirTermBranch -> {
+            out.push(bb.termThenBlock)
+            out.push(bb.termElseBlock)
+        },
+        MirTermSwitchInt -> {
+            for c in bb.termCases {
+                out.push(c.target)
+            }
+            out.push(bb.termTarget)
+        },
+        _ -> {
+        },
+    }
+    out
+}
 /// mirReachableBlocks returns the set of block IDs reachable from
 /// `func.entry` by walking terminator successors. The result is encoded
 /// as a List<Bool> parallel to `func.blocks`; unreachable blocks map to
@@ -1169,7 +1257,7 @@ pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
         if !(bb.hasTerm) {
             continue
         }
-        let succs = mirSuccessors(bb.term)
+        let succs = mirBlockSuccessors(bb)
         for s in succs {
             if s >= 0 && s < n && !(seen[s]) {
                 stack.push(s)
@@ -1280,7 +1368,7 @@ fn mirPrintBlock(bb: MirBasicBlock, func: MirFunction) -> String {
         parts.push("{mirIndent(2)}{mirPrintInstr(instr, func)}\n")
     }
     if bb.hasTerm {
-        parts.push("{mirIndent(2)}{mirPrintTerm(bb.term, func)}\n")
+        parts.push("{mirIndent(2)}{mirPrintBlockTerm(bb, func)}\n")
     } else {
         parts.push("{mirIndent(2)}<missing terminator>\n")
     }
@@ -1319,6 +1407,30 @@ fn mirPrintCallee(i: MirInstr, func: MirFunction) -> String {
         return "*" + mirPrintOperand(i.calleeOperand, func)
     }
     "(?)"
+}
+// B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+fn mirPrintBlockTerm(bb: MirBasicBlock, func: MirFunction) -> String {
+    match bb.term.kind {
+        MirTermGoto -> "goto -> bb" + mirIntToString(bb.termTarget),
+        MirTermBranch -> "branch " + mirPrintOperand(bb.termCond, func) + " -> [true: bb" + mirIntToString(bb.termThenBlock) + ", false: bb" + mirIntToString(bb.termElseBlock) + "]",
+        MirTermSwitchInt -> {
+            let mut armParts: List<String> = []
+            for c in bb.termCases {
+                let label = if c.label == "" {
+                    mirIntToString(c.value)
+                } else {
+                    c.label
+                }
+                armParts.push("{label} -> bb{mirIntToString(c.target)}")
+            }
+            armParts.push("_ -> bb{mirIntToString(bb.termTarget)}")
+            let arms = strings.join(armParts, ", ")
+            "switchInt {mirPrintOperand(bb.termCond, func)} -> [{arms}]"
+        },
+        MirTermReturn -> "return",
+        MirTermUnreachable -> "unreachable",
+        _ -> "(invalid terminator)",
+    }
 }
 // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {

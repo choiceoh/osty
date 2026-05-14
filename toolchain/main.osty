@@ -71,9 +71,49 @@ fn currentExecutable() -> String {
 fn runSelfRebuild(args: List<String>) -> Int {
     let toolchainDir = lastArg(args)
     let _ = selfRebuildPath(toolchainDir, ".osty/out/debug/llvm/osty-self")
-    eprint("osty-self rebuild blocked: real self-rebuild requires an Osty-owned MIR-to-LLVM module emitter.\n")
-    eprint("missing entrypoint: toolchain/mir_generator.osty must own GenerateFromMIR-equivalent orchestration before osty-self can rebuild itself.\n")
+    eprint("osty-self rebuild blocked: source-to-LIR probe is live, but full toolchain rebuild/link orchestration is not.\n")
+    eprint("missing entrypoint: Osty-owned self-rebuild driver must bundle toolchain sources, lower via LIR Proto, link the runtime, and stage the next osty-self.\n")
     2
+}
+fn selfhostProbeSource() -> String {
+    "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
+}
+fn selfhostProbeError() -> String {
+    let source = selfhostProbeSource()
+    let hir = hirLowerSource("main", source)
+    let mir = mirLowerModule(hir)
+    let mirErrs = mirValidateModule(mir)
+    if mirErrs.len() != 0 {
+        return "MIR validation failed: " + strings.join(mirErrs, "; ")
+    }
+    let cfg = lirLowerConfig("main", "<selfhost-doctor>", "")
+    let result = lirLowerMirModule(cfg, mir)
+    if !lirLowerOK(result) {
+        let mut rendered: List<String> = []
+        for d in result.diagnostics {
+            if d.severity == LirSeverityError {
+                rendered.push(lirDiagnosticRender(d))
+            }
+        }
+        if rendered.len() == 0 {
+            return "LIR Proto lowering failed without an error diagnostic"
+        }
+        return strings.join(rendered, "; ")
+    }
+    let irText = lirRenderModule(result.module)
+    if irText == "" {
+        return "LLVM IR renderer returned empty output"
+    }
+    if !strings.contains(irText, "define") {
+        return "LLVM IR renderer produced no function definition"
+    }
+    if !strings.contains(irText, "ret ") {
+        return "LLVM IR renderer produced no return instruction"
+    }
+    if strings.contains(irText, "body omitted") || strings.contains(irText, "function bodies stubbed") {
+        return "LLVM IR renderer still reports stubbed function bodies"
+    }
+    ""
 }
 fn runSelfhostDoctor() -> Int {
     let exe = currentExecutable()
@@ -81,11 +121,19 @@ fn runSelfhostDoctor() -> Int {
         eprint("osty-self self-rebuild probe failed: executable not found\n")
         return 2
     }
+    let probeError = selfhostProbeError()
     println("osty-self mode: self-rebuild")
     println("osty-self host compiler: disabled")
-    println("osty-self source compiler: phase 0 (module skeleton only)")
-    println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LLVM IR (function bodies stubbed)")
-    println("osty-self missing stage: per-instruction body emission (Phase 1+)")
+    if probeError != "" {
+        println("osty-self source compiler: disabled")
+        println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LIR Proto -> LLVM IR")
+        eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
+        return 1
+    }
+    println("osty-self source compiler: enabled")
+    println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LIR Proto -> LLVM IR")
+    println("osty-self self-rebuild probe: OK")
+    println("osty-self missing stage: full toolchain directory rebuild/link orchestration")
     0
 }
 /// runCompile is the Phase 0 self-host pipeline entry: read a source

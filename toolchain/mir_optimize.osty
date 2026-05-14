@@ -203,7 +203,7 @@ fn mirBuildPredecessors(func: MirFunction) -> List<List<Int>> {
     let mut bi = 0
     for bb in func.blocks {
         if bb.hasTerm {
-            for succ in mirSuccessors(bb.term) {
+            for succ in mirBlockSuccessors(bb) {
                 if succ >= 0 && succ < n {
                     preds[succ].push(bi)
                 }
@@ -328,7 +328,7 @@ fn mirComputeBlockStates(func: MirFunction) -> List<MirConstState> {
             continue
         }
         exitStates[id] = outState
-        for succ in mirSuccessors(bb.term) {
+        for succ in mirBlockSuccessors(bb) {
             if succ < 0 || succ >= n {
                 continue
             }
@@ -405,7 +405,7 @@ fn mirPropagateBlock(bb: MirBasicBlock, known: List<MirConst>) -> Bool {
         i = i + 1
     }
     if bb.hasTerm {
-        if mirRewriteTerminatorCond(bb.term, known) {
+        if mirRewriteBlockTerminatorCond(bb, known) {
             changed = true
         }
         if mirFoldTerminator(bb) {
@@ -522,15 +522,23 @@ fn mirRewritePlaceProjections(p: MirPlace, known: List<MirConst>) -> Bool {
     }
     changed
 }
-/// mirRewriteTerminatorCond substitutes a const into a Branch's `cond`
+/// mirRewriteBlockTerminatorCond substitutes a const into a Branch's `cond`
 /// or a SwitchInt's scrutinee when possible. Returns true on
 /// substitution.
-fn mirRewriteTerminatorCond(t: MirTerm, known: List<MirConst>) -> Bool {
-    if t.kind == MirTermBranch {
-        return mirSubstituteOperandInPlace(t.cond, known)
+fn mirRewriteBlockTerminatorCond(bb: MirBasicBlock, known: List<MirConst>) -> Bool {
+    if bb.term.kind == MirTermBranch {
+        if mirSubstituteOperandInPlace(bb.termCond, known) {
+            bb.term.cond = bb.termCond
+            return true
+        }
+        return false
     }
-    if t.kind == MirTermSwitchInt {
-        return mirSubstituteOperandInPlace(t.cond, known)
+    if bb.term.kind == MirTermSwitchInt {
+        if mirSubstituteOperandInPlace(bb.termCond, known) {
+            bb.term.cond = bb.termCond
+            return true
+        }
+        return false
     }
     false
 }
@@ -580,36 +588,36 @@ fn mirClearKnown(known: List<MirConst>, id: Int) {
 fn mirFoldTerminator(bb: MirBasicBlock) -> Bool {
     match bb.term.kind {
         MirTermBranch -> {
-            if bb.term.cond.kind != MirOpConst {
+            if bb.termCond.kind != MirOpConst {
                 return false
             }
-            if bb.term.cond.const.kind != MirConstBool {
+            if bb.termCond.const.kind != MirConstBool {
                 return false
             }
-            let target = if bb.term.cond.const.boolValue {
-                bb.term.thenBlock
+            let target = if bb.termCond.const.boolValue {
+                bb.termThenBlock
             } else {
-                bb.term.elseBlock
+                bb.termElseBlock
             }
-            bb.term = mirGotoTerm(target, bb.term.span)
+            mirBlockSetGotoTerminator(bb, target, bb.term.span, false)
             true
         },
         MirTermSwitchInt -> {
-            if bb.term.cond.kind != MirOpConst {
+            if bb.termCond.kind != MirOpConst {
                 return false
             }
-            if bb.term.cond.const.kind != MirConstInt {
+            if bb.termCond.const.kind != MirConstInt {
                 return false
             }
-            let scrutinee = bb.term.cond.const.intValue
-            let mut target = bb.term.target
-            for c in bb.term.cases {
+            let scrutinee = bb.termCond.const.intValue
+            let mut target = bb.termTarget
+            for c in bb.termCases {
                 if c.value == scrutinee {
                     target = c.target
                     break
                 }
             }
-            bb.term = mirGotoTerm(target, bb.term.span)
+            mirBlockSetGotoTerminator(bb, target, bb.term.span, false)
             true
         },
         _ -> false,
@@ -660,45 +668,58 @@ fn mirCollapseBlockEdges(bb: MirBasicBlock, func: MirFunction) -> Bool {
     let termKind = bb.term.kind
     match termKind {
         MirTermGoto -> {
-            let curTarget = bb.term.target
+            let curTarget = bb.termTarget
             let nextTarget = mirResolveEmptyGoto(func, curTarget)
             if nextTarget != curTarget {
-                bb.term.target = nextTarget
+                mirBlockSetGotoTerminator(bb, nextTarget, bb.term.span, bb.termLoopBackEdge)
                 changed = true
             }
         },
         MirTermBranch -> {
-            let curThen = bb.term.thenBlock
+            let mut thenTarget = bb.termThenBlock
+            let mut elseTarget = bb.termElseBlock
+            let curThen = thenTarget
             let nextThen = mirResolveEmptyGoto(func, curThen)
             if nextThen != curThen {
-                bb.term.thenBlock = nextThen
+                thenTarget = nextThen
                 changed = true
             }
-            let curElse = bb.term.elseBlock
+            let curElse = elseTarget
             let nextElse = mirResolveEmptyGoto(func, curElse)
             if nextElse != curElse {
-                bb.term.elseBlock = nextElse
+                elseTarget = nextElse
                 changed = true
+            }
+            if changed {
+                mirBlockSetBranchTerminator(bb, bb.termCond, thenTarget, elseTarget, bb.term.span)
             }
         },
         MirTermSwitchInt -> {
-            let cases = bb.term.cases
+            let cases = bb.termCases
             let nCases = cases.len()
+            let mut newCases: List<MirSwitchCase> = []
             let mut ci = 0
             for _iter in 0..nCases {
-                let curTarget = bb.term.cases[ci].target
+                let curCase = cases[ci]
+                let curTarget = curCase.target
                 let newTarget = mirResolveEmptyGoto(func, curTarget)
                 if newTarget != curTarget {
-                    bb.term.cases[ci] = mirSwitchCaseSetTarget(bb.term.cases[ci], newTarget)
+                    newCases.push(mirSwitchCaseSetTarget(curCase, newTarget))
                     changed = true
+                } else {
+                    newCases.push(curCase)
                 }
                 ci = ci + 1
             }
-            let curDefault = bb.term.target
-            let newDefault = mirResolveEmptyGoto(func, curDefault)
-            if newDefault != curDefault {
-                bb.term.target = newDefault
+            let curDefault = bb.termTarget
+            let mut newDefault = curDefault
+            let resolvedDefault = mirResolveEmptyGoto(func, curDefault)
+            if resolvedDefault != curDefault {
+                newDefault = resolvedDefault
                 changed = true
+            }
+            if changed {
+                mirBlockSetSwitchIntTerminator(bb, bb.termCond, newCases, newDefault, bb.term.span)
             }
         },
         _ -> {
@@ -735,7 +756,7 @@ fn mirResolveEmptyGoto(func: MirFunction, target: Int) -> Int {
             return cur
         }
         seen[cur] = true
-        cur = bb.term.target
+        cur = bb.termTarget
     }
     cur
 }
@@ -899,10 +920,10 @@ fn mirCollectLocalReads(func: MirFunction) -> List<Int> {
         if bb.hasTerm {
             match bb.term.kind {
                 MirTermBranch -> {
-                    mirCountOperandReads(bb.term.cond, reads)
+                    mirCountOperandReads(bb.termCond, reads)
                 },
                 MirTermSwitchInt -> {
-                    mirCountOperandReads(bb.term.cond, reads)
+                    mirCountOperandReads(bb.termCond, reads)
                 },
                 MirTermReturn -> {
                     if func.returnLocal >= 0 && func.returnLocal < nLocals {

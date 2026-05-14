@@ -504,12 +504,10 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 	}
 }
 
-// TestPhase0DoctorMessageReflectsProgress pins the wording of the
-// `--selfhost-doctor` output so a future revert of `runSelfhostDoctor`
-// (which used to claim the module emitter was wholly missing) can't
-// silently regress the surfaced status. Expanded coverage will tighten
-// these bands as Phase 1+ lands.
-func TestPhase0DoctorMessageReflectsProgress(t *testing.T) {
+// TestSelfhostDoctorRunsSourceProbe pins the `--selfhost-doctor`
+// source probe so the status cannot drift back to a text-only Phase 0
+// claim while the real LIR Proto path regresses underneath it.
+func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -520,18 +518,24 @@ func TestPhase0DoctorMessageReflectsProgress(t *testing.T) {
 	}
 	text := string(src)
 	// The doctor must NOT keep saying "missing stage: MIR-to-LLVM
-	// module emitter" once mirEmitModule is wired (Phase 0). It SHOULD
-	// surface the next dependency wall (per-instruction body emission).
+	// module emitter" once LIR Proto lowering is wired. It SHOULD run a
+	// small source pipeline and only mark the source compiler enabled
+	// when that probe reaches rendered LLVM IR.
 	regressed := regexp.MustCompile(`missing stage:\s*MIR-to-LLVM module emitter`)
 	if regressed.MatchString(text) {
-		t.Fatalf("doctor still claims module emitter is missing — Phase 0 mirEmitModule should have flipped this status")
+		t.Fatalf("doctor still claims module emitter is missing; LIR Proto lowering should have flipped this status")
 	}
 	for _, needle := range []string{
-		"phase 0",
-		"per-instruction body emission",
+		"selfhostProbeError",
+		"lirLowerMirModule(",
+		"lirRenderModule(",
+		"LLVM IR renderer produced no return instruction",
+		"osty-self source compiler: enabled",
+		"osty-self self-rebuild probe: OK",
+		"full toolchain directory rebuild/link orchestration",
 	} {
-		if !strings.Contains(strings.ToLower(text), needle) {
-			t.Errorf("doctor message missing %q (Phase 0 status surface)", needle)
+		if !strings.Contains(text, needle) {
+			t.Errorf("doctor probe missing %q", needle)
 		}
 	}
 }

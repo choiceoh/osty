@@ -209,6 +209,53 @@ fn mirValidateBlock(func: MirFunction, bb: MirBasicBlock) -> List<String> {
         errs.push("function \"{func.name}\" bb{bb.id}: missing terminator")
         return errs
     }
+    if bb.term.kind == MirTermGoto {
+        let rErrs = mirValidateBlockRef(func, bb, bb.termTarget, "goto.target")
+        for e in rErrs {
+            errs.push(e)
+        }
+        return errs
+    }
+    if bb.term.kind == MirTermBranch {
+        let oErrs = mirValidateOperand(func, bb, bb.termCond, "branch.cond")
+        for e in oErrs {
+            errs.push(e)
+        }
+        let thenErrs = mirValidateBlockRef(func, bb, bb.termThenBlock, "branch.thenBlock")
+        for e in thenErrs {
+            errs.push(e)
+        }
+        let elseErrs = mirValidateBlockRef(func, bb, bb.termElseBlock, "branch.elseBlock")
+        for e in elseErrs {
+            errs.push(e)
+        }
+        return errs
+    }
+    if bb.term.kind == MirTermSwitchInt {
+        let oErrs = mirValidateOperand(func, bb, bb.termCond, "switchInt.scrutinee")
+        for e in oErrs {
+            errs.push(e)
+        }
+        let mut seenVals: List<Int> = []
+        let mut ci = 0
+        for c in bb.termCases {
+            let rErrs = mirValidateBlockRef(func, bb, c.target, "switchInt.cases[{ci}]")
+            for e in rErrs {
+                errs.push(e)
+            }
+            if listContainsInt(seenVals, c.value) {
+                errs.push("function \"{func.name}\" bb{bb.id}: switchInt.cases[{ci}] value {c.value} duplicates an earlier case")
+            } else {
+                seenVals.push(c.value)
+            }
+            ci = ci + 1
+        }
+        let defErrs = mirValidateBlockRef(func, bb, bb.termTarget, "switchInt.default")
+        for e in defErrs {
+            errs.push(e)
+        }
+        return errs
+    }
     let tErrs = mirValidateTerm(func, bb, bb.term)
     for e in tErrs {
         errs.push(e)
