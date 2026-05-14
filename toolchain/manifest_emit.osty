@@ -133,13 +133,40 @@ pub fn renderManifestDepsSection(section: String, deps: List<ManifestDepEmitSpec
     if deps.len() == 0 {
         return ""
     }
-    let sorted = deps.sortedBy(|d| d.name)
+    let sorted = sortManifestDepsByName(deps)
     let mut parts: List<String> = []
     parts.push("\n[" + section + "]\n")
     for d in sorted {
         parts.push(renderManifestDepLine(d))
     }
     strings.join(parts, "")
+}
+/// sortManifestDepsByName returns dependencies sorted by name without
+/// relying on a closure or generic higher-order call. This keeps the
+/// manifest emitter inside stage0's currently-lowered subset.
+fn sortManifestDepsByName(deps: List<ManifestDepEmitSpec>) -> List<ManifestDepEmitSpec> {
+    let mut out: List<ManifestDepEmitSpec> = []
+    for item in deps {
+        out.push(item)
+    }
+    let mut i = 0
+    for i < out.len() {
+        let mut best = i
+        let mut j = i + 1
+        for j < out.len() {
+            if out[j].name < out[best].name {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tmp = out[i]
+            out[i] = out[best]
+            out[best] = tmp
+        }
+        i = i + 1
+    }
+    out
 }
 /// ManifestBinEmitSpec mirrors the host `manifest.BinTarget`. Empty
 /// `name`/`path` both signal "no [bin] section"; the renderer

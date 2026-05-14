@@ -6779,6 +6779,12 @@ func TestStage0DefaultStopsAtFirstDecline(t *testing.T) {
 	// Default mode reports exactly one function — whichever was reached
 	// first. The aggregated multi-name diagnostic must NOT appear.
 	msg := err.Error()
+	if !strings.Contains(msg, "first") {
+		t.Fatalf("default mode should report the first declined function:\n%s", msg)
+	}
+	if strings.Contains(msg, "second") {
+		t.Fatalf("default mode should fail fast before the second declined function:\n%s", msg)
+	}
 	if strings.Contains(msg, " function(s) declined:") {
 		t.Fatalf("default mode unexpectedly aggregated declines:\n%s", msg)
 	}

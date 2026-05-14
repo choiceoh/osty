@@ -13,6 +13,8 @@ import (
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
+const installSelfAllowSourceBootstrapEnv = "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP"
+
 // runInstallSelf orchestrates the bootstrap "build osty-self →
 // promote into cache" sequence. It:
 //
@@ -90,6 +92,32 @@ func runInstallSelf(args []string, _ cliFlags) {
 		os.Exit(1)
 	}
 
+	resolvedSelf, _, resolveErr := selfhostcache.ResolveBinaryWithFetch(context.Background(), root, selfhostcache.EnvFetcher())
+	if resolveErr == nil {
+		if !force {
+			if resolvedSelf != cachedPath {
+				if err := selfhostcache.Install(root, key, resolvedSelf); err != nil {
+					fmt.Fprintf(os.Stderr, "osty install-self: cache install from resolved osty-self: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("installed:   %s\n", cachedPath)
+				return
+			}
+			fmt.Printf("up-to-date:  %s\n", cachedPath)
+			return
+		}
+	} else if !installSelfSourceBootstrapAllowed() {
+		fmt.Fprintf(os.Stderr, "osty install-self: no osty-self bootstrap source available: %v\n", resolveErr)
+		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
+			printInstallSelfBootstrapHint()
+		} else {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "stage0 fallback is enabled, but a full source bootstrap currently requires opt-in because it can exceed memory/time limits before the emergency emitter is reached.")
+		}
+		fmt.Fprintf(os.Stderr, "to attempt the heavy source bootstrap anyway, set %s=1.\n", installSelfAllowSourceBootstrapEnv)
+		os.Exit(1)
+	}
+
 	builtBin, err := buildOstySelf(context.Background(), hostOsty, root, tcAbs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", err)
@@ -104,13 +132,9 @@ func runInstallSelf(args []string, _ cliFlags) {
 		// the workflow options so the user does not have to hunt
 		// through the resolver chain in the dark.
 		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "hint: bootstrap from a fresh clone needs an osty-self source. Pick one:")
-			fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
-			fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_BIN at an existing osty-self binary, or")
-			fmt.Fprintln(os.Stderr, "  - retry with OSTY_STAGE0_FALLBACK=1 to use the emergency bootstrap emitter")
-			fmt.Fprintln(os.Stderr, "    (subset coverage; see docs/osty_self_bootstrap_design.md).")
+			printInstallSelfBootstrapHint()
 		}
+
 		os.Exit(1)
 	}
 	if err := selfhostcache.Install(root, key, builtBin); err != nil {
@@ -123,6 +147,24 @@ func runInstallSelf(args []string, _ cliFlags) {
 // buildOstySelf invokes the host `osty` binary with the standard
 // build flags used by the self-rebuild ratchet. Returns the absolute
 // path to the produced osty-self binary.
+func installSelfSourceBootstrapAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(installSelfAllowSourceBootstrapEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func printInstallSelfBootstrapHint() {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "hint: bootstrap from a fresh clone needs an osty-self source. Pick one:")
+	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
+	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_BIN at an existing osty-self binary, or")
+	fmt.Fprintln(os.Stderr, "  - retry with OSTY_STAGE0_FALLBACK=1 to use the emergency bootstrap emitter")
+	fmt.Fprintln(os.Stderr, "    (subset coverage; see docs/osty_self_bootstrap_design.md).")
+}
+
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
 	cmd.Dir = root

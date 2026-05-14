@@ -107,7 +107,7 @@ while IFS= read -r -d '' file; do
 	count_pattern "$file" "?-early-return" '(\)|\]|[a-z0-9_}])\?$'
 	count_pattern "$file" "?-optional-chain" '\?\.'
 	count_pattern "$file" "?-coalesce" '\?\?'
-done < <(find "$dir" -maxdepth 1 -name '*.osty' -print0)
+done < <(find "$dir" -maxdepth 1 -type f -name '*.osty' -print0)
 
 m=${TOTAL[match]:-0}
 c=${TOTAL[closure]:-0}
@@ -153,7 +153,7 @@ printf '?-coalesce         %s  (?? fallback; nil-coalesce operator)\n' \
 # by a few %), but enough to drive B2.2-vs-B2.3 unlock priority.
 
 printf '\n=== per-match classification ===\n'
-find "$dir" -maxdepth 1 -name '*.osty' -not -name '*_test.osty' -print0 |
+find "$dir" -maxdepth 1 -type f -name '*.osty' -not -name '*_test.osty' -print0 |
 	xargs -0 awk '
 BEGIN {
 	in_match = 0

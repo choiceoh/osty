@@ -149,6 +149,39 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	}
 
 	listAll := listAllDeclinesEnabled()
+	if !listAll {
+		// Default stage0 fallback must be fail-fast.  The two-pass
+		// aggregate/stub path below is only needed for the diagnostic
+		// survey mode enabled by OSTY_STAGE0_LIST_ALL_DECLINES=1.  Running
+		// that whole-module trial emit for normal install-self attempts can
+		// spend minutes and several GiB before reporting the first unsupported
+		// shape, which turns a useful first wall into an OOM kill.  In the
+		// common path, emit in source order and return the first decline.
+		var fnBodies strings.Builder
+		emittedMain := false
+		for _, fn := range module.Functions {
+			if fn == nil {
+				continue
+			}
+			var probe strings.Builder
+			if err := emitFunction(&probe, fn, mctx); err != nil {
+				return nil, err
+			}
+			fnBodies.WriteString(probe.String())
+			if fn.Name == "main" {
+				emittedMain = true
+			}
+		}
+		if !emittedMain {
+			return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
+		}
+		if mctx.extraDecls.Len() > 0 {
+			out.WriteString(mctx.extraDecls.String())
+			out.WriteString("\n")
+		}
+		out.WriteString(fnBodies.String())
+		return []byte(out.String()), nil
+	}
 
 	// Two-pass emit so declare-suppression knows which functions
 	// actually emit a `define`. Pass 1 trial-emits with the optimistic
