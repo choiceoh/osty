@@ -1,0 +1,124 @@
+use std.testing
+fn testRewritePythonColonHeaderArrowArm() {
+    let r = rewritePythonColonHeader("Foo(x) ->")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "Foo(x) -> \{")
+    testing.assertEq(r.changeKind, "python_arrow_arm_block")
+    testing.assertEq(r.scopeKind, pythonScopeMatchArm)
+    testing.assertEq(r.elseish, false)
+    testing.assertEq(r.requiresMatch, true)
+}
+fn testRewritePythonColonHeaderArrowEmptyRejected() {
+    let r = rewritePythonColonHeader("->")
+    testing.assertEq(r.ok, false)
+}
+fn testRewritePythonColonHeaderElse() {
+    let r = rewritePythonColonHeader("else:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "else \{")
+    testing.assertEq(r.changeKind, "python_else_block")
+    testing.assertEq(r.scopeKind, pythonScopeBlock)
+    testing.assertEq(r.elseish, true)
+    testing.assertEq(r.requiresMatch, false)
+}
+fn testRewritePythonColonHeaderElif() {
+    let r = rewritePythonColonHeader("elif x > 0:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "else if x > 0 \{")
+    testing.assertEq(r.changeKind, "python_elif_block")
+    testing.assertEq(r.elseish, true)
+}
+fn testRewritePythonColonHeaderElseif() {
+    let r = rewritePythonColonHeader("elseif n == 0:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "else if n == 0 \{")
+    testing.assertEq(r.changeKind, "python_elif_block")
+    testing.assertEq(r.elseish, true)
+}
+fn testRewritePythonColonHeaderElseIf() {
+    let r = rewritePythonColonHeader("else if y < 0:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "else if y < 0 \{")
+    testing.assertEq(r.changeKind, "python_else_if_block")
+    testing.assertEq(r.elseish, true)
+}
+fn testRewritePythonColonHeaderIf() {
+    let r = rewritePythonColonHeader("if cond:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "if cond \{")
+    testing.assertEq(r.changeKind, "python_if_block")
+    testing.assertEq(r.elseish, false)
+    testing.assertEq(r.scopeKind, pythonScopeBlock)
+}
+fn testRewritePythonColonHeaderFor() {
+    let r = rewritePythonColonHeader("for x in xs:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "for x in xs \{")
+    testing.assertEq(r.changeKind, "python_for_block")
+}
+fn testRewritePythonColonHeaderWhile() {
+    let r = rewritePythonColonHeader("while n > 0:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "for n > 0 \{")
+    testing.assertEq(r.changeKind, "python_while_block")
+}
+fn testRewritePythonColonHeaderMatch() {
+    let r = rewritePythonColonHeader("match value:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "match value \{")
+    testing.assertEq(r.changeKind, "python_match_block")
+    testing.assertEq(r.scopeKind, pythonScopeMatch)
+    testing.assertEq(r.requiresMatch, false)
+}
+fn testRewritePythonColonHeaderCase() {
+    let r = rewritePythonColonHeader("case Foo(x):")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "Foo(x) -> \{")
+    testing.assertEq(r.changeKind, "python_case_arm")
+    testing.assertEq(r.scopeKind, pythonScopeMatchArm)
+    testing.assertEq(r.requiresMatch, true)
+}
+fn testRewritePythonColonHeaderDefault() {
+    let r = rewritePythonColonHeader("default:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "_ -> \{")
+    testing.assertEq(r.changeKind, "python_default_arm")
+    testing.assertEq(r.scopeKind, pythonScopeMatchArm)
+    testing.assertEq(r.requiresMatch, true)
+}
+fn testRewritePythonColonHeaderFnBlock() {
+    let r = rewritePythonColonHeader("fn foo() -> Int:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "fn foo() -> Int \{")
+    testing.assertEq(r.changeKind, "python_fn_block")
+}
+fn testRewritePythonColonHeaderPubFnBlock() {
+    let r = rewritePythonColonHeader("pub fn bar() -> String:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "pub fn bar() -> String \{")
+    testing.assertEq(r.changeKind, "python_fn_block")
+}
+fn testRewritePythonColonHeaderStruct() {
+    let r = rewritePythonColonHeader("struct Point:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "struct Point \{")
+    testing.assertEq(r.changeKind, "python_struct_block")
+}
+fn testRewritePythonColonHeaderInterface() {
+    let r = rewritePythonColonHeader("interface Reader:")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.rewritten, "interface Reader \{")
+    testing.assertEq(r.changeKind, "python_interface_block")
+}
+fn testRewritePythonColonHeaderNoColonRejected() {
+    let r = rewritePythonColonHeader("if cond")
+    testing.assertEq(r.ok, false)
+}
+fn testRewritePythonColonHeaderBareColonRejected() {
+    let r = rewritePythonColonHeader(":")
+    testing.assertEq(r.ok, false)
+}
+fn testRewritePythonColonHeaderUnknownPrefix() {
+    let r = rewritePythonColonHeader("randomToken:")
+    testing.assertEq(r.ok, false)
+}

@@ -195,130 +195,21 @@ func writePythonClosings(out *strings.Builder, closings []pythonBlockScope, incl
 	}
 }
 
+// rewritePythonColonHeader bridges to runner.RewritePythonColonHeader
+// (mirror of toolchain/airepair_python.osty). The struct/enum shape
+// here stays package-local — runner's snapshot owns the recogniser
+// rules.
 func rewritePythonColonHeader(trimmed string) (pythonColonHeader, bool) {
-	if strings.HasSuffix(trimmed, "->") {
-		head := strings.TrimSpace(strings.TrimSuffix(trimmed, "->"))
-		if head == "" {
-			return pythonColonHeader{}, false
-		}
-		return pythonColonHeader{
-			rewritten:     head + " -> {",
-			changeKind:    "python_arrow_arm_block",
-			message:       "wrap a multiline match arm body in Osty braces",
-			scopeKind:     pythonScopeMatchArm,
-			requiresMatch: true,
-		}, true
-	}
-	if !strings.HasSuffix(trimmed, ":") {
+	r := runner.RewritePythonColonHeader(trimmed)
+	if !r.Ok {
 		return pythonColonHeader{}, false
 	}
-	head := strings.TrimSpace(strings.TrimSuffix(trimmed, ":"))
-	switch {
-	case head == "else":
-		return pythonColonHeader{
-			rewritten:  "else {",
-			changeKind: "python_else_block",
-			message:    "replace Python-style `else:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-			elseish:    true,
-		}, true
-	case strings.HasPrefix(head, "elif "):
-		return pythonColonHeader{
-			rewritten:  "else if " + strings.TrimPrefix(head, "elif ") + " {",
-			changeKind: "python_elif_block",
-			message:    "replace Python-style `elif:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-			elseish:    true,
-		}, true
-	case strings.HasPrefix(head, "elseif "):
-		return pythonColonHeader{
-			rewritten:  "else if " + strings.TrimPrefix(head, "elseif ") + " {",
-			changeKind: "python_elif_block",
-			message:    "replace alternate `elseif:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-			elseish:    true,
-		}, true
-	case strings.HasPrefix(head, "else if "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_else_if_block",
-			message:    "replace Python-style `else if:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-			elseish:    true,
-		}, true
-	case strings.HasPrefix(head, "if "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_if_block",
-			message:    "replace Python-style `if:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "for "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_for_block",
-			message:    "replace Python-style `for:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "while "):
-		return pythonColonHeader{
-			rewritten:  "for " + strings.TrimPrefix(head, "while ") + " {",
-			changeKind: "python_while_block",
-			message:    "replace Python-style `while:` block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "match "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_match_block",
-			message:    "replace Python-style `match:` block with Osty braces",
-			scopeKind:  pythonScopeMatch,
-		}, true
-	case strings.HasPrefix(head, "case "):
-		return pythonColonHeader{
-			rewritten:     strings.TrimPrefix(head, "case ") + " -> {",
-			changeKind:    "python_case_arm",
-			message:       "replace Python-style `case:` arm with Osty match syntax",
-			scopeKind:     pythonScopeMatchArm,
-			requiresMatch: true,
-		}, true
-	case head == "default":
-		return pythonColonHeader{
-			rewritten:     "_ -> {",
-			changeKind:    "python_default_arm",
-			message:       "replace Python-style `default:` arm with Osty match syntax",
-			scopeKind:     pythonScopeMatchArm,
-			requiresMatch: true,
-		}, true
-	case strings.HasPrefix(head, "fn "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_fn_block",
-			message:    "replace Python-style function block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "pub fn "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_fn_block",
-			message:    "replace Python-style function block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "struct "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_struct_block",
-			message:    "replace Python-style struct block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	case strings.HasPrefix(head, "interface "):
-		return pythonColonHeader{
-			rewritten:  head + " {",
-			changeKind: "python_interface_block",
-			message:    "replace Python-style interface block with Osty braces",
-			scopeKind:  pythonScopeBlock,
-		}, true
-	default:
-		return pythonColonHeader{}, false
-	}
+	return pythonColonHeader{
+		rewritten:     r.Rewritten,
+		changeKind:    r.ChangeKind,
+		message:       r.Message,
+		scopeKind:     pythonScopeKind(r.ScopeKind),
+		elseish:       r.Elseish,
+		requiresMatch: r.RequiresMatch,
+	}, true
 }
