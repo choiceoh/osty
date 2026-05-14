@@ -11,7 +11,6 @@
 /// Mirrored by `internal/runner/lint_codes_policy.go`. The drift
 /// test under internal/runner keeps the two in sync — the Osty
 /// file is the source of truth at review time.
-use std.strings as strings
 /// isLintCode reports whether `code` belongs to the `Lxxxx`
 /// namespace — exactly one `L` followed by one or more ASCII
 /// digits. Empty strings and short tokens are rejected.
