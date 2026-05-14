@@ -79,6 +79,47 @@ func TestProseExample(t *testing.T) {
 	}
 }
 
+func TestFamilyForHeading(t *testing.T) {
+	cases := []struct {
+		name    string
+		heading string
+		want    string
+	}{
+		{"exact-lexical", "Lexical", "FamilyLexical"},
+		{"exact-expressions", "Expressions", "FamilyExpression"},
+		{"exact-scaffolding", "Scaffolding", "FamilyScaffold"},
+		{"strips-range-suffix", "Lexical (E0001-E0099)", "FamilyLexical"},
+		{"prefix-manifest", "Manifest — TOML syntax.", "FamilyManifest"},
+		{"prefix-lint", "Lint — naming", "FamilyLint"},
+		{"prefix-type-checking", "Type checking — generic instantiation", "FamilyTypeChecking"},
+		{"v06-hidden-dep", "v0.6 — Hidden-Dependency-Surface", "FamilyAnnotation"},
+		{"v06-capabilities", "G36 — Capabilities", "FamilyTypeChecking"},
+		{"v06-publishing", "G44 — Publishing", "FamilyManifest"},
+		{"unknown", "Wholly Unknown Heading", ""},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := FamilyForHeading(c.heading); got != c.want {
+				t.Errorf("FamilyForHeading(%q) = %q, want %q", c.heading, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCodesdocHeadingPrefixRulesOrder(t *testing.T) {
+	rules := CodesdocHeadingPrefixRules()
+	if len(rules) != 5 {
+		t.Fatalf("rule count = %d, want 5", len(rules))
+	}
+	if rules[0].Prefix != "Manifest" || rules[0].Family != "FamilyManifest" {
+		t.Errorf("rules[0] = %+v, want {Manifest FamilyManifest}", rules[0])
+	}
+	if rules[2].Prefix != "Type checking" {
+		t.Errorf("rules[2].Prefix = %q, want Type checking", rules[2].Prefix)
+	}
+}
+
 func TestOstyEscape(t *testing.T) {
 	cases := []struct {
 		in   string

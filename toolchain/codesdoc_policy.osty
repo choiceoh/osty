@@ -120,3 +120,92 @@ pub fn ostyEscape(s: String) -> String {
     }
     strings.join(parts, "")
 }
+/// CodesdocHeadingPrefixRule is one entry in the prefix-match
+/// fallback table that `familyForHeading` consults when the
+/// stripped heading isn't in the exact-match table. Iterated in
+/// declaration order — the first matching prefix wins.
+pub struct CodesdocHeadingPrefixRule {
+    pub prefix: String,
+    pub family: String,
+}
+/// codesdocHeadingExactFamily returns the heading-name → Osty
+/// `DiagnosticFamily` variant mapping that `familyForHeading`
+/// consults first. The table is keyed on the **stripped** form
+/// (post `stripRangeSuffix`), so both `Lexical` and
+/// `Lexical (E0001-E0099)` resolve through the same entry.
+///
+/// Add an entry here whenever `internal/diag/codes.go` introduces
+/// a new phase section, otherwise the markdown/manifest generators
+/// will reject the heading.
+pub fn codesdocHeadingExactFamily() -> Map<String, String> {
+    {
+        "Lexical": "FamilyLexical",
+        "Declarations & statements": "FamilyDeclaration",
+        "Expressions": "FamilyExpression",
+        "Types & patterns": "FamilyTypePattern",
+        "Annotations": "FamilyAnnotation",
+        "Name resolution": "FamilyResolution",
+        "Control flow / context": "FamilyControlFlow",
+        "Type checking": "FamilyTypeChecking",
+        "Deprecation warning": "FamilyWarning",
+        "Runtime sublanguage": "FamilyTypeChecking",
+        "Scaffolding": "FamilyScaffold",
+        "v0.6 — Hidden-Dependency-Surface": "FamilyAnnotation",
+        "G36 — Capabilities": "FamilyTypeChecking",
+        "G38 — Spec link": "FamilyAnnotation",
+        "G46 — Performance contract": "FamilyAnnotation",
+        "G37 — Information flow": "FamilyTypeChecking",
+        "v0.6 — Annotation / declaration extensions": "FamilyAnnotation",
+        "G41 — Error contract": "FamilyAnnotation",
+        "G40 — Sealed construct": "FamilyDeclaration",
+        "G42 — Structured intent": "FamilyAnnotation",
+        "G43 — Executable spec block": "FamilyDeclaration",
+        "G45 — Golden tests": "FamilyAnnotation",
+        "G44 — API evolution": "FamilyAnnotation",
+        "G44 — Publishing": "FamilyManifest",
+    }
+}
+/// codesdocHeadingPrefixRules returns the ordered prefix-match
+/// fallback used when an exact-match miss falls through. Order
+/// matters — the first matching prefix wins, which is why
+/// `Type checking` comes before any narrower `Type ...` heading
+/// would.
+pub fn codesdocHeadingPrefixRules() -> List<CodesdocHeadingPrefixRule> {
+    [
+        CodesdocHeadingPrefixRule {prefix: "Manifest", family: "FamilyManifest"},
+        CodesdocHeadingPrefixRule {prefix: "Lint", family: "FamilyLint"},
+        CodesdocHeadingPrefixRule {prefix: "Type checking", family: "FamilyTypeChecking"},
+        CodesdocHeadingPrefixRule {prefix: "Name resolution", family: "FamilyResolution"},
+        CodesdocHeadingPrefixRule {prefix: "Annotations", family: "FamilyAnnotation"},
+    ]
+}
+/// familyForHeading classifies a parsed phase heading into its
+/// Osty `DiagnosticFamily` variant name (e.g. `FamilyLexical`).
+/// Consults two tables in order:
+///
+///   1. `codesdocHeadingExactFamily` — direct heading→family map
+///      (after stripping the `(Exxxx-Eyyyy)` range suffix).
+///   2. `codesdocHeadingPrefixRules` — ordered prefix-match
+///      fallback for the families that share a heading prefix
+///      (e.g. `Manifest — TOML syntax.`).
+///
+/// Returns `""` when no rule matches; cmd/codesdoc treats that as
+/// a fatal generator error so unknown headings can't silently
+/// degrade to `FamilyUnknown` in the rendered manifest.
+pub fn familyForHeading(heading: String) -> String {
+    let trimmed = stripRangeSuffix(heading)
+    let exact = codesdocHeadingExactFamily()
+    match exact.get(trimmed) {
+        Some(fam) -> {
+            return fam
+        },
+        None -> {
+        },
+    }
+    for rule in codesdocHeadingPrefixRules() {
+        if strings.hasPrefix(trimmed, rule.prefix) {
+            return rule.family
+        }
+    }
+    ""
+}

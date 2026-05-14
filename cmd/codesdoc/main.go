@@ -572,74 +572,13 @@ func renderEntry(b *strings.Builder, e codeEntry) {
 
 // ---- manifest render ----
 
-// headingFamily maps the phase heading (as written in codes.go, minus
-// the auto-appended range suffix) to the Osty DiagnosticFamily variant
-// name. Add entries here when codes.go introduces a new phase section.
-//
-// Headings that share a family prefix (e.g. "Manifest — TOML syntax."
-// vs "Manifest — schema.") are matched by prefix via headingToFamily.
-var headingFamily = map[string]string{
-	"Lexical":                   "FamilyLexical",
-	"Declarations & statements": "FamilyDeclaration",
-	"Expressions":               "FamilyExpression",
-	"Types & patterns":          "FamilyTypePattern",
-	"Annotations":               "FamilyAnnotation",
-	"Name resolution":           "FamilyResolution",
-	"Control flow / context":    "FamilyControlFlow",
-	"Type checking":             "FamilyTypeChecking",
-	"Deprecation warning":       "FamilyWarning",
-	"Runtime sublanguage":       "FamilyTypeChecking", // TODO: dedicated FamilyRuntime once generated.go accommodates it
-	"Scaffolding":               "FamilyScaffold",
-
-	// v0.6 — Hidden-Dependency-Surface (G36 – G49)
-	// Note: stripRangeSuffix removes " (...)" suffix, so map uses stripped form.
-	"v0.6 — Hidden-Dependency-Surface": "FamilyAnnotation",
-	"G36 — Capabilities":               "FamilyTypeChecking",
-	"G38 — Spec link":                  "FamilyAnnotation",
-	"G46 — Performance contract":       "FamilyAnnotation",
-	"G37 — Information flow":           "FamilyTypeChecking",
-
-	// v0.6 — Annotation / declaration extensions
-	"v0.6 — Annotation / declaration extensions": "FamilyAnnotation",
-	"G41 — Error contract":                       "FamilyAnnotation",
-	"G40 — Sealed construct":                     "FamilyDeclaration",
-	"G42 — Structured intent":                    "FamilyAnnotation",
-	"G43 — Executable spec block":                "FamilyDeclaration",
-	"G45 — Golden tests":                         "FamilyAnnotation",
-	"G44 — API evolution":                        "FamilyAnnotation",
-	"G44 — Publishing":                           "FamilyManifest",
-}
-
-// headingPrefixFamily matches headings by prefix when multiple
-// subsections share a family (e.g. "Manifest — TOML syntax." →
-// FamilyManifest). Iterated in declaration order so the first matching
-// prefix wins.
-var headingPrefixFamily = []struct {
-	Prefix string
-	Family string
-}{
-	{"Manifest", "FamilyManifest"},
-	{"Lint", "FamilyLint"},
-	{"Type checking", "FamilyTypeChecking"},
-	{"Name resolution", "FamilyResolution"},
-	{"Annotations", "FamilyAnnotation"},
-}
-
-// familyForHeading classifies a parsed phase heading. Returns the empty
-// string when no mapping matches; callers treat that as a fatal
-// generator error so unknown headings can't silently degrade to
-// FamilyUnknown at runtime.
+// familyForHeading delegates to toolchain/codesdoc_policy.osty for
+// the heading→`DiagnosticFamily` classification. The exact-match
+// table and the ordered prefix-match rules both live there;
+// updating codes.go with a new phase section means updating the
+// Osty source, not this file.
 func familyForHeading(heading string) string {
-	trimmed := stripRangeSuffix(heading)
-	if fam, ok := headingFamily[trimmed]; ok {
-		return fam
-	}
-	for _, p := range headingPrefixFamily {
-		if strings.HasPrefix(trimmed, p.Prefix) {
-			return p.Family
-		}
-	}
-	return ""
+	return runner.FamilyForHeading(heading)
 }
 
 // stripRangeSuffix delegates to toolchain/codesdoc_policy.osty
