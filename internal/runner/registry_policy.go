@@ -5,6 +5,7 @@ package runner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -77,4 +78,20 @@ func RegistrySearchScoreOf(name, description string, keywords []string, q string
 		}
 	}
 	return RegistrySearchScore{Score: 0, Ok: false}
+}
+
+// RegistryStatusErrorMessage builds the error string emitted
+// when an HTTP response from the registry has an unexpected
+// status code. Format: `registry <url>: HTTP <code>: <msg>`.
+// When the trimmed body is empty, statusText (typically
+// `resp.Status`) is used as the message.
+//
+// Osty: toolchain/registry_policy.osty:137
+func RegistryStatusErrorMessage(url string, statusCode int, body, statusText string) string {
+	trimmed := strings.TrimSpace(body)
+	msg := trimmed
+	if msg == "" {
+		msg = statusText
+	}
+	return "registry " + url + ": HTTP " + strconv.Itoa(statusCode) + ": " + msg
 }
