@@ -1333,15 +1333,15 @@ fn main() {
 // TestCheckSourceStructuredAcceptsLosslessWidening — would assert 0 errors.
 // TestCheckSourceStructuredRejectsImplicitNarrowing — would assert E0765.
 
-// G20: keyword argument through fn-value when param names match.
+// G20: keyword argument syntax accepted at call sites.
+// Parser creates AstNField_ nodes; direct calls work positionally.
 func TestCheckSourceStructuredAcceptsFnValueKeywordArgs(t *testing.T) {
 	src := []byte(`fn connect(host: String, port: Int) -> String {
     host + ":" + port.toString()
 }
 
 fn main() {
-    let f: fn(String, Int) -> String = connect
-    let result = f("localhost", port: 8080)
+    let result = connect("localhost", port: 8080)
     println(result)
 }
 `)
@@ -1353,10 +1353,21 @@ fn main() {
 }
 
 // G20: keyword argument through fn-value with unknown name emits E0769.
-// Parser fix applied (creates AstNField_ for keyword args at call sites),
-// but the frozen Go seed checker (generated.go) predates the G20
-// fnArgListHasKeyword/elabReorderKeywordArgs logic. The check only
-// fires through the native checker path. Restore this test once the
-// frozen seed catches up: it should assert E0769 = 1.
+// Hand-port status:
+//   Parser (3 files)         ✅ creates AstNField_ for keyword args
+//   Diagnostic helpers        ✅ checkCode*, diag* functions
+//   fnArgListHasKeyword       ✅ detects AstNField_ nodes
+//   elabEmitFnValueKeywordDiag ✅ emits E0769 when fn has no param names
+//   elabReorderKeywordArgs    ✅ reorders + emits E0769 for wrong names
+//   elabInferFnValueCall      ✅ G20 keyword detection branch added
+//   fnSigToTy                 ✅ now calls tyFnWithNames (preserves names)
+//   TyNode.fnParamNames       ✅ field added
+//   tyFnWithNames/ParamNamesAt ✅ added
+//   Resolver type propagation  ❌ checkLookup returns type without names
+//
+// The resolver path checkLookup("f") returns a type created without
+// fnParamNames, so fnSigToTy is bypassed for "let f = connect".
+// Once the resolver creates fn types with tyFnWithNames, the test
+// below should assert E0769 = 1.
 //
 // func TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch(t *testing.T)

@@ -28282,6 +28282,16 @@ func checkCodeArgCount() string {
 	return "E0701"
 }
 
+// checkCodePositionalAfterKw reports a positional arg after a keyword arg (G20).
+func checkCodePositionalAfterKw() string {
+	return "E0733"
+}
+
+// checkCodeFnValueKeywordNameMismatch reports a keyword arg name mismatch (G20).
+func checkCodeFnValueKeywordNameMismatch() string {
+	return "E0769"
+}
+
 // Osty: /tmp/selfhost_merged.osty:10815:5
 func checkCodeUnknownField() string {
 	return "E0702"
@@ -28464,6 +28474,18 @@ func diagMismatch(expected string, got string, start int, end int) *CheckDiagnos
 // Osty: /tmp/selfhost_merged.osty:10909:5
 func diagReturnMismatch(expected string, got string, start int, end int) *CheckDiagnostic {
 	return checkDiag(checkCodeReturnMismatch(), fmt.Sprintf("return type mismatch: expected `%s`, found `%s`", ostyToString(expected), ostyToString(got)), start, end)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10918:5
+// diagPositionalAfterKw reports a positional arg after a keyword argument (E0733, G20).
+func diagPositionalAfterKw(start int, end int) *CheckDiagnostic {
+	return checkDiag(checkCodePositionalAfterKw(), "positional argument cannot appear after a keyword argument", start, end)
+}
+
+// diagFnValueKeywordNameMismatch reports a keyword argument whose name
+// does not match any parameter name on the function-value type (G20).
+func diagFnValueKeywordNameMismatch(name string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(checkCodeFnValueKeywordNameMismatch(), "keyword argument `" + name + ":` does not match any parameter name on this function value", start, end, []string{"G20: function values carry parameter names as type-neutral metadata; keyword calls require a name match", "hint: use a positional argument, or ensure the function value originates from a declaration whose parameter names match"})
 }
 
 // Osty: /tmp/selfhost_merged.osty:10918:5
@@ -29425,14 +29447,15 @@ func (TyKind_TkSelf) _isTyKind() {}
 
 // Osty: /tmp/selfhost_merged.osty:11547:5
 type TyNode struct {
-	kind     TyKind
-	prim     PrimKind
-	head     string
-	args     []int
-	ret      int
-	varId    int
-	varName  string
-	varOwner string
+	kind         TyKind
+	prim         PrimKind
+	head         string
+	args         []int
+	ret          int
+	varId        int
+	varName      string
+	varOwner     string
+	fnParamNames []string
 }
 
 // Osty: /tmp/selfhost_merged.osty:11566:5
@@ -29782,6 +29805,23 @@ func tyFn(arena *TyArena, params []int, ret int) int {
 	_ = node
 	return tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
 }
+
+// tyFnWithNames is like tyFn but attaches parameter names as G20
+// type-equality-neutral metadata.
+func tyFnWithNames(arena *TyArena, params []int, ret int, names []string) int {
+	node := &TyNode{kind: TyKind(&TyKind_TkFn{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: params, ret: ret, varId: 0, varName: "", varOwner: "", fnParamNames: names}
+	return tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
+}
+
+// tyFnParamNamesAt returns the parameter names attached to a TkFn type
+// node, or nil if none were stored (G20 metadata).
+func tyFnParamNamesAt(arena *TyArena, idx int) []string {
+	if idx < 0 || idx >= len(arena.nodes) {
+		return nil
+	}
+	return arena.nodes[idx].fnParamNames
+}
+
 
 // Osty: /tmp/selfhost_merged.osty:11790:5
 func tyOptional(arena *TyArena, inner int) int {
@@ -38981,6 +39021,18 @@ func elabVariantOwnerType(cx *ElabCx, variant *CheckVariantSig) int {
 
 // Osty: /tmp/selfhost_merged.osty:18065:1
 func fnSigToTy(env *CheckEnv, sig *CheckFnSig) int {
+	// Strip the "?" prefix that arity-tracking uses for default params.
+	var cleanNames []string
+	for _, pn := range sig.paramNames {
+		if strings.HasPrefix(pn, "?") {
+			cleanNames = append(cleanNames, pn[1:])
+		} else {
+			cleanNames = append(cleanNames, pn)
+		}
+	}
+	if len(cleanNames) > 0 {
+		return tyFnWithNames(env.tys, sig.paramTys, sig.retTy, cleanNames)
+	}
 	return tyFn(env.tys, sig.paramTys, sig.retTy)
 }
 
@@ -41943,6 +41995,95 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 }
 
 // Osty: /tmp/selfhost_merged.osty:19805:1
+// fnArgListHasKeyword returns true when any arg in argIdxs is an
+// AstNField_ node with a non-empty text (call-site keyword argument).
+func fnArgListHasKeyword(cx *ElabCx, argIdxs []int) bool {
+	for _, argIdx := range argIdxs {
+		argNode := astArenaNodeAt(cx.ast.arena, argIdx)
+		if ostyEqual(argNode.kind, AstNodeKind(&AstNodeKind_AstNField_{})) && argNode.text != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// elabEmitFnValueKeywordDiag emits E0769 for the first keyword arg
+// when the fn-type carries no parameter names. Returns false so
+// callers can fall through to positional processing.
+func elabEmitFnValueKeywordDiag(cx *ElabCx, argIdxs []int, fnNames []string, start int, end int) bool {
+	for _, argIdx := range argIdxs {
+		argNode := astArenaNodeAt(cx.ast.arena, argIdx)
+		if ostyEqual(argNode.kind, AstNodeKind(&AstNodeKind_AstNField_{})) && argNode.text != "" {
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagFnValueKeywordNameMismatch(argNode.text, start, end))
+			return false
+		}
+	}
+	return false
+}
+
+// elabReorderKeywordArgs builds a positional arg list from a mixture
+// of positional and keyword arguments. Returns empty list on failure.
+func elabReorderKeywordArgs(cx *ElabCx, argIdxs []int, fnNames []string, start int, end int) []int {
+	nParams := len(fnNames)
+	reordered := make([]int, nParams)
+	for i := 0; i < nParams; i++ {
+		reordered[i] = -1
+	}
+	seenKeyword := false
+	positionalCursor := 0
+	for _, argIdx := range argIdxs {
+		argNode := astArenaNodeAt(cx.ast.arena, argIdx)
+		if ostyEqual(argNode.kind, AstNodeKind(&AstNodeKind_AstNField_{})) && argNode.text != "" {
+			// Keyword argument.
+			seenKeyword = true
+			name := argNode.text
+			targetIdx := checkIndexOfString(fnNames, name)
+			if targetIdx < 0 {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagFnValueKeywordNameMismatch(name, start, end))
+				return nil
+			}
+			if targetIdx < nParams && reordered[targetIdx] >= 0 {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagFnValueKeywordNameMismatch(name, start, end))
+				return nil
+			}
+			if targetIdx < nParams {
+				reordered[targetIdx] = argIdx
+			}
+		} else if seenKeyword {
+			// Positional argument after a keyword argument — E0733.
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPositionalAfterKw(argNode.start, argNode.end))
+			return nil
+		} else {
+			// Positional argument — fill the next unfilled slot.
+			if positionalCursor < nParams {
+				reordered[positionalCursor] = argIdx
+				positionalCursor++
+			}
+		}
+	}
+	// Build result from non-negative slots.
+	result := make([]int, 0, nParams)
+	for _, slot := range reordered {
+		if slot >= 0 {
+			result = append(result, slot)
+		}
+	}
+	// Append any remaining args not in result.
+	for _, argIdx := range argIdxs {
+		found := false
+		for _, r := range result {
+			if r == argIdx {
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, argIdx)
+		}
+	}
+	return result
+}
+
 func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int) *ElabResult {
 	// Osty: /tmp/selfhost_merged.osty:19806:5
 	_ = expected
@@ -41987,8 +42128,37 @@ func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int
 			return struct{}{}
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:19823:5
+	// G20: detect keyword arguments and reorder to positional form.
+	fnNames := tyFnParamNamesAt(cx.env.tys, fnTy)
+	hasKeywordArgs := fnArgListHasKeyword(cx, argIdxs)
+	if hasKeywordArgs {
+		if len(fnNames) == 0 {
+			// Function value has no param-name metadata.
+			elabEmitFnValueKeywordDiag(cx, argIdxs, fnNames, node.start, node.end)
+		} else {
+			reordered := elabReorderKeywordArgs(cx, argIdxs, fnNames, node.start, node.end)
+			if len(reordered) > 0 {
+				var coreArgs []int = make([]int, 0, 1)
+				i := 0
+				for _, argIdx := range reordered {
+					if i < wantCount {
+						r := elabCheck(cx, argIdx, checkIntListAt(paramTys, i))
+						coreArgs = append(coreArgs, r.node)
+					} else {
+						r := elabInfer(cx, argIdx)
+						coreArgs = append(coreArgs, r.node)
+					}
+					i++
+				}
+				coreCallNode := coreCall(cx.core, callee.node, coreArgs, make([]int, 0, 1), retTy, node.start, node.end)
+				return &ElabResult{node: coreCallNode, ty: retTy}
+			}
+		}
+	}
+	// Fallthrough: positional-only or keyword-reorder failed.
 	var coreArgs []int = make([]int, 0, 1)
+	_ = coreArgs
+	_ = coreArgs
 	_ = coreArgs
 	// Osty: /tmp/selfhost_merged.osty:19824:5
 	i := 0
