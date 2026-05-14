@@ -98,7 +98,7 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		pkgName = "main"
 	}
 	command := "lir-proto-lower"
-	if req.Source == "" && req.MIR != nil {
+	if req.MIR != nil {
 		command = "lir-proto-lower-mir-json"
 	}
 	args := []string{command, sourcePath, "--package-name=" + pkgName}
@@ -159,11 +159,10 @@ func resolveOstySelfBin() (string, error) {
 	return bin, nil
 }
 
-// stageSource writes the request's source bytes to a temp file so
-// the osty-self subcommand can open it. The original `sourcePath`
-// is preserved as the basename when set (callers expect the file
-// name to round-trip through the staged copy for diagnostic
-// `source_filename` lines).
+// stageInput writes either the source text or the already-lowered MIR
+// JSON to a temp file so the osty-self subcommand can open it. MIR
+// wins even when callers attach source text for diagnostics; otherwise
+// the bridge silently re-enters source lowering and loses the MIR path.
 func stageInput(req nativelirproto.Request) (string, func(), error) {
 	root, err := os.MkdirTemp("", "osty-native-lirproto-*")
 	if err != nil {
@@ -176,7 +175,7 @@ func stageInput(req nativelirproto.Request) (string, func(), error) {
 		name = filepath.Base(req.SourcePath)
 	}
 	data := []byte(req.Source)
-	if req.Source == "" && req.MIR != nil {
+	if req.MIR != nil {
 		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".mir.json"
 		encoded, err := json.Marshal(req.MIR)
 		if err != nil {

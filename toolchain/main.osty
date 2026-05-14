@@ -68,12 +68,265 @@ fn currentExecutable() -> String {
     }
     args[0]
 }
+fn selfRebuildOptionValue(args: List<String>, name: String) -> String {
+    let prefix = name + "="
+    let mut i = 0
+    for i < args.len() {
+        let arg = args[i]
+        if strings.hasPrefix(arg, prefix) {
+            return strings.trimPrefix(arg, prefix)
+        }
+        if arg == name && i + 1 < args.len() {
+            return args[i + 1]
+        }
+        i = i + 1
+    }
+    ""
+}
+fn selfRebuildRepoRoot(toolchainDir: String) -> String {
+    if strings.hasSuffix(toolchainDir, "/toolchain") {
+        return strings.trimSuffix(toolchainDir, "/toolchain")
+    }
+    selfRebuildPath(toolchainDir, "..")
+}
+fn selfRebuildIsToolchainSource(path: String) -> Bool {
+    strings.hasSuffix(path, ".osty") && !(strings.hasSuffix(path, "_test.osty")) && !(strings.contains(path, "/.osty/")) && !(strings.hasSuffix(path, "/ci.osty"))
+}
+fn selfRebuildStripDriverImports(src: String) -> String {
+    let mut out: List<String> = []
+    for line in strings.split(src, "\n") {
+        if line == "use std.env" || line == "use std.fs" || line == "use std.os" || line == "use std.process" || line == "use std.strings" {
+        } else {
+            out.push(line)
+        }
+    }
+    strings.join(out, "\n")
+}
+fn selfRebuildBundleSource(toolchainDir: String) -> String {
+    let paths = match fs.walk(toolchainDir) {
+        Ok(p) -> p,
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: walk toolchain sources failed\n")
+            return ""
+        },
+    }
+    let mut parts: List<String> = ["use std.env", "use std.fs", "use std.os", "use std.process", "use std.strings", ""]
+    for path in paths {
+        if selfRebuildIsToolchainSource(path) {
+            let src = match fs.readToString(path) {
+                Ok(s) -> s,
+                Err(e) -> {
+                    let _ = e
+                    eprint("osty-self rebuild: read source failed: " + path + "\n")
+                    return ""
+                },
+            }
+            parts.push("// ---- " + path + " ----")
+            parts.push(selfRebuildStripDriverImports(src))
+            parts.push("")
+        }
+    }
+    strings.join(parts, "\n")
+}
+fn selfRebuildClangCompileObjectArgs(target: String, irPath: String, objectPath: String) -> List<String> {
+    let mut args: List<String> = []
+    if target != "" {
+        args.push("-target")
+        args.push(target)
+    }
+    args.push("-O3")
+    args.push("-flto=thin")
+    if strings.contains(target, "x86_64") || strings.contains(target, "amd64") {
+        args.push("-march=x86-64-v3")
+    }
+    args.push("-c")
+    args.push(irPath)
+    args.push("-o")
+    args.push(objectPath)
+    args
+}
+fn selfRebuildClangCompileRuntimeArgs(target: String, sourcePath: String, objectPath: String) -> List<String> {
+    let mut args: List<String> = []
+    if target != "" {
+        args.push("-target")
+        args.push(target)
+    }
+    if !(strings.contains(target, "windows")) {
+        args.push("-pthread")
+    }
+    args.push("-O3")
+    args.push("-flto=thin")
+    args.push("-std=c11")
+    args.push("-c")
+    args.push(sourcePath)
+    args.push("-o")
+    args.push(objectPath)
+    args
+}
+fn selfRebuildHostIsDarwin() -> Bool {
+    match os.execWith("uname", ["-s"], "", {:}, 0) {
+        Ok(out) -> strings.trimSpace(out.stdout) == "Darwin",
+        Err(_) -> false,
+    }
+}
+fn selfRebuildIsDarwinTarget(target: String) -> Bool {
+    if target == "" {
+        return selfRebuildHostIsDarwin()
+    }
+    strings.contains(target, "darwin") || strings.contains(target, "apple")
+}
+fn selfRebuildClangLinkArgs(target: String, objectPath: String, runtimeObjectPath: String, binaryPath: String) -> List<String> {
+    let mut args: List<String> = []
+    if target != "" {
+        args.push("-target")
+        args.push(target)
+    }
+    args.push("-O3")
+    args.push("-flto=thin")
+    args.push(objectPath)
+    args.push(runtimeObjectPath)
+    if !(strings.contains(target, "windows")) {
+        args.push("-pthread")
+        args.push("-lz")
+    }
+    args.push("-o")
+    args.push(binaryPath)
+    if !(strings.contains(target, "windows")) {
+        args.push("-lm")
+    }
+    if selfRebuildIsDarwinTarget(target) {
+        args.push("-framework")
+        args.push("Security")
+        args.push("-framework")
+        args.push("CoreFoundation")
+    }
+    if strings.contains(target, "windows") {
+        args.push("-ladvapi32")
+    }
+    args
+}
+fn selfRebuildRunClang(action: String, args: List<String>) -> String {
+    let out = match os.execWith("clang", args, "", {:}, 0) {
+        Ok(o) -> o,
+        Err(e) -> {
+            let _ = e
+            return "clang " + action + " failed to start"
+        },
+    }
+    if out.exitCode == 0 && !out.timedOut {
+        return ""
+    }
+    let msg = strings.trimSpace(out.stderr + "\n" + out.stdout)
+    "clang " + action + " failed\ncommand: clang " + strings.join(args, " ") + "\n" + msg
+}
+fn selfRebuildRunSelfLower(exe: String, bundlePath: String, target: String) -> String {
+    let mut args: List<String> = ["lir-proto-lower", bundlePath, "--package-name=main"]
+    if target != "" {
+        args.push("--target=" + target)
+    }
+    let out = match os.execWith(exe, args, "", {:}, 0) {
+        Ok(o) -> o,
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: self LIR Proto lower failed to start\n")
+            return ""
+        },
+    }
+    if out.exitCode == 0 && !out.timedOut && out.stdout != "" {
+        return out.stdout
+    }
+    eprint("osty-self rebuild: self LIR Proto lower failed\n")
+    eprint(strings.trimSpace(out.stderr + "\n" + out.stdout) + "\n")
+    ""
+}
 fn runSelfRebuild(args: List<String>) -> Int {
     let toolchainDir = lastArg(args)
-    let _ = selfRebuildPath(toolchainDir, ".osty/out/debug/llvm/osty-self")
-    eprint("osty-self rebuild blocked: source-to-LIR probe is live, but full toolchain rebuild/link orchestration is not.\n")
-    eprint("missing entrypoint: Osty-owned self-rebuild driver must bundle toolchain sources, lower via LIR Proto, link the runtime, and stage the next osty-self.\n")
-    2
+    let target = selfRebuildOptionValue(args, "--target")
+    let repoRoot = selfRebuildRepoRoot(toolchainDir)
+    let outDir = selfRebuildPath(toolchainDir, ".osty/out/debug/llvm")
+    let runtimeDir = selfRebuildPath(outDir, "runtime")
+    let bundlePath = selfRebuildPath(outDir, "self-rebuild-bundle.osty")
+    let irPath = selfRebuildPath(outDir, "main.ll")
+    let objectPath = selfRebuildPath(outDir, "main.o")
+    let runtimeSourceInRepo = selfRebuildPath(repoRoot, "internal/backend/runtime/osty_runtime.c")
+    let runtimeSourcePath = selfRebuildPath(runtimeDir, "osty_runtime.c")
+    let runtimeObjectPath = selfRebuildPath(runtimeDir, "osty_runtime.o")
+    let binaryPath = selfRebuildPath(outDir, "osty-self")
+    match fs.mkdirAll(runtimeDir) {
+        Ok(_) -> {
+        },
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: mkdir failed\n")
+            return 1
+        },
+    }
+    let source = selfRebuildBundleSource(toolchainDir)
+    if source == "" {
+        return 1
+    }
+    match fs.writeString(bundlePath, source) {
+        Ok(_) -> {
+        },
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: write bundle failed\n")
+            return 1
+        },
+    }
+    let exe = currentExecutable()
+    if exe == "" {
+        eprint("osty-self rebuild: executable not found\n")
+        return 1
+    }
+    let irText = selfRebuildRunSelfLower(exe, bundlePath, target)
+    if irText == "" {
+        return 1
+    }
+    match fs.writeString(irPath, irText) {
+        Ok(_) -> {
+        },
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: write LLVM IR failed\n")
+            return 1
+        },
+    }
+    let runtimeSource = match fs.readToString(runtimeSourceInRepo) {
+        Ok(s) -> s,
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: read runtime source failed\n")
+            return 1
+        },
+    }
+    match fs.writeString(runtimeSourcePath, runtimeSource) {
+        Ok(_) -> {
+        },
+        Err(e) -> {
+            let _ = e
+            eprint("osty-self rebuild: write runtime source failed\n")
+            return 1
+        },
+    }
+    let compileObjectErr = selfRebuildRunClang("compile object", selfRebuildClangCompileObjectArgs(target, irPath, objectPath))
+    if compileObjectErr != "" {
+        eprint("osty-self rebuild: " + compileObjectErr + "\n")
+        return 1
+    }
+    let compileRuntimeErr = selfRebuildRunClang("compile runtime", selfRebuildClangCompileRuntimeArgs(target, runtimeSourcePath, runtimeObjectPath))
+    if compileRuntimeErr != "" {
+        eprint("osty-self rebuild: " + compileRuntimeErr + "\n")
+        return 1
+    }
+    let linkErr = selfRebuildRunClang("link binary", selfRebuildClangLinkArgs(target, objectPath, runtimeObjectPath, binaryPath))
+    if linkErr != "" {
+        eprint("osty-self rebuild: " + linkErr + "\n")
+        return 1
+    }
+    println("osty-self self-rebuild: wrote " + binaryPath)
+    0
 }
 fn selfhostProbeSource() -> String {
     "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
@@ -133,7 +386,7 @@ fn runSelfhostDoctor() -> Int {
     println("osty-self source compiler: enabled")
     println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LIR Proto -> LLVM IR")
     println("osty-self self-rebuild probe: OK")
-    println("osty-self missing stage: full toolchain directory rebuild/link orchestration")
+    println("osty-self self-rebuild driver: source bundle -> clang object/runtime link")
     0
 }
 /// runCompile is the Phase 0 self-host pipeline entry: read a source

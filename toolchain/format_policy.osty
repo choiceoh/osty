@@ -157,7 +157,7 @@ pub fn finalizeFormatted(input: String) -> String {
         let _ = out.pop()
     }
     if out.len() == 0 || out[out.len() - 1].toInt() != 0x0A {
-        out.push(formatPolicyNewlineByte())
+        out.push(0x0A.toByte())
     }
     let buf = bytes.from(out)
     bytes.toString(buf).unwrapOr(input)
@@ -186,10 +186,6 @@ fn formatPolicyWriteLine(out: List<Byte>, bs: List<Byte>, start: Int, end: Int, 
         acc.push(bs[j])
         j = j + 1
     }
-    acc.push(formatPolicyNewlineByte())
+    acc.push(0x0A.toByte())
     FinalizeWriteResult {out: acc, leading: false, prevBlank: blank}
-}
-fn formatPolicyNewlineByte() -> Byte {
-    let n: Int = 0x0A
-    n.toByte()
 }

@@ -136,7 +136,11 @@ fn explainFlushPara(st: ExplainParseState) -> ExplainParseState {
 /// trimAllLines applies `strings.trimSpace` to every line. Empty
 /// input returns an empty list.
 fn trimAllLines(xs: List<String>) -> List<String> {
-    xs.map(|s| strings.trimSpace(s))
+    let mut out: List<String> = []
+    for line in xs {
+        out.push(strings.trimSpace(line))
+    }
+    out
 }
 /// trimExampleBlock strips leading/trailing blank lines and a
 /// common leading-space prefix from the example block, then

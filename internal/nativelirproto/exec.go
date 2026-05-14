@@ -4,12 +4,9 @@
 // JSON-encodes the request, spawns the binary, and decodes the JSON
 // response.
 //
-// Today the binary's internals are a thin Go wrapper around the
-// existing MIR-direct emitter (so gate-on output matches gate-off
-// exactly). The wire shape is what matters for Phase 7: a future
-// slice will replace the binary's body with a real call into the
-// Osty-owned `toolchain/lir_proto.osty` lowerer without touching
-// any caller of this package.
+// The subprocess stages source requests for `lir-proto-lower` and MIR
+// requests for `lir-proto-lower-mir-json`, keeping callers on the same
+// JSON wire shape while the Osty-owned LIR Proto backend grows behind it.
 package nativelirproto
 
 import (

@@ -134,6 +134,68 @@ func TestRunInvokesOstySelfWithRequestArgs(t *testing.T) {
 	}
 }
 
+// TestRunMIRPayloadInvokesMirJSONSubcommand pins the production
+// self-host boundary: once the caller has already produced MIR, the
+// bridge must not silently fall back to source re-lowering just because
+// the request still carries source text for diagnostics.
+func TestRunMIRPayloadInvokesMirJSONSubcommand(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+	captureMIR := filepath.Join(captureDir, "main.mir.json")
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureMIR)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; lir-proto MIR IR\ndefine i64 @main() {\n  ret i64 42\n}\n")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		Source:      "fn stale_source_path_should_not_be_lowered() {}\n",
+		Target:      "x86_64-unknown-linux-gnu",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want false: %+v", resp)
+	}
+
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 3 {
+		t.Fatalf("captured args too short: %v", args)
+	}
+	if args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("args[0] = %q, want lir-proto-lower-mir-json", args[0])
+	}
+	if !strings.HasSuffix(args[1], "main.mir.json") {
+		t.Fatalf("args[1] = %q, want staged main.mir.json path", args[1])
+	}
+	if !contains(args, "--target=x86_64-unknown-linux-gnu") {
+		t.Fatalf("args missing target: %v", args)
+	}
+	staged := readFile(t, captureMIR)
+	if strings.Contains(staged, "stale_source_path_should_not_be_lowered") {
+		t.Fatalf("staged MIR unexpectedly contains source text: %q", staged)
+	}
+	if !strings.Contains(staged, `"version":1`) || !strings.Contains(staged, `"packageName":"main"`) {
+		t.Fatalf("staged MIR content unexpected: %q", staged)
+	}
+}
+
 // TestRunDeclinesWhenOstySelfExitsNonZero pins the second
 // fall-back: a non-zero exit from osty-self (parse failure,
 // unsupported MIR shape, etc.) lands as a `declined: true`

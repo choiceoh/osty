@@ -443,7 +443,11 @@ func (v *validator) validateExpr(e Expr) {
 				continue
 			}
 			if p.Type == nil {
-				v.addf("Closure: param[%d] nil Type", i)
+				name := p.Name
+				if name == "" {
+					name = "<pattern>"
+				}
+				v.addf("Closure at %d:%d: param[%d] %q nil Type", e.SpanV.Start.Line, e.SpanV.Start.Column, i, name)
 				continue
 			}
 			v.validateType(p.Type, fmt.Sprintf("Closure param[%d]", i))

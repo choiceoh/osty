@@ -530,9 +530,11 @@ func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
 		"lirLowerMirModule(",
 		"lirRenderModule(",
 		"LLVM IR renderer produced no return instruction",
+		"selfRebuildBundleSource",
+		"selfRebuildRunClang",
 		"osty-self source compiler: enabled",
 		"osty-self self-rebuild probe: OK",
-		"full toolchain directory rebuild/link orchestration",
+		"osty-self self-rebuild driver: source bundle -> clang object/runtime link",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Errorf("doctor probe missing %q", needle)
