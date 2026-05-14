@@ -232,3 +232,168 @@ type ManifestCapabilitiesEmitSpec struct {
 func RenderManifestCapabilitiesSection(caps ManifestCapabilitiesEmitSpec) string {
 	return "\n[capabilities]\n" + RenderManifestBoolField("runtime", caps.Runtime)
 }
+
+// ManifestPackageEmitSpec mirrors the [package] table emit
+// payload. HasPackage is the host's `Manifest.HasPackage` flag —
+// together with Name/Version it gates emission so a virtual
+// workspace manifest omits the entire section.
+//
+// Osty: toolchain/manifest_emit.osty:211
+type ManifestPackageEmitSpec struct {
+	HasPackage  bool
+	Name        string
+	Version     string
+	Edition     string
+	Description string
+	Authors     []string
+	License     string
+	Repository  string
+	Homepage    string
+	Keywords    []string
+}
+
+// RenderManifestPackageSection emits `[package]\n` plus every
+// non-empty field. Returns "" for a virtual workspace shape
+// (HasPackage == false AND both Name + Version empty).
+//
+// Osty: toolchain/manifest_emit.osty:231
+func RenderManifestPackageSection(pkg ManifestPackageEmitSpec) string {
+	if !pkg.HasPackage && pkg.Name == "" && pkg.Version == "" {
+		return ""
+	}
+	out := "[package]\n"
+	out += RenderManifestStringField("name", pkg.Name)
+	out += RenderManifestStringField("version", pkg.Version)
+	if pkg.Edition != "" {
+		out += RenderManifestStringField("edition", pkg.Edition)
+	}
+	if pkg.Description != "" {
+		out += RenderManifestStringField("description", pkg.Description)
+	}
+	if len(pkg.Authors) > 0 {
+		out += RenderManifestStringArrayField("authors", pkg.Authors)
+	}
+	if pkg.License != "" {
+		out += RenderManifestStringField("license", pkg.License)
+	}
+	if pkg.Repository != "" {
+		out += RenderManifestStringField("repository", pkg.Repository)
+	}
+	if pkg.Homepage != "" {
+		out += RenderManifestStringField("homepage", pkg.Homepage)
+	}
+	if len(pkg.Keywords) > 0 {
+		out += RenderManifestStringArrayField("keywords", pkg.Keywords)
+	}
+	return out
+}
+
+// ManifestRegistryEmitSpec mirrors one entry of the host
+// `manifest.Registries` slice.
+//
+// Osty: toolchain/manifest_emit.osty:264
+type ManifestRegistryEmitSpec struct {
+	Name  string
+	URL   string
+	Token string
+}
+
+// RenderManifestRegistriesSection emits one
+// `[registries.<name>]` block per entry. Order is preserved
+// from the input slice (the historical Go code did not sort).
+// Returns "" when the slice is empty.
+//
+// Osty: toolchain/manifest_emit.osty:273
+func RenderManifestRegistriesSection(registries []ManifestRegistryEmitSpec) string {
+	if len(registries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range registries {
+		b.WriteString("\n[registries.")
+		b.WriteString(r.Name)
+		b.WriteString("]\n")
+		if r.URL != "" {
+			b.WriteString(RenderManifestStringField("url", r.URL))
+		}
+		if r.Token != "" {
+			b.WriteString(RenderManifestStringField("token", r.Token))
+		}
+	}
+	return b.String()
+}
+
+// ManifestLintEmitSpec mirrors the [lint] table emit payload.
+// Empty Allow AND empty Deny together gate the section out.
+//
+// Osty: toolchain/manifest_emit.osty:292
+type ManifestLintEmitSpec struct {
+	Allow []string
+	Deny  []string
+}
+
+// RenderManifestLintSection emits `\n[lint]\n` + optional allow +
+// optional deny. Returns "" when both arrays are empty.
+//
+// Osty: toolchain/manifest_emit.osty:298
+func RenderManifestLintSection(lint ManifestLintEmitSpec) string {
+	if len(lint.Allow) == 0 && len(lint.Deny) == 0 {
+		return ""
+	}
+	out := "\n[lint]\n"
+	if len(lint.Allow) > 0 {
+		out += RenderManifestStringArrayField("allow", lint.Allow)
+	}
+	if len(lint.Deny) > 0 {
+		out += RenderManifestStringArrayField("deny", lint.Deny)
+	}
+	return out
+}
+
+// ManifestWebView2EmitSpec mirrors the nested
+// `[gui.webview2]` table. HasDevTools is the host's flag
+// distinguishing "field absent" from `devtools = false`.
+//
+// Osty: toolchain/manifest_emit.osty:315
+type ManifestWebView2EmitSpec struct {
+	HasDevTools bool
+	DevTools    bool
+	Runtime     string
+}
+
+// ManifestGUIEmitSpec mirrors the [gui] table. HasWebView2 gates
+// the nested `[gui.webview2]` block.
+//
+// Osty: toolchain/manifest_emit.osty:324
+type ManifestGUIEmitSpec struct {
+	Backend     string
+	Entry       string
+	HasWebView2 bool
+	WebView2    ManifestWebView2EmitSpec
+}
+
+// RenderManifestGUISection emits `\n[gui]\n` + optional fields,
+// followed by an optional nested `\n[gui.webview2]\n` block.
+// Always emitted by the renderer; the host's nil-check on m.GUI
+// controls presence.
+//
+// Osty: toolchain/manifest_emit.osty:334
+func RenderManifestGUISection(gui ManifestGUIEmitSpec) string {
+	out := "\n[gui]\n"
+	if gui.Backend != "" {
+		out += RenderManifestStringField("backend", gui.Backend)
+	}
+	if gui.Entry != "" {
+		out += RenderManifestStringField("entry", gui.Entry)
+	}
+	if gui.HasWebView2 {
+		out += "\n[gui.webview2]\n"
+		if gui.WebView2.HasDevTools {
+			out += RenderManifestBoolField("devtools", gui.WebView2.DevTools)
+		}
+		if gui.WebView2.Runtime != "" {
+			out += RenderManifestStringField("runtime", gui.WebView2.Runtime)
+		}
+	}
+	return out
+}

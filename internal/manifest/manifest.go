@@ -977,36 +977,20 @@ func stringArray(v *value, context string) ([]string, error) {
 // then the workspace table (if any).
 func Marshal(m *Manifest) []byte {
 	var b strings.Builder
-	// A virtual workspace may omit [package]. In every other case the
-	// package section comes first because it's the most important
-	// human-readable summary.
-	pkgEmit := m.HasPackage || m.Package.Name != "" || m.Package.Version != ""
-	if pkgEmit {
-		b.WriteString("[package]\n")
-		writeString(&b, "name", m.Package.Name)
-		writeString(&b, "version", m.Package.Version)
-		if m.Package.Edition != "" {
-			writeString(&b, "edition", m.Package.Edition)
-		}
-		if m.Package.Description != "" {
-			writeString(&b, "description", m.Package.Description)
-		}
-		if len(m.Package.Authors) > 0 {
-			writeStringArray(&b, "authors", m.Package.Authors)
-		}
-		if m.Package.License != "" {
-			writeString(&b, "license", m.Package.License)
-		}
-		if m.Package.Repository != "" {
-			writeString(&b, "repository", m.Package.Repository)
-		}
-		if m.Package.Homepage != "" {
-			writeString(&b, "homepage", m.Package.Homepage)
-		}
-		if len(m.Package.Keywords) > 0 {
-			writeStringArray(&b, "keywords", m.Package.Keywords)
-		}
-	}
+	// A virtual workspace may omit [package]. The renderer handles
+	// that gate via the HasPackage flag.
+	b.WriteString(runner.RenderManifestPackageSection(runner.ManifestPackageEmitSpec{
+		HasPackage:  m.HasPackage,
+		Name:        m.Package.Name,
+		Version:     m.Package.Version,
+		Edition:     m.Package.Edition,
+		Description: m.Package.Description,
+		Authors:     m.Package.Authors,
+		License:     m.Package.License,
+		Repository:  m.Package.Repository,
+		Homepage:    m.Package.Homepage,
+		Keywords:    m.Package.Keywords,
+	}))
 	if m.Bin != nil {
 		b.WriteString(runner.RenderManifestBinSection(runner.ManifestBinEmitSpec{
 			Name: m.Bin.Name,
@@ -1020,28 +1004,27 @@ func Marshal(m *Manifest) []byte {
 	}
 	writeDeps(&b, "dependencies", m.Dependencies)
 	writeDeps(&b, "dev-dependencies", m.DevDependencies)
-	for _, r := range m.Registries {
-		b.WriteString(fmt.Sprintf("\n[registries.%s]\n", r.Name))
-		if r.URL != "" {
-			writeString(&b, "url", r.URL)
+	if len(m.Registries) > 0 {
+		specs := make([]runner.ManifestRegistryEmitSpec, 0, len(m.Registries))
+		for _, r := range m.Registries {
+			specs = append(specs, runner.ManifestRegistryEmitSpec{
+				Name:  r.Name,
+				URL:   r.URL,
+				Token: r.Token,
+			})
 		}
-		if r.Token != "" {
-			writeString(&b, "token", r.Token)
-		}
+		b.WriteString(runner.RenderManifestRegistriesSection(specs))
 	}
 	if m.Workspace != nil {
 		b.WriteString(runner.RenderManifestWorkspaceSection(runner.ManifestWorkspaceEmitSpec{
 			Members: m.Workspace.Members,
 		}))
 	}
-	if m.Lint != nil && (len(m.Lint.Allow) > 0 || len(m.Lint.Deny) > 0) {
-		b.WriteString("\n[lint]\n")
-		if len(m.Lint.Allow) > 0 {
-			writeStringArray(&b, "allow", m.Lint.Allow)
-		}
-		if len(m.Lint.Deny) > 0 {
-			writeStringArray(&b, "deny", m.Lint.Deny)
-		}
+	if m.Lint != nil {
+		b.WriteString(runner.RenderManifestLintSection(runner.ManifestLintEmitSpec{
+			Allow: m.Lint.Allow,
+			Deny:  m.Lint.Deny,
+		}))
 	}
 	if m.Capabilities != nil {
 		b.WriteString(runner.RenderManifestCapabilitiesSection(runner.ManifestCapabilitiesEmitSpec{
@@ -1049,22 +1032,21 @@ func Marshal(m *Manifest) []byte {
 		}))
 	}
 	if m.GUI != nil {
-		b.WriteString("\n[gui]\n")
-		if m.GUI.Backend != "" {
-			writeString(&b, "backend", m.GUI.Backend)
-		}
-		if m.GUI.Entry != "" {
-			writeString(&b, "entry", m.GUI.Entry)
-		}
-		if m.GUI.WebView2 != nil {
-			b.WriteString("\n[gui.webview2]\n")
-			if m.GUI.WebView2.HasDevTools {
-				writeBool(&b, "devtools", m.GUI.WebView2.DevTools)
-			}
-			if m.GUI.WebView2.Runtime != "" {
-				writeString(&b, "runtime", m.GUI.WebView2.Runtime)
+		wv := runner.ManifestWebView2EmitSpec{}
+		hasWV2 := m.GUI.WebView2 != nil
+		if hasWV2 {
+			wv = runner.ManifestWebView2EmitSpec{
+				HasDevTools: m.GUI.WebView2.HasDevTools,
+				DevTools:    m.GUI.WebView2.DevTools,
+				Runtime:     m.GUI.WebView2.Runtime,
 			}
 		}
+		b.WriteString(runner.RenderManifestGUISection(runner.ManifestGUIEmitSpec{
+			Backend:     m.GUI.Backend,
+			Entry:       m.GUI.Entry,
+			HasWebView2: hasWV2,
+			WebView2:    wv,
+		}))
 	}
 	return []byte(b.String())
 }
