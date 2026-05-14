@@ -80,7 +80,13 @@ func TryEmitNativeOwnedLLVMIRText(entry Entry, target string) ([]byte, bool, []e
 }
 
 var tryNativeOwnedMIRPayloadLLVMIRText = func(entry Entry, target string) ([]byte, bool, []error, error) {
-	return nativellvmgen.TryMIR(".", entry.PackageName, entry.SourcePath, entry.Source, entry.MIR, target)
+	source := entry.Source
+	if len(source) == 0 && entry.SourcePath != "" {
+		if data, err := os.ReadFile(entry.SourcePath); err == nil {
+			source = data
+		}
+	}
+	return nativellvmgen.TryMIR(".", entry.PackageName, entry.SourcePath, source, entry.MIR, target)
 }
 
 const stage0OstySelfMissingWarning = "osty-self not found; run `osty build toolchain/` or set OSTY_SELF_BIN"
