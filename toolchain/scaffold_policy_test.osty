@@ -1,3 +1,4 @@
+use std.strings as strings
 use std.testing
 fn testIsValidScaffoldNameHappyPaths() {
     testing.assert(isValidScaffoldName("myproj"))
@@ -136,4 +137,66 @@ fn testScaffoldRelativePathsUnknownFallsBackToBin() {
     testing.assertEq(paths.len(), 4)
     testing.assertEq(paths[0], "osty.toml")
     testing.assertEq(paths[1], "main.osty")
+}
+fn testScaffoldGenericManifestBin() {
+    let got = scaffoldGenericManifest("bin", "demo", "0.5")
+    testing.assert(strings.contains(got, "# Binary project;"))
+    testing.assert(strings.contains(got, "name = \"demo\""))
+    testing.assert(strings.contains(got, "edition = \"0.5\""))
+    testing.assert(strings.contains(got, "[dependencies]"))
+    testing.assert(strings.contains(got, "json-ext = \{ path = \"../json-ext\" \}"))
+}
+fn testScaffoldGenericManifestLib() {
+    let got = scaffoldGenericManifest("lib", "mylib", "0.4")
+    testing.assert(strings.contains(got, "# Library project;"))
+    testing.assert(strings.contains(got, "name = \"mylib\""))
+    testing.assert(strings.contains(got, "edition = \"0.4\""))
+}
+fn testScaffoldGenericManifestCliService() {
+    let cli = scaffoldGenericManifest("cli", "app", "0.5")
+    testing.assert(strings.contains(cli, "# CLI app project;"))
+    let svc = scaffoldGenericManifest("service", "api", "0.5")
+    testing.assert(strings.contains(svc, "# HTTP service project;"))
+}
+fn testScaffoldGenericManifestGUIVariants() {
+    // RenderManifest (the public Go entry) calls the generic body
+    // for ALL kinds — only the *header* differs for GUI variants.
+    // The richer GUI manifests are emitted at writeLayout time.
+    let qt = scaffoldGenericManifest("gui-qtquick", "g", "0.5")
+    testing.assert(strings.contains(qt, "# Qt Quick GUI app project;"))
+    testing.assert(strings.contains(qt, "[dependencies]"))
+    let wv = scaffoldGenericManifest("gui-webview2", "g", "0.5")
+    testing.assert(strings.contains(wv, "# WebView2 GUI app project;"))
+}
+fn testScaffoldGenericManifestUnknownFallsBackToBinHeader() {
+    let got = scaffoldGenericManifest("nonsense", "demo", "0.5")
+    testing.assert(strings.contains(got, "# Binary project;"))
+}
+fn testScaffoldGUIWebView2ManifestStructure() {
+    let got = scaffoldGUIWebView2Manifest("g", "0.5")
+    testing.assert(strings.contains(got, "[gui.webview2]"))
+    testing.assert(strings.contains(got, "devtools = true"))
+    testing.assert(strings.contains(got, "[target.amd64-windows]"))
+    testing.assert(strings.contains(got, "WebView2Loader"))
+    testing.assert(strings.contains(got, "name = \"g\""))
+    testing.assert(strings.contains(got, "edition = \"0.5\""))
+}
+fn testScaffoldGUIQtQuickManifestLinksAllTargets() {
+    let got = scaffoldGUIQtQuickManifest("g", "0.5")
+    testing.assert(strings.contains(got, "[target.arm64-darwin]"))
+    testing.assert(strings.contains(got, "[target.amd64-darwin]"))
+    testing.assert(strings.contains(got, "[target.amd64-linux]"))
+    testing.assert(strings.contains(got, "[target.amd64-windows]"))
+    testing.assert(strings.contains(got, "osty_qt"))
+}
+fn testScaffoldWorkspaceManifestNamed() {
+    let got = scaffoldWorkspaceManifest("demo-ws", "0.5", "core")
+    testing.assert(strings.contains(got, "# Workspace: demo-ws"))
+    testing.assert(strings.contains(got, "[workspace]"))
+    testing.assert(strings.contains(got, "members = [\"core\"]"))
+}
+fn testScaffoldWorkspaceManifestAnonymous() {
+    let got = scaffoldWorkspaceManifest("", "0.5", "alpha")
+    testing.assert(!(strings.contains(got, "# Workspace:")))
+    testing.assert(strings.contains(got, "members = [\"alpha\"]"))
 }

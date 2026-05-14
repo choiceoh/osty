@@ -126,3 +126,109 @@ pub fn scaffoldRelativePaths(kind: String, workspaceMember: String) -> List<Stri
     }
     ["osty.toml", "main.osty", "main_test.osty", ".gitignore"]
 }
+/// scaffoldManifestHeader returns the one-line `# ...` banner
+/// that introduces an `osty.toml` for the given kind. Bin / lib /
+/// cli / service share the same template body downstream and just
+/// vary on this header; GUI variants and the workspace use
+/// dedicated templates instead.
+fn scaffoldManifestHeader(kind: String) -> String {
+    if kind == "lib" {
+        return "# Library project; exposes a public API via `pub` declarations."
+    }
+    if kind == "cli" {
+        return "# CLI app project; main.osty splits parsed Args from the testable run() core."
+    }
+    if kind == "service" {
+        return "# HTTP service project; main.osty defines Request/Response and a handle() core."
+    }
+    if kind == "gui-qtquick" {
+        return "# Qt Quick GUI app project; main.osty owns state/events and ui/main.qml owns layout."
+    }
+    if kind == "gui-webview2" {
+        return "# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2."
+    }
+    "# Binary project; `osty gen main.osty` uses the native LLVM backend and emits LLVM IR for the entry point."
+}
+/// scaffoldGenericManifest renders the canonical `osty.toml` for
+/// the bin/lib/cli/service kinds. GUI variants (gui-qtquick /
+/// gui-webview2) use richer templates that pin link/target/runtime
+/// tables — those have their own renderers.
+pub fn scaffoldGenericManifest(kind: String, name: String, edition: String) -> String {
+    let header = scaffoldManifestHeader(kind)
+    header + "\n\n" +
+        "[package]\n" +
+        "name = \"" + name + "\"\n" +
+        "version = \"0.1.0\"\n" +
+        "edition = \"" + edition + "\"\n\n" +
+        "[dependencies]\n" +
+        "# Add dependencies here, for example:\n" +
+        "# json-ext = \{ path = \"../json-ext\" \}\n"
+}
+/// scaffoldGUIWebView2Manifest renders the Windows WebView2 GUI
+/// `osty.toml`. Includes `[gui]`, `[gui.webview2]`, and the
+/// Windows link target table because the entry needs the native
+/// WebView2 loader + system DLLs.
+pub fn scaffoldGUIWebView2Manifest(name: String, edition: String) -> String {
+    "# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2.\n\n" +
+        "[package]\n" +
+        "name = \"" + name + "\"\n" +
+        "version = \"0.1.0\"\n" +
+        "edition = \"" + edition + "\"\n\n" +
+        "[dependencies]\n\n" +
+        "[bin]\n" +
+        "path = \"src/main.osty\"\n\n" +
+        "[gui]\n" +
+        "backend = \"webview2\"\n" +
+        "entry = \"ui/index.html\"\n\n" +
+        "[gui.webview2]\n" +
+        "devtools = true\n" +
+        "runtime = \"evergreen\"\n\n" +
+        "[target.amd64-windows]\n" +
+        "cgo = true\n" +
+        "link = [\"osty_webview2\", \"WebView2Loader\", \"user32\", \"ole32\"]\n"
+}
+/// scaffoldGUIQtQuickManifest renders the Qt Quick GUI
+/// `osty.toml`. The `osty_qt` bridge library is linked across all
+/// four supported desktop targets; users build it once via cmake
+/// from the upstream repository.
+pub fn scaffoldGUIQtQuickManifest(name: String, edition: String) -> String {
+    "# Qt Quick GUI app project; build libosty_qt and make it visible to the linker/runtime.\n\n" +
+        "[package]\n" +
+        "name = \"" + name + "\"\n" +
+        "version = \"0.1.0\"\n" +
+        "edition = \"" + edition + "\"\n\n" +
+        "[dependencies]\n\n" +
+        "[gui]\n" +
+        "backend = \"qtquick\"\n" +
+        "entry = \"ui/main.qml\"\n\n" +
+        "[target.arm64-darwin]\n" +
+        "link = [\"osty_qt\"]\n\n" +
+        "[target.amd64-darwin]\n" +
+        "link = [\"osty_qt\"]\n\n" +
+        "[target.amd64-linux]\n" +
+        "link = [\"osty_qt\"]\n\n" +
+        "[target.amd64-windows]\n" +
+        "link = [\"osty_qt\"]\n"
+}
+/// scaffoldWorkspaceManifest renders the virtual-root workspace
+/// `osty.toml`. `name` may be empty (anonymous virtual root); when
+/// supplied it shows up as a leading `# Workspace: NAME` comment.
+/// `edition` is accepted for API symmetry with the package
+/// renderers but currently unused — a virtual workspace has no
+/// `[package]` table to pin.
+pub fn scaffoldWorkspaceManifest(name: String, edition: String, member: String) -> String {
+    let _ = edition
+    let mut nameLine = ""
+    if name != "" {
+        nameLine = "# Workspace: " + name + "\n"
+    }
+    nameLine +
+        "# Virtual workspace root. Member paths below are resolved relative\n" +
+        "# to this directory (spec §5). Add members with:\n" +
+        "#\n" +
+        "#     osty new --bin NAME        # inside this directory\n" +
+        "#\n" +
+        "# then append the directory name to the members list below.\n\n" +
+        "[workspace]\n" +
+        "members = [\"" + member + "\"]\n"
+}

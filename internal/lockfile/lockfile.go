@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/tomlparse"
 )
 
@@ -83,27 +84,19 @@ type Dependency struct {
 //	"name version" (common)
 //	"name version (source)" (when Source is set)
 func (d Dependency) String() string {
-	if d.Source == "" {
-		return fmt.Sprintf("%s %s", d.Name, d.Version)
-	}
-	return fmt.Sprintf("%s %s (%s)", d.Name, d.Version, d.Source)
+	return runner.DependencyString(d.Name, d.Version, d.Source)
 }
 
 // ParseDependency parses the string form back into a Dependency.
 // Returns an error for unrecognized shapes so a hand-edited lockfile
-// doesn't silently deserialize to junk.
+// doesn't silently deserialize to junk. The shape policy lives in
+// toolchain/lockfile_policy.osty.
 func ParseDependency(s string) (Dependency, error) {
-	s = strings.TrimSpace(s)
-	var src string
-	if open := strings.Index(s, "("); open > 0 && strings.HasSuffix(s, ")") {
-		src = s[open+1 : len(s)-1]
-		s = strings.TrimSpace(s[:open])
+	r := runner.ParseDependency(s)
+	if !r.Ok {
+		return Dependency{}, fmt.Errorf("invalid dependency %q", strings.TrimSpace(s))
 	}
-	parts := strings.Fields(s)
-	if len(parts) != 2 {
-		return Dependency{}, fmt.Errorf("invalid dependency %q", s)
-	}
-	return Dependency{Name: parts[0], Version: parts[1], Source: src}, nil
+	return Dependency{Name: r.Name, Version: r.Version, Source: r.Source}, nil
 }
 
 // Read loads osty.lock from dir (the project root directory

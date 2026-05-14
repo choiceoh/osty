@@ -1,6 +1,9 @@
 package runner
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsValidScaffoldName(t *testing.T) {
 	valid := []string{
@@ -57,6 +60,82 @@ func TestScaffoldFixtureCapsMatchOstyConstants(t *testing.T) {
 func TestScaffoldDefaultWorkspaceMember(t *testing.T) {
 	if got := ScaffoldDefaultWorkspaceMember(); got != "core" {
 		t.Errorf("ScaffoldDefaultWorkspaceMember() = %q, want %q", got, "core")
+	}
+}
+
+func TestScaffoldGenericManifestHeaders(t *testing.T) {
+	cases := []struct {
+		kind   string
+		header string
+	}{
+		{"bin", "# Binary project;"},
+		{"lib", "# Library project;"},
+		{"cli", "# CLI app project;"},
+		{"service", "# HTTP service project;"},
+		{"gui-qtquick", "# Qt Quick GUI app project;"},
+		{"gui-webview2", "# WebView2 GUI app project;"},
+		{"nonsense", "# Binary project;"},
+	}
+	for _, c := range cases {
+		got := ScaffoldGenericManifest(c.kind, "demo", "0.5")
+		if !strings.HasPrefix(got, c.header) {
+			t.Errorf("kind=%q header missing: %q", c.kind, got[:80])
+		}
+		if !strings.Contains(got, "name = \"demo\"") {
+			t.Errorf("kind=%q missing name field", c.kind)
+		}
+		if !strings.Contains(got, "edition = \"0.5\"") {
+			t.Errorf("kind=%q missing edition field", c.kind)
+		}
+		if !strings.Contains(got, "json-ext = { path = \"../json-ext\" }") {
+			t.Errorf("kind=%q missing dependency hint", c.kind)
+		}
+	}
+}
+
+func TestScaffoldGUIWebView2Manifest(t *testing.T) {
+	got := ScaffoldGUIWebView2Manifest("g", "0.5")
+	for _, want := range []string{
+		"[gui.webview2]", "devtools = true",
+		"[target.amd64-windows]", "WebView2Loader",
+		"name = \"g\"", "edition = \"0.5\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in output", want)
+		}
+	}
+}
+
+func TestScaffoldGUIQtQuickManifest(t *testing.T) {
+	got := ScaffoldGUIQtQuickManifest("g", "0.5")
+	for _, target := range []string{
+		"[target.arm64-darwin]", "[target.amd64-darwin]",
+		"[target.amd64-linux]", "[target.amd64-windows]",
+	} {
+		if !strings.Contains(got, target) {
+			t.Errorf("missing target table %q", target)
+		}
+	}
+	// 4 link entries + 1 in the header banner ("build libosty_qt").
+	if strings.Count(got, "osty_qt") != 5 {
+		t.Errorf("osty_qt count = %d, want 5", strings.Count(got, "osty_qt"))
+	}
+}
+
+func TestScaffoldWorkspaceManifest(t *testing.T) {
+	named := ScaffoldWorkspaceManifest("demo-ws", "0.5", "core")
+	if !strings.HasPrefix(named, "# Workspace: demo-ws\n") {
+		t.Errorf("named workspace missing # Workspace banner: %q", named[:60])
+	}
+	if !strings.Contains(named, "members = [\"core\"]") {
+		t.Errorf("missing members table")
+	}
+	anon := ScaffoldWorkspaceManifest("", "0.5", "alpha")
+	if strings.Contains(anon, "# Workspace:") {
+		t.Errorf("anonymous workspace still has # Workspace banner")
+	}
+	if !strings.Contains(anon, "members = [\"alpha\"]") {
+		t.Errorf("missing members table for anon")
 	}
 }
 

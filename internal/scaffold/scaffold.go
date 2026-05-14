@@ -593,86 +593,28 @@ func RenderWorkspaceManifest(name, edition, member string) string {
 	return renderWorkspaceManifest(name, edition, member)
 }
 
+// renderManifest delegates the generic per-Kind osty.toml body to
+// toolchain/scaffold_policy.osty. Header text + [package] +
+// [dependencies] hint live there; bin/lib/cli/service share the
+// same body and just swap headers.
 func renderManifest(name, edition string, k Kind) string {
-	header := "# Binary project; `osty gen main.osty` uses the native LLVM backend and emits LLVM IR for the entry point."
-	switch k {
-	case KindLib:
-		header = "# Library project; exposes a public API via `pub` declarations."
-	case KindCli:
-		header = "# CLI app project; main.osty splits parsed Args from the testable run() core."
-	case KindService:
-		header = "# HTTP service project; main.osty defines Request/Response and a handle() core."
-	case KindGUIQtQuick:
-		header = "# Qt Quick GUI app project; main.osty owns state/events and ui/main.qml owns layout."
-	case KindGUIWebView2:
-		header = "# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2."
-	}
-	return fmt.Sprintf(`%s
-
-[package]
-name = "%s"
-version = "0.1.0"
-edition = "%s"
-
-[dependencies]
-# Add dependencies here, for example:
-# json-ext = { path = "../json-ext" }
-`, header, name, edition)
+	return runner.ScaffoldGenericManifest(kindName(k), name, edition)
 }
 
+// renderGUIWebView2Manifest delegates to
+// toolchain/scaffold_policy.osty. The richer WebView2 template
+// (with [gui], [gui.webview2], [target.amd64-windows]) is only
+// emitted at writeLayout time; RenderManifest still returns the
+// generic body for KindGUIWebView2.
 func renderGUIWebView2Manifest(name, edition string) string {
-	return fmt.Sprintf(`# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2.
-
-[package]
-name = "%s"
-version = "0.1.0"
-edition = "%s"
-
-[dependencies]
-
-[bin]
-path = "src/main.osty"
-
-[gui]
-backend = "webview2"
-entry = "ui/index.html"
-
-[gui.webview2]
-devtools = true
-runtime = "evergreen"
-
-[target.amd64-windows]
-cgo = true
-link = ["osty_webview2", "WebView2Loader", "user32", "ole32"]
-`, name, edition)
+	return runner.ScaffoldGUIWebView2Manifest(name, edition)
 }
 
+// renderGUIQtQuickManifest delegates to
+// toolchain/scaffold_policy.osty. Links `osty_qt` across all four
+// supported desktop targets.
 func renderGUIQtQuickManifest(name, edition string) string {
-	return fmt.Sprintf(`# Qt Quick GUI app project; build libosty_qt and make it visible to the linker/runtime.
-
-[package]
-name = "%s"
-version = "0.1.0"
-edition = "%s"
-
-[dependencies]
-
-[gui]
-backend = "qtquick"
-entry = "ui/main.qml"
-
-[target.arm64-darwin]
-link = ["osty_qt"]
-
-[target.amd64-darwin]
-link = ["osty_qt"]
-
-[target.amd64-linux]
-link = ["osty_qt"]
-
-[target.amd64-windows]
-link = ["osty_qt"]
-`, name, edition)
+	return runner.ScaffoldGUIQtQuickManifest(name, edition)
 }
 
 func renderGUIQtQuickReadme(name string) string {
@@ -698,25 +640,13 @@ osty gui doctor qtquick
 `, name)
 }
 
+// renderWorkspaceManifest delegates to
+// toolchain/scaffold_policy.osty. Edition is currently unused for
+// the virtual root but kept in the signature for symmetry with
+// renderManifest (future [workspace.package] inheritance might
+// surface it).
 func renderWorkspaceManifest(name, edition, member string) string {
-	nameLine := ""
-	if name != "" {
-		nameLine = fmt.Sprintf("# Workspace: %s\n", name)
-	}
-	_ = edition // edition currently unused for the virtual root;
-	// kept in the signature for symmetry with renderManifest so
-	// future additions (e.g. [workspace.package] inheritance) don't
-	// need a plumbing change at call sites.
-	return fmt.Sprintf(`%s# Virtual workspace root. Member paths below are resolved relative
-# to this directory (spec §5). Add members with:
-#
-#     osty new --bin NAME        # inside this directory
-#
-# then append the directory name to the members list below.
-
-[workspace]
-members = ["%s"]
-`, nameLine, member)
+	return runner.ScaffoldWorkspaceManifest(name, edition, member)
 }
 
 const binSourceTemplate = `fn main() {

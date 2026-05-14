@@ -1,0 +1,101 @@
+/// Pure `osty.lock` Dependency surface — the `name version (source)`
+/// canonical string and its inverse parser. The lockfile generator
+/// uses this to emit deterministic single-line dependency entries
+/// the human-edited form can round-trip through.
+///
+/// Host code (`internal/lockfile`) owns the multi-line lockfile
+/// document, TOML parsing, and filesystem I/O; this module decides
+/// the per-entry string shape.
+///
+/// Mirrored by `internal/runner/lockfile_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// DependencyParts is the outcome of parsing a single dependency
+/// line back into its `(name, version, source)` triple. `ok ==
+/// false` signals a malformed shape so the host emits a precise
+/// `invalid dependency "..."` diagnostic. `source == ""` means the
+/// dependency came from the default registry — no `( ... )` was
+/// appended.
+pub struct DependencyParts {
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub ok: Bool,
+}
+/// dependencyString renders one lockfile entry as the canonical
+/// single-line form:
+///
+///   - `<name> <version>` when source is empty (default registry).
+///   - `<name> <version> (<source>)` otherwise (path/git/custom
+///     registry).
+///
+/// The whitespace separator + parenthesised source format is what
+/// the parser below understands; keep the two in lockstep.
+pub fn dependencyString(name: String, version: String, source: String) -> String {
+    if source == "" {
+        return name + " " + version
+    }
+    name + " " + version + " (" + source + ")"
+}
+/// parseDependency is the inverse of `dependencyString`. Accepts:
+///
+///   - `name version`
+///   - `name version (source)`  — `source` may itself contain
+///     whitespace; only the trailing `)` closes the group.
+///
+/// Returns `ok == false` for anything else (wrong field count,
+/// missing closing paren, etc.). The host blames the malformed
+/// line with `invalid dependency "..."`.
+pub fn parseDependency(line: String) -> DependencyParts {
+    let trimmed = strings.trimSpace(line)
+    let mut head = trimmed
+    let mut source = ""
+    if strings.hasSuffix(trimmed, ")") {
+        let openOpt = strings.indexOf(trimmed, "(")
+        match openOpt {
+            Some(open) -> {
+                if open > 0 {
+                    source = strings.slice(trimmed, open + 1, trimmed.len() - 1)
+                    head = strings.trimSpace(strings.slice(trimmed, 0, open))
+                }
+            },
+            None -> {
+            },
+        }
+    }
+    let parts = parseDependencyFields(head)
+    if parts.len() != 2 {
+        return DependencyParts {name: "", version: "", source: "", ok: false}
+    }
+    DependencyParts {name: parts[0], version: parts[1], source: source, ok: true}
+}
+/// parseDependencyFields splits `head` on runs of ASCII space /
+/// tab (matches Go's `strings.Fields` for the limited alphabet
+/// the lockfile lexer accepts — dependency names and versions
+/// never carry CR/LF/VT/FF). Empty runs are dropped so callers
+/// see exactly the non-whitespace tokens.
+fn parseDependencyFields(head: String) -> List<String> {
+    let bs = head.bytes()
+    let n = bs.len()
+    let mut out: List<String> = []
+    let mut start = -1
+    let mut i = 0
+    for i < n {
+        let b = bs[i].toInt()
+        let isWS = b == 0x20 || b == 0x09
+        if isWS {
+            if start >= 0 {
+                out.push(strings.slice(head, start, i))
+                start = -1
+            }
+        } else if start < 0 {
+            start = i
+        }
+        i = i + 1
+    }
+    if start >= 0 {
+        out.push(strings.slice(head, start, n))
+    }
+    out
+}
