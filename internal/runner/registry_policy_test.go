@@ -187,3 +187,86 @@ func TestRegistrySearchRequestNormalize(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyPublishDeps(t *testing.T) {
+	t.Run("basic", func(t *testing.T) {
+		normal := []PublishDepSpec{
+			{Name: "serde", VersionReq: "1.0"},
+			{Name: "log", VersionReq: "0.4"},
+		}
+		r := ClassifyPublishDeps(normal, nil)
+		if r.ErrorMessage != "" {
+			t.Fatalf("unexpected err: %q", r.ErrorMessage)
+		}
+		if len(r.Deps) != 2 || r.Deps[0].Name != "serde" || r.Deps[0].Req != "1.0" || r.Deps[0].Kind != "normal" {
+			t.Errorf("unexpected: %+v", r.Deps)
+		}
+	})
+	t.Run("dev-kind", func(t *testing.T) {
+		dev := []PublishDepSpec{{Name: "testing", VersionReq: "0.1"}}
+		r := ClassifyPublishDeps(nil, dev)
+		if len(r.Deps) != 1 || r.Deps[0].Kind != "dev" {
+			t.Errorf("unexpected: %+v", r.Deps)
+		}
+	})
+	t.Run("package-rename", func(t *testing.T) {
+		normal := []PublishDepSpec{{Name: "alias", PackageName: "real-name", VersionReq: "1.0"}}
+		r := ClassifyPublishDeps(normal, nil)
+		if r.Deps[0].Name != "real-name" {
+			t.Errorf("name = %q, want real-name", r.Deps[0].Name)
+		}
+	})
+	t.Run("default-req-star", func(t *testing.T) {
+		normal := []PublishDepSpec{{Name: "anything"}}
+		r := ClassifyPublishDeps(normal, nil)
+		if r.Deps[0].Req != "*" {
+			t.Errorf("req = %q, want *", r.Deps[0].Req)
+		}
+	})
+	t.Run("skips-git", func(t *testing.T) {
+		normal := []PublishDepSpec{
+			{Name: "serde", VersionReq: "1.0"},
+			{Name: "git-dep", IsGit: true},
+		}
+		r := ClassifyPublishDeps(normal, nil)
+		if r.ErrorMessage != "" {
+			t.Fatalf("unexpected err: %q", r.ErrorMessage)
+		}
+		if len(r.Deps) != 1 || r.Deps[0].Name != "serde" {
+			t.Errorf("unexpected: %+v", r.Deps)
+		}
+	})
+	t.Run("rejects-path", func(t *testing.T) {
+		normal := []PublishDepSpec{{Name: "local", Path: "../local"}}
+		r := ClassifyPublishDeps(normal, nil)
+		want := `dependency "local" uses path="../local"; path dependencies cannot be published`
+		if r.ErrorMessage != want {
+			t.Errorf("err = %q, want %q", r.ErrorMessage, want)
+		}
+		if len(r.Deps) != 0 {
+			t.Errorf("deps must be empty on rejection, got %+v", r.Deps)
+		}
+	})
+	t.Run("rejects-path-in-dev", func(t *testing.T) {
+		dev := []PublishDepSpec{{Name: "local", Path: "../local"}}
+		r := ClassifyPublishDeps(nil, dev)
+		want := `dependency "local" uses path="../local"; path dependencies cannot be published`
+		if r.ErrorMessage != want {
+			t.Errorf("err = %q, want %q", r.ErrorMessage, want)
+		}
+	})
+	t.Run("both-sections", func(t *testing.T) {
+		normal := []PublishDepSpec{{Name: "a", VersionReq: "1.0"}}
+		dev := []PublishDepSpec{{Name: "b", VersionReq: "2.0"}}
+		r := ClassifyPublishDeps(normal, dev)
+		if len(r.Deps) != 2 || r.Deps[0].Kind != "normal" || r.Deps[1].Kind != "dev" {
+			t.Errorf("unexpected: %+v", r.Deps)
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		r := ClassifyPublishDeps(nil, nil)
+		if r.ErrorMessage != "" || len(r.Deps) != 0 {
+			t.Errorf("unexpected: %+v", r)
+		}
+	})
+}

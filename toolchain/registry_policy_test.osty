@@ -209,3 +209,71 @@ fn testRegistrySearchRequestNormalizeNegativeLimit() {
     testing.assertEq(r.errorMessage, "")
     testing.assertEq(r.limit, 20)
 }
+fn pubDep(name: String) -> PublishDepSpec {
+    PublishDepSpec {name: name, packageName: "", versionReq: "", path: "", isGit: false}
+}
+fn testClassifyPublishDepsBasic() {
+    let normal = [
+        PublishDepSpec {..pubDep("serde"), versionReq: "1.0"},
+        PublishDepSpec {..pubDep("log"), versionReq: "0.4"},
+    ]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 2)
+    testing.assertEq(r.deps[0].name, "serde")
+    testing.assertEq(r.deps[0].req, "1.0")
+    testing.assertEq(r.deps[0].kind, "normal")
+    testing.assertEq(r.deps[1].name, "log")
+}
+fn testClassifyPublishDepsDevKind() {
+    let dev = [PublishDepSpec {..pubDep("testing"), versionReq: "0.1"}]
+    let r = classifyPublishDeps([], dev)
+    testing.assertEq(r.deps.len(), 1)
+    testing.assertEq(r.deps[0].kind, "dev")
+}
+fn testClassifyPublishDepsPackageRename() {
+    // packageName overrides name for the published manifest.
+    let normal = [PublishDepSpec {..pubDep("alias"), packageName: "real-name", versionReq: "1.0"}]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.deps[0].name, "real-name")
+}
+fn testClassifyPublishDepsDefaultReq() {
+    // Empty versionReq defaults to `"*"`.
+    let normal = [pubDep("anything")]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.deps[0].req, "*")
+}
+fn testClassifyPublishDepsSkipsGit() {
+    let normal = [
+        PublishDepSpec {..pubDep("serde"), versionReq: "1.0"},
+        PublishDepSpec {..pubDep("git-dep"), isGit: true},
+    ]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 1)
+    testing.assertEq(r.deps[0].name, "serde")
+}
+fn testClassifyPublishDepsRejectsPath() {
+    let normal = [PublishDepSpec {..pubDep("local"), path: "../local"}]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "dependency \"local\" uses path=\"../local\"; path dependencies cannot be published")
+    testing.assertEq(r.deps.len(), 0)
+}
+fn testClassifyPublishDepsRejectsPathInDev() {
+    let dev = [PublishDepSpec {..pubDep("local"), path: "../local"}]
+    let r = classifyPublishDeps([], dev)
+    testing.assertEq(r.errorMessage, "dependency \"local\" uses path=\"../local\"; path dependencies cannot be published")
+}
+fn testClassifyPublishDepsBothSections() {
+    let normal = [PublishDepSpec {..pubDep("a"), versionReq: "1.0"}]
+    let dev = [PublishDepSpec {..pubDep("b"), versionReq: "2.0"}]
+    let r = classifyPublishDeps(normal, dev)
+    testing.assertEq(r.deps.len(), 2)
+    testing.assertEq(r.deps[0].kind, "normal")
+    testing.assertEq(r.deps[1].kind, "dev")
+}
+fn testClassifyPublishDepsEmpty() {
+    let r = classifyPublishDeps([], [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 0)
+}

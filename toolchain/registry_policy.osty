@@ -230,3 +230,87 @@ pub fn registrySearchRequestNormalize(rawQuery: String, rawLimit: Int) -> Regist
         errorMessage: "",
     }
 }
+/// PublishDepSpec is the host-side dependency shape the publish
+/// filter operates on. Mirrors a subset of manifest.Dependency:
+///
+///   - `name`: alias used in the manifest (`[dependencies]` key).
+///   - `packageName`: explicit `package = "..."` override; empty
+///     falls back to `name`.
+///   - `versionReq`: the `version = "..."` constraint; empty
+///     becomes the wildcard `"*"`.
+///   - `path`: non-empty marks the dep as a path source — those
+///     get rejected at publish time.
+///   - `isGit`: true marks a git source — silently dropped from
+///     the published metadata (the registry has no way to honour
+///     git deps after the fact).
+pub struct PublishDepSpec {
+    pub name: String,
+    pub packageName: String,
+    pub versionReq: String,
+    pub path: String,
+    pub isGit: Bool,
+}
+/// PublishVersionDep is the structured output the registry's
+/// store records on each published version. `kind` is "normal"
+/// or "dev" — the labels the historical Go code used.
+pub struct PublishVersionDep {
+    pub name: String,
+    pub req: String,
+    pub kind: String,
+}
+/// PublishDepsResult bundles the filtered dep list + an
+/// optional rejection message. `errorMessage != ""` blocks the
+/// publish; the message is the user-facing string the HTTP
+/// handler wraps in `badRequest`.
+pub struct PublishDepsResult {
+    pub deps: List<PublishVersionDep>,
+    pub errorMessage: String,
+}
+/// classifyPublishDeps applies the per-publish dep policy to a
+/// manifest's `[dependencies]` (normal) and `[dev-dependencies]`
+/// (dev) lists. Rules:
+///
+///   - A path dependency (`d.path != ""`) blocks the publish —
+///     the registry can't honour file-system pointers.
+///   - A git dependency (`d.isGit`) is silently dropped — the
+///     registry only records registry-resolvable deps.
+///   - Otherwise the dep is recorded with the effective name
+///     (`packageName` else `name`) and version req (`"*"` when
+///     blank).
+pub fn classifyPublishDeps(normal: List<PublishDepSpec>, dev: List<PublishDepSpec>) -> PublishDepsResult {
+    let mut out: List<PublishVersionDep> = []
+    let normalErr = appendPublishDeps(out, normal, "normal")
+    if normalErr != "" {
+        return PublishDepsResult {deps: [], errorMessage: normalErr}
+    }
+    let devErr = appendPublishDeps(out, dev, "dev")
+    if devErr != "" {
+        return PublishDepsResult {deps: [], errorMessage: devErr}
+    }
+    PublishDepsResult {deps: out, errorMessage: ""}
+}
+/// appendPublishDeps mutates `out` in place with the classified
+/// entries for one section. Returns `""` on success; the path-dep
+/// rejection message otherwise.
+fn appendPublishDeps(out: List<PublishVersionDep>, section: List<PublishDepSpec>, kind: String) -> String {
+    for d in section {
+        if d.path != "" {
+            return "dependency " + tomlBasicString(d.name) + " uses path=" + tomlBasicString(d.path) + "; path dependencies cannot be published"
+        }
+        if d.isGit {
+            continue
+        }
+        let outName = if d.packageName == "" {
+            d.name
+        } else {
+            d.packageName
+        }
+        let outReq = if d.versionReq == "" {
+            "*"
+        } else {
+            d.versionReq
+        }
+        out.push(PublishVersionDep {name: outName, req: outReq, kind: kind})
+    }
+    ""
+}
