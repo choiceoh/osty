@@ -11429,12 +11429,30 @@ func opParseCallArgs(p *OstyParser, callee int) int {
 		// Osty: /tmp/docgen_merged.osty:7529:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
 			// Osty: /tmp/docgen_merged.osty:7530:13
-			_ = opAdvance(p)
+			fs := p.pos
+			_ = fs
+			// Osty: /tmp/docgen_merged.osty:7530:13
+			key := opAdvance(p).text
+			_ = key
 			// Osty: /tmp/docgen_merged.osty:7531:13
 			_ = opAdvance(p)
+			// Osty: /tmp/docgen_merged.osty:
+			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
+			_ = n
+			// Osty: /tmp/docgen_merged.osty:
+			n.text = key
+			// Osty: /tmp/docgen_merged.osty:
+			n.left = opParseExpr(p)
+			// Osty: /tmp/docgen_merged.osty:
+			n.start = fs
+			// Osty: /tmp/docgen_merged.osty:
+			n.end = p.pos
+			// Osty: /tmp/docgen_merged.osty:
+			args = append(args, opAddNode(p, n))
+		} else {
+			// Osty: /tmp/docgen_merged.osty:7533:9
+			func() struct{} { args = append(args, opParseExpr(p)); return struct{}{} }()
 		}
-		// Osty: /tmp/docgen_merged.osty:7533:9
-		func() struct{} { args = append(args, opParseExpr(p)); return struct{}{} }()
 		// Osty: /tmp/docgen_merged.osty:7534:9
 		opSkipNewlines(p)
 		// Osty: /tmp/docgen_merged.osty:7535:9
