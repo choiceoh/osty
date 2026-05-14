@@ -80,16 +80,26 @@ func PkgSkipDirEntry(rel string) bool {
 	return false
 }
 
+// pkgPathBase mirrors filepath.Base on forward-slash and backslash
+// paths, including trimming trailing separators (`sub/.git/` →
+// `.git`).
 func pkgPathBase(p string) string {
-	last := -1
-	for i := 0; i < len(p); i++ {
-		b := p[i]
-		if b == '/' || b == '\\' {
-			last = i
-		}
+	end := len(p)
+	for end > 0 && (p[end-1] == '/' || p[end-1] == '\\') {
+		end--
 	}
-	if last < 0 {
+	if end == 0 {
 		return p
 	}
-	return p[last+1:]
+	sep := -1
+	for i := 0; i < end; i++ {
+		b := p[i]
+		if b == '/' || b == '\\' {
+			sep = i
+		}
+	}
+	if sep < 0 {
+		return p[:end]
+	}
+	return p[sep+1 : end]
 }

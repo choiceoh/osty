@@ -75,21 +75,34 @@ pub fn pkgSkipDirEntry(rel: String) -> Bool {
 /// pkgPathBase mirrors Go's `filepath.Base` on forward-slash and
 /// backslash paths. `pkgmgr` passes platform-native paths through
 /// `filepath.Rel`, which yields `\\`-separated relatives on Windows;
-/// the matcher must agree there too, so we split on both.
+/// the matcher must agree there too, so we split on both. Trailing
+/// separators are stripped first so `sub/.git/` still resolves
+/// `.git` as the base (matches `filepath.Base` semantics).
 fn pkgPathBase(p: String) -> String {
+    let mut end = p.bytes().len()
     let bs = p.bytes()
-    let n = bs.len()
-    let mut last = -1
+    for end > 0 {
+        let last = bs[end - 1].toInt()
+        if last == 0x2F || last == 0x5C {
+            end = end - 1
+        } else {
+            break
+        }
+    }
+    if end == 0 {
+        return p
+    }
+    let mut sep = -1
     let mut i = 0
-    for i < n {
+    for i < end {
         let b = bs[i].toInt()
         if b == 0x2F || b == 0x5C {
-            last = i
+            sep = i
         }
         i = i + 1
     }
-    if last < 0 {
-        return p
+    if sep < 0 {
+        return strings.slice(p, 0, end)
     }
-    strings.slice(p, last + 1, n)
+    strings.slice(p, sep + 1, end)
 }

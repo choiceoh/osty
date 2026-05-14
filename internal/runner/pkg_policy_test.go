@@ -84,6 +84,9 @@ func TestPkgSkipDirEntry(t *testing.T) {
 		{"normal-readme", "README.md", false},
 		{"backslash-git", "sub\\.git", true},
 		{"backslash-normal", "sub\\src\\main.osty", false},
+		{"trailing-slash-git", "sub/.git/", true},
+		{"trailing-backslash-git", "sub\\.git\\", true},
+		{"trailing-slash-osty", ".osty/", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

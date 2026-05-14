@@ -71,3 +71,10 @@ fn testPkgSkipDirEntryWindowsSeparator() {
     testing.assertEq(pkgSkipDirEntry("sub\\.git"), true)
     testing.assertEq(pkgSkipDirEntry("sub\\src\\main.osty"), false)
 }
+fn testPkgSkipDirEntryTrailingSeparator() {
+    // filepath.Walk doesn't pass trailing separators in practice, but the
+    // contract says we mirror filepath.Base which DOES trim them.
+    testing.assertEq(pkgSkipDirEntry("sub/.git/"), true)
+    testing.assertEq(pkgSkipDirEntry("sub\\.git\\"), true)
+    testing.assertEq(pkgSkipDirEntry(".osty/"), true)
+}
