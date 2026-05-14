@@ -1,0 +1,109 @@
+/// Pure lookups + tiny string helpers for the parser-level
+/// auto-repair pass (`internal/repair/repair.go`). Host code owns
+/// the token stream traversal, edit application, and source-level
+/// rewriting; this module decides the lexical-only translations
+/// that don't need any token context:
+///
+///   - which uppercase numeric-base prefix needs to be lowercased
+///     (`0X` -> `0x`, `0B` -> `0b`, `0O` -> `0o`);
+///   - which foreign declaration keyword (`func` / `function` /
+///     `def`) maps to Osty's `fn`;
+///   - which foreign value identifier (`nil` / `null` / `True` /
+///     `False`) maps to Osty's canonical form;
+///   - the leading whitespace prefix at a byte offset in source.
+///
+/// Mirrored by `internal/runner/repair_policy.go`. The drift test
+/// under internal/runner keeps the two in sync — the Osty file is
+/// the source of truth at review time.
+use std.strings as strings
+/// RepairLookupResult is the outcome of inspecting a token value
+/// for a known foreign-language → Osty translation. `ok == false`
+/// signals "no canonical rewrite available — leave the source
+/// alone".
+pub struct RepairLookupResult {
+    pub value: String,
+    pub ok: Bool,
+}
+/// uppercaseBasePrefix recognises numeric literals written with
+/// an uppercase base prefix (`0X` / `0B` / `0O`) and returns the
+/// lowercase replacement character. Returns `""` when the value
+/// is not a recognised uppercase-prefix literal.
+///
+/// The host rewriter splices the returned byte over `value[1]`
+/// while keeping the leading `0` and the rest of the literal.
+pub fn uppercaseBasePrefix(value: String) -> String {
+    let bs = value.bytes()
+    if bs.len() < 2 || bs[0].toInt() != 0x30 {
+        return ""
+    }
+    let b1 = bs[1].toInt()
+    if b1 == 0x58 {
+        return "x"
+    }
+    if b1 == 0x42 {
+        return "b"
+    }
+    if b1 == 0x4F {
+        return "o"
+    }
+    ""
+}
+/// declarationKeywordReplacement maps a foreign-language
+/// declaration keyword to Osty's `fn`. The host token-context
+/// check (`looksLikeFnDecl`) decides whether to actually apply
+/// the rewrite.
+pub fn declarationKeywordReplacement(value: String) -> RepairLookupResult {
+    if value == "func" || value == "function" || value == "def" {
+        return RepairLookupResult {value: "fn", ok: true}
+    }
+    RepairLookupResult {value: "", ok: false}
+}
+/// valueIdentifierReplacement maps a foreign-language value
+/// identifier to Osty's canonical form:
+///
+///   - `nil` / `null` -> `None`
+///   - `True` -> `true`
+///   - `False` -> `false`
+///
+/// The host token-context check (`looksLikeValueUse`) decides
+/// whether to actually apply the rewrite.
+pub fn valueIdentifierReplacement(value: String) -> RepairLookupResult {
+    if value == "nil" || value == "null" {
+        return RepairLookupResult {value: "None", ok: true}
+    }
+    if value == "True" {
+        return RepairLookupResult {value: "true", ok: true}
+    }
+    if value == "False" {
+        return RepairLookupResult {value: "false", ok: true}
+    }
+    RepairLookupResult {value: "", ok: false}
+}
+/// lineIndent returns the leading whitespace prefix of the line
+/// that contains byte `offset` in `src`. Only ASCII space (0x20)
+/// and tab (0x09) bytes count as indent; anything else terminates
+/// the prefix.
+///
+/// Used by the auto-repair pass when it needs to insert a new
+/// line with the same indentation as the surrounding code (e.g.
+/// when adding a missing semicolon-replacement newline).
+pub fn lineIndent(src: String, offset: Int) -> String {
+    let bs = src.bytes()
+    let n = bs.len()
+    let mut start = offset
+    if start > n {
+        start = n
+    }
+    for start > 0 && bs[start - 1].toInt() != 0x0A {
+        start = start - 1
+    }
+    let mut end = start
+    for end < n {
+        let b = bs[end].toInt()
+        if b != 0x20 && b != 0x09 {
+            break
+        }
+        end = end + 1
+    }
+    strings.slice(src, start, end)
+}
