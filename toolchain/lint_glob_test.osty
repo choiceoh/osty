@@ -1,0 +1,93 @@
+use std.testing
+fn testLintMatchGlobLiteralMatch() {
+    testing.assertEq(lintMatchGlob("foo/bar", "foo/bar"), true)
+}
+fn testLintMatchGlobLiteralMiss() {
+    testing.assertEq(lintMatchGlob("foo/bar", "foo/baz"), false)
+}
+fn testLintMatchGlobLiteralLengthMismatch() {
+    testing.assertEq(lintMatchGlob("foo", "foo/bar"), false)
+    testing.assertEq(lintMatchGlob("foo/bar", "foo"), false)
+}
+fn testLintMatchGlobTrailingDoubleStar() {
+    testing.assertEq(lintMatchGlob("gen/**", "gen/a.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/**", "gen/a/b/c.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/**", "gen"), true)
+    testing.assertEq(lintMatchGlob("gen/**", "other/a.osty"), false)
+}
+fn testLintMatchGlobMiddleDoubleStar() {
+    testing.assertEq(lintMatchGlob("gen/**/x.osty", "gen/x.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/**/x.osty", "gen/a/x.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/**/x.osty", "gen/a/b/x.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/**/x.osty", "gen/a/b/y.osty"), false)
+}
+fn testLintMatchGlobLeadingDoubleStar() {
+    testing.assertEq(lintMatchGlob("**/x.osty", "x.osty"), true)
+    testing.assertEq(lintMatchGlob("**/x.osty", "a/x.osty"), true)
+    testing.assertEq(lintMatchGlob("**/x.osty", "a/b/x.osty"), true)
+    testing.assertEq(lintMatchGlob("**/x.osty", "a/b/y.osty"), false)
+}
+fn testLintMatchGlobStarSegment() {
+    testing.assertEq(lintMatchGlob("gen/*.osty", "gen/a.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/*.osty", "gen/aaa.osty"), true)
+    testing.assertEq(lintMatchGlob("gen/*.osty", "gen/a/b.osty"), false)
+}
+fn testLintMatchGlobStarCrossSegmentForbidden() {
+    testing.assertEq(lintMatchGlob("gen/*", "gen/a/b"), false)
+}
+fn testLintMatchGlobQuestionMark() {
+    testing.assertEq(lintMatchGlob("?.osty", "a.osty"), true)
+    testing.assertEq(lintMatchGlob("?.osty", "ab.osty"), false)
+}
+fn testLintMatchSegmentLiteral() {
+    testing.assertEq(lintMatchSegment("abc", "abc"), true)
+    testing.assertEq(lintMatchSegment("abc", "abd"), false)
+    testing.assertEq(lintMatchSegment("abc", "ab"), false)
+    testing.assertEq(lintMatchSegment("abc", "abcd"), false)
+}
+fn testLintMatchSegmentStar() {
+    testing.assertEq(lintMatchSegment("*", ""), true)
+    testing.assertEq(lintMatchSegment("*", "anything"), true)
+    testing.assertEq(lintMatchSegment("*.osty", "x.osty"), true)
+    testing.assertEq(lintMatchSegment("*.osty", "xxxxxxxx.osty"), true)
+    testing.assertEq(lintMatchSegment("a*c", "abc"), true)
+    testing.assertEq(lintMatchSegment("a*c", "abbbbbc"), true)
+    testing.assertEq(lintMatchSegment("a*c", "ad"), false)
+}
+fn testLintMatchSegmentQuestion() {
+    testing.assertEq(lintMatchSegment("?", "a"), true)
+    testing.assertEq(lintMatchSegment("?", ""), false)
+    testing.assertEq(lintMatchSegment("a?c", "abc"), true)
+    testing.assertEq(lintMatchSegment("a?c", "ac"), false)
+}
+fn testLintMatchSegmentClass() {
+    testing.assertEq(lintMatchSegment("[abc]", "a"), true)
+    testing.assertEq(lintMatchSegment("[abc]", "b"), true)
+    testing.assertEq(lintMatchSegment("[abc]", "d"), false)
+}
+fn testLintMatchSegmentClassRange() {
+    testing.assertEq(lintMatchSegment("[a-z]", "m"), true)
+    testing.assertEq(lintMatchSegment("[a-z]", "A"), false)
+    testing.assertEq(lintMatchSegment("[0-9]", "5"), true)
+    testing.assertEq(lintMatchSegment("[0-9]", "a"), false)
+}
+fn testLintMatchSegmentClassNegated() {
+    testing.assertEq(lintMatchSegment("[^abc]", "d"), true)
+    testing.assertEq(lintMatchSegment("[^abc]", "a"), false)
+    testing.assertEq(lintMatchSegment("[!abc]", "d"), true)
+    testing.assertEq(lintMatchSegment("[!abc]", "a"), false)
+}
+fn testLintMatchSegmentBackslashEscape() {
+    testing.assertEq(lintMatchSegment("a\\*b", "a*b"), true)
+    testing.assertEq(lintMatchSegment("a\\*b", "axb"), false)
+}
+fn testLintMatchSegmentEmptyPatternEmptyName() {
+    testing.assertEq(lintMatchSegment("", ""), true)
+}
+fn testLintMatchSegmentEmptyPatternNonEmptyName() {
+    testing.assertEq(lintMatchSegment("", "x"), false)
+}
+fn testLintMatchGlobExactDoubleStarOnly() {
+    testing.assertEq(lintMatchGlob("**", "a/b/c"), true)
+    testing.assertEq(lintMatchGlob("**", ""), true)
+}

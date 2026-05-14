@@ -1,0 +1,188 @@
+/// `lint Config.MatchingExclude` glob policy. Host code in
+/// `internal/lint/config.go` reads the user's `[lint]
+/// exclude = [...]` patterns from osty.toml and asks this module
+/// whether a candidate path matches any of them.
+///
+/// Algorithm: `lintMatchGlob` splits both the pattern and the
+/// candidate path on `/` and runs the recursive `lintGlobParts`
+/// matcher. `**` (cross-segment wildcard) consumes zero or more
+/// segments, including slashes; every other segment is matched by
+/// `lintMatchSegment`, a byte-level port of Go's `filepath.Match`
+/// semantics:
+///
+///   - `*` matches any byte sequence within the segment.
+///   - `?` matches exactly one byte.
+///   - `[...]` is a character class; ranges (`a-z`), negation
+///     (`^`/`!`), and `\c` escapes are supported. Operates on
+///     bytes; non-ASCII classes are byte-wise.
+///   - `\c` outside `[...]` is a literal `c`.
+///
+/// Mirrored by `internal/runner/lint_glob_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// `lintMatchGlob(pattern, path)` reports whether `path` matches
+/// the glob `pattern`. Both arguments use forward-slash
+/// separators; callers normalise platform-specific separators
+/// before invoking.
+pub fn lintMatchGlob(pattern: String, path: String) -> Bool {
+    let patParts = strings.split(pattern, "/")
+    let pParts = strings.split(path, "/")
+    lintGlobPartsAt(patParts, 0, pParts, 0)
+}
+/// `lintGlobPartsAt` walks the segment lists in parallel, expanding
+/// `**` recursively. `pi` / `ni` are starting indices so the
+/// recursion can share the parsed segment slices.
+fn lintGlobPartsAt(pat: List<String>, pi0: Int, p: List<String>, ni0: Int) -> Bool {
+    let mut pi = pi0
+    let mut ni = ni0
+    for pi < pat.len() && ni < p.len() {
+        if pat[pi] == "**" {
+            if pi + 1 == pat.len() {
+                return true
+            }
+            let mut j = 0
+            let remaining = p.len() - ni
+            for j <= remaining {
+                if lintGlobPartsAt(pat, pi + 1, p, ni + j) {
+                    return true
+                }
+                j = j + 1
+            }
+            return false
+        }
+        if !lintMatchSegment(pat[pi], p[ni]) {
+            return false
+        }
+        pi = pi + 1
+        ni = ni + 1
+    }
+    for pi < pat.len() && pat[pi] == "**" {
+        pi = pi + 1
+    }
+    pi == pat.len() && ni == p.len()
+}
+/// `lintMatchSegment(pattern, name)` runs the per-segment matcher.
+/// Byte-level; no path separator handling inside (segments are
+/// already separator-free by construction).
+pub fn lintMatchSegment(pattern: String, name: String) -> Bool {
+    let pat = pattern.bytes()
+    let nb = name.bytes()
+    lintMatchSegmentAt(pat, 0, nb, 0)
+}
+/// Recursive segment matcher. Returns true when `pat[pi..]` matches
+/// `name[ni..]`.
+fn lintMatchSegmentAt(pat: List<Byte>, pi0: Int, name: List<Byte>, ni0: Int) -> Bool {
+    let mut pi = pi0
+    let mut ni = ni0
+    for pi < pat.len() {
+        let c = pat[pi].toInt()
+        if c == 0x2A {
+            for pi + 1 < pat.len() && pat[pi + 1].toInt() == 0x2A {
+                pi = pi + 1
+            }
+            if pi + 1 == pat.len() {
+                return true
+            }
+            let mut k = ni
+            for k <= name.len() {
+                if lintMatchSegmentAt(pat, pi + 1, name, k) {
+                    return true
+                }
+                k = k + 1
+            }
+            return false
+        }
+        if ni >= name.len() {
+            return false
+        }
+        if c == 0x3F {
+            pi = pi + 1
+            ni = ni + 1
+            continue
+        }
+        if c == 0x5B {
+            let r = lintMatchClass(pat, pi + 1, name[ni].toInt())
+            if !r.matched {
+                return false
+            }
+            pi = r.next
+            ni = ni + 1
+            continue
+        }
+        if c == 0x5C {
+            pi = pi + 1
+            if pi >= pat.len() {
+                return false
+            }
+        }
+        if pat[pi].toInt() != name[ni].toInt() {
+            return false
+        }
+        pi = pi + 1
+        ni = ni + 1
+    }
+    ni == name.len()
+}
+/// `LintClassMatch` is the structured outcome of a `[class]` scan:
+/// whether the candidate byte was in the class and the index
+/// immediately after the closing `]`. `matched = false` with
+/// `next == pi0` indicates a malformed (unterminated) class —
+/// callers treat that as no-match.
+pub struct LintClassMatch {
+    pub matched: Bool,
+    pub next: Int,
+}
+/// Parse and evaluate a `[...]` character class. `pi0` is the
+/// index right after the opening `[`. `ch` is the byte to test.
+fn lintMatchClass(pat: List<Byte>, pi0: Int, ch: Int) -> LintClassMatch {
+    let mut pi = pi0
+    let mut negated = false
+    if pi < pat.len() {
+        let lead = pat[pi].toInt()
+        if lead == 0x5E || lead == 0x21 {
+            negated = true
+            pi = pi + 1
+        }
+    }
+    let mut matched = false
+    let mut consumedAny = false
+    for pi < pat.len() {
+        let b = pat[pi].toInt()
+        if b == 0x5D && consumedAny {
+            pi = pi + 1
+            let final_match = if negated { !matched } else { matched }
+            return LintClassMatch { matched: final_match, next: pi }
+        }
+        let mut lo = b
+        if lo == 0x5C {
+            pi = pi + 1
+            if pi >= pat.len() {
+                return LintClassMatch { matched: false, next: pi0 }
+            }
+            lo = pat[pi].toInt()
+        }
+        pi = pi + 1
+        let mut hi = lo
+        if pi < pat.len() && pat[pi].toInt() == 0x2D {
+            pi = pi + 1
+            if pi >= pat.len() {
+                return LintClassMatch { matched: false, next: pi0 }
+            }
+            hi = pat[pi].toInt()
+            if hi == 0x5C {
+                pi = pi + 1
+                if pi >= pat.len() {
+                    return LintClassMatch { matched: false, next: pi0 }
+                }
+                hi = pat[pi].toInt()
+            }
+            pi = pi + 1
+        }
+        if lo <= ch && ch <= hi {
+            matched = true
+        }
+        consumedAny = true
+    }
+    LintClassMatch { matched: false, next: pi0 }
+}
