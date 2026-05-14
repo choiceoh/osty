@@ -171,12 +171,18 @@ fn testDiagSuggestionDisplayFixApplicable() {
     testing.assertEq(r.replacement, "let foo = 1")
 }
 fn testDiagSuggestionDisplaySuggestOnly() {
+    // Non-machine-applicable: only the tag flips to "suggest";
+    // label + replacement still pass-through unchanged.
     let r = diagSuggestionDisplayOf("rename to foo", false, "let foo = 1")
     testing.assertEq(r.tag, "suggest")
+    testing.assertEq(r.label, "rename to foo")
+    testing.assertEq(r.replacement, "let foo = 1")
 }
 fn testDiagSuggestionDisplayEmptyLabel() {
     let r = diagSuggestionDisplayOf("", true, "x")
+    testing.assertEq(r.tag, "fix")
     testing.assertEq(r.label, "suggested fix")
+    testing.assertEq(r.replacement, "x")
 }
 fn testDiagSuggestionDisplayEmptyReplacement() {
     let r = diagSuggestionDisplayOf("rm unused", true, "")

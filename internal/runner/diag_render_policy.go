@@ -212,7 +212,7 @@ type DiagSuggestionDisplay struct {
 // default capitalization rule doesn't collide with the
 // DiagSuggestionDisplay struct in the drift table.
 //
-// Osty: toolchain/diag_render.osty:210
+// Osty: toolchain/diag_render.osty:214
 func DiagSuggestionDisplayOf(userLabel string, machineApplicable bool, rendered string) DiagSuggestionDisplay {
 	tag := "suggest"
 	if machineApplicable {
@@ -232,11 +232,11 @@ func DiagSuggestionDisplayOf(userLabel string, machineApplicable bool, rendered 
 // DiagNoteLabel returns the literal "note" used in the formatter's
 // `= note: <text>` line.
 //
-// Osty: toolchain/diag_render.osty:234
+// Osty: toolchain/diag_render.osty:238
 func DiagNoteLabel() string { return "note" }
 
 // DiagHelpLabel returns the literal "help" used in the formatter's
 // `= help: <hint>` line.
 //
-// Osty: toolchain/diag_render.osty:239
+// Osty: toolchain/diag_render.osty:243
 func DiagHelpLabel() string { return "help" }
