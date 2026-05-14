@@ -22,6 +22,7 @@ import (
 
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr/semver"
+	"github.com/osty/osty/internal/runner"
 )
 
 // DefaultMaxUploadBytes is the default upper bound for one published
@@ -673,24 +674,8 @@ func totalDownloads(rec *PackageRecord) int64 {
 }
 
 func searchScore(name string, meta PublishMetadata, q string) (int, bool) {
-	lowerName := strings.ToLower(name)
-	switch {
-	case lowerName == q:
-		return 0, true
-	case strings.HasPrefix(lowerName, q):
-		return 1, true
-	case strings.Contains(lowerName, q):
-		return 2, true
-	}
-	if strings.Contains(strings.ToLower(meta.Description), q) {
-		return 3, true
-	}
-	for _, kw := range meta.Keywords {
-		if strings.Contains(strings.ToLower(kw), q) {
-			return 4, true
-		}
-	}
-	return 0, false
+	r := runner.RegistrySearchScoreOf(name, meta.Description, meta.Keywords, q)
+	return r.Score, r.Ok
 }
 
 func manifestFromTarball(tarPath string) (*manifest.Manifest, error) {
