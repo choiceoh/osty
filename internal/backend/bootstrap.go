@@ -9,11 +9,10 @@ import (
 )
 
 // Stage0FallbackEnv is the env-var name that opts a build into the
-// stage0 bootstrap fallback emitter. The dispatcher consults it inside
-// `emitLLVMFallback` only when the native LIR Proto subprocess
-// declined because `osty-self` is missing — the canonical first-build
-// symptom on a fresh clone. Production runs (osty-self built) never
-// observe stage0 even when the variable is set.
+// stage0 bootstrap fallback emitter. The dispatcher consults it when the
+// native LIR Proto subprocess declined because `osty-self` is missing, or
+// because the only available `osty-self` is itself a stage0 partial binary
+// that trapped in a declined function.
 const Stage0FallbackEnv = "OSTY_STAGE0_FALLBACK"
 
 // Stage0FallbackEnabled reports whether the stage0 fallback emitter
@@ -40,6 +39,7 @@ var tryStage0Fallback = func(entry Entry, opts llvmabi.Options) ([]byte, error) 
 // → `tryNativeOwnedMIRPayloadLLVMIRText`) where each hop can prepend its
 // own context.
 const ostySelfMissingSignal = "osty-self not found"
+const ostySelfStage0DeclinedSignal = "stage0 declined function:"
 
 // IsOstySelfMissing reports whether any of the supplied subprocess warnings
 // carry the "osty-self not found" signal originating from
@@ -66,6 +66,25 @@ func IsOstySelfMissing(warnings []error) bool {
 			continue
 		}
 		if strings.Contains(w.Error(), ostySelfMissingSignal) {
+			return true
+		}
+	}
+	return false
+}
+
+// ShouldUseStage0BootstrapFallback reports whether an explicitly enabled
+// bootstrap build should bypass the native subprocess result and emit through
+// stage0. A stale partial `osty-self` can exist in the normal lookup path and
+// decline before a fresh stage1 has been produced; treating that as bootstrap
+// state lets `osty build toolchain/` recover instead of getting stuck behind
+// its previous partial binary.
+func ShouldUseStage0BootstrapFallback(warnings []error) bool {
+	for _, w := range warnings {
+		if w == nil {
+			continue
+		}
+		msg := w.Error()
+		if strings.Contains(msg, ostySelfMissingSignal) || strings.Contains(msg, ostySelfStage0DeclinedSignal) {
 			return true
 		}
 	}

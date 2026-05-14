@@ -1,0 +1,504 @@
+// Small support surface needed by the selfhost MIR JSON driver.
+//
+// The full source compiler owns these helpers in mir_generator.osty and
+// llvmgen.osty. The MIR JSON self-rebuild driver only needs their stable
+// policy values while lowering already-formed MIR, so keep a compact copy here
+// instead of pulling the whole source-generation pipeline into the fixed-point
+// ratchet bundle.
+
+fn listContainsString(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn listContainsInt(xs: List<Int>, needle: Int) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+pub fn mirDiscriminantSome() -> String {
+    "0"
+}
+
+pub fn mirDiscriminantOk() -> String {
+    "0"
+}
+
+pub fn mirDiscriminantErr() -> String {
+    "1"
+}
+
+pub fn mirDiscriminantNone() -> String {
+    "1"
+}
+
+pub fn mirRtSymbol(suffix: String) -> String {
+    "osty_rt_" + suffix
+}
+
+pub fn mirRtListSymbol(suffix: String) -> String {
+    "osty_rt_list_" + suffix
+}
+
+pub fn mirRtMapSymbol(suffix: String) -> String {
+    "osty_rt_map_" + suffix
+}
+
+pub fn mirRtSetSymbol(suffix: String) -> String {
+    "osty_rt_set_" + suffix
+}
+
+pub fn mirRtStringSymbol(suffix: String) -> String {
+    "osty_rt_strings_" + suffix
+}
+
+pub fn mirRtBytesSymbol(suffix: String) -> String {
+    "osty_rt_bytes_" + suffix
+}
+
+pub fn mirRtCancelSymbol(suffix: String) -> String {
+    "osty_rt_cancel_" + suffix
+}
+
+pub fn mirRtThreadSymbol(suffix: String) -> String {
+    "osty_rt_thread_" + suffix
+}
+
+pub fn mirRtListPopDiscardSymbol() -> String {
+    mirRtListSymbol("pop_discard")
+}
+
+pub fn mirRtListClearSymbol() -> String {
+    mirRtListSymbol("clear")
+}
+
+pub fn mirRtListReverseSymbol() -> String {
+    mirRtListSymbol("reverse")
+}
+
+pub fn mirRtListReversedSymbol() -> String {
+    mirRtListSymbol("reversed")
+}
+
+pub fn mirRtListRemoveAtDiscardSymbol() -> String {
+    mirRtListSymbol("remove_at_discard")
+}
+
+pub fn mirRtListGetBytesV1Symbol() -> String {
+    mirRtListSymbol("get_bytes_v1")
+}
+
+pub fn mirRtMapSymbolForNew() -> String {
+    mirRtMapSymbol("new")
+}
+
+pub fn mirRtBytesLenSymbolName() -> String {
+    mirRtBytesSymbol("len")
+}
+
+pub fn mirRtBytesGetSymbol() -> String {
+    mirRtBytesSymbol("get")
+}
+
+pub fn mirRtBytesFromListSymbol() -> String {
+    mirRtBytesSymbol("from_list")
+}
+
+pub fn mirRtBytesFromHexSymbol() -> String {
+    mirRtBytesSymbol("from_hex")
+}
+
+pub fn mirRtBytesIsValidHexSymbol() -> String {
+    mirRtBytesSymbol("is_valid_hex")
+}
+
+pub fn mirRtBytesToStringSymbol() -> String {
+    mirRtBytesSymbol("to_string")
+}
+
+pub fn mirRtBytesIsValidUTF8Symbol() -> String {
+    mirRtBytesSymbol("is_valid_utf8")
+}
+
+pub fn mirRtStringToBytesSymbol() -> String {
+    mirRtStringSymbol("ToBytes")
+}
+
+pub fn mirRtStringIsValidIntSymbol() -> String {
+    mirRtStringSymbol("IsValidInt")
+}
+
+pub fn mirRtStringToIntSymbol() -> String {
+    mirRtStringSymbol("ToInt")
+}
+
+pub fn mirRtStringIsValidFloatSymbol() -> String {
+    mirRtStringSymbol("IsValidFloat")
+}
+
+pub fn mirRtStringToFloatSymbol() -> String {
+    mirRtStringSymbol("ToFloat")
+}
+
+pub fn mirRtStringSplitIntoSymbol() -> String {
+    mirRtStringSymbol("SplitInto")
+}
+
+pub fn mirRtStringNthSegmentSymbol() -> String {
+    mirRtStringSymbol("NthSegment")
+}
+
+pub fn mirRtCancelCheckCancelledSymbol() -> String {
+    mirRtCancelSymbol("check_cancelled")
+}
+
+pub fn mirRtThreadSleepSymbol() -> String {
+    mirRtThreadSymbol("sleep")
+}
+
+pub fn mirRtOptionUnwrapNoneSymbol() -> String {
+    mirRtSymbol("option_unwrap_none")
+}
+
+pub fn mirRtResultUnwrapErrSymbol() -> String {
+    mirRtSymbol("result_unwrap_err")
+}
+
+pub fn mirRtParallelSymbol() -> String {
+    mirRtSymbol("parallel")
+}
+
+pub fn mirRtTaskGroupRootSymbol() -> String {
+    mirRtSymbol("task_group")
+}
+
+pub fn mirRtTaskSpawnSymbol() -> String {
+    mirRtSymbol("task_spawn")
+}
+
+pub fn mirRtTaskGroupSpawnSymbol() -> String {
+    mirRtSymbol("task_group_spawn")
+}
+
+pub fn mirRtTaskHandleJoinSymbol() -> String {
+    mirRtSymbol("task_handle_join")
+}
+
+pub fn mirRtTaskGroupCancelSymbol() -> String {
+    mirRtSymbol("task_group_cancel")
+}
+
+pub fn mirRtTaskGroupIsCancelledSymbol() -> String {
+    mirRtSymbol("task_group_is_cancelled")
+}
+
+pub fn mirRtTaskRaceSymbol() -> String {
+    mirRtSymbol("task_race")
+}
+
+pub fn mirRtTaskCollectAllSymbol() -> String {
+    mirRtSymbol("task_collect_all")
+}
+
+pub fn mirRtSelectSymbol() -> String {
+    mirRtSymbol("select")
+}
+
+pub fn mirRtSelectRecvSymbol() -> String {
+    mirRtSymbol("select_recv")
+}
+
+pub fn mirRtSelectTimeoutSymbol() -> String {
+    mirRtSymbol("select_timeout")
+}
+
+pub fn mirRtSelectDefaultSymbol() -> String {
+    mirRtSymbol("select_default")
+}
+
+pub fn mirRtSelectSendBytesV1Symbol() -> String {
+    mirRtSymbol("select_send_bytes_v1")
+}
+
+pub fn mirRtSelectSendSuffixSymbol(suffix: String) -> String {
+    mirRtSymbol("select_send_" + suffix)
+}
+
+pub fn mirMapValueSizeBytes(llvmTyp: String) -> Int {
+    if llvmTyp == "i64" || llvmTyp == "double" || llvmTyp == "ptr" {
+        return 8
+    }
+    if llvmTyp == "i32" {
+        return 4
+    }
+    if llvmTyp == "i8" || llvmTyp == "i1" {
+        return 1
+    }
+    0
+}
+
+pub fn llvmListRuntimeNewSymbol() -> String {
+    "osty_rt_list_new"
+}
+
+pub fn llvmListRuntimeLenSymbol() -> String {
+    "osty_rt_list_len"
+}
+
+pub fn llvmListRuntimePushSymbol(suffix: String) -> String {
+    "osty_rt_list_push_" + suffix
+}
+
+pub fn llvmListRuntimePushSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_push_string"
+    }
+    llvmListRuntimePushSymbol(llvmListElementSuffix(elemTyp))
+}
+
+pub fn llvmListRuntimeGetSymbol(suffix: String) -> String {
+    "osty_rt_list_get_" + suffix
+}
+
+pub fn llvmListRuntimeGetSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_get_string"
+    }
+    llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
+}
+
+pub fn llvmListRuntimeInsertSymbol(suffix: String) -> String {
+    "osty_rt_list_insert_" + suffix
+}
+
+pub fn llvmListRuntimeInsertSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_insert_string"
+    }
+    llvmListRuntimeInsertSymbol(llvmListElementSuffix(elemTyp))
+}
+
+pub fn llvmListRuntimeSortedSymbol(elemTyp: String, isString: Bool) -> String {
+    if isString {
+        return "osty_rt_list_sorted_string"
+    }
+    if elemTyp == "i64" {
+        return "osty_rt_list_sorted_i64"
+    }
+    if elemTyp == "i1" {
+        return "osty_rt_list_sorted_i1"
+    }
+    if elemTyp == "double" {
+        return "osty_rt_list_sorted_f64"
+    }
+    ""
+}
+
+pub fn llvmListRuntimeToSetSymbol(elemTyp: String, isString: Bool) -> String {
+    if isString {
+        return "osty_rt_list_to_set_string"
+    }
+    if elemTyp == "i64" {
+        return "osty_rt_list_to_set_i64"
+    }
+    if elemTyp == "i1" {
+        return "osty_rt_list_to_set_i1"
+    }
+    if elemTyp == "double" {
+        return "osty_rt_list_to_set_f64"
+    }
+    if elemTyp == "ptr" {
+        return "osty_rt_list_to_set_ptr"
+    }
+    ""
+}
+
+pub fn llvmMapRuntimeNewSymbol() -> String {
+    "osty_rt_map_new"
+}
+
+pub fn llvmMapRuntimeKeysSymbol() -> String {
+    "osty_rt_map_keys"
+}
+
+pub fn llvmMapRuntimeValuesSymbol() -> String {
+    "osty_rt_map_values"
+}
+
+pub fn llvmMapRuntimeLenSymbol() -> String {
+    "osty_rt_map_len"
+}
+
+pub fn llvmMapRuntimeClearSymbol() -> String {
+    "osty_rt_map_clear"
+}
+
+pub fn llvmMapKeySuffix(typ: String, isString: Bool) -> String {
+    if isString {
+        return "string"
+    }
+    if typ == "i64" {
+        return "i64"
+    }
+    if typ == "i1" {
+        return "i1"
+    }
+    if typ == "double" {
+        return "f64"
+    }
+    if typ == "ptr" {
+        return "ptr"
+    }
+    "bytes"
+}
+
+pub fn llvmMapRuntimeContainsSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_contains_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+pub fn llvmMapRuntimeInsertSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_insert_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+pub fn llvmMapRuntimeRemoveSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_remove_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+pub fn llvmSetRuntimeNewSymbol() -> String {
+    "osty_rt_set_new"
+}
+
+pub fn llvmSetRuntimeLenSymbol() -> String {
+    "osty_rt_set_len"
+}
+
+pub fn llvmSetRuntimeToListSymbol() -> String {
+    "osty_rt_set_to_list"
+}
+
+pub fn llvmSetRuntimeClearSymbol() -> String {
+    "osty_rt_set_clear"
+}
+
+pub fn llvmSetRuntimeContainsSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_contains_" + llvmMapKeySuffix(elemTyp, isString)
+}
+
+pub fn llvmSetRuntimeInsertSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_insert_" + llvmMapKeySuffix(elemTyp, isString)
+}
+
+pub fn llvmSetRuntimeRemoveSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_remove_" + llvmMapKeySuffix(elemTyp, isString)
+}
+
+pub fn llvmContainerAbiKind(typ: String, isString: Bool) -> Int {
+    if isString {
+        return 5
+    }
+    if typ == "i64" {
+        return 1
+    }
+    if typ == "i1" {
+        return 2
+    }
+    if typ == "double" {
+        return 3
+    }
+    if typ == "ptr" {
+        return 4
+    }
+    6
+}
+
+pub fn llvmListUsesTypedRuntime(elemTyp: String) -> Bool {
+    elemTyp == "i64" || elemTyp == "i1" || elemTyp == "double" || elemTyp == "ptr"
+}
+
+pub fn llvmListElementSuffix(typ: String) -> String {
+    if typ == "i64" || typ == "i1" || typ == "ptr" {
+        return typ
+    }
+    if typ == "double" {
+        return "f64"
+    }
+    let mut out = ""
+    for c in typ.chars() {
+        if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+            out = "{out}{c}"
+        } else {
+            out = "{out}_"
+        }
+    }
+    if out == "" {
+        return "ptr"
+    }
+    out
+}
+
+pub fn llvmChanElementSuffix(elemTyp: String) -> String {
+    if llvmListUsesTypedRuntime(elemTyp) {
+        return llvmListElementSuffix(elemTyp)
+    }
+    "bytes_v1"
+}
+
+pub fn llvmChanRuntimeMakeSymbol() -> String {
+    "osty_rt_thread_chan_make"
+}
+
+pub fn llvmChanRuntimeSendSymbol(suffix: String) -> String {
+    "osty_rt_thread_chan_send_" + suffix
+}
+
+pub fn llvmChanRuntimeSendBytesSymbol() -> String {
+    "osty_rt_thread_chan_send_bytes_v1"
+}
+
+pub fn llvmChanRuntimeRecvSymbol(suffix: String) -> String {
+    "osty_rt_thread_chan_recv_" + suffix
+}
+
+pub fn llvmChanRuntimeCloseSymbol() -> String {
+    "osty_rt_thread_chan_close"
+}
+
+pub fn llvmChanRuntimeIsClosedSymbol() -> String {
+    "osty_rt_thread_chan_is_closed"
+}
+
+pub fn llvmStringRuntimeEqualSymbol() -> String {
+    "osty_rt_strings_Equal"
+}
+
+pub fn llvmSafepointKindEntry() -> Int {
+    1
+}
+
+pub fn llvmSafepointKindCall() -> Int {
+    2
+}
+
+pub fn llvmEncodeSafepointId(kind: Int, serial: Int) -> Int {
+    let mask = (1 << 56) - 1
+    (kind << 56) | (serial & mask)
+}
+
+fn mirProjectionKindName(k: MirProjectionKind) -> String {
+    match k {
+        MirProjField -> "field",
+        MirProjTuple -> "tuple",
+        MirProjVariant -> "variant",
+        MirProjIndex -> "index",
+        MirProjDeref -> "deref",
+        MirProjInvalid -> "invalid",
+    }
+}

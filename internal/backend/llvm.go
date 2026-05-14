@@ -313,7 +313,7 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 }
 
 func emitStage0FallbackForMissingOstySelf(entry Entry, opts llvmabi.Options, nativeWarnings []error) ([]byte, []error, bool) {
-	if !Stage0FallbackEnabled() || !IsOstySelfMissing(nativeWarnings) {
+	if !Stage0FallbackEnabled() || !ShouldUseStage0BootstrapFallback(nativeWarnings) {
 		return nil, nativeWarnings, false
 	}
 	s0Out, s0Err := tryStage0Fallback(entry, opts)

@@ -4,12 +4,11 @@
 // JSON object on stdout.
 //
 // Slice-2 contract: the binary's body is now a thin Go shim that
-// stages the source to a temp file and forks the self-hosted
-// `osty-self` binary's `lir-proto-lower` subcommand to do the
-// actual lowering through the Osty-owned `toolchain/lir_proto.osty`
-// pipeline (HIR → MIR → LIR Proto → LLVM IR). The wire shape stays
-// identical to Slice 1 — callers in `internal/nativelirproto`,
-// `cmd/osty/lir_proto_bridge.go`, and the tests are untouched.
+// stages either source or an already-lowered MIR JSON payload to a
+// temp file and forks the self-hosted `osty-self` binary. Source
+// requests use `lir-proto-lower`; MIR requests use
+// `lir-proto-lower-mir-json` so production backends do not re-enter
+// the still-partial Osty source compiler.
 //
 // Failure modes (returned as `declined: true` so the dispatcher
 // falls back to the legacy MIR-direct emit instead of hard-failing):
@@ -82,7 +81,7 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		// when the self-host artifact isn't built yet.
 		return nativelirproto.Response{Declined: true, Error: err.Error()}, nil
 	}
-	sourcePath, cleanup, err := stageInput(req)
+	stagedPath, command, cleanup, err := stageInput(req)
 	if cleanup != nil && os.Getenv("OSTY_LIRPROTO_KEEP_STAGED") == "" {
 		defer cleanup()
 	}
@@ -90,18 +89,14 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		return nativelirproto.Response{}, err
 	}
 	if dbg := os.Getenv("OSTY_LIRPROTO_DEBUG"); dbg != "" {
-		fmt.Fprintf(os.Stderr, "[lirproto-debug] staged source=%s\n", sourcePath)
+		fmt.Fprintf(os.Stderr, "[lirproto-debug] staged %s=%s\n", command, stagedPath)
 	}
 
 	pkgName := req.PackageName
 	if pkgName == "" {
 		pkgName = "main"
 	}
-	// osty-self currently only supports lir-proto-lower (source-based).
-	// MIR JSON path is reserved for when the self-hosted binary grows
-	// a lir-proto-lower-mir-json subcommand (Phase 1+).
-	command := "lir-proto-lower"
-	args := []string{command, sourcePath, "--package-name=" + pkgName}
+	args := []string{command, stagedPath, "--package-name=" + pkgName}
 	if req.Target != "" {
 		args = append(args, "--target="+req.Target)
 	}
@@ -163,12 +158,35 @@ func resolveOstySelfBin() (string, error) {
 // JSON to a temp file so the osty-self subcommand can open it. MIR
 // wins even when callers attach source text for diagnostics; otherwise
 // the bridge silently re-enters source lowering and loses the MIR path.
-func stageInput(req nativelirproto.Request) (string, func(), error) {
+func stageInput(req nativelirproto.Request) (string, string, func(), error) {
 	root, err := os.MkdirTemp("", "osty-native-lirproto-*")
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	cleanup := func() { os.RemoveAll(root) }
+
+	if req.MIR != nil {
+		data, err := json.Marshal(req.MIR)
+		if err != nil {
+			return "", "", cleanup, fmt.Errorf("marshal MIR JSON input: %w", err)
+		}
+		name := "main.mir.json"
+		if req.SourcePath != "" {
+			base := filepath.Base(req.SourcePath)
+			ext := filepath.Ext(base)
+			if ext != "" {
+				base = strings.TrimSuffix(base, ext)
+			}
+			if base != "" && base != "." {
+				name = base + ".mir.json"
+			}
+		}
+		stagedPath := filepath.Join(root, name)
+		if err := os.WriteFile(stagedPath, data, 0o644); err != nil {
+			return "", "", cleanup, err
+		}
+		return stagedPath, "lir-proto-lower-mir-json", cleanup, nil
+	}
 
 	name := "main.osty"
 	if req.SourcePath != "" {
@@ -181,11 +199,11 @@ func stageInput(req nativelirproto.Request) (string, func(), error) {
 		}
 	}
 	if len(data) == 0 {
-		return "", cleanup, errors.New("source text is empty; lir-proto-lower requires source")
+		return "", "", cleanup, errors.New("source text is empty; lir-proto-lower requires source")
 	}
 	stagedPath := filepath.Join(root, name)
 	if err := os.WriteFile(stagedPath, data, 0o644); err != nil {
-		return "", cleanup, err
+		return "", "", cleanup, err
 	}
-	return stagedPath, cleanup, nil
+	return stagedPath, "lir-proto-lower", cleanup, nil
 }

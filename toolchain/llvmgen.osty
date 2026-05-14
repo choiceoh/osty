@@ -1322,11 +1322,18 @@ fn llvmNativeEvalListLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValu
     let list = llvmListNew(emitter)
     for child in expr.childExprs {
         let value = llvmNativeEvalExpr(emitter, child)
-        if llvmListUsesTypedRuntime(expr.elemLLVMType) {
+        let childComposite = llvmStrings.hasPrefix(child.llvmType, "%") || llvmStrings.hasPrefix(child.llvmType, "\{")
+        if llvmListUsesTypedRuntime(expr.elemLLVMType) && value.typ == expr.elemLLVMType && childComposite == false {
             llvmListPush(emitter, list, value)
         } else {
-            let slot = llvmSpillToSlot(emitter, value)
-            let size = llvmSizeOf(emitter, expr.elemLLVMType)
+            let spillType = if childComposite {
+                child.llvmType
+            } else {
+                value.typ
+            }
+            let spillValue = LlvmValue {typ: spillType, name: value.name, pointer: false}
+            let slot = llvmSpillToSlot(emitter, spillValue)
+            let size = llvmSizeOf(emitter, spillType)
             llvmCallVoid(emitter, "osty_rt_list_push_bytes_v1", [list, slot, size])
         }
     }

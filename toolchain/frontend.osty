@@ -807,7 +807,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let ownerToken = tokenIndex
                 tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
+                let facts = frontStringStructureScan(positions, units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -840,7 +840,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let ownerToken = tokenIndex
                 tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
+                let facts = frontStringStructureScan(positions, units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -868,7 +868,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let ownerToken = tokenIndex
                 tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
+                let facts = frontStringStructureScan(positions, units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -896,7 +896,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let ownerToken = tokenIndex
                 tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
+                let facts = frontStringStructureScan(positions, units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -933,7 +933,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let ownerToken = tokenIndex
                 tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
-                let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
+                let facts = frontStringStructureScan(positions, units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
                     stringParts.push(part)
                 }
@@ -1160,7 +1160,7 @@ pub fn frontStringScanHitNewline(units: List<String>, start: Int, unitCount: Int
 pub fn emptyFrontStringStructureScan() -> FrontStringStructureScan {
     FrontStringStructureScan {parts: [], interpolationTokens: [], diagnostics: [], partCount: 0, interpolationTokenCount: 0, normalizedTripleUnits: 0, tripleIndentErrors: 0, escapeErrors: 0}
 }
-pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind, ownerToken: Int, firstPartIndex: Int, firstInterpolationTokenIndex: Int, scan: FrontScanResult) -> FrontStringStructureScan {
+pub fn frontStringStructureScan(positions: List<FrontPos>, units: List<String>, start: Int, unitCount: Int, kind: FrontTokenKind, ownerToken: Int, firstPartIndex: Int, firstInterpolationTokenIndex: Int, scan: FrontScanResult) -> FrontStringStructureScan {
     let mut out = emptyFrontStringStructureScan()
     let mut partIndex = firstPartIndex
     let mut interpolationTokenIndex = firstInterpolationTokenIndex
@@ -1170,17 +1170,17 @@ pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int,
     out.normalizedTripleUnits = normalized.normalizedUnits
     out.tripleIndentErrors = normalized.badIndentLines
     if normalized.badIndentLines > 0 {
-        out.diagnostics.push(frontLexDiagnostic(FrontDiagBadTripleIndent, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
+        out.diagnostics.push(frontLexDiagnostic(FrontDiagBadTripleIndent, frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, start + scan.consumed)))
     }
     if kind == FrontChar || kind == FrontByte {
         if contentEnd <= contentStart {
             if kind == FrontChar {
-                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyChar, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyChar, frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, start + scan.consumed)))
             } else {
-                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyByte, frontPositionAt(units, start), frontPositionAt(units, start + scan.consumed)))
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagEmptyByte, frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, start + scan.consumed)))
             }
         }
-        let escapes = frontEscapeDiagnostics(units, contentStart, contentEnd)
+        let escapes = frontEscapeDiagnostics(positions, units, contentStart, contentEnd)
         for diag in escapes.diagnostics {
             out.diagnostics.push(diag)
         }
@@ -1190,7 +1190,7 @@ pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int,
     if kind == FrontRawString {
         let length = contentEnd - contentStart
         if length > 0 || scan.triple {
-            out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, contentStart), frontPositionAt(units, contentEnd), length, frontStringNormalizedLength(length, scan.triple, normalized.normalizedUnits), 0, 0))
+            out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionFromIndex(positions, contentStart), frontPositionFromIndex(positions, contentEnd), length, frontStringNormalizedLength(length, scan.triple, normalized.normalizedUnits), 0, 0))
             out.partCount = out.partCount + 1
         }
         return out
@@ -1205,19 +1205,19 @@ pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int,
             if unit == "\\" {
                 let escape = frontEscapeScan(units, idx + 1, contentEnd)
                 if !(escape.ok) {
-                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionAt(units, idx), frontPositionAt(units, idx + 1 + escape.consumed)))
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + 1 + escape.consumed)))
                     out.escapeErrors = out.escapeErrors + 1
                 }
                 skip = escape.consumed
             } else if unit == r"{" {
                 if idx > segmentStart {
-                    out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, segmentStart), frontPositionAt(units, idx), idx - segmentStart, idx - segmentStart, 0, 0))
+                    out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionFromIndex(positions, segmentStart), frontPositionFromIndex(positions, idx), idx - segmentStart, idx - segmentStart, 0, 0))
                     out.partCount = out.partCount + 1
                     partIndex = partIndex + 1
                 }
                 let interpPartIndex = partIndex
-                let interp = frontInterpolationScan(units, idx, contentEnd, interpPartIndex)
-                out.parts.push(frontStringPart(ownerToken, FrontStringInterpolation, frontPositionAt(units, idx), frontPositionAt(units, idx + interp.consumed), interp.consumed, 0, interpolationTokenIndex, interp.tokenCount))
+                let interp = frontInterpolationScan(positions, units, idx, contentEnd, interpPartIndex)
+                out.parts.push(frontStringPart(ownerToken, FrontStringInterpolation, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + interp.consumed), interp.consumed, 0, interpolationTokenIndex, interp.tokenCount))
                 out.partCount = out.partCount + 1
                 partIndex = partIndex + 1
                 for token in interp.tokens {
@@ -1234,7 +1234,7 @@ pub fn frontStringStructureScan(units: List<String>, start: Int, unitCount: Int,
         }
     }
     if contentEnd > segmentStart {
-        out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionAt(units, segmentStart), frontPositionAt(units, contentEnd), contentEnd - segmentStart, frontStringNormalizedLength(contentEnd - segmentStart, scan.triple, normalized.normalizedUnits), 0, 0))
+        out.parts.push(frontStringPart(ownerToken, FrontStringText, frontPositionFromIndex(positions, segmentStart), frontPositionFromIndex(positions, contentEnd), contentEnd - segmentStart, frontStringNormalizedLength(contentEnd - segmentStart, scan.triple, normalized.normalizedUnits), 0, 0))
         out.partCount = out.partCount + 1
     }
     out
@@ -1289,7 +1289,7 @@ pub fn frontUnitsMatchAt(units: List<String>, start: Int, text: String) -> Bool 
     }
     true
 }
-pub fn frontEscapeDiagnostics(units: List<String>, start: Int, end: Int) -> FrontStringStructureScan {
+pub fn frontEscapeDiagnostics(positions: List<FrontPos>, units: List<String>, start: Int, end: Int) -> FrontStringStructureScan {
     let mut out = emptyFrontStringStructureScan()
     let mut skip = 0
     for idx in start..end {
@@ -1298,7 +1298,7 @@ pub fn frontEscapeDiagnostics(units: List<String>, start: Int, end: Int) -> Fron
         } else if frontUnitAt(units, idx) == "\\" {
             let escape = frontEscapeScan(units, idx + 1, end)
             if !(escape.ok) {
-                out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionAt(units, idx), frontPositionAt(units, idx + 1 + escape.consumed)))
+                out.diagnostics.push(frontLexDiagnostic(FrontDiagUnknownEscape, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + 1 + escape.consumed)))
                 out.escapeErrors = out.escapeErrors + 1
             }
             skip = escape.consumed
@@ -1370,7 +1370,7 @@ pub fn frontHexValue(unit: String) -> Int {
 pub fn emptyFrontInterpolationScan() -> FrontInterpolationScan {
     FrontInterpolationScan {consumed: 0, ok: true, tokens: [], diagnostics: [], tokenCount: 0}
 }
-pub fn frontInterpolationScan(units: List<String>, start: Int, limit: Int, ownerPart: Int) -> FrontInterpolationScan {
+pub fn frontInterpolationScan(positions: List<FrontPos>, units: List<String>, start: Int, limit: Int, ownerPart: Int) -> FrontInterpolationScan {
     let mut out = emptyFrontInterpolationScan()
     let mut depth = 1
     let mut skip = 0
@@ -1390,7 +1390,7 @@ pub fn frontInterpolationScan(units: List<String>, start: Int, limit: Int, owner
                 let block = frontBlockCommentSkip(units, idx, limit)
                 out.consumed = idx - start + block.consumed
                 if !(block.ok) {
-                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedBlockComment, frontPositionAt(units, idx), frontPositionAt(units, idx + block.consumed)))
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedBlockComment, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + block.consumed)))
                 }
                 skip = block.consumed - 1
             } else if unit == r"}" {
@@ -1399,30 +1399,30 @@ pub fn frontInterpolationScan(units: List<String>, start: Int, limit: Int, owner
                     out.consumed = idx - start + 1
                     return out
                 }
-                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontRBrace, 0, false, 0, false)))
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScanIndexed(positions, idx, 1, FrontRBrace, 0, false, 0, false)))
                 out.tokenCount = out.tokenCount + 1
                 out.consumed = idx - start + 1
             } else if unit == r"{" {
                 depth = depth + 1
-                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontLBrace, 0, false, 0, false)))
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScanIndexed(positions, idx, 1, FrontLBrace, 0, false, 0, false)))
                 out.tokenCount = out.tokenCount + 1
                 out.consumed = idx - start + 1
             } else {
                 let tokenScan = frontInterpolationTokenScan(units, idx, limit)
-                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, tokenScan.consumed, tokenScan.kind, 0, tokenScan.triple, tokenScan.interpolations, tokenScan.baseLiteral)))
+                out.tokens.push(frontInterpolationToken(ownerPart, frontLexTokenFromScanIndexed(positions, idx, tokenScan.consumed, tokenScan.kind, 0, tokenScan.triple, tokenScan.interpolations, tokenScan.baseLiteral)))
                 out.tokenCount = out.tokenCount + 1
-                let nestedString = frontInterpolationStringDiagnostics(units, idx, limit, tokenScan)
+                let nestedString = frontInterpolationStringDiagnostics(positions, units, idx, limit, tokenScan)
                 for diag in nestedString.diagnostics {
                     out.diagnostics.push(diag)
                 }
                 if tokenScan.uppercaseBasePrefix {
-                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, frontPositionAt(units, idx), frontPositionAt(units, idx + 2)))
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + 2)))
                 }
                 if frontScanIsNumber(tokenScan) && frontNumberHasBadSeparator(units, idx, tokenScan.consumed) {
-                    out.diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, frontPositionAt(units, idx), frontPositionAt(units, idx + tokenScan.consumed)))
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + tokenScan.consumed)))
                 }
                 if frontScanIsFatArrow(units, idx, tokenScan) {
-                    out.diagnostics.push(frontLexDiagnostic(FrontDiagFatArrowRemoved, frontPositionAt(units, idx), frontPositionAt(units, idx + tokenScan.consumed)))
+                    out.diagnostics.push(frontLexDiagnostic(FrontDiagFatArrowRemoved, frontPositionFromIndex(positions, idx), frontPositionFromIndex(positions, idx + tokenScan.consumed)))
                 }
                 out.consumed = idx - start + tokenScan.consumed
                 skip = tokenScan.consumed - 1
@@ -1431,20 +1431,20 @@ pub fn frontInterpolationScan(units: List<String>, start: Int, limit: Int, owner
     }
     out.ok = false
     out.consumed = limit - start
-    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedInterpolation, frontPositionAt(units, start), frontPositionAt(units, limit)))
+    out.diagnostics.push(frontLexDiagnostic(FrontDiagUnterminatedInterpolation, frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, limit)))
     out
 }
-pub fn frontInterpolationStringDiagnostics(units: List<String>, start: Int, limit: Int, tokenScan: FrontScanResult) -> FrontStringStructureScan {
+pub fn frontInterpolationStringDiagnostics(positions: List<FrontPos>, units: List<String>, start: Int, limit: Int, tokenScan: FrontScanResult) -> FrontStringStructureScan {
     if tokenScan.kind != FrontString && tokenScan.kind != FrontRawString && tokenScan.kind != FrontChar && tokenScan.kind != FrontByte && tokenScan.kind != FrontByteString {
         return emptyFrontStringStructureScan()
     }
     let mut out = emptyFrontStringStructureScan()
-    let facts = frontStringStructureScan(units, start, limit, tokenScan.kind, -1, 0, 0, tokenScan)
+    let facts = frontStringStructureScan(positions, units, start, limit, tokenScan.kind, -1, 0, 0, tokenScan)
     for diag in facts.diagnostics {
         out.diagnostics.push(diag)
     }
     if tokenScan.errors > 0 {
-        out.diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan), frontPositionAt(units, start), frontPositionAt(units, start + tokenScan.consumed)))
+        out.diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan), frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, start + tokenScan.consumed)))
     }
     out
 }
@@ -1840,14 +1840,10 @@ pub fn frontBlockCommentScan(consumed: Int, ok: Bool) -> FrontBlockCommentScan {
     FrontBlockCommentScan {consumed, ok}
 }
 pub fn frontUnitAt(units: List<String>, target: Int) -> String {
-    let mut idx = 0
-    for unit in units {
-        if idx == target {
-            return unit
-        }
-        idx = idx + 1
+    if target < 0 || target >= units.len() {
+        return ""
     }
-    ""
+    units[target]
 }
 pub fn frontIsSpaceNoNewline(unit: String) -> Bool {
     unit == " " || unit == "\t"

@@ -34,3 +34,27 @@ func TestIsOstySelfMissingDetectsSubprocessSignal(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldUseStage0BootstrapFallbackDetectsPartialOstySelf(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		ws   []error
+		want bool
+	}{
+		{"empty", nil, false},
+		{"missing", []error{errors.New("osty-self not found; run `osty build toolchain/`")}, true},
+		{"partial-stage0", []error{errors.New("native LIR Proto subprocess declined: osty-self: stage0 declined function: mirJsonParseValue")}, true},
+		{"unrelated", []error{errors.New("MIR payload requires the Osty-owned LIR Proto backend")}, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ShouldUseStage0BootstrapFallback(c.ws); got != c.want {
+				t.Fatalf("ShouldUseStage0BootstrapFallback(%v) = %v, want %v", c.ws, got, c.want)
+			}
+		})
+	}
+}
