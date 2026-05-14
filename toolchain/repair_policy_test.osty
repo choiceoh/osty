@@ -1,0 +1,89 @@
+use std.testing
+fn testUppercaseBasePrefixHex() {
+    testing.assertEq(uppercaseBasePrefix("0XFF"), "x")
+    testing.assertEq(uppercaseBasePrefix("0X0"), "x")
+}
+fn testUppercaseBasePrefixBinary() {
+    testing.assertEq(uppercaseBasePrefix("0B1010"), "b")
+}
+fn testUppercaseBasePrefixOctal() {
+    testing.assertEq(uppercaseBasePrefix("0O777"), "o")
+}
+fn testUppercaseBasePrefixRejectsLowerCase() {
+    testing.assertEq(uppercaseBasePrefix("0xFF"), "")
+    testing.assertEq(uppercaseBasePrefix("0b10"), "")
+    testing.assertEq(uppercaseBasePrefix("0o7"), "")
+}
+fn testUppercaseBasePrefixRejectsNonZeroPrefix() {
+    testing.assertEq(uppercaseBasePrefix("1XFF"), "")
+    testing.assertEq(uppercaseBasePrefix("XX"), "")
+    testing.assertEq(uppercaseBasePrefix(""), "")
+    testing.assertEq(uppercaseBasePrefix("0"), "")
+}
+fn testUppercaseBasePrefixRejectsUnknownBase() {
+    testing.assertEq(uppercaseBasePrefix("0Z123"), "")
+    testing.assertEq(uppercaseBasePrefix("0123"), "")
+}
+fn testDeclarationKeywordReplacementKnown() {
+    let func_ = declarationKeywordReplacement("func")
+    testing.assert(func_.ok)
+    testing.assertEq(func_.value, "fn")
+    let function = declarationKeywordReplacement("function")
+    testing.assert(function.ok)
+    testing.assertEq(function.value, "fn")
+    let def = declarationKeywordReplacement("def")
+    testing.assert(def.ok)
+    testing.assertEq(def.value, "fn")
+}
+fn testDeclarationKeywordReplacementRejects() {
+    testing.assert(!(declarationKeywordReplacement("fn").ok))
+    testing.assert(!(declarationKeywordReplacement("let").ok))
+    testing.assert(!(declarationKeywordReplacement("").ok))
+    testing.assert(!(declarationKeywordReplacement("FUNC").ok))
+}
+fn testValueIdentifierReplacementNullAliases() {
+    let n1 = valueIdentifierReplacement("nil")
+    testing.assert(n1.ok)
+    testing.assertEq(n1.value, "None")
+    let n2 = valueIdentifierReplacement("null")
+    testing.assert(n2.ok)
+    testing.assertEq(n2.value, "None")
+}
+fn testValueIdentifierReplacementBools() {
+    let t = valueIdentifierReplacement("True")
+    testing.assert(t.ok)
+    testing.assertEq(t.value, "true")
+    let f = valueIdentifierReplacement("False")
+    testing.assert(f.ok)
+    testing.assertEq(f.value, "false")
+}
+fn testValueIdentifierReplacementRejectsCanonical() {
+    testing.assert(!(valueIdentifierReplacement("None").ok))
+    testing.assert(!(valueIdentifierReplacement("true").ok))
+    testing.assert(!(valueIdentifierReplacement("false").ok))
+    testing.assert(!(valueIdentifierReplacement("").ok))
+}
+fn testLineIndentMidLine() {
+    testing.assertEq(lineIndent("    hello", 8), "    ")
+}
+fn testLineIndentTabIndent() {
+    testing.assertEq(lineIndent("\t\thello", 5), "\t\t")
+}
+fn testLineIndentNoIndent() {
+    testing.assertEq(lineIndent("hello", 3), "")
+}
+fn testLineIndentSecondLine() {
+    let src = "first\n    second"
+    testing.assertEq(lineIndent(src, 10), "    ")
+}
+fn testLineIndentBlankLine() {
+    let src = "first\n\n    third"
+    let blank = lineIndent(src, 6)
+    testing.assertEq(blank, "")
+}
+fn testLineIndentOffsetPastEnd() {
+    testing.assertEq(lineIndent("ab", 100), "")
+}
+fn testLineIndentMixedTabsThenNonWhitespace() {
+    testing.assertEq(lineIndent(" \tcode", 4), " \t")
+}

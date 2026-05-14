@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/osty/osty/internal/lexer"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -181,29 +182,20 @@ func Source(src []byte) Result {
 	return Result{Source: out, Changes: changes, Skipped: skipped}
 }
 
+// uppercaseBasePrefix delegates to toolchain/repair_policy.osty
+// for the lowercase replacement of an uppercase numeric base
+// prefix.
 func uppercaseBasePrefix(value string) string {
-	if len(value) < 2 || value[0] != '0' {
-		return ""
-	}
-	switch value[1] {
-	case 'X':
-		return "x"
-	case 'B':
-		return "b"
-	case 'O':
-		return "o"
-	default:
-		return ""
-	}
+	return runner.UppercaseBasePrefix(value)
 }
 
+// declarationKeywordReplacement delegates to
+// toolchain/repair_policy.osty for the foreign-keyword → `fn`
+// lookup. Token-context filtering stays in this package's
+// caller.
 func declarationKeywordReplacement(value string) (string, bool) {
-	switch value {
-	case "func", "function", "def":
-		return "fn", true
-	default:
-		return "", false
-	}
+	r := runner.DeclarationKeywordReplacement(value)
+	return r.Value, r.Ok
 }
 
 func looksLikeFnDecl(toks []token.Token, i int) bool {
@@ -305,17 +297,12 @@ func atStatementStart(toks []token.Token, i int) bool {
 	}
 }
 
+// valueIdentifierReplacement delegates to
+// toolchain/repair_policy.osty for the foreign-value → canonical
+// Osty value lookup.
 func valueIdentifierReplacement(value string) (string, bool) {
-	switch value {
-	case "nil", "null":
-		return "None", true
-	case "True":
-		return "true", true
-	case "False":
-		return "false", true
-	default:
-		return "", false
-	}
+	r := runner.ValueIdentifierReplacement(value)
+	return r.Value, r.Ok
 }
 
 func looksLikeValueUse(toks []token.Token, i int) bool {
@@ -455,20 +442,7 @@ func semicolonEdit(src []byte, toks []token.Token, i int) edit {
 }
 
 func lineIndent(src []byte, offset int) string {
-	start := offset
-	for start > 0 && src[start-1] != '\n' {
-		start--
-	}
-	end := start
-	for end < len(src) {
-		switch src[end] {
-		case ' ', '\t':
-			end++
-		default:
-			return string(src[start:end])
-		}
-	}
-	return string(src[start:end])
+	return runner.LineIndent(src, offset)
 }
 
 func nextSignificant(toks []token.Token, start int) token.Token {
