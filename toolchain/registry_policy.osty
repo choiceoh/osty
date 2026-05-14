@@ -143,3 +143,38 @@ pub fn registryStatusErrorMessage(url: String, statusCode: Int, body: String, st
     }
     "registry " + url + ": HTTP " + "{statusCode}" + ": " + msg
 }
+/// validateRegistryPackageName checks `name` against the registry's
+/// accepted name alphabet. Returns the empty string on success;
+/// otherwise an error message the host wraps in `badRequest`:
+///
+///   - empty input → `"package name is empty"`
+///   - any other rejection → `"invalid package name \"<name>\""`
+///
+/// Rules:
+///
+///   - All positions: `[A-Za-z_]` ok.
+///   - All positions except the first: `[0-9-]` also ok.
+///   - Anything else (including any non-ASCII) is rejected.
+pub fn validateRegistryPackageName(name: String) -> String {
+    if name == "" {
+        return "package name is empty"
+    }
+    let bs = name.bytes()
+    let n = bs.len()
+    let mut i = 0
+    for i < n {
+        let b = bs[i].toInt()
+        let isUpper = b >= 0x41 && b <= 0x5A
+        let isLower = b >= 0x61 && b <= 0x7A
+        let isUnderscore = b == 0x5F
+        let isDigit = b >= 0x30 && b <= 0x39
+        let isDash = b == 0x2D
+        let always = isUpper || isLower || isUnderscore
+        let nonFirst = i > 0 && (isDigit || isDash)
+        if !(always || nonFirst) {
+            return "invalid package name \"" + name + "\""
+        }
+        i = i + 1
+    }
+    ""
+}

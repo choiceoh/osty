@@ -95,3 +95,33 @@ func RegistryStatusErrorMessage(url string, statusCode int, body, statusText str
 	}
 	return "registry " + url + ": HTTP " + strconv.Itoa(statusCode) + ": " + msg
 }
+
+// ValidateRegistryPackageName checks `name` against the registry's
+// accepted name alphabet. Returns the empty string on success;
+// otherwise an error message the host wraps in badRequest:
+//
+//   - empty input → "package name is empty"
+//   - any other rejection → `invalid package name "<name>"`
+//
+// Rules: [A-Za-z_] everywhere, [0-9-] for non-first positions.
+//
+// Osty: toolchain/registry_policy.osty:158
+func ValidateRegistryPackageName(name string) string {
+	if name == "" {
+		return "package name is empty"
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		isUpper := b >= 'A' && b <= 'Z'
+		isLower := b >= 'a' && b <= 'z'
+		isUnderscore := b == '_'
+		isDigit := b >= '0' && b <= '9'
+		isDash := b == '-'
+		always := isUpper || isLower || isUnderscore
+		nonFirst := i > 0 && (isDigit || isDash)
+		if !(always || nonFirst) {
+			return "invalid package name \"" + name + "\""
+		}
+	}
+	return ""
+}
