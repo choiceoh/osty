@@ -159,3 +159,73 @@ func RegistrySearchRequestNormalize(rawQuery string, rawLimit int) RegistrySearc
 	}
 	return RegistrySearchRequest{Query: q, Limit: limit}
 }
+
+// PublishDepSpec is the host-side dependency shape the publish
+// filter operates on.
+//
+// Osty: toolchain/registry_policy.osty:246
+type PublishDepSpec struct {
+	Name        string
+	PackageName string
+	VersionReq  string
+	Path        string
+	IsGit       bool
+}
+
+// PublishVersionDep is the structured output the registry's
+// store records on each published version. Kind is "normal" or
+// "dev".
+//
+// Osty: toolchain/registry_policy.osty:256
+type PublishVersionDep struct {
+	Name string
+	Req  string
+	Kind string
+}
+
+// PublishDepsResult bundles the filtered dep list + an optional
+// rejection message.
+//
+// Osty: toolchain/registry_policy.osty:265
+type PublishDepsResult struct {
+	Deps         []PublishVersionDep
+	ErrorMessage string
+}
+
+// ClassifyPublishDeps applies per-publish dep policy:
+//   - path dep → reject the publish
+//   - git dep → silently skip
+//   - else → record with effective name + version req
+//
+// Osty: toolchain/registry_policy.osty:280
+func ClassifyPublishDeps(normal, dev []PublishDepSpec) PublishDepsResult {
+	var out []PublishVersionDep
+	if msg := appendPublishDeps(&out, normal, "normal"); msg != "" {
+		return PublishDepsResult{ErrorMessage: msg}
+	}
+	if msg := appendPublishDeps(&out, dev, "dev"); msg != "" {
+		return PublishDepsResult{ErrorMessage: msg}
+	}
+	return PublishDepsResult{Deps: out}
+}
+
+func appendPublishDeps(out *[]PublishVersionDep, section []PublishDepSpec, kind string) string {
+	for _, d := range section {
+		if d.Path != "" {
+			return "dependency " + TomlBasicString(d.Name) + " uses path=" + TomlBasicString(d.Path) + "; path dependencies cannot be published"
+		}
+		if d.IsGit {
+			continue
+		}
+		name := d.PackageName
+		if name == "" {
+			name = d.Name
+		}
+		req := d.VersionReq
+		if req == "" {
+			req = "*"
+		}
+		*out = append(*out, PublishVersionDep{Name: name, Req: req, Kind: kind})
+	}
+	return ""
+}

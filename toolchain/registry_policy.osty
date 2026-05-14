@@ -230,3 +230,107 @@ pub fn registrySearchRequestNormalize(rawQuery: String, rawLimit: Int) -> Regist
         errorMessage: "",
     }
 }
+/// PublishDepSpec is the host-side dependency shape the publish
+/// filter operates on. Mirrors a subset of manifest.Dependency:
+///
+///   - `name`: alias used in the manifest (`[dependencies]` key).
+///   - `packageName`: explicit `package = "..."` override; empty
+///     falls back to `name`.
+///   - `versionReq`: the `version = "..."` constraint; empty
+///     becomes the wildcard `"*"`.
+///   - `path`: non-empty marks the dep as a path source — those
+///     get rejected at publish time.
+///   - `isGit`: true marks a git source — silently dropped from
+///     the published metadata (the registry has no way to honour
+///     git deps after the fact).
+pub struct PublishDepSpec {
+    pub name: String,
+    pub packageName: String,
+    pub versionReq: String,
+    pub path: String,
+    pub isGit: Bool,
+}
+/// PublishVersionDep is the structured output the registry's
+/// store records on each published version. `kind` is "normal"
+/// or "dev" — the labels the historical Go code used.
+pub struct PublishVersionDep {
+    pub name: String,
+    pub req: String,
+    pub kind: String,
+}
+/// PublishDepsResult bundles the filtered dep list + an
+/// optional rejection message. `errorMessage != ""` blocks the
+/// publish; the message is the user-facing string the HTTP
+/// handler wraps in `badRequest`.
+pub struct PublishDepsResult {
+    pub deps: List<PublishVersionDep>,
+    pub errorMessage: String,
+}
+/// classifyPublishDeps applies the per-publish dep policy to a
+/// manifest's `[dependencies]` (normal) and `[dev-dependencies]`
+/// (dev) lists. Rules:
+///
+///   - A path dependency (`d.path != ""`) blocks the publish —
+///     the registry can't honour file-system pointers.
+///   - A git dependency (`d.isGit`) is silently dropped — the
+///     registry only records registry-resolvable deps.
+///   - Otherwise the dep is recorded with the effective name
+///     (`packageName` else `name`) and version req (`"*"` when
+///     blank).
+///
+/// Both sections share the same scan body but the accumulator
+/// lives in this function's frame — no helper takes `out` as a
+/// parameter. Keeps the policy independent of Osty's
+/// `List<T>` pass-by-reference semantics (the Go snapshot uses
+/// `*[]...` for the same logic).
+pub fn classifyPublishDeps(normal: List<PublishDepSpec>, dev: List<PublishDepSpec>) -> PublishDepsResult {
+    let mut out: List<PublishVersionDep> = []
+    let mut i = 0
+    let normalLen = normal.len()
+    for i < normalLen {
+        let d = normal[i]
+        if d.path != "" {
+            return PublishDepsResult {deps: [], errorMessage: pathDepRejectMessage(d.name, d.path)}
+        }
+        if !d.isGit {
+            out.push(classifiedPublishDep(d, "normal"))
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    let devLen = dev.len()
+    for j < devLen {
+        let d = dev[j]
+        if d.path != "" {
+            return PublishDepsResult {deps: [], errorMessage: pathDepRejectMessage(d.name, d.path)}
+        }
+        if !d.isGit {
+            out.push(classifiedPublishDep(d, "dev"))
+        }
+        j = j + 1
+    }
+    PublishDepsResult {deps: out, errorMessage: ""}
+}
+/// classifiedPublishDep builds one `PublishVersionDep` from a
+/// non-path / non-git spec, applying the empty-string fallbacks
+/// (`packageName` → `name`, `versionReq` → `"*"`).
+fn classifiedPublishDep(d: PublishDepSpec, kind: String) -> PublishVersionDep {
+    let outName = if d.packageName == "" {
+        d.name
+    } else {
+        d.packageName
+    }
+    let outReq = if d.versionReq == "" {
+        "*"
+    } else {
+        d.versionReq
+    }
+    PublishVersionDep {name: outName, req: outReq, kind: kind}
+}
+/// pathDepRejectMessage formats the publish-blocking error when a
+/// path dependency is seen. Name + path are run through
+/// `tomlBasicString` so embedded quotes / control characters get
+/// escaped (log-injection prevention — see PR #1796 pattern).
+fn pathDepRejectMessage(name: String, path: String) -> String {
+    "dependency " + tomlBasicString(name) + " uses path=" + tomlBasicString(path) + "; path dependencies cannot be published"
+}

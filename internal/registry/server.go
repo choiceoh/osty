@@ -723,35 +723,35 @@ func manifestFromTarball(tarPath string) (*manifest.Manifest, error) {
 	}
 }
 
+// versionDependencies bridges to runner.ClassifyPublishDeps
+// (mirror of toolchain/registry_policy.osty). The host turns
+// manifest.Dependency lists into the runner spec; the policy
+// decides which deps are recorded and which trigger publish
+// rejection (path deps).
 func versionDependencies(m *manifest.Manifest) ([]VersionDependency, error) {
-	var out []VersionDependency
-	add := func(kind string, deps []manifest.Dependency) error {
-		for _, d := range deps {
-			if d.Path != "" {
-				return fmt.Errorf("dependency %q uses path=%q; path dependencies cannot be published", d.Name, d.Path)
-			}
-			if d.Git != nil {
-				continue
-			}
-			name := d.PackageName
-			if name == "" {
-				name = d.Name
-			}
-			req := d.VersionReq
-			if req == "" {
-				req = "*"
-			}
-			out = append(out, VersionDependency{Name: name, Req: req, Kind: kind})
-		}
-		return nil
+	r := runner.ClassifyPublishDeps(publishDepSpecs(m.Dependencies), publishDepSpecs(m.DevDependencies))
+	if r.ErrorMessage != "" {
+		return nil, errors.New(r.ErrorMessage)
 	}
-	if err := add("normal", m.Dependencies); err != nil {
-		return nil, err
-	}
-	if err := add("dev", m.DevDependencies); err != nil {
-		return nil, err
+	out := make([]VersionDependency, 0, len(r.Deps))
+	for _, d := range r.Deps {
+		out = append(out, VersionDependency{Name: d.Name, Req: d.Req, Kind: d.Kind})
 	}
 	return out, nil
+}
+
+func publishDepSpecs(deps []manifest.Dependency) []runner.PublishDepSpec {
+	specs := make([]runner.PublishDepSpec, 0, len(deps))
+	for _, d := range deps {
+		specs = append(specs, runner.PublishDepSpec{
+			Name:        d.Name,
+			PackageName: d.PackageName,
+			VersionReq:  d.VersionReq,
+			Path:        d.Path,
+			IsGit:       d.Git != nil,
+		})
+	}
+	return specs
 }
 
 func copyFeatures(m *manifest.Manifest) map[string][]string {
