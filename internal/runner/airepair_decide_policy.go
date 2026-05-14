@@ -118,3 +118,113 @@ func CompareFrontEndAssist(before, after ProbeStats) int {
 func RepairedChanged(changeCount, skipCount int) bool {
 	return changeCount > 0 || skipCount > 0
 }
+
+// Airepair mode names — match `--airepair-mode` flag values.
+const (
+	airepairModeRewriteOnly   = "rewrite"
+	airepairModeAutoAssist    = "auto"
+	airepairModeParseAssist   = "parse"
+	airepairModeFrontEndAssist = "frontend"
+)
+
+// IsImproved reports whether `after` is a strict improvement on
+// `before` under the chosen mode. Defaults to auto-assist for
+// unrecognised modes.
+//
+// Osty: toolchain/airepair_decide.osty:138
+func IsImproved(mode string, before, after ProbeStats, repairedChanges int) bool {
+	switch mode {
+	case airepairModeRewriteOnly:
+		return repairedChanges > 0
+	case airepairModeParseAssist:
+		return CompareParseAssist(before, after) > 0
+	case airepairModeFrontEndAssist:
+		return CompareFrontEndAssist(before, after) > 0
+	}
+	return CompareAutoAssist(before, after) > 0
+}
+
+// IsAccepted is the looser sibling of IsImproved. No edits + no
+// skips short-circuits to true (nothing was tried). Rewrite mode
+// always accepts when edits exist. Otherwise the mode's score
+// ladder must be non-negative.
+//
+// Osty: toolchain/airepair_decide.osty:158
+func IsAccepted(mode string, before, after ProbeStats, repairedChanges, repairedSkipped int) bool {
+	if repairedChanges == 0 && repairedSkipped == 0 {
+		return true
+	}
+	switch mode {
+	case airepairModeRewriteOnly:
+		return true
+	case airepairModeParseAssist:
+		return CompareParseAssist(before, after) >= 0
+	case airepairModeFrontEndAssist:
+		return CompareFrontEndAssist(before, after) >= 0
+	}
+	return CompareAutoAssist(before, after) >= 0
+}
+
+// ExplainAcceptedReason returns a stable string tag classifying
+// why the rewriter's output was accepted. Tags are part of the
+// public airepair JSON contract.
+//
+// Osty: toolchain/airepair_decide.osty:179
+func ExplainAcceptedReason(mode string, before, after ProbeStats, repairedChanges int, proposed bool) string {
+	changed := repairedChanges > 0
+	beforeEqAfter := airepairProbeStatsEqual(before, after)
+	if !proposed || (!changed && beforeEqAfter) {
+		return "already_clean"
+	}
+	if after.Parse.Errors < before.Parse.Errors {
+		return "parse_errors_reduced"
+	}
+	if after.Resolve.Errors < before.Resolve.Errors {
+		return "resolve_errors_reduced"
+	}
+	if after.Check.Errors < before.Check.Errors {
+		return "check_errors_reduced"
+	}
+	if after.TotalWarnings < before.TotalWarnings {
+		return "warnings_reduced"
+	}
+	if mode == airepairModeRewriteOnly && repairedChanges > 0 {
+		return "rewrite_mode_applied"
+	}
+	if repairedChanges > 0 {
+		return "non_regressing_rewrite_accepted"
+	}
+	return "accepted"
+}
+
+// ExplainRejectedReason classifies why an output failed isAccepted
+// under the given mode. Tags are part of the public airepair JSON
+// contract.
+//
+// Osty: toolchain/airepair_decide.osty:213
+func ExplainRejectedReason(mode string, before, after ProbeStats) string {
+	if after.Parse.Errors > before.Parse.Errors {
+		return "parse_regression_blocked"
+	}
+	if mode == airepairModeAutoAssist && after.Resolve.Errors > before.Resolve.Errors {
+		return "resolve_regression_blocked"
+	}
+	if mode == airepairModeAutoAssist && after.Check.Errors > before.Check.Errors {
+		return "check_regression_blocked"
+	}
+	if after.TotalErrors > before.TotalErrors {
+		return "front_end_regression_blocked"
+	}
+	if after.TotalWarnings > before.TotalWarnings {
+		return "warning_regression_blocked"
+	}
+	return "no_improvement"
+}
+
+func airepairProbeStatsEqual(a, b ProbeStats) bool {
+	return a.Parse == b.Parse &&
+		a.Resolve == b.Resolve &&
+		a.Check == b.Check &&
+		a.TotalErrors == b.TotalErrors &&
+		a.TotalWarnings == b.TotalWarnings
+}

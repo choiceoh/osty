@@ -230,47 +230,12 @@ func (r Result) JSONReport() Report {
 }
 
 func explainAcceptedReason(mode Mode, before, after ProbeStats, repaired repair.Result, proposed bool) string {
-	if !proposed || (!repairedChanged(repaired) && before == after) {
-		return "already_clean"
-	}
-	if after.Parse.Errors < before.Parse.Errors {
-		return "parse_errors_reduced"
-	}
-	if after.Resolve.Errors < before.Resolve.Errors {
-		return "resolve_errors_reduced"
-	}
-	if after.Check.Errors < before.Check.Errors {
-		return "check_errors_reduced"
-	}
-	if after.TotalWarnings < before.TotalWarnings {
-		return "warnings_reduced"
-	}
-	if mode == ModeRewriteOnly && len(repaired.Changes) > 0 {
-		return "rewrite_mode_applied"
-	}
-	if len(repaired.Changes) > 0 {
-		return "non_regressing_rewrite_accepted"
-	}
-	return "accepted"
+	return runner.ExplainAcceptedReason(string(mode), statsToRunner(before), statsToRunner(after),
+		len(repaired.Changes), proposed)
 }
 
 func explainRejectedReason(mode Mode, before, after ProbeStats) string {
-	if after.Parse.Errors > before.Parse.Errors {
-		return "parse_regression_blocked"
-	}
-	if mode == ModeAutoAssist && after.Resolve.Errors > before.Resolve.Errors {
-		return "resolve_regression_blocked"
-	}
-	if mode == ModeAutoAssist && after.Check.Errors > before.Check.Errors {
-		return "check_regression_blocked"
-	}
-	if after.TotalErrors > before.TotalErrors {
-		return "front_end_regression_blocked"
-	}
-	if after.TotalWarnings > before.TotalWarnings {
-		return "warning_regression_blocked"
-	}
-	return "no_improvement"
+	return runner.ExplainRejectedReason(string(mode), statsToRunner(before), statsToRunner(after))
 }
 
 func repairedChanged(repaired repair.Result) bool {
@@ -405,32 +370,12 @@ func count(diags []*diag.Diagnostic) StageStats {
 }
 
 func isImproved(mode Mode, before, after ProbeStats, repaired repair.Result) bool {
-	switch mode {
-	case ModeRewriteOnly:
-		return len(repaired.Changes) > 0
-	case ModeParseAssist:
-		return compareParseAssist(before, after) > 0
-	case ModeFrontEndAssist:
-		return compareFrontEndAssist(before, after) > 0
-	default:
-		return compareAutoAssist(before, after) > 0
-	}
+	return runner.IsImproved(string(mode), statsToRunner(before), statsToRunner(after), len(repaired.Changes))
 }
 
 func isAccepted(mode Mode, before, after ProbeStats, repaired repair.Result) bool {
-	if len(repaired.Changes) == 0 && repaired.Skipped == 0 {
-		return true
-	}
-	switch mode {
-	case ModeRewriteOnly:
-		return true
-	case ModeParseAssist:
-		return compareParseAssist(before, after) >= 0
-	case ModeFrontEndAssist:
-		return compareFrontEndAssist(before, after) >= 0
-	default:
-		return compareAutoAssist(before, after) >= 0
-	}
+	return runner.IsAccepted(string(mode), statsToRunner(before), statsToRunner(after),
+		len(repaired.Changes), repaired.Skipped)
 }
 
 // compare* returns:

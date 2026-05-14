@@ -94,3 +94,113 @@ fn testCompareFrontEndAssistWarningOnlyRegressed() {
     let after = stats(1, 1, 1, 3, 5)
     testing.assertEq(compareFrontEndAssist(before, after), -1)
 }
+fn testIsImprovedRewriteOnly() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assert(isImproved("rewrite", s, s, 1))
+    testing.assert(!(isImproved("rewrite", s, s, 0)))
+}
+fn testIsImprovedParseAssist() {
+    let before = stats(3, 1, 1, 5, 0)
+    let after = stats(1, 1, 1, 3, 0)
+    testing.assert(isImproved("parse", before, after, 1))
+    testing.assert(!(isImproved("parse", after, before, 1)))
+}
+fn testIsImprovedFrontEndAssist() {
+    let before = stats(2, 2, 2, 6, 0)
+    let after = stats(2, 1, 1, 4, 0)
+    testing.assert(isImproved("frontend", before, after, 1))
+}
+fn testIsImprovedDefaultsToAuto() {
+    let before = stats(0, 0, 5, 5, 0)
+    let after = stats(0, 0, 2, 2, 0)
+    testing.assert(isImproved("auto", before, after, 1))
+    testing.assert(isImproved("unknown", before, after, 1))
+}
+fn testIsAcceptedNoEditsNoSkipsShortCircuit() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(5, 5, 5, 15, 0)
+    // Edits 0 + skipped 0 → unconditionally accepted even though
+    // the after counts are catastrophically worse.
+    testing.assert(isAccepted("auto", before, after, 0, 0))
+}
+fn testIsAcceptedRewriteModeAlwaysAccepts() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(5, 5, 5, 15, 0)
+    testing.assert(isAccepted("rewrite", before, after, 1, 0))
+}
+fn testIsAcceptedNonRegressingAllowed() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assert(isAccepted("auto", s, s, 1, 0))
+    testing.assert(isAccepted("parse", s, s, 1, 0))
+    testing.assert(isAccepted("frontend", s, s, 1, 0))
+}
+fn testIsAcceptedRejectsRegression() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(2, 1, 1, 4, 0)
+    testing.assert(!(isAccepted("auto", before, after, 1, 0)))
+    testing.assert(!(isAccepted("parse", before, after, 1, 0)))
+}
+fn testExplainAcceptedAlreadyClean() {
+    let s = stats(0, 0, 0, 0, 0)
+    testing.assertEq(explainAcceptedReason("auto", s, s, 0, false), "already_clean")
+    testing.assertEq(explainAcceptedReason("auto", s, s, 0, true), "already_clean")
+}
+fn testExplainAcceptedParseDrop() {
+    let before = stats(3, 1, 1, 5, 0)
+    let after = stats(1, 1, 1, 3, 0)
+    testing.assertEq(explainAcceptedReason("auto", before, after, 2, true), "parse_errors_reduced")
+}
+fn testExplainAcceptedResolveDrop() {
+    let before = stats(0, 3, 0, 3, 0)
+    let after = stats(0, 1, 0, 1, 0)
+    testing.assertEq(explainAcceptedReason("auto", before, after, 1, true), "resolve_errors_reduced")
+}
+fn testExplainAcceptedCheckDrop() {
+    let before = stats(0, 0, 3, 3, 0)
+    let after = stats(0, 0, 1, 1, 0)
+    testing.assertEq(explainAcceptedReason("auto", before, after, 1, true), "check_errors_reduced")
+}
+fn testExplainAcceptedWarningsOnly() {
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 2)
+    testing.assertEq(explainAcceptedReason("auto", before, after, 1, true), "warnings_reduced")
+}
+fn testExplainAcceptedRewriteMode() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assertEq(explainAcceptedReason("rewrite", s, s, 1, true), "rewrite_mode_applied")
+}
+fn testExplainAcceptedNonRegressingRewrite() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assertEq(explainAcceptedReason("auto", s, s, 1, true), "non_regressing_rewrite_accepted")
+}
+fn testExplainRejectedParseRegression() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(2, 1, 1, 4, 0)
+    testing.assertEq(explainRejectedReason("auto", before, after), "parse_regression_blocked")
+}
+fn testExplainRejectedResolveOnlyAutoMode() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(1, 3, 1, 5, 0)
+    testing.assertEq(explainRejectedReason("auto", before, after), "resolve_regression_blocked")
+    // parse mode collapses through to front-end regression blocked.
+    testing.assertEq(explainRejectedReason("parse", before, after), "front_end_regression_blocked")
+}
+fn testExplainRejectedCheckOnlyAutoMode() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(1, 1, 3, 5, 0)
+    testing.assertEq(explainRejectedReason("auto", before, after), "check_regression_blocked")
+}
+fn testExplainRejectedFrontEndAggregate() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(1, 2, 2, 5, 0)
+    testing.assertEq(explainRejectedReason("frontend", before, after), "front_end_regression_blocked")
+}
+fn testExplainRejectedWarningRegression() {
+    let before = stats(1, 1, 1, 3, 2)
+    let after = stats(1, 1, 1, 3, 5)
+    testing.assertEq(explainRejectedReason("auto", before, after), "warning_regression_blocked")
+}
+fn testExplainRejectedNoImprovementFallback() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assertEq(explainRejectedReason("auto", s, s), "no_improvement")
+}

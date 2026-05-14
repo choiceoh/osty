@@ -128,3 +128,146 @@ pub fn compareFrontEndAssist(before: ProbeStats, after: ProbeStats) -> Int {
 pub fn repairedChanged(changeCount: Int, skipCount: Int) -> Bool {
     changeCount > 0 || skipCount > 0
 }
+/// Mode strings the airepair scorers dispatch on. Match
+/// toolchain/airepair_flags.osty's canonical mode names so the
+/// `--airepair-mode` flag and the policy talk in the same alphabet.
+let airepairModeRewriteOnly: String = "rewrite"
+let airepairModeAutoAssist: String = "auto"
+let airepairModeParseAssist: String = "parse"
+let airepairModeFrontEndAssist: String = "frontend"
+/// isImproved reports whether the rewriter's snapshot is a strict
+/// improvement over the pre-repair snapshot under the chosen
+/// mode. The default ("auto" or unrecognised) routes through the
+/// most aggressive ladder.
+///
+/// `rewrite` mode is structurally improved whenever the repair
+/// pass emitted any edits — there's no diagnostic scoring to do.
+pub fn isImproved(mode: String, before: ProbeStats, after: ProbeStats, repairedChanges: Int) -> Bool {
+    if mode == airepairModeRewriteOnly {
+        return repairedChanges > 0
+    }
+    if mode == airepairModeParseAssist {
+        return compareParseAssist(before, after) > 0
+    }
+    if mode == airepairModeFrontEndAssist {
+        return compareFrontEndAssist(before, after) > 0
+    }
+    compareAutoAssist(before, after) > 0
+}
+/// isAccepted is the looser sibling of `isImproved` — it returns
+/// true when the rewriter's output is at least non-regressing.
+/// Two short-circuits:
+///
+///   - No edits + no skips → unconditionally accepted (the source
+///     was already clean and nothing was tried; nothing to undo).
+///   - `rewrite` mode → always accepted when there are edits, since
+///     the mode brackets explicitly opt into the rewrite-only
+///     contract.
+///
+/// Otherwise the mode's score ladder must come out non-negative.
+pub fn isAccepted(mode: String, before: ProbeStats, after: ProbeStats, repairedChanges: Int, repairedSkipped: Int) -> Bool {
+    if repairedChanges == 0 && repairedSkipped == 0 {
+        return true
+    }
+    if mode == airepairModeRewriteOnly {
+        return true
+    }
+    if mode == airepairModeParseAssist {
+        return compareParseAssist(before, after) >= 0
+    }
+    if mode == airepairModeFrontEndAssist {
+        return compareFrontEndAssist(before, after) >= 0
+    }
+    compareAutoAssist(before, after) >= 0
+}
+/// explainAcceptedReason picks a stable string tag that captures
+/// *why* the rewriter's output was accepted. Returned tags travel
+/// untouched into JSON reports (`osty airepair --json`) and the
+/// learning capture corpus, so they're part of the public contract:
+///
+///   - `already_clean`           — repair didn't fire / nothing changed.
+///   - `parse_errors_reduced`    — parse-stage error count dropped.
+///   - `resolve_errors_reduced`  — resolve-stage error count dropped.
+///   - `check_errors_reduced`    — check-stage error count dropped.
+///   - `warnings_reduced`        — only warnings changed (improved).
+///   - `rewrite_mode_applied`    — bracketed rewrite-only mode took
+///                                 the edits without scoring.
+///   - `non_regressing_rewrite_accepted` — edits applied with no
+///                                 measurable improvement but no
+///                                 regression either.
+///   - `accepted`                — fallback (shouldn't fire in
+///                                 practice; kept as a safety net).
+pub fn explainAcceptedReason(
+    mode: String,
+    before: ProbeStats,
+    after: ProbeStats,
+    repairedChanges: Int,
+    proposed: Bool,
+) -> String {
+    let changed = repairedChanges > 0
+    let beforeEqAfter = airepairProbeStatsEqual(before, after)
+    if !proposed || (!changed && beforeEqAfter) {
+        return "already_clean"
+    }
+    if after.parse.errors < before.parse.errors {
+        return "parse_errors_reduced"
+    }
+    if after.resolve.errors < before.resolve.errors {
+        return "resolve_errors_reduced"
+    }
+    if after.check.errors < before.check.errors {
+        return "check_errors_reduced"
+    }
+    if after.totalWarnings < before.totalWarnings {
+        return "warnings_reduced"
+    }
+    if mode == airepairModeRewriteOnly && repairedChanges > 0 {
+        return "rewrite_mode_applied"
+    }
+    if repairedChanges > 0 {
+        return "non_regressing_rewrite_accepted"
+    }
+    "accepted"
+}
+/// explainRejectedReason classifies *why* an output failed the
+/// `isAccepted` ladder under the given mode. Returned tags are
+/// part of the public airepair JSON contract:
+///
+///   - `parse_regression_blocked`     — any mode rejects parse
+///                                      regression.
+///   - `resolve_regression_blocked`   — auto-assist only.
+///   - `check_regression_blocked`     — auto-assist only.
+///   - `front_end_regression_blocked` — total-error regression.
+///   - `warning_regression_blocked`   — warnings up only.
+///   - `no_improvement`               — fallback.
+pub fn explainRejectedReason(mode: String, before: ProbeStats, after: ProbeStats) -> String {
+    if after.parse.errors > before.parse.errors {
+        return "parse_regression_blocked"
+    }
+    if mode == airepairModeAutoAssist && after.resolve.errors > before.resolve.errors {
+        return "resolve_regression_blocked"
+    }
+    if mode == airepairModeAutoAssist && after.check.errors > before.check.errors {
+        return "check_regression_blocked"
+    }
+    if after.totalErrors > before.totalErrors {
+        return "front_end_regression_blocked"
+    }
+    if after.totalWarnings > before.totalWarnings {
+        return "warning_regression_blocked"
+    }
+    "no_improvement"
+}
+/// airepairProbeStatsEqual compares two snapshots field-by-field.
+/// Osty doesn't ship structural equality on user structs yet (no
+/// Equal derive in 0.5 baseline), so the comparison is explicit.
+fn airepairProbeStatsEqual(a: ProbeStats, b: ProbeStats) -> Bool {
+    a.parse.errors == b.parse.errors &&
+        a.parse.warnings == b.parse.warnings &&
+        a.resolve.errors == b.resolve.errors &&
+        a.resolve.warnings == b.resolve.warnings &&
+        a.check.errors == b.check.errors &&
+        a.check.warnings == b.check.warnings &&
+        a.totalErrors == b.totalErrors &&
+        a.totalWarnings == b.totalWarnings
+}
