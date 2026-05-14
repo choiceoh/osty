@@ -301,3 +301,147 @@ func TestRenderManifestCapabilitiesSection(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderManifestPackageSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestPackageEmitSpec
+		want string
+	}{
+		{
+			name: "virtual-workspace-omits",
+			in:   ManifestPackageEmitSpec{},
+			want: "",
+		},
+		{
+			name: "present-flag-emits-blank-fields",
+			in:   ManifestPackageEmitSpec{HasPackage: true},
+			want: "[package]\nname = \"\"\nversion = \"\"\n",
+		},
+		{
+			name: "name-version-only",
+			in:   ManifestPackageEmitSpec{Name: "demo", Version: "0.1.0"},
+			want: "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+		},
+		{
+			name: "all-fields",
+			in: ManifestPackageEmitSpec{
+				HasPackage:  true,
+				Name:        "demo",
+				Version:     "0.1.0",
+				Edition:     "0.5",
+				Description: "A demo",
+				Authors:     []string{"Alice"},
+				License:     "MIT",
+				Repository:  "https://github.com/x/demo",
+				Homepage:    "https://demo.example",
+				Keywords:    []string{"demo", "test"},
+			},
+			want: "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"0.5\"\ndescription = \"A demo\"\nauthors = [\"Alice\"]\nlicense = \"MIT\"\nrepository = \"https://github.com/x/demo\"\nhomepage = \"https://demo.example\"\nkeywords = [\"demo\", \"test\"]\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestPackageSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestRegistriesSection(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		if got := RenderManifestRegistriesSection(nil); got != "" {
+			t.Errorf("empty input must return \"\", got %q", got)
+		}
+	})
+	t.Run("single-full", func(t *testing.T) {
+		r := ManifestRegistryEmitSpec{Name: "custom", URL: "https://registry.custom.dev", Token: "secret"}
+		want := "\n[registries.custom]\nurl = \"https://registry.custom.dev\"\ntoken = \"secret\"\n"
+		if got := RenderManifestRegistriesSection([]ManifestRegistryEmitSpec{r}); got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("url-only", func(t *testing.T) {
+		r := ManifestRegistryEmitSpec{Name: "noauth", URL: "https://r.dev"}
+		want := "\n[registries.noauth]\nurl = \"https://r.dev\"\n"
+		if got := RenderManifestRegistriesSection([]ManifestRegistryEmitSpec{r}); got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("preserves-input-order", func(t *testing.T) {
+		r1 := ManifestRegistryEmitSpec{Name: "b", URL: "u1"}
+		r2 := ManifestRegistryEmitSpec{Name: "a", URL: "u2"}
+		want := "\n[registries.b]\nurl = \"u1\"\n\n[registries.a]\nurl = \"u2\"\n"
+		if got := RenderManifestRegistriesSection([]ManifestRegistryEmitSpec{r1, r2}); got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+}
+
+func TestRenderManifestLintSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestLintEmitSpec
+		want string
+	}{
+		{"both-empty", ManifestLintEmitSpec{}, ""},
+		{"allow-only", ManifestLintEmitSpec{Allow: []string{"L0001", "dead_code"}}, "\n[lint]\nallow = [\"L0001\", \"dead_code\"]\n"},
+		{"deny-only", ManifestLintEmitSpec{Deny: []string{"unused"}}, "\n[lint]\ndeny = [\"unused\"]\n"},
+		{"both", ManifestLintEmitSpec{Allow: []string{"L0001"}, Deny: []string{"L0002"}}, "\n[lint]\nallow = [\"L0001\"]\ndeny = [\"L0002\"]\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestLintSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestGUISection(t *testing.T) {
+	t.Run("minimal", func(t *testing.T) {
+		if got := RenderManifestGUISection(ManifestGUIEmitSpec{}); got != "\n[gui]\n" {
+			t.Errorf("minimal gui = %q, want %q", got, "\n[gui]\n")
+		}
+	})
+	t.Run("with-fields", func(t *testing.T) {
+		got := RenderManifestGUISection(ManifestGUIEmitSpec{Backend: "wry", Entry: "src/ui.osty"})
+		want := "\n[gui]\nbackend = \"wry\"\nentry = \"src/ui.osty\"\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("webview2-devtools-only", func(t *testing.T) {
+		got := RenderManifestGUISection(ManifestGUIEmitSpec{
+			Backend:     "webview2",
+			HasWebView2: true,
+			WebView2:    ManifestWebView2EmitSpec{HasDevTools: true, DevTools: true},
+		})
+		want := "\n[gui]\nbackend = \"webview2\"\n\n[gui.webview2]\ndevtools = true\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("webview2-devtools-false-explicit", func(t *testing.T) {
+		// HasDevTools=true + DevTools=false → emit `devtools = false` (false != absent).
+		got := RenderManifestGUISection(ManifestGUIEmitSpec{
+			HasWebView2: true,
+			WebView2:    ManifestWebView2EmitSpec{HasDevTools: true, DevTools: false, Runtime: "C:/runtime"},
+		})
+		want := "\n[gui]\n\n[gui.webview2]\ndevtools = false\nruntime = \"C:/runtime\"\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("webview2-devtools-absent", func(t *testing.T) {
+		got := RenderManifestGUISection(ManifestGUIEmitSpec{
+			HasWebView2: true,
+			WebView2:    ManifestWebView2EmitSpec{HasDevTools: false, Runtime: "C:/runtime"},
+		})
+		want := "\n[gui]\n\n[gui.webview2]\nruntime = \"C:/runtime\"\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+}

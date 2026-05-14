@@ -237,3 +237,190 @@ fn testRenderManifestCapabilitiesSection() {
         "\n[capabilities]\nruntime = false\n",
     )
 }
+fn defaultPackage() -> ManifestPackageEmitSpec {
+    ManifestPackageEmitSpec {
+        hasPackage: false,
+        name: "",
+        version: "",
+        edition: "",
+        description: "",
+        authors: [],
+        license: "",
+        repository: "",
+        homepage: "",
+        keywords: [],
+    }
+}
+fn testRenderManifestPackageSectionVirtualOmits() {
+    testing.assertEq(renderManifestPackageSection(defaultPackage()), "")
+}
+fn testRenderManifestPackageSectionPresentWithFlag() {
+    let pkg = ManifestPackageEmitSpec {..defaultPackage(), hasPackage: true}
+    testing.assertEq(
+        renderManifestPackageSection(pkg),
+        "[package]\nname = \"\"\nversion = \"\"\n",
+    )
+}
+fn testRenderManifestPackageSectionNameVersion() {
+    let pkg = ManifestPackageEmitSpec {
+        ..defaultPackage(),
+        name: "demo",
+        version: "0.1.0",
+    }
+    testing.assertEq(
+        renderManifestPackageSection(pkg),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+}
+fn testRenderManifestPackageSectionAllFields() {
+    let pkg = ManifestPackageEmitSpec {
+        hasPackage: true,
+        name: "demo",
+        version: "0.1.0",
+        edition: "0.5",
+        description: "A demo",
+        authors: ["Alice"],
+        license: "MIT",
+        repository: "https://github.com/x/demo",
+        homepage: "https://demo.example",
+        keywords: ["demo", "test"],
+    }
+    let expected = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"0.5\"\ndescription = \"A demo\"\nauthors = [\"Alice\"]\nlicense = \"MIT\"\nrepository = \"https://github.com/x/demo\"\nhomepage = \"https://demo.example\"\nkeywords = [\"demo\", \"test\"]\n"
+    testing.assertEq(renderManifestPackageSection(pkg), expected)
+}
+fn testRenderManifestRegistriesSectionEmpty() {
+    testing.assertEq(renderManifestRegistriesSection([]), "")
+}
+fn testRenderManifestRegistriesSectionSingle() {
+    let r = ManifestRegistryEmitSpec {
+        name: "custom",
+        url: "https://registry.custom.dev",
+        token: "secret",
+    }
+    testing.assertEq(
+        renderManifestRegistriesSection([r]),
+        "\n[registries.custom]\nurl = \"https://registry.custom.dev\"\ntoken = \"secret\"\n",
+    )
+}
+fn testRenderManifestRegistriesSectionUrlOnly() {
+    let r = ManifestRegistryEmitSpec {
+        name: "noauth",
+        url: "https://r.dev",
+        token: "",
+    }
+    testing.assertEq(
+        renderManifestRegistriesSection([r]),
+        "\n[registries.noauth]\nurl = \"https://r.dev\"\n",
+    )
+}
+fn testRenderManifestRegistriesSectionMultiplePreservesOrder() {
+    let r1 = ManifestRegistryEmitSpec {name: "b", url: "u1", token: ""}
+    let r2 = ManifestRegistryEmitSpec {name: "a", url: "u2", token: ""}
+    let out = renderManifestRegistriesSection([r1, r2])
+    testing.assertEq(
+        out,
+        "\n[registries.b]\nurl = \"u1\"\n\n[registries.a]\nurl = \"u2\"\n",
+    )
+}
+fn testRenderManifestLintSectionBothEmpty() {
+    testing.assertEq(
+        renderManifestLintSection(ManifestLintEmitSpec {allow: [], deny: []}),
+        "",
+    )
+}
+fn testRenderManifestLintSectionAllowOnly() {
+    testing.assertEq(
+        renderManifestLintSection(ManifestLintEmitSpec {
+            allow: ["L0001", "dead_code"],
+            deny: [],
+        }),
+        "\n[lint]\nallow = [\"L0001\", \"dead_code\"]\n",
+    )
+}
+fn testRenderManifestLintSectionDenyOnly() {
+    testing.assertEq(
+        renderManifestLintSection(ManifestLintEmitSpec {
+            allow: [],
+            deny: ["unused"],
+        }),
+        "\n[lint]\ndeny = [\"unused\"]\n",
+    )
+}
+fn testRenderManifestLintSectionBoth() {
+    testing.assertEq(
+        renderManifestLintSection(ManifestLintEmitSpec {
+            allow: ["L0001"],
+            deny: ["L0002"],
+        }),
+        "\n[lint]\nallow = [\"L0001\"]\ndeny = [\"L0002\"]\n",
+    )
+}
+fn emptyWebView2() -> ManifestWebView2EmitSpec {
+    ManifestWebView2EmitSpec {hasDevTools: false, devTools: false, runtime: ""}
+}
+fn defaultGUI() -> ManifestGUIEmitSpec {
+    ManifestGUIEmitSpec {
+        backend: "",
+        entry: "",
+        hasWebView2: false,
+        webView2: emptyWebView2(),
+    }
+}
+fn testRenderManifestGUISectionMinimal() {
+    testing.assertEq(renderManifestGUISection(defaultGUI()), "\n[gui]\n")
+}
+fn testRenderManifestGUISectionWithFields() {
+    let gui = ManifestGUIEmitSpec {..defaultGUI(), backend: "wry", entry: "src/ui.osty"}
+    testing.assertEq(
+        renderManifestGUISection(gui),
+        "\n[gui]\nbackend = \"wry\"\nentry = \"src/ui.osty\"\n",
+    )
+}
+fn testRenderManifestGUISectionWebView2DevtoolsOnly() {
+    let gui = ManifestGUIEmitSpec {
+        ..defaultGUI(),
+        backend: "webview2",
+        hasWebView2: true,
+        webView2: ManifestWebView2EmitSpec {
+            hasDevTools: true,
+            devTools: true,
+            runtime: "",
+        },
+    }
+    testing.assertEq(
+        renderManifestGUISection(gui),
+        "\n[gui]\nbackend = \"webview2\"\n\n[gui.webview2]\ndevtools = true\n",
+    )
+}
+fn testRenderManifestGUISectionWebView2DevtoolsFalsePresent() {
+    // hasDevTools=true with devTools=false should still emit (false != absent).
+    let gui = ManifestGUIEmitSpec {
+        ..defaultGUI(),
+        hasWebView2: true,
+        webView2: ManifestWebView2EmitSpec {
+            hasDevTools: true,
+            devTools: false,
+            runtime: "C:/runtime",
+        },
+    }
+    testing.assertEq(
+        renderManifestGUISection(gui),
+        "\n[gui]\n\n[gui.webview2]\ndevtools = false\nruntime = \"C:/runtime\"\n",
+    )
+}
+fn testRenderManifestGUISectionWebView2DevtoolsAbsent() {
+    // hasDevTools=false → omit devtools line entirely.
+    let gui = ManifestGUIEmitSpec {
+        ..defaultGUI(),
+        hasWebView2: true,
+        webView2: ManifestWebView2EmitSpec {
+            hasDevTools: false,
+            devTools: false,
+            runtime: "C:/runtime",
+        },
+    }
+    testing.assertEq(
+        renderManifestGUISection(gui),
+        "\n[gui]\n\n[gui.webview2]\nruntime = \"C:/runtime\"\n",
+    )
+}

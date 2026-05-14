@@ -204,3 +204,149 @@ pub struct ManifestCapabilitiesEmitSpec {
 pub fn renderManifestCapabilitiesSection(caps: ManifestCapabilitiesEmitSpec) -> String {
     "\n[capabilities]\n" + renderManifestBoolField("runtime", caps.runtime)
 }
+/// ManifestPackageEmitSpec mirrors the [package] table emit
+/// payload. `hasPackage` is the host's `Manifest.HasPackage` flag
+/// — together with name/version it gates emission so a virtual
+/// workspace manifest omits the entire section.
+pub struct ManifestPackageEmitSpec {
+    pub hasPackage: Bool,
+    pub name: String,
+    pub version: String,
+    pub edition: String,
+    pub description: String,
+    pub authors: List<String>,
+    pub license: String,
+    pub repository: String,
+    pub homepage: String,
+    pub keywords: List<String>,
+}
+/// renderManifestPackageSection emits `[package]\n` plus every
+/// non-empty field. Returns "" when `hasPackage` is false AND
+/// both `name` and `version` are empty — that's the "virtual
+/// workspace" shape the host has historically skipped.
+///
+/// `name` and `version` are always emitted (even when blank) so
+/// the section can be parsed back as an explicit `name = ""`
+/// when the host requested presence via `hasPackage = true`.
+pub fn renderManifestPackageSection(pkg: ManifestPackageEmitSpec) -> String {
+    if !pkg.hasPackage && pkg.name == "" && pkg.version == "" {
+        return ""
+    }
+    let mut out = "[package]\n"
+    out = out + renderManifestStringField("name", pkg.name)
+    out = out + renderManifestStringField("version", pkg.version)
+    if pkg.edition != "" {
+        out = out + renderManifestStringField("edition", pkg.edition)
+    }
+    if pkg.description != "" {
+        out = out + renderManifestStringField("description", pkg.description)
+    }
+    if pkg.authors.len() > 0 {
+        out = out + renderManifestStringArrayField("authors", pkg.authors)
+    }
+    if pkg.license != "" {
+        out = out + renderManifestStringField("license", pkg.license)
+    }
+    if pkg.repository != "" {
+        out = out + renderManifestStringField("repository", pkg.repository)
+    }
+    if pkg.homepage != "" {
+        out = out + renderManifestStringField("homepage", pkg.homepage)
+    }
+    if pkg.keywords.len() > 0 {
+        out = out + renderManifestStringArrayField("keywords", pkg.keywords)
+    }
+    out
+}
+/// ManifestRegistryEmitSpec mirrors one entry of the host
+/// `manifest.Registries` slice. The renderer emits a
+/// `[registries.<name>]` block; empty `url`/`token` are skipped.
+pub struct ManifestRegistryEmitSpec {
+    pub name: String,
+    pub url: String,
+    pub token: String,
+}
+/// renderManifestRegistriesSection emits one `[registries.<name>]`
+/// block per entry. Order is preserved from the input list (the
+/// historical Go code did not sort here). Returns "" when the
+/// list is empty.
+pub fn renderManifestRegistriesSection(registries: List<ManifestRegistryEmitSpec>) -> String {
+    if registries.len() == 0 {
+        return ""
+    }
+    let mut out = ""
+    for r in registries {
+        out = out + "\n[registries." + r.name + "]\n"
+        if r.url != "" {
+            out = out + renderManifestStringField("url", r.url)
+        }
+        if r.token != "" {
+            out = out + renderManifestStringField("token", r.token)
+        }
+    }
+    out
+}
+/// ManifestLintEmitSpec mirrors the [lint] table emit payload.
+/// Empty `allow` AND empty `deny` together gate the section out;
+/// the host's historical guard was `len(Allow)>0 || len(Deny)>0`.
+pub struct ManifestLintEmitSpec {
+    pub allow: List<String>,
+    pub deny: List<String>,
+}
+/// renderManifestLintSection emits `\n[lint]\n` + optional allow +
+/// optional deny. Returns "" when both arrays are empty.
+pub fn renderManifestLintSection(lint: ManifestLintEmitSpec) -> String {
+    if lint.allow.len() == 0 && lint.deny.len() == 0 {
+        return ""
+    }
+    let mut out = "\n[lint]\n"
+    if lint.allow.len() > 0 {
+        out = out + renderManifestStringArrayField("allow", lint.allow)
+    }
+    if lint.deny.len() > 0 {
+        out = out + renderManifestStringArrayField("deny", lint.deny)
+    }
+    out
+}
+/// ManifestWebView2EmitSpec mirrors the nested
+/// `[gui.webview2]` table. `hasDevTools` is the host's flag
+/// distinguishing "field absent" from `devTools = false`
+/// (both serialise to different output).
+pub struct ManifestWebView2EmitSpec {
+    pub hasDevTools: Bool,
+    pub devTools: Bool,
+    pub runtime: String,
+}
+/// ManifestGUIEmitSpec mirrors the [gui] table. `hasWebView2`
+/// gates the nested `[gui.webview2]` block; without that flag,
+/// an empty `ManifestWebView2EmitSpec` would still appear since
+/// Osty has no `T?` for opting the whole struct out.
+pub struct ManifestGUIEmitSpec {
+    pub backend: String,
+    pub entry: String,
+    pub hasWebView2: Bool,
+    pub webView2: ManifestWebView2EmitSpec,
+}
+/// renderManifestGUISection emits `\n[gui]\n` + optional fields,
+/// followed by an optional `\n[gui.webview2]\n` nested block.
+/// Always emitted by the renderer; the host's nil-check on `m.GUI`
+/// controls presence.
+pub fn renderManifestGUISection(gui: ManifestGUIEmitSpec) -> String {
+    let mut out = "\n[gui]\n"
+    if gui.backend != "" {
+        out = out + renderManifestStringField("backend", gui.backend)
+    }
+    if gui.entry != "" {
+        out = out + renderManifestStringField("entry", gui.entry)
+    }
+    if gui.hasWebView2 {
+        out = out + "\n[gui.webview2]\n"
+        if gui.webView2.hasDevTools {
+            out = out + renderManifestBoolField("devtools", gui.webView2.devTools)
+        }
+        if gui.webView2.runtime != "" {
+            out = out + renderManifestStringField("runtime", gui.webView2.runtime)
+        }
+    }
+    out
+}
