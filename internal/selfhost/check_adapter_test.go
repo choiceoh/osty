@@ -1323,3 +1323,39 @@ fn main() {
 		t.Fatalf("summary errors = %d, want 1 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
 	}
 }
+
+// G34: lossless numeric widening checks live in toolchain/check_env.osty
+// but the frozen Go seed (internal/selfhost/generated.go) predates them.
+// Once the seed catches up, these tests should assert 0 errors (widening)
+// and E0765 (narrowing). For now they document the gap: widening rejected
+// as E0700 generic mismatch, narrowing reported as E0700 instead of E0765.
+//
+// TestCheckSourceStructuredAcceptsLosslessWidening — would assert 0 errors.
+// TestCheckSourceStructuredRejectsImplicitNarrowing — would assert E0765.
+
+// G20: keyword argument through fn-value when param names match.
+func TestCheckSourceStructuredAcceptsFnValueKeywordArgs(t *testing.T) {
+	src := []byte(`fn connect(host: String, port: Int) -> String {
+    host + ":" + port.toString()
+}
+
+fn main() {
+    let f: fn(String, Int) -> String = connect
+    let result = f("localhost", port: 8080)
+    println(result)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
+
+// G20: keyword argument through fn-value with unknown name.
+// The self-host parser doesn't yet produce AstNField_ for keyword
+// args at call sites, so fnArgListHasKeyword returns false and the
+// name-mismatch check (E0769) is skipped. Once parser support lands
+// this test should assert E0769.
+//
+// TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch — would assert E0769.
