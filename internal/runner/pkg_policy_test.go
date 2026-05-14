@@ -117,3 +117,33 @@ func TestPkgSourceKindString(t *testing.T) {
 		})
 	}
 }
+
+func TestPkgSourceKindConstantsLiteralValues(t *testing.T) {
+	// Mirror the literal-value assertion that runs on the Osty side
+	// (toolchain/pkg_policy_test.osty). The compile-time guards in
+	// internal/pkgmgr/source.go would block a build that drifts, but
+	// these run pre-build during `go test` so CI can name the regression.
+	if PkgSourceKindPath != 0 {
+		t.Errorf("PkgSourceKindPath = %d, want 0", PkgSourceKindPath)
+	}
+	if PkgSourceKindGit != 1 {
+		t.Errorf("PkgSourceKindGit = %d, want 1", PkgSourceKindGit)
+	}
+	if PkgSourceKindRegistry != 2 {
+		t.Errorf("PkgSourceKindRegistry = %d, want 2", PkgSourceKindRegistry)
+	}
+}
+
+func TestPkgSourceKindStringByLiteralValue(t *testing.T) {
+	// Hit the mapping with literal ints — independent of the named
+	// constants — so a `PkgSourceKindPath = 1` typo can't hide.
+	if got := PkgSourceKindString(0); got != "path" {
+		t.Errorf("PkgSourceKindString(0) = %q, want %q", got, "path")
+	}
+	if got := PkgSourceKindString(1); got != "git" {
+		t.Errorf("PkgSourceKindString(1) = %q, want %q", got, "git")
+	}
+	if got := PkgSourceKindString(2); got != "registry" {
+		t.Errorf("PkgSourceKindString(2) = %q, want %q", got, "registry")
+	}
+}

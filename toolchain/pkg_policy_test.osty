@@ -91,3 +91,19 @@ fn testPkgSourceKindStringUnknown() {
     testing.assertEq(pkgSourceKindString(99), "unknown")
     testing.assertEq(pkgSourceKindString(-1), "unknown")
 }
+fn testPkgSourceKindConstantsLiteralValues() {
+    // The struct-y constants are part of the wire-format contract
+    // with `internal/pkgmgr.SourceKind` (iota 0/1/2). A regression
+    // would break the host's compile-time guard, but only AFTER
+    // a build — these literal asserts catch the drift in CI tests.
+    testing.assertEq(pkgSourceKindPath, 0)
+    testing.assertEq(pkgSourceKindGit, 1)
+    testing.assertEq(pkgSourceKindRegistry, 2)
+}
+fn testPkgSourceKindStringByLiteralValue() {
+    // Hit the mapping directly with literal ints — bypassing the
+    // named constants — so a `pkgSourceKindPath = 1` typo can't hide.
+    testing.assertEq(pkgSourceKindString(0), "path")
+    testing.assertEq(pkgSourceKindString(1), "git")
+    testing.assertEq(pkgSourceKindString(2), "registry")
+}
