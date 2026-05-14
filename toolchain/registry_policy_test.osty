@@ -168,3 +168,44 @@ fn testValidateRegistryPackageNameEmbeddedTab() {
         "invalid package name \"a\\tb\"",
     )
 }
+fn testRegistrySearchRequestNormalizeBasic() {
+    let r = registrySearchRequestNormalize("Serde", 50)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.query, "serde")
+    testing.assertEq(r.limit, 50)
+}
+fn testRegistrySearchRequestNormalizeTrim() {
+    let r = registrySearchRequestNormalize("  JSON  ", 10)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.query, "json")
+    testing.assertEq(r.limit, 10)
+}
+fn testRegistrySearchRequestNormalizeEmpty() {
+    let r = registrySearchRequestNormalize("", 50)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.query, "")
+    // limit still carries the effective value even on rejection,
+    // so callers can echo it without a re-lookup.
+    testing.assertEq(r.limit, 50)
+}
+fn testRegistrySearchRequestNormalizeWhitespaceOnly() {
+    let r = registrySearchRequestNormalize("   \t\n  ", 5)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 5)
+}
+fn testRegistrySearchRequestNormalizeEmptyDefaultLimit() {
+    // Rejection path also collapses limit <= 0 to the default.
+    let r = registrySearchRequestNormalize("", 0)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 20)
+}
+fn testRegistrySearchRequestNormalizeDefaultLimit() {
+    let r = registrySearchRequestNormalize("foo", 0)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.limit, 20)
+}
+fn testRegistrySearchRequestNormalizeNegativeLimit() {
+    let r = registrySearchRequestNormalize("foo", -5)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.limit, 20)
+}
