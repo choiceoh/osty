@@ -1,6 +1,9 @@
 package runner
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFormatEscapeCommon(t *testing.T) {
 	cases := []struct {
@@ -72,6 +75,22 @@ func TestFormatEscapeByteForChar(t *testing.T) {
 				t.Errorf("FormatEscapeByteForChar(%#x) = %q, want %q", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestAppendFormatUnicodeEscapeMatchesValueForm(t *testing.T) {
+	// The streaming and value-return forms must produce byte-identical
+	// output across the input range that the formatter actually feeds
+	// (control + ASCII + BMP + supplementary plane boundaries).
+	cases := []int{0, 0xA, 0xFF, 0xD55C, 0x100, 0x1F600, 0x10FFFF}
+	for _, r := range cases {
+		var b strings.Builder
+		AppendFormatUnicodeEscape(&b, r)
+		got := b.String()
+		want := FormatUnicodeEscape(r)
+		if got != want {
+			t.Errorf("AppendFormatUnicodeEscape(%#x) = %q, FormatUnicodeEscape = %q", r, got, want)
+		}
 	}
 }
 

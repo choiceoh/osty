@@ -21,11 +21,12 @@ func escapeCommon(r rune) string {
 }
 
 // appendUnicodeEscape writes the Osty `\u{XXXX}` hex escape for r
-// to b. Wraps runner.FormatUnicodeEscape so the Osty side owns the
-// hex-render policy; this helper just streams the result into the
-// caller's builder.
+// to b. Delegates to runner.AppendFormatUnicodeEscape — the
+// streaming sibling of FormatUnicodeEscape — to keep the
+// zero-allocation path for string-escape hot loops while policy
+// ownership stays in toolchain/format_escape.osty.
 func appendUnicodeEscape(b *strings.Builder, r rune) {
-	b.WriteString(runner.FormatUnicodeEscape(int(r)))
+	runner.AppendFormatUnicodeEscape(b, int(r))
 }
 
 // unicodeEscape is the string-returning sibling of

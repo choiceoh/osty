@@ -33,10 +33,22 @@ func FormatEscapeCommon(r int) string {
 //
 // Osty: toolchain/format_escape.osty:47
 func FormatUnicodeEscape(r int) string {
-	if r == 0 {
-		return "\\u{0}"
-	}
 	var b strings.Builder
+	AppendFormatUnicodeEscape(&b, r)
+	return b.String()
+}
+
+// AppendFormatUnicodeEscape is the streaming sibling of
+// FormatUnicodeEscape — writes the `\u{HEX}` form directly into
+// `b` so per-rune escape loops avoid the intermediate string
+// allocation. Output bytes are identical; both implementations
+// share the policy rules mirrored from
+// toolchain/format_escape.osty:47.
+func AppendFormatUnicodeEscape(b *strings.Builder, r int) {
+	if r == 0 {
+		b.WriteString("\\u{0}")
+		return
+	}
 	b.WriteString("\\u{")
 	digits := 0
 	for x := r; x > 0; x >>= 4 {
@@ -47,7 +59,6 @@ func FormatUnicodeEscape(r int) string {
 		b.WriteByte(formatHexDigitsUpper[nibble])
 	}
 	b.WriteByte('}')
-	return b.String()
 }
 
 const formatHexDigitsUpper = "0123456789ABCDEF"
