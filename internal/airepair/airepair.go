@@ -13,6 +13,7 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
@@ -273,7 +274,19 @@ func explainRejectedReason(mode Mode, before, after ProbeStats) string {
 }
 
 func repairedChanged(repaired repair.Result) bool {
-	return len(repaired.Changes) > 0 || repaired.Skipped > 0
+	return runner.RepairedChanged(len(repaired.Changes), repaired.Skipped)
+}
+
+// statsToRunner adapts the airepair-local ProbeStats to the
+// flattened runner.ProbeStats shape the toolchain scorers see.
+func statsToRunner(s ProbeStats) runner.ProbeStats {
+	return runner.ProbeStats{
+		Parse:         runner.ProbeStageStats{Errors: s.Parse.Errors, Warnings: s.Parse.Warnings},
+		Resolve:       runner.ProbeStageStats{Errors: s.Resolve.Errors, Warnings: s.Resolve.Warnings},
+		Check:         runner.ProbeStageStats{Errors: s.Check.Errors, Warnings: s.Check.Warnings},
+		TotalErrors:   s.TotalErrors,
+		TotalWarnings: s.TotalWarnings,
+	}
 }
 
 func (r Result) ResidualPrimaryCode() string {
@@ -426,75 +439,15 @@ func isAccepted(mode Mode, before, after ProbeStats, repaired repair.Result) boo
 //	 0 when they are equivalent for that mode
 //	-1 when after regresses the source for that mode
 func compareParseAssist(before, after ProbeStats) int {
-	if after.Parse.Errors != before.Parse.Errors {
-		if after.Parse.Errors < before.Parse.Errors {
-			return 1
-		}
-		return -1
-	}
-	if after.TotalErrors != before.TotalErrors {
-		if after.TotalErrors < before.TotalErrors {
-			return 1
-		}
-		return -1
-	}
-	if after.TotalWarnings != before.TotalWarnings {
-		if after.TotalWarnings < before.TotalWarnings {
-			return 1
-		}
-		return -1
-	}
-	return 0
+	return runner.CompareParseAssist(statsToRunner(before), statsToRunner(after))
 }
 
 func compareAutoAssist(before, after ProbeStats) int {
-	if after.Parse.Errors != before.Parse.Errors {
-		if after.Parse.Errors < before.Parse.Errors {
-			return 1
-		}
-		return -1
-	}
-	if after.Resolve.Errors != before.Resolve.Errors {
-		if after.Resolve.Errors < before.Resolve.Errors {
-			return 1
-		}
-		return -1
-	}
-	if after.Check.Errors != before.Check.Errors {
-		if after.Check.Errors < before.Check.Errors {
-			return 1
-		}
-		return -1
-	}
-	if after.TotalWarnings != before.TotalWarnings {
-		if after.TotalWarnings < before.TotalWarnings {
-			return 1
-		}
-		return -1
-	}
-	return 0
+	return runner.CompareAutoAssist(statsToRunner(before), statsToRunner(after))
 }
 
 func compareFrontEndAssist(before, after ProbeStats) int {
-	if after.TotalErrors != before.TotalErrors {
-		if after.TotalErrors < before.TotalErrors {
-			return 1
-		}
-		return -1
-	}
-	if after.Parse.Errors != before.Parse.Errors {
-		if after.Parse.Errors < before.Parse.Errors {
-			return 1
-		}
-		return -1
-	}
-	if after.TotalWarnings != before.TotalWarnings {
-		if after.TotalWarnings < before.TotalWarnings {
-			return 1
-		}
-		return -1
-	}
-	return 0
+	return runner.CompareFrontEndAssist(statsToRunner(before), statsToRunner(after))
 }
 
 func checkOptsForSource(src []byte) check.Opts {

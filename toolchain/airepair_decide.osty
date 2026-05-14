@@ -1,0 +1,128 @@
+/// Pure decision policy for `osty airepair`'s accept/reject logic.
+/// Host code (internal/airepair) owns lex/parse/check pipeline
+/// execution, diag aggregation, and source-edit application; this
+/// module decides:
+///
+///   - how to rank two `ProbeStats` snapshots under each
+///     scoring mode (parse-assist / auto-assist / front-end-assist),
+///   - whether a `repair.Result`'s edit count + skip count counts
+///     as "the repairer actually did something".
+///
+/// Mirrored by `internal/runner/airepair_decide_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+/// ProbeStageStats summarises diagnostics from one pipeline stage
+/// (parse, resolve, or check). Mirrors the host's `StageStats`.
+pub struct ProbeStageStats {
+    pub errors: Int,
+    pub warnings: Int,
+}
+/// ProbeStats is the per-source pipeline snapshot the accept/reject
+/// scorers compare. Field shapes match the host's `ProbeStats`.
+/// `totalErrors` and `totalWarnings` are pre-computed sums across
+/// the three stages plus any cross-cutting diagnostics — callers
+/// don't recompute them inside the scorers.
+pub struct ProbeStats {
+    pub parse: ProbeStageStats,
+    pub resolve: ProbeStageStats,
+    pub check: ProbeStageStats,
+    pub totalErrors: Int,
+    pub totalWarnings: Int,
+}
+/// compareParseAssist returns `+1` when `after` improves on
+/// `before` for the parse-only assist mode, `-1` when it
+/// regresses, `0` when neither. Priority:
+///
+///   1. parse-stage errors (the mode's namesake).
+///   2. total errors (any stage).
+///   3. total warnings.
+///
+/// Sub-priority differences must individually flip the sign for
+/// the result to change, so a parse improvement at the cost of a
+/// resolve regression still wins.
+pub fn compareParseAssist(before: ProbeStats, after: ProbeStats) -> Int {
+    if after.parse.errors != before.parse.errors {
+        if after.parse.errors < before.parse.errors {
+            return 1
+        }
+        return -1
+    }
+    if after.totalErrors != before.totalErrors {
+        if after.totalErrors < before.totalErrors {
+            return 1
+        }
+        return -1
+    }
+    if after.totalWarnings != before.totalWarnings {
+        if after.totalWarnings < before.totalWarnings {
+            return 1
+        }
+        return -1
+    }
+    0
+}
+/// compareAutoAssist scores the default mode: parse errors first,
+/// then resolve errors, then check errors, then total warnings.
+/// This is the most aggressive ladder — improvements at every
+/// stage are valued, with parser regression as the hard floor.
+pub fn compareAutoAssist(before: ProbeStats, after: ProbeStats) -> Int {
+    if after.parse.errors != before.parse.errors {
+        if after.parse.errors < before.parse.errors {
+            return 1
+        }
+        return -1
+    }
+    if after.resolve.errors != before.resolve.errors {
+        if after.resolve.errors < before.resolve.errors {
+            return 1
+        }
+        return -1
+    }
+    if after.check.errors != before.check.errors {
+        if after.check.errors < before.check.errors {
+            return 1
+        }
+        return -1
+    }
+    if after.totalWarnings != before.totalWarnings {
+        if after.totalWarnings < before.totalWarnings {
+            return 1
+        }
+        return -1
+    }
+    0
+}
+/// compareFrontEndAssist scores the front-end mode: total errors
+/// across all front-end stages first, parse errors as a
+/// tiebreaker, then total warnings. This mode collapses the three
+/// stages into one aggregate so an improvement that trades a
+/// resolve error for a check error still scores neutral.
+pub fn compareFrontEndAssist(before: ProbeStats, after: ProbeStats) -> Int {
+    if after.totalErrors != before.totalErrors {
+        if after.totalErrors < before.totalErrors {
+            return 1
+        }
+        return -1
+    }
+    if after.parse.errors != before.parse.errors {
+        if after.parse.errors < before.parse.errors {
+            return 1
+        }
+        return -1
+    }
+    if after.totalWarnings != before.totalWarnings {
+        if after.totalWarnings < before.totalWarnings {
+            return 1
+        }
+        return -1
+    }
+    0
+}
+/// repairedChanged reports whether the lexical repair phase did
+/// anything observable to the source. Either an applied edit OR a
+/// skipped-but-attempted edit counts — the host uses this to
+/// classify the result as `accepted` vs `already_clean` even
+/// before scoring kicks in.
+pub fn repairedChanged(changeCount: Int, skipCount: Int) -> Bool {
+    changeCount > 0 || skipCount > 0
+}

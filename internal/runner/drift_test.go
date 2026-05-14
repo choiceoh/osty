@@ -37,6 +37,7 @@ import (
 func TestPolicySnapshotParityWithOsty(t *testing.T) {
 	ostySources := []string{
 		"runner.osty",
+		"airepair_decide.osty",
 		"airepair_flags.osty",
 		"airepair_rewrite.osty",
 		"airepair_source.osty",
