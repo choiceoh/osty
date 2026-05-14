@@ -775,22 +775,13 @@ func copyStringSliceMap(in map[string][]string) map[string][]string {
 	return out
 }
 
+// validatePackageName bridges to runner.ValidateRegistryPackageName
+// (mirror of toolchain/registry_policy.osty). Returns nil on
+// success; otherwise an error whose message matches the policy's
+// rejection text.
 func validatePackageName(name string) error {
-	if name == "" {
-		return fmt.Errorf("package name is empty")
-	}
-	for i, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r == '_':
-			continue
-		case i > 0 && r >= '0' && r <= '9',
-			i > 0 && r == '-':
-			continue
-		default:
-			return fmt.Errorf("invalid package name %q", name)
-		}
+	if msg := runner.ValidateRegistryPackageName(name); msg != "" {
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }

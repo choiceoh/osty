@@ -105,3 +105,31 @@ func TestRegistryStatusErrorMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRegistryPackageName(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"valid-serde", "serde", ""},
+		{"valid-underscore-mid", "my_lib", ""},
+		{"valid-dash-mid", "json-ext", ""},
+		{"valid-digits", "abc123", ""},
+		{"valid-camel", "CamelCase", ""},
+		{"valid-leading-underscore", "_foo", ""},
+		{"empty", "", "package name is empty"},
+		{"leading-digit", "1abc", "invalid package name \"1abc\""},
+		{"leading-dash", "-abc", "invalid package name \"-abc\""},
+		{"dot-rejected", "serde.json", "invalid package name \"serde.json\""},
+		{"space-rejected", "hello world", "invalid package name \"hello world\""},
+		{"unicode-rejected", "한글", "invalid package name \"한글\""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ValidateRegistryPackageName(c.in); got != c.want {
+				t.Errorf("ValidateRegistryPackageName(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

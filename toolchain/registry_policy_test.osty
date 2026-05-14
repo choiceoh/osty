@@ -113,3 +113,32 @@ fn testRegistryStatusErrorMessageTrimsBody() {
         "registry https://r.dev/x: HTTP 403: not allowed",
     )
 }
+fn testValidateRegistryPackageNameValid() {
+    testing.assertEq(validateRegistryPackageName("serde"), "")
+    testing.assertEq(validateRegistryPackageName("my_lib"), "")
+    testing.assertEq(validateRegistryPackageName("json-ext"), "")
+    testing.assertEq(validateRegistryPackageName("abc123"), "")
+    testing.assertEq(validateRegistryPackageName("CamelCase"), "")
+}
+fn testValidateRegistryPackageNameEmpty() {
+    testing.assertEq(validateRegistryPackageName(""), "package name is empty")
+}
+fn testValidateRegistryPackageNameLeadingDigit() {
+    testing.assertEq(validateRegistryPackageName("1abc"), "invalid package name \"1abc\"")
+}
+fn testValidateRegistryPackageNameLeadingDash() {
+    testing.assertEq(validateRegistryPackageName("-abc"), "invalid package name \"-abc\"")
+}
+fn testValidateRegistryPackageNameDot() {
+    // Dot is not in the registry's accepted alphabet (only in cache sanitizer's).
+    testing.assertEq(validateRegistryPackageName("serde.json"), "invalid package name \"serde.json\"")
+}
+fn testValidateRegistryPackageNameSpace() {
+    testing.assertEq(validateRegistryPackageName("hello world"), "invalid package name \"hello world\"")
+}
+fn testValidateRegistryPackageNameUnicode() {
+    testing.assertEq(validateRegistryPackageName("한글"), "invalid package name \"한글\"")
+}
+fn testValidateRegistryPackageNameUnderscoreFirst() {
+    testing.assertEq(validateRegistryPackageName("_foo"), "")
+}
