@@ -100,8 +100,11 @@ func RegistryStatusErrorMessage(url string, statusCode int, body, statusText str
 // accepted name alphabet. Returns the empty string on success;
 // otherwise an error message the host wraps in badRequest:
 //
-//   - empty input → "package name is empty"
-//   - any other rejection → `invalid package name "<name>"`
+//   - empty input → `package name is empty`
+//   - any other rejection → `invalid package name <quoted>` where
+//     <quoted> is TomlBasicString(name) — Go `%q`-style escapes
+//     keep embedded quotes / backslashes / control characters from
+//     breaking log lines or HTTP error responses.
 //
 // Rules: [A-Za-z_] everywhere, [0-9-] for non-first positions.
 //
@@ -120,7 +123,7 @@ func ValidateRegistryPackageName(name string) string {
 		always := isUpper || isLower || isUnderscore
 		nonFirst := i > 0 && (isDigit || isDash)
 		if !(always || nonFirst) {
-			return "invalid package name \"" + name + "\""
+			return "invalid package name " + TomlBasicString(name)
 		}
 	}
 	return ""
