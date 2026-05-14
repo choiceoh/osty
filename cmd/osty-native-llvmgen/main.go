@@ -80,14 +80,9 @@ func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
 	if req.MIR == nil {
 		return nil, []string{"lir-proto bridge skipped: MIR payload missing"}, false
 	}
-	source := req.MIR.Source
-	if source == "" {
-		return nil, []string{"lir-proto bridge skipped: original source text not attached to MIR payload"}, false
-	}
 	resp, err := nativelirproto.Run(req.MIR.SourcePath, nativelirproto.Request{
 		PackageName: req.MIR.PackageName,
 		SourcePath:  req.MIR.SourcePath,
-		Source:      source,
 		Target:      req.MIR.Target,
 		MIR:         req.MIR.Module,
 	})

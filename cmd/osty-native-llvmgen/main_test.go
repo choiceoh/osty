@@ -76,7 +76,6 @@ func TestRunMIRPayloadPrefersLIRProtoWhenSelected(t *testing.T) {
 		MIR: &llvmgenMIRInput{
 			PackageName: entry.PackageName,
 			SourcePath:  entry.SourcePath,
-			Source:      string(entry.Source),
 			Target:      "x86_64-unknown-linux-gnu",
 			Module:      payload,
 		},
@@ -96,13 +95,14 @@ func TestRunMIRPayloadPrefersLIRProtoWhenSelected(t *testing.T) {
 		t.Fatalf("response did not use LIR Proto IR: %#v", resp)
 	}
 	var lirReq struct {
-		PackageName string `json:"packageName"`
-		SourcePath  string `json:"sourcePath"`
-		Source      string `json:"source"`
-		Target      string `json:"target"`
+		PackageName string          `json:"packageName"`
+		SourcePath  string          `json:"sourcePath"`
+		Source      string          `json:"source"`
+		Target      string          `json:"target"`
+		MIR         json.RawMessage `json:"mir"`
 	}
 	decodeCapturedLIRRequest(t, capture, &lirReq)
-	if lirReq.PackageName != "main" || lirReq.SourcePath != entry.SourcePath || lirReq.Source == "" || lirReq.Target != "x86_64-unknown-linux-gnu" {
+	if lirReq.PackageName != "main" || lirReq.SourcePath != entry.SourcePath || lirReq.Source != "" || lirReq.Target != "x86_64-unknown-linux-gnu" || len(lirReq.MIR) == 0 {
 		t.Fatalf("captured LIR request = %#v", lirReq)
 	}
 }
