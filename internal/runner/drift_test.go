@@ -44,6 +44,7 @@ func TestPolicySnapshotParityWithOsty(t *testing.T) {
 		"diag_explain.osty",
 		"diag_render.osty",
 		"format_policy.osty",
+		"profile_features.osty",
 		"profile_flags.osty",
 		"profile_pragma.osty",
 		"repair_policy.osty",

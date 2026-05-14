@@ -271,14 +271,7 @@ func (p *Profile) OptLevelFlags() []string {
 	if p == nil {
 		return nil
 	}
-	switch p.OptLevel {
-	case 0:
-		return []string{"-gcflags=all=-N -l"}
-	case 1:
-		return []string{"-gcflags=all=-l"}
-	default:
-		return nil
-	}
+	return runner.OptLevelFlags(p.OptLevel)
 }
 
 // GoEnv collects the environment overrides this resolved config
@@ -391,49 +384,12 @@ func (c *Config) Resolve(profileName, triple string, requestedFeatures []string,
 	return &Resolved{Profile: p, Target: t, Features: feats}, nil
 }
 
-// expandFeatures computes the transitive closure of requested + (if
-// useDefaults is true) default-feature names through c.Features.
-// Unknown feature names are passed through unchanged — feature
-// cross-linking to deps is the concern of the resolver layer, not
-// this package.
+// expandFeatures delegates to toolchain/profile_features.osty for
+// the deterministic BFS closure over c.Features. Unknown feature
+// names pass through unchanged — feature cross-linking to deps is
+// the concern of the resolver layer.
 func (c *Config) expandFeatures(requested []string, useDefaults bool) []string {
-	seed := map[string]struct{}{}
-	if useDefaults {
-		for _, f := range c.DefaultFeatures {
-			seed[f] = struct{}{}
-		}
-	}
-	for _, f := range requested {
-		seed[f] = struct{}{}
-	}
-	// BFS through c.Features.
-	out := map[string]struct{}{}
-	queue := make([]string, 0, len(seed))
-	for f := range seed {
-		queue = append(queue, f)
-	}
-	for len(queue) > 0 {
-		f := queue[0]
-		queue = queue[1:]
-		if _, done := out[f]; done {
-			continue
-		}
-		out[f] = struct{}{}
-		for _, child := range c.Features[f] {
-			// "<dep>/<feat>" references are left intact — a future
-			// pkgmgr hook will interpret them. For the local
-			// closure we only recurse on bare feature names.
-			if !strings.Contains(child, "/") {
-				queue = append(queue, child)
-			}
-		}
-	}
-	names := make([]string, 0, len(out))
-	for f := range out {
-		names = append(names, f)
-	}
-	sort.Strings(names)
-	return names
+	return runner.ExpandFeatures(c.Features, c.DefaultFeatures, requested, useDefaults)
 }
 
 // ReadFeaturePragma scans the first ~32 lines of src for a line of
