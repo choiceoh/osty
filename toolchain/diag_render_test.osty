@@ -120,3 +120,34 @@ fn testDiagRenderReplacementFallbackWithTemplate() {
         "wrap(<expr>)",
     )
 }
+fn testDiagSeverityStringError() {
+    testing.assertEq(diagSeverityString(diagSeverityError), "error")
+}
+fn testDiagSeverityStringWarning() {
+    testing.assertEq(diagSeverityString(diagSeverityWarning), "warning")
+}
+fn testDiagSeverityStringNote() {
+    testing.assertEq(diagSeverityString(diagSeverityNote), "note")
+}
+fn testDiagSeverityStringUnknown() {
+    testing.assertEq(diagSeverityString(99), "unknown")
+    testing.assertEq(diagSeverityString(-1), "unknown")
+}
+fn testDiagShortErrorWithCode() {
+    testing.assertEq(
+        diagShortError("E0500", diagSeverityError, 12, 3, "name not found"),
+        "E0500: error at 12:3: name not found",
+    )
+}
+fn testDiagShortErrorWithoutCode() {
+    testing.assertEq(
+        diagShortError("", diagSeverityWarning, 1, 5, "unused let"),
+        "warning at 1:5: unused let",
+    )
+}
+fn testDiagShortErrorNoteSeverity() {
+    testing.assertEq(
+        diagShortError("E0703", diagSeverityNote, 42, 1, "see also"),
+        "E0703: note at 42:1: see also",
+    )
+}

@@ -5,6 +5,7 @@ package runner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -121,4 +122,41 @@ func DiagRenderReplacement(replacement, excerpt string, haveExcerpt bool) string
 		return body
 	}
 	return replacement[:idx] + body + replacement[idx+2:]
+}
+
+// DiagSeverity enum constants. Order matches
+// toolchain/diag_render.osty + internal/diag.Severity iota.
+const (
+	DiagSeverityError   = 0
+	DiagSeverityWarning = 1
+	DiagSeverityNote    = 2
+)
+
+// DiagSeverityString maps a Severity int back to its
+// human-readable label. Unknown values collapse to "unknown".
+//
+// Osty: toolchain/diag_render.osty:148
+func DiagSeverityString(sev int) string {
+	switch sev {
+	case DiagSeverityError:
+		return "error"
+	case DiagSeverityWarning:
+		return "warning"
+	case DiagSeverityNote:
+		return "note"
+	}
+	return "unknown"
+}
+
+// DiagShortError renders the compact (*Diagnostic).Error() form:
+// `<code>: <severity> at <line>:<col>: <message>` when code is
+// set, otherwise the prefix is dropped.
+//
+// Osty: toolchain/diag_render.osty:164
+func DiagShortError(code string, severity, line, column int, message string) string {
+	head := DiagSeverityString(severity) + " at " + strconv.Itoa(line) + ":" + strconv.Itoa(column) + ": " + message
+	if code == "" {
+		return head
+	}
+	return code + ": " + head
 }

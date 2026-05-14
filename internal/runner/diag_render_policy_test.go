@@ -121,3 +121,48 @@ func TestDiagRenderReplacement(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagSeverityString(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want string
+	}{
+		{"error", DiagSeverityError, "error"},
+		{"warning", DiagSeverityWarning, "warning"},
+		{"note", DiagSeverityNote, "note"},
+		{"unknown-positive", 99, "unknown"},
+		{"unknown-negative", -1, "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DiagSeverityString(c.in); got != c.want {
+				t.Errorf("DiagSeverityString(%d) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDiagShortError(t *testing.T) {
+	cases := []struct {
+		name     string
+		code     string
+		severity int
+		line     int
+		column   int
+		message  string
+		want     string
+	}{
+		{"with-code", "E0500", DiagSeverityError, 12, 3, "name not found", "E0500: error at 12:3: name not found"},
+		{"without-code", "", DiagSeverityWarning, 1, 5, "unused let", "warning at 1:5: unused let"},
+		{"note-severity", "E0703", DiagSeverityNote, 42, 1, "see also", "E0703: note at 42:1: see also"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DiagShortError(c.code, c.severity, c.line, c.column, c.message)
+			if got != c.want {
+				t.Errorf("DiagShortError = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

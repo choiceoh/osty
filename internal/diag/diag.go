@@ -12,6 +12,7 @@
 package diag
 
 import (
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
@@ -32,15 +33,7 @@ const (
 )
 
 func (s Severity) String() string {
-	switch s {
-	case Error:
-		return "error"
-	case Warning:
-		return "warning"
-	case Note:
-		return "note"
-	}
-	return "unknown"
+	return runner.DiagSeverityString(int(s))
 }
 
 // Span is a half-open range [Start, End) within a single source file.
@@ -155,10 +148,7 @@ func (d *Diagnostic) PrimarySpan() (Span, bool) {
 // from functions that conventionally return error.
 func (d *Diagnostic) Error() string {
 	pos := d.PrimaryPos()
-	if d.Code != "" {
-		return d.Code + ": " + d.Severity.String() + " at " + pos.String() + ": " + d.Message
-	}
-	return d.Severity.String() + " at " + pos.String() + ": " + d.Message
+	return runner.DiagShortError(d.Code, int(d.Severity), pos.Line, pos.Column, d.Message)
 }
 
 // Builder offers a fluent API for assembling a Diagnostic.
