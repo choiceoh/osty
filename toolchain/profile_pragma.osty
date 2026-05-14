@@ -1,0 +1,165 @@
+/// Pure parsers for the profile/target/feature surface in
+/// `internal/profile`. Host code owns manifest stitching, Config
+/// merging, and feature-graph expansion; this module decides:
+///
+///   - how to split an `<arch>-<os>` target triple,
+///   - how to scan the first ~32 lines of a source file for a
+///     `// @feature: a, b c` pragma and return the active list,
+///   - the pragma-specific feature-list lexer (comma / space /
+///     tab separator, ASCII whitespace trim, drop empties).
+///
+/// Note that the CLI `--features=a,b` flag has its own
+/// pragma-independent parser in `toolchain/profile_flags.osty`
+/// (`parseFeatureList`) — that one splits on commas only and is
+/// used by `osty build` / `osty run` / `osty test` flag handling.
+/// The pragma scanner here lives separately because file-level
+/// pragmas are whitespace-delimited too.
+///
+/// Mirrored by `internal/runner/profile_pragma_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// TripleParseResult is the structured outcome of splitting an
+/// `<arch>-<os>` target triple. `ok == false` signals a malformed
+/// triple (missing dash, empty arch, or empty OS) and leaves
+/// `arch`/`os` empty.
+///
+/// The OS part keeps any internal dashes (e.g.
+/// `x86_64-apple-darwin` → arch=`x86_64`, os=`apple-darwin`)
+/// because callers downstream use the full second segment as the
+/// platform identifier.
+pub struct TripleParseResult {
+    pub arch: String,
+    pub os: String,
+    pub ok: Bool,
+}
+/// parseTriple splits `triple` once on the first `-` so the OS
+/// half can carry further dashes (`apple-darwin`, `unknown-linux`,
+/// etc.). Both halves must be non-empty.
+pub fn parseTriple(triple: String) -> TripleParseResult {
+    let parts = strings.splitN(triple, "-", 2)
+    if parts.len() != 2 || parts[0] == "" || parts[1] == "" {
+        return TripleParseResult {arch: "", os: "", ok: false}
+    }
+    TripleParseResult {arch: parts[0], os: parts[1], ok: true}
+}
+/// readFeaturePragma scans the first 32 logical lines of `src`
+/// for a `// @feature: a, b c` pragma and returns the list of
+/// features it activates. Returns an empty list when:
+///
+///   - no pragma is found in the prefix window,
+///   - a non-comment, non-blank line is encountered before any
+///     pragma (pragmas must live at the top of the file).
+///
+/// Both `// @feature:` and `//@feature:` prefixes are accepted so
+/// the formatter's "space after `//`" preference doesn't bind the
+/// pragma's recognition.
+pub fn readFeaturePragma(src: String) -> List<String> {
+    let maxLines = 32
+    let bs = src.bytes()
+    let n = bs.len()
+    let mut start = 0
+    let mut line = 0
+    let mut i = 0
+    for i <= n && line < maxLines {
+        let atEOF = i == n
+        let atNL = !atEOF && bs[i].toInt() == 0x0A
+        if !atEOF && !atNL {
+            i = i + 1
+            continue
+        }
+        let raw = strings.slice(src, start, i)
+        let trimmed = pragmaTrim(raw)
+        let lineComment = pragmaStrip(trimmed, "// @feature:")
+        if lineComment.ok {
+            return parsePragmaFeatureList(lineComment.rest)
+        }
+        let tightComment = pragmaStrip(trimmed, "//@feature:")
+        if tightComment.ok {
+            return parsePragmaFeatureList(tightComment.rest)
+        }
+        if trimmed != "" && !pragmaHasPrefix(trimmed, "//") && !pragmaHasPrefix(trimmed, "/*") {
+            return []
+        }
+        start = i + 1
+        line = line + 1
+        i = i + 1
+    }
+    []
+}
+/// PragmaStripResult is the outcome of `pragmaStrip` — the rest
+/// of the line after the matched prefix, or `{rest: "", ok:
+/// false}` when the prefix didn't match.
+pub struct PragmaStripResult {
+    pub rest: String,
+    pub ok: Bool,
+}
+/// parsePragmaFeatureList splits a pragma payload on any of
+/// `,` / ` ` / `\t`, trims each token (matches Go's featTrim:
+/// ASCII space, tab, CR), and drops empty entries.
+pub fn parsePragmaFeatureList(s: String) -> List<String> {
+    let bs = s.bytes()
+    let n = bs.len()
+    let mut out: List<String> = []
+    let mut start = 0
+    let mut i = 0
+    for i < n {
+        let b = bs[i].toInt()
+        if b == 0x2C || b == 0x20 || b == 0x09 {
+            if start < i {
+                let token = pragmaTrim(strings.slice(s, start, i))
+                if token != "" {
+                    out.push(token)
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        let token = pragmaTrim(strings.slice(s, start, n))
+        if token != "" {
+            out.push(token)
+        }
+    }
+    out
+}
+/// pragmaTrim matches Go's `featTrim` — strips leading/trailing
+/// ASCII space (0x20), tab (0x09), and CR (0x0D). Does not touch
+/// other Unicode whitespace.
+fn pragmaTrim(s: String) -> String {
+    let bs = s.bytes()
+    let n = bs.len()
+    let mut i = 0
+    let mut j = n
+    for i < j {
+        let b = bs[i].toInt()
+        if b != 0x20 && b != 0x09 && b != 0x0D {
+            break
+        }
+        i = i + 1
+    }
+    for j > i {
+        let b = bs[j - 1].toInt()
+        if b != 0x20 && b != 0x09 && b != 0x0D {
+            break
+        }
+        j = j - 1
+    }
+    strings.slice(s, i, j)
+}
+/// pragmaHasPrefix matches Go's `featHas`. Used only inside this
+/// module for the non-comment-line detector in
+/// `readFeaturePragma`.
+fn pragmaHasPrefix(s: String, p: String) -> Bool {
+    strings.hasPrefix(s, p)
+}
+/// pragmaStrip matches Go's `featStrip` — return-rest-if-prefix
+/// shape. Returns `{rest: s[len(p)..], ok: true}` when `s` starts
+/// with `p`, otherwise `{rest: "", ok: false}`.
+fn pragmaStrip(s: String, p: String) -> PragmaStripResult {
+    if strings.hasPrefix(s, p) {
+        return PragmaStripResult {rest: strings.slice(s, p.len(), s.len()), ok: true}
+    }
+    PragmaStripResult {rest: "", ok: false}
+}

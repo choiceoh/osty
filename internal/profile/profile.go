@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // Built-in profile names. Any additional profile declared in the
@@ -111,12 +113,15 @@ func (t *Target) Clone() *Target {
 // if the triple isn't in the expected form. The toolchain does not
 // try to validate against Go's internal GOOS/GOARCH table — unknown
 // combinations are surfaced by `go build` itself.
+// ParseTriple delegates to toolchain/profile_pragma.osty. The host
+// wrapper preserves the legacy (arch, os, err) shape by lifting the
+// policy's `Ok` flag into a formatted error message.
 func ParseTriple(triple string) (arch, os string, err error) {
-	parts := strings.SplitN(triple, "-", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	r := runner.ParseTriple(triple)
+	if !r.Ok {
 		return "", "", fmt.Errorf("invalid target triple %q (want <arch>-<os>)", triple)
 	}
-	return parts[0], parts[1], nil
+	return r.Arch, r.OS, nil
 }
 
 // Config is the merged view of built-in defaults + manifest-declared
@@ -440,32 +445,9 @@ func (c *Config) expandFeatures(requested []string, useDefaults bool) []string {
 // starts with "@feature:" — so the check doesn't need a parser pass.
 // Callers (build driver, gen emitter) combine this with the active
 // feature set to decide whether the file participates in the build.
+// ReadFeaturePragma delegates to toolchain/profile_pragma.osty.
 func ReadFeaturePragma(src []byte) []string {
-	const maxLines = 32
-	line := 0
-	start := 0
-	for i := 0; i <= len(src) && line < maxLines; i++ {
-		// Logical line break at '\n' or at EOF.
-		if i < len(src) && src[i] != '\n' {
-			continue
-		}
-		raw := string(src[start:i])
-		trimmed := featTrim(raw)
-		if after, ok := featStrip(trimmed, "// @feature:"); ok {
-			return parseFeatureList(after)
-		}
-		if after, ok := featStrip(trimmed, "//@feature:"); ok {
-			return parseFeatureList(after)
-		}
-		// Stop as soon as we hit a non-comment, non-blank line —
-		// feature pragmas must live at the top of the file.
-		if trimmed != "" && !featHas(trimmed, "//") && !featHas(trimmed, "/*") {
-			return nil
-		}
-		start = i + 1
-		line++
-	}
-	return nil
+	return runner.ReadFeaturePragma(src)
 }
 
 // FileNeedsFeatures reads src's feature pragma and reports whether
@@ -482,46 +464,10 @@ func FileNeedsFeatures(src []byte, active map[string]bool) (bool, string) {
 	return true, ""
 }
 
+// parseFeatureList delegates to toolchain/profile_pragma.osty.
+// Note: this is the pragma-side parser (comma + space + tab
+// separators). The CLI `--features=a,b` parser lives in
+// toolchain/profile_flags.osty under the same name.
 func parseFeatureList(s string) []string {
-	var out []string
-	cur := ""
-	flush := func() {
-		t := featTrim(cur)
-		if t != "" {
-			out = append(out, t)
-		}
-		cur = ""
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == ',' || c == ' ' || c == '\t' {
-			flush()
-			continue
-		}
-		cur += string(c)
-	}
-	flush()
-	return out
-}
-
-func featTrim(s string) string {
-	i, j := 0, len(s)
-	for i < j && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') {
-		i++
-	}
-	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r') {
-		j--
-	}
-	return s[i:j]
-}
-
-func featStrip(s, p string) (string, bool) {
-	if len(s) >= len(p) && s[:len(p)] == p {
-		return s[len(p):], true
-	}
-	return "", false
-}
-
-func featHas(s, p string) bool {
-	return len(s) >= len(p) && s[:len(p)] == p
+	return runner.ParsePragmaFeatureList(s)
 }
