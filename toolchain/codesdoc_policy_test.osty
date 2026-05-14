@@ -118,3 +118,40 @@ fn testCodesdocHeadingPrefixRulesOrder() {
     testing.assertEq(rules[0].family, "FamilyManifest")
     testing.assertEq(rules[2].prefix, "Type checking")
 }
+fn testRangeSuffixMultipleCodes() {
+    testing.assertEq(rangeSuffix("Lexical", "E0001", "E0099"), "Lexical (E0001–E0099)")
+}
+fn testRangeSuffixSingleCode() {
+    testing.assertEq(rangeSuffix("Deprecation warning", "W0750", "W0750"), "Deprecation warning (W0750)")
+}
+fn testRangeSuffixEmptyRangeReturnsHeading() {
+    testing.assertEq(rangeSuffix("Lexical", "", ""), "Lexical")
+}
+fn testRangeSuffixSkipsAlreadySuffixed() {
+    testing.assertEq(rangeSuffix("Lexical (E0001-E0099)", "E0100", "E0199"), "Lexical (E0001-E0099)")
+}
+fn testHarvestPhaseForResolveFamilies() {
+    testing.assertEq(harvestPhaseFor("FamilyLexical"), "resolve")
+    testing.assertEq(harvestPhaseFor("FamilyDeclaration"), "resolve")
+    testing.assertEq(harvestPhaseFor("FamilyExpression"), "resolve")
+    testing.assertEq(harvestPhaseFor("FamilyTypePattern"), "resolve")
+    testing.assertEq(harvestPhaseFor("FamilyAnnotation"), "resolve")
+    testing.assertEq(harvestPhaseFor("FamilyResolution"), "resolve")
+}
+fn testHarvestPhaseForCheckFamilies() {
+    testing.assertEq(harvestPhaseFor("FamilyControlFlow"), "check")
+    testing.assertEq(harvestPhaseFor("FamilyTypeChecking"), "check")
+    testing.assertEq(harvestPhaseFor("FamilyWarning"), "check")
+}
+fn testHarvestPhaseForLintFamily() {
+    testing.assertEq(harvestPhaseFor("FamilyLint"), "lint")
+}
+fn testHarvestPhaseForSkipFamilies() {
+    testing.assertEq(harvestPhaseFor("FamilyManifest"), "skip")
+    testing.assertEq(harvestPhaseFor("FamilyScaffold"), "skip")
+}
+fn testHarvestPhaseForUnknownDefaultsToSkip() {
+    testing.assertEq(harvestPhaseFor("FamilyUnknown"), "skip")
+    testing.assertEq(harvestPhaseFor(""), "skip")
+    testing.assertEq(harvestPhaseFor("NotAFamily"), "skip")
+}
