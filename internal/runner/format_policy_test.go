@@ -73,6 +73,35 @@ func TestUseCSurfaceLibName(t *testing.T) {
 	}
 }
 
+func TestFinalizeFormatted(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"adds-trailing-newline", "hello", "hello\n"},
+		{"keeps-single-newline", "hello\n", "hello\n"},
+		{"collapses-trailing-newlines", "hello\n\n\n", "hello\n"},
+		{"trims-trailing-spaces", "a  \nb\t\n", "a\nb\n"},
+		{"collapses-blank-lines", "a\n\n\nb\n", "a\n\nb\n"},
+		{"drops-leading-blanks", "\n\nhello\n", "hello\n"},
+		{"all-blanks-reduces", "\n\n\n", "\n"},
+		{"empty", "", "\n"},
+		{"preserves-intra-line-ws", "a   b\n", "a   b\n"},
+		{"trims-mixed-tabs-spaces", "line \t \nnext", "line\nnext\n"},
+		{"no-trailing-newline-body", "a\nb", "a\nb\n"},
+		{"preserves-non-ascii", "한글 \n", "한글\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := string(FinalizeFormatted([]byte(c.in)))
+			if got != c.want {
+				t.Errorf("FinalizeFormatted(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 func TestShouldBreakChain(t *testing.T) {
 	cases := []struct {
 		name        string

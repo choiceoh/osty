@@ -82,3 +82,39 @@ fn testShouldBreakChainMultiLineCallStaysFlat() {
     ]
     testing.assert(!(shouldBreakChain(1, segs)))
 }
+fn testFinalizeFormattedAddsTrailingNewline() {
+    testing.assertEq(finalizeFormatted("hello"), "hello\n")
+}
+fn testFinalizeFormattedKeepsSingleTrailingNewline() {
+    testing.assertEq(finalizeFormatted("hello\n"), "hello\n")
+}
+fn testFinalizeFormattedCollapsesTrailingNewlines() {
+    testing.assertEq(finalizeFormatted("hello\n\n\n"), "hello\n")
+}
+fn testFinalizeFormattedTrimsTrailingSpaces() {
+    testing.assertEq(finalizeFormatted("a  \nb\t\n"), "a\nb\n")
+}
+fn testFinalizeFormattedCollapsesBlankLines() {
+    testing.assertEq(finalizeFormatted("a\n\n\nb\n"), "a\n\nb\n")
+}
+fn testFinalizeFormattedDropsLeadingBlanks() {
+    testing.assertEq(finalizeFormatted("\n\nhello\n"), "hello\n")
+}
+fn testFinalizeFormattedAllBlanksReducesToOneNewline() {
+    testing.assertEq(finalizeFormatted("\n\n\n"), "\n")
+}
+fn testFinalizeFormattedEmpty() {
+    testing.assertEq(finalizeFormatted(""), "\n")
+}
+fn testFinalizeFormattedPreservesIntraLineWhitespace() {
+    testing.assertEq(finalizeFormatted("a   b\n"), "a   b\n")
+}
+fn testFinalizeFormattedTrimsTabsAndSpacesMixed() {
+    testing.assertEq(finalizeFormatted("line \t \nnext"), "line\nnext\n")
+}
+fn testFinalizeFormattedNoTrailingNewlineWithBody() {
+    testing.assertEq(finalizeFormatted("a\nb"), "a\nb\n")
+}
+fn testFinalizeFormattedPreservesNonAscii() {
+    testing.assertEq(finalizeFormatted("한글 \n"), "한글\n")
+}
