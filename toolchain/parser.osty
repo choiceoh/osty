@@ -2514,7 +2514,19 @@ fn opParseFnType(p: OstyParser) -> Int {
     opExpect(p, FrontLParen)
     let mut params: List<Int> = []
     for !(opAt(p, FrontRParen)) && !(opAt(p, FrontEOF)) {
-        params.push(opParseType(p))
+        if opAt(p, FrontIdent) && opPeekAt(p, 1).kind == FrontColon {
+            let fs = p.pos
+            let name = opAdvance(p).text
+            let _ = opAdvance(p)
+            let mut n = emptyAstNode(AstNField_)
+            n.text = name
+            n.left = opParseType(p)
+            n.start = fs
+            n.end = p.pos
+            params.push(opAddNode(p, n))
+        } else {
+            params.push(opParseType(p))
+        }
         if !(opEat(p, FrontComma)) {
             break
         }

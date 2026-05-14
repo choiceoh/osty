@@ -1136,13 +1136,25 @@ fn astTypeToTy(cx: ElabCx, idx: Int) -> Int {
     }
     if node.text == "fn" {
         let mut params: List<Int> = []
+        let mut paramNames: List<String> = []
         for p in node.children {
-            let pt = astTypeToTy(cx, p)
-            params.push(if pt < 0 {
-                tErr(cx.env.tys)
+            let child = astArenaNodeAt(cx.ast.arena, p)
+            if child.kind == AstNField_ {
+                paramNames.push(child.text)
+                let pt = astTypeToTy(cx, child.left)
+                params.push(if pt < 0 {
+                    tErr(cx.env.tys)
+                } else {
+                    pt
+                })
             } else {
-                pt
-            })
+                let pt = astTypeToTy(cx, p)
+                params.push(if pt < 0 {
+                    tErr(cx.env.tys)
+                } else {
+                    pt
+                })
+            }
         }
         let retTy = if node.right < 0 {
             tUnit(cx.env.tys)
@@ -1153,6 +1165,9 @@ fn astTypeToTy(cx: ElabCx, idx: Int) -> Int {
             } else {
                 r
             }
+        }
+        if paramNames.len() > 0 {
+            return tyFnWithNames(cx.env.tys, params, retTy, paramNames)
         }
         return tyFn(cx.env.tys, params, retTy)
     }

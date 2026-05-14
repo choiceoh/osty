@@ -23172,8 +23172,19 @@ func opParseFnType(p *OstyParser) int {
 	_ = params
 	// Osty: /tmp/selfhost_merged.osty:8743:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8743:59
-		func() struct{} { params = append(params, opParseType(p)); return struct{}{} }()
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
+			fs := p.pos
+			key := opAdvance(p).text
+			_ = opAdvance(p)
+			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
+			n.text = key
+			n.left = opParseType(p)
+			n.start = fs
+			n.end = p.pos
+			params = append(params, opAddNode(p, n))
+		} else {
+			func() struct{} { params = append(params, opParseType(p)); return struct{}{} }()
+		}
 		// Osty: /tmp/selfhost_merged.osty:8744:5
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
 			// Osty: /tmp/selfhost_merged.osty:8744:34
@@ -28485,7 +28496,7 @@ func diagPositionalAfterKw(start int, end int) *CheckDiagnostic {
 // diagFnValueKeywordNameMismatch reports a keyword argument whose name
 // does not match any parameter name on the function-value type (G20).
 func diagFnValueKeywordNameMismatch(name string, start int, end int) *CheckDiagnostic {
-	return checkDiagWithNotes(checkCodeFnValueKeywordNameMismatch(), "keyword argument `" + name + ":` does not match any parameter name on this function value", start, end, []string{"G20: function values carry parameter names as type-neutral metadata; keyword calls require a name match", "hint: use a positional argument, or ensure the function value originates from a declaration whose parameter names match"})
+	return checkDiagWithNotes(checkCodeFnValueKeywordNameMismatch(), "keyword argument `"+name+":` does not match any parameter name on this function value", start, end, []string{"G20: function values carry parameter names as type-neutral metadata; keyword calls require a name match", "hint: use a positional argument, or ensure the function value originates from a declaration whose parameter names match"})
 }
 
 // Osty: /tmp/selfhost_merged.osty:10918:5
@@ -29821,7 +29832,6 @@ func tyFnParamNamesAt(arena *TyArena, idx int) []string {
 	}
 	return arena.nodes[idx].fnParamNames
 }
-
 
 // Osty: /tmp/selfhost_merged.osty:11790:5
 func tyOptional(arena *TyArena, inner int) int {
@@ -40565,42 +40575,54 @@ func astTypeToTy(cx *ElabCx, idx int) int {
 		// Osty: /tmp/selfhost_merged.osty:18859:9
 		var params []int = make([]int, 0, 1)
 		_ = params
+		var fnParamNames []string
 		// Osty: /tmp/selfhost_merged.osty:18860:9
 		for _, p := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:18861:13
-			pt := astTypeToTy(cx, p)
-			_ = pt
-			// Osty: /tmp/selfhost_merged.osty:18862:13
-			func() struct{} {
-				params = append(params, func() int {
-					if pt < 0 {
-						return tErr(cx.env.tys)
-					} else {
-						return pt
-					}
-				}())
-				return struct{}{}
-			}()
+			child := astArenaNodeAt(cx.ast.arena, p)
+			if ostyEqual(child.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+				fnParamNames = append(fnParamNames, child.text)
+				pt := astTypeToTy(cx, child.left)
+				_ = pt
+				func() struct{} {
+					params = append(params, func() int {
+						if pt < 0 {
+							return tErr(cx.env.tys)
+						} else {
+							return pt
+						}
+					}())
+					return struct{}{}
+				}()
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:18861:13
+				pt := astTypeToTy(cx, p)
+				_ = pt
+				// Osty: /tmp/selfhost_merged.osty:18862:13
+				func() struct{} {
+					params = append(params, func() int {
+						if pt < 0 {
+							return tErr(cx.env.tys)
+						} else {
+							return pt
+						}
+					}())
+					return struct{}{}
+				}()
+			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:18864:9
+		// Osty: /tmp/selfhost_merged.osty:18866:5
 		retTy := func() int {
 			if node.right < 0 {
 				return tUnit(cx.env.tys)
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:18867:13
-				r := astTypeToTy(cx, node.right)
-				_ = r
-				return func() int {
-					if r < 0 {
-						return tUnit(cx.env.tys)
-					} else {
-						return r
-					}
-				}()
+				return astTypeToTy(cx, node.right)
 			}
 		}()
 		_ = retTy
-		// Osty: /tmp/selfhost_merged.osty:18870:9
+		// Osty: /tmp/selfhost_merged.osty:18867:5
+		if len(fnParamNames) > 0 {
+			return tyFnWithNames(cx.env.tys, params, retTy, fnParamNames)
+		}
 		return tyFn(cx.env.tys, params, retTy)
 	}
 	// Osty: /tmp/selfhost_merged.osty:18872:5
@@ -50906,8 +50928,13 @@ func privilegeWalkType(cx *ElabCx, arena *AstArena, typeIdx int) {
 	if node.text == "fn" {
 		// Osty: /tmp/selfhost_merged.osty:25111:9
 		for _, pIdx := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:25112:13
-			privilegeWalkType(cx, arena, pIdx)
+			pNode := astArenaNodeAt(arena, pIdx)
+			if ostyEqual(pNode.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+				privilegeWalkType(cx, arena, pNode.left)
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:25112:13
+				privilegeWalkType(cx, arena, pIdx)
+			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:25114:9
 		privilegeWalkType(cx, arena, node.right)
@@ -52951,8 +52978,13 @@ func srAstResolveType(file *AstFile, idx int, scope *SelfResolveScope, owner str
 	} else if node.text == "fn" {
 		// Osty: /tmp/selfhost_merged.osty:26819:9
 		for _, child := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:26820:13
-			out = srAstResolveType(file, child, scope, owner, out)
+			childNode := srAstNode(file, child)
+			if ostyEqual(childNode.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+				out = srAstResolveType(file, childNode.left, scope, owner, out)
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:26820:13
+				out = srAstResolveType(file, child, scope, owner, out)
+			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:26822:9
 		out = srAstResolveType(file, node.right, scope, owner, out)

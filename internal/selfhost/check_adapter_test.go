@@ -1371,3 +1371,23 @@ fn main() {
 		t.Fatalf("E0769 count = %d, want 1 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
 	}
 }
+
+// G20: named fn type annotation preserves param names for keyword calls.
+// let f: fn(host: String, port: Int) -> String = connect
+func TestCheckSourceStructuredAcceptsNamedFnTypeKeywordArgs(t *testing.T) {
+	src := []byte(`fn connect(host: String, port: Int) -> String {
+    host + ":" + port.toString()
+}
+
+fn main() {
+    let f: fn(host: String, port: Int) -> String = connect
+    let result = f("localhost", port: 8080)
+    println(result)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
