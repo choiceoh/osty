@@ -26,6 +26,7 @@ import (
 	"context"
 
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/runner"
 )
 
 // SourceKind selects how a Source materializes its package. Each
@@ -44,16 +45,19 @@ const (
 	SourceRegistry
 )
 
+// Compile-time guard: the SourceKind iota MUST match the int
+// constants in the runner snapshot (toolchain/pkg_policy.osty).
+// A future reorder of the iota above would silently desync the
+// two sources of truth without this; the array length check
+// forces a build failure instead.
+var _ = [1]struct{}{}[int(SourcePath)-runner.PkgSourceKindPath]
+var _ = [1]struct{}{}[int(SourceGit)-runner.PkgSourceKindGit]
+var _ = [1]struct{}{}[int(SourceRegistry)-runner.PkgSourceKindRegistry]
+
+// String bridges to runner.PkgSourceKindString (mirror of
+// toolchain/pkg_policy.osty).
 func (k SourceKind) String() string {
-	switch k {
-	case SourcePath:
-		return "path"
-	case SourceGit:
-		return "git"
-	case SourceRegistry:
-		return "registry"
-	}
-	return "unknown"
+	return runner.PkgSourceKindString(int(k))
 }
 
 // Source is the uniform interface over local, git, and registry

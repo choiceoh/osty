@@ -106,3 +106,24 @@ fn pkgPathBase(p: String) -> String {
     }
     strings.slice(p, sep + 1, end)
 }
+/// SourceKind enum constants. Encoded as Int so the host mirrors
+/// them as their iota analogue without a wire-format translation.
+/// Order MUST match `internal/pkgmgr.SourceKind` iota.
+pub let pkgSourceKindPath: Int = 0
+pub let pkgSourceKindGit: Int = 1
+pub let pkgSourceKindRegistry: Int = 2
+/// pkgSourceKindString maps a SourceKind int back to its
+/// human-readable label. Unknown / out-of-range values collapse
+/// to `"unknown"` so log lines never surface a bare number.
+pub fn pkgSourceKindString(kind: Int) -> String {
+    if kind == pkgSourceKindPath {
+        return "path"
+    }
+    if kind == pkgSourceKindGit {
+        return "git"
+    }
+    if kind == pkgSourceKindRegistry {
+        return "registry"
+    }
+    "unknown"
+}
