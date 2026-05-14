@@ -116,3 +116,30 @@ pub fn registrySearchScoreOf(name: String, description: String, keywords: List<S
     }
     RegistrySearchScore {score: 0, ok: false}
 }
+/// registryStatusErrorMessage builds the error string emitted
+/// when an HTTP response from the registry has an unexpected
+/// status code. Format mirrors the existing host code:
+///
+///   `registry <url>: HTTP <code>: <msg>`
+///
+/// Inputs:
+///
+///   - `url`: the request's URL (typically the package endpoint).
+///   - `statusCode`: numeric HTTP status (e.g. 500, 404).
+///   - `body`: the response body, host-trimmed to a sane upper
+///     bound (the historical limit is 16 KiB).
+///   - `statusText`: `resp.Status` (e.g. "500 Internal Server
+///     Error") — used as the fallback message when `body` is
+///     empty or whitespace-only.
+///
+/// The body is trimmed (whitespace at both ends) before use;
+/// an empty trim triggers the statusText fallback.
+pub fn registryStatusErrorMessage(url: String, statusCode: Int, body: String, statusText: String) -> String {
+    let trimmed = strings.trimSpace(body)
+    let msg = if trimmed == "" {
+        statusText
+    } else {
+        trimmed
+    }
+    "registry " + url + ": HTTP " + "{statusCode}" + ": " + msg
+}

@@ -65,3 +65,43 @@ func TestRegistrySearchScoreOf(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistryStatusErrorMessage(t *testing.T) {
+	cases := []struct {
+		name       string
+		url        string
+		statusCode int
+		body       string
+		statusText string
+		want       string
+	}{
+		{
+			"with-body",
+			"https://r.dev/v1/crates/serde", 500, "internal error", "500 Internal Server Error",
+			"registry https://r.dev/v1/crates/serde: HTTP 500: internal error",
+		},
+		{
+			"empty-body-uses-status",
+			"https://r.dev/x", 404, "", "404 Not Found",
+			"registry https://r.dev/x: HTTP 404: 404 Not Found",
+		},
+		{
+			"whitespace-body-uses-status",
+			"https://r.dev/x", 404, "   \n\t  ", "404 Not Found",
+			"registry https://r.dev/x: HTTP 404: 404 Not Found",
+		},
+		{
+			"trims-body",
+			"https://r.dev/x", 403, "  not allowed  ", "403 Forbidden",
+			"registry https://r.dev/x: HTTP 403: not allowed",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RegistryStatusErrorMessage(c.url, c.statusCode, c.body, c.statusText)
+			if got != c.want {
+				t.Errorf("RegistryStatusErrorMessage =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}

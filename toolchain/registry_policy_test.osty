@@ -85,3 +85,31 @@ fn testRegistrySearchScoreKeywordCaseInsensitive() {
     testing.assertEq(r.ok, true)
     testing.assertEq(r.score, 4)
 }
+fn testRegistryStatusErrorMessageWithBody() {
+    testing.assertEq(
+        registryStatusErrorMessage(
+            "https://r.dev/v1/crates/serde", 500, "internal error", "500 Internal Server Error",
+        ),
+        "registry https://r.dev/v1/crates/serde: HTTP 500: internal error",
+    )
+}
+fn testRegistryStatusErrorMessageEmptyBodyUsesStatus() {
+    testing.assertEq(
+        registryStatusErrorMessage("https://r.dev/x", 404, "", "404 Not Found"),
+        "registry https://r.dev/x: HTTP 404: 404 Not Found",
+    )
+}
+fn testRegistryStatusErrorMessageWhitespaceBodyUsesStatus() {
+    testing.assertEq(
+        registryStatusErrorMessage("https://r.dev/x", 404, "   \n\t  ", "404 Not Found"),
+        "registry https://r.dev/x: HTTP 404: 404 Not Found",
+    )
+}
+fn testRegistryStatusErrorMessageTrimsBody() {
+    testing.assertEq(
+        registryStatusErrorMessage(
+            "https://r.dev/x", 403, "  not allowed  ", "403 Forbidden",
+        ),
+        "registry https://r.dev/x: HTTP 403: not allowed",
+    )
+}
