@@ -1,0 +1,80 @@
+use std.testing
+fn testDefaultHeadingForErrors() {
+    testing.assertEq(defaultHeadingFor("E0001"), "Errors starting at E0001")
+    testing.assertEq(defaultHeadingFor("E0500"), "Errors starting at E0500")
+}
+fn testDefaultHeadingForWarnings() {
+    testing.assertEq(defaultHeadingFor("W0750"), "Warnings starting at W0750")
+}
+fn testDefaultHeadingForLint() {
+    testing.assertEq(defaultHeadingFor("L0001"), "Lint warnings starting at L0001")
+}
+fn testDefaultHeadingForMiscellaneous() {
+    testing.assertEq(defaultHeadingFor("X1234"), "Miscellaneous")
+    testing.assertEq(defaultHeadingFor(""), "Miscellaneous")
+}
+fn testStripRangeSuffixWithRange() {
+    testing.assertEq(stripRangeSuffix("Lexical (E0001-E0099)"), "Lexical")
+    testing.assertEq(stripRangeSuffix("Manifest (E2017)"), "Manifest")
+}
+fn testStripRangeSuffixWithoutRange() {
+    testing.assertEq(stripRangeSuffix("Lexical"), "Lexical")
+    testing.assertEq(stripRangeSuffix(""), "")
+}
+fn testStripRangeSuffixTrimsSpace() {
+    testing.assertEq(stripRangeSuffix("  Lexical  "), "Lexical")
+}
+fn testStripRangeSuffixUsesLastOccurrence() {
+    testing.assertEq(stripRangeSuffix("Foo (bar) (E0001)"), "Foo (bar)")
+}
+fn testUnsafeForBootstrapGenBraceAndFatArrow() {
+    testing.assert(unsafeForBootstrapGen("match x \{ A => B \}"))
+    testing.assert(unsafeForBootstrapGen("let f = fn (x) => \{ x \}"))
+}
+fn testUnsafeForBootstrapGenBraceOnly() {
+    testing.assert(!(unsafeForBootstrapGen("fn main() \{}")))
+    testing.assert(!(unsafeForBootstrapGen("\{ a, b \}")))
+}
+fn testUnsafeForBootstrapGenFatArrowOnly() {
+    testing.assert(!(unsafeForBootstrapGen("x => y")))
+}
+fn testUnsafeForBootstrapGenNeither() {
+    testing.assert(!(unsafeForBootstrapGen("let x = 1")))
+    testing.assert(!(unsafeForBootstrapGen("")))
+}
+fn testProseExampleEllipsisDots() {
+    testing.assert(proseExample("foo(...)"))
+    testing.assert(proseExample("a ... b"))
+}
+fn testProseExampleUnicodeEllipsis() {
+    testing.assert(proseExample("a … b"))
+}
+fn testProseExampleUnicodeArrow() {
+    testing.assert(proseExample("x → y"))
+}
+fn testProseExampleClean() {
+    testing.assert(!(proseExample("let x = 1")))
+    testing.assert(!(proseExample("")))
+    testing.assert(!(proseExample("a -> b")))
+}
+fn testOstyEscapePlain() {
+    testing.assertEq(ostyEscape("hello"), "hello")
+    testing.assertEq(ostyEscape(""), "")
+}
+fn testOstyEscapeBackslash() {
+    testing.assertEq(ostyEscape("a\\b"), "a\\\\b")
+}
+fn testOstyEscapeDoubleQuote() {
+    testing.assertEq(ostyEscape("a\"b"), "a\\\"b")
+}
+fn testOstyEscapeControlChars() {
+    testing.assertEq(ostyEscape("a\nb"), "a\\nb")
+    testing.assertEq(ostyEscape("a\tb"), "a\\tb")
+    testing.assertEq(ostyEscape("a\rb"), "a\\rb")
+}
+fn testOstyEscapeBraces() {
+    testing.assertEq(ostyEscape("a\{b\}c"), "a\\\{b\\\}c")
+}
+fn testOstyEscapePreservesNonAscii() {
+    testing.assertEq(ostyEscape("한글"), "한글")
+}

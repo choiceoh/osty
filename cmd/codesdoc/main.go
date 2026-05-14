@@ -462,19 +462,11 @@ func parseDocComment(cg *ast.CommentGroup) parsedDoc {
 	return runner.ParseExplainDoc(lines)
 }
 
-// defaultHeadingFor invents a heading when the const block has no
-// leading doc comment. Rare — only hit during development of new
-// blocks.
+// defaultHeadingFor delegates to toolchain/codesdoc_policy.osty
+// for the default phase heading when the const block has no
+// leading doc comment.
 func defaultHeadingFor(code string) string {
-	switch {
-	case strings.HasPrefix(code, "E"):
-		return "Errors starting at " + code
-	case strings.HasPrefix(code, "W"):
-		return "Warnings starting at " + code
-	case strings.HasPrefix(code, "L"):
-		return "Lint warnings starting at " + code
-	}
-	return "Miscellaneous"
+	return runner.DefaultHeadingFor(code)
 }
 
 // rangeSuffix appends an Exxxx–Eyyyy range to the heading if the
@@ -650,13 +642,10 @@ func familyForHeading(heading string) string {
 	return ""
 }
 
-// stripRangeSuffix removes the " (Exxxx–Eyyyy)" suffix that
-// rangeSuffix appends to phase headings for markdown rendering.
+// stripRangeSuffix delegates to toolchain/codesdoc_policy.osty
+// for removing the " (Exxxx-Eyyyy)" suffix from phase headings.
 func stripRangeSuffix(h string) string {
-	if i := strings.LastIndex(h, " ("); i >= 0 {
-		return strings.TrimSpace(h[:i])
-	}
-	return strings.TrimSpace(h)
+	return runner.StripRangeSuffix(h)
 }
 
 // renderManifest emits the Osty source for toolchain/diag_manifest.osty.
@@ -727,50 +716,18 @@ var harvestPhaseForFamily = map[string]string{
 // string literal. Today the known trigger is the `\{` + `=>` pair; add
 // more conditions here (instead of broadening the filter) so each
 // carved-out code stays traceable.
+// unsafeForBootstrapGen / proseExample / ostyEscape delegate to
+// toolchain/codesdoc_policy.osty.
 func unsafeForBootstrapGen(example string) bool {
-	hasBrace := strings.Contains(example, "{") || strings.Contains(example, "}")
-	hasFatArrow := strings.Contains(example, "=>")
-	return hasBrace && hasFatArrow
+	return runner.UnsafeForBootstrapGen(example)
 }
 
-// proseExample reports whether an example contains prose placeholders
-// (triple-dot, unicode right-arrow, ellipsis) that make it unrunnable
-// as real Osty source. These examples illustrate the rule in
-// ERROR_CODES.md but can't be harvested — skip them rather than emit
-// known-failing cases.
 func proseExample(example string) bool {
-	return strings.Contains(example, "...") ||
-		strings.Contains(example, "…") ||
-		strings.Contains(example, "→")
+	return runner.ProseExample(example)
 }
 
-// ostyEscape escapes a byte slice so it's safe to drop inside an Osty
-// regular string literal ("..."). Covers interpolation braces (§1.6.3)
-// and the usual control chars.
 func ostyEscape(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 8)
-	for _, r := range s {
-		switch r {
-		case '\\':
-			b.WriteString(`\\`)
-		case '"':
-			b.WriteString(`\"`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\r':
-			b.WriteString(`\r`)
-		case '\t':
-			b.WriteString(`\t`)
-		case '{':
-			b.WriteString(`\{`)
-		case '}':
-			b.WriteString(`\}`)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return runner.OstyEscape(s)
 }
 
 // renderHarvest emits the Osty source for toolchain/diag_examples.osty,
