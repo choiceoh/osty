@@ -1,63 +1,37 @@
 package format
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // Escape helpers render AST literal values (rune / byte / string
-// segment) back to source form. No existing lexer helper is exported
-// for the inverse direction, and strconv.Quote doesn't speak Osty's
-// `\u{...}` and `\{` `\}` conventions — hence this file.
+// segment) back to source form. The byte-level + universal-escape
+// pieces live in toolchain/format_escape.osty; this file owns the
+// rune-level escapers that still need `unicode.IsPrint` for
+// invisible-rune detection.
 
-// escapeCommon returns the Osty escape for the five runes that behave
-// the same across Char, Byte, and String literals, or "" when r needs
-// no shared handling.
+// escapeCommon delegates to runner.FormatEscapeCommon (mirror of
+// toolchain/format_escape.osty). The 5-case mapping (`\\`, `\n`,
+// `\r`, `\t`, `\0`) is shared with the byte escapers.
 func escapeCommon(r rune) string {
-	switch r {
-	case '\\':
-		return `\\`
-	case '\n':
-		return `\n`
-	case '\r':
-		return `\r`
-	case '\t':
-		return `\t`
-	case 0:
-		return `\0`
-	}
-	return ""
+	return runner.FormatEscapeCommon(int(r))
 }
 
-// appendUnicodeEscape writes the Osty `\u{XXXX}` hex escape for r to b
-// with uppercase hex and no leading zeros. Used from per-rune escape
-// loops in place of fmt.Fprintf, which would allocate on every call.
+// appendUnicodeEscape writes the Osty `\u{XXXX}` hex escape for r
+// to b. Wraps runner.FormatUnicodeEscape so the Osty side owns the
+// hex-render policy; this helper just streams the result into the
+// caller's builder.
 func appendUnicodeEscape(b *strings.Builder, r rune) {
-	const hex = "0123456789ABCDEF"
-	b.WriteString(`\u{`)
-	if r == 0 {
-		b.WriteByte('0')
-	} else {
-		// Most-significant hex digit first; strip leading zeros.
-		digits := 0
-		for x := r; x > 0; x >>= 4 {
-			digits++
-		}
-		for i := digits - 1; i >= 0; i-- {
-			b.WriteByte(hex[(r>>(4*i))&0xF])
-		}
-	}
-	b.WriteByte('}')
+	b.WriteString(runner.FormatUnicodeEscape(int(r)))
 }
 
-// unicodeEscape is the string-returning sibling of appendUnicodeEscape,
-// for callers (escapeForChar) that package one rune into a literal body
-// at a time rather than streaming into a shared builder.
+// unicodeEscape is the string-returning sibling of
+// appendUnicodeEscape; both call into the same runner policy.
 func unicodeEscape(r rune) string {
-	var b strings.Builder
-	appendUnicodeEscape(&b, r)
-	return b.String()
+	return runner.FormatUnicodeEscape(int(r))
 }
 
 func escapeForChar(r rune) string {
@@ -80,29 +54,11 @@ func escapeForChar(r rune) string {
 }
 
 func escapeForByte(b byte) string {
-	if b == '\'' {
-		return `\'`
-	}
-	if b == '{' {
-		return `\{`
-	}
-	if b == '}' {
-		return `\}`
-	}
-	if s := escapeCommon(rune(b)); s != "" {
-		return s
-	}
-	if b < 0x20 || b > 0x7E {
-		return fmt.Sprintf(`\x%02X`, b)
-	}
-	return string(b)
+	return runner.FormatEscapeByteForChar(int(b))
 }
 
 func escapeForBytesLit(b byte) string {
-	if b == '"' {
-		return `\"`
-	}
-	return escapeForByte(b)
+	return runner.FormatEscapeByteForBytes(int(b))
 }
 
 // writeDefaultRune is the shared tail of the string escapers: an
