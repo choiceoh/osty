@@ -40,3 +40,48 @@ pub fn isLintCode(code: String) -> Bool {
     }
     true
 }
+/// lintMergeStringSlices returns the union of two string slices
+/// with dedup. Entries from `a` come first, then entries from `b`
+/// that haven't been seen yet — used by `Config.Merge` to combine
+/// child + parent Allow/Deny lists with stable order.
+///
+/// When both inputs are empty the result has `len == 0`; the
+/// concrete form (`[]` vs `nil` slice on the Go snapshot side) is
+/// an implementation detail callers MUST NOT depend on.
+pub fn lintMergeStringSlices(a: List<String>, b: List<String>) -> List<String> {
+    if a.len() == 0 && b.len() == 0 {
+        return []
+    }
+    let mut out: List<String> = []
+    let mut i = 0
+    let aLen = a.len()
+    for i < aLen {
+        if !lintListContains(out, a[i]) {
+            out.push(a[i])
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    let bLen = b.len()
+    for j < bLen {
+        if !lintListContains(out, b[j]) {
+            out.push(b[j])
+        }
+        j = j + 1
+    }
+    out
+}
+/// lintListContains reports whether `xs` already contains `target`.
+/// Linear scan — the Allow/Deny lists are typically a handful of
+/// entries, so the constant-factor wins over a hash-based dedup.
+fn lintListContains(xs: List<String>, target: String) -> Bool {
+    let mut i = 0
+    let n = xs.len()
+    for i < n {
+        if xs[i] == target {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
