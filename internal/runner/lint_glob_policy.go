@@ -49,7 +49,7 @@ func lintGlobPartsAt(pat []string, pi0 int, p []string, ni0 int) bool {
 // path-separator handling inside (segments are already
 // separator-free by construction).
 //
-// Osty: toolchain/lint_glob.osty:71
+// Osty: toolchain/lint_glob.osty:68
 func LintMatchSegment(pattern, name string) bool {
 	return lintMatchSegmentAt([]byte(pattern), 0, []byte(name), 0)
 }
@@ -110,7 +110,7 @@ func lintMatchSegmentAt(pat []byte, pi0 int, name []byte, ni0 int) bool {
 // pi0 indicates a malformed (unterminated) class — callers treat
 // that as no-match.
 //
-// Osty: toolchain/lint_glob.osty:128
+// Osty: toolchain/lint_glob.osty:132
 type LintClassMatch struct {
 	Matched bool
 	Next    int
