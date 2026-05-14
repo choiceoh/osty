@@ -1,0 +1,61 @@
+use std.testing
+fn testDependencyStringNoSource() {
+    testing.assertEq(dependencyString("serde", "1.2.3", ""), "serde 1.2.3")
+}
+fn testDependencyStringWithSource() {
+    testing.assertEq(
+        dependencyString("serde", "1.2.3", "git+https://github.com/x/y"),
+        "serde 1.2.3 (git+https://github.com/x/y)",
+    )
+}
+fn testParseDependencyTwoFields() {
+    let r = parseDependency("serde 1.2.3")
+    testing.assert(r.ok)
+    testing.assertEq(r.name, "serde")
+    testing.assertEq(r.version, "1.2.3")
+    testing.assertEq(r.source, "")
+}
+fn testParseDependencyWithSource() {
+    let r = parseDependency("serde 1.2.3 (path:./vendor/serde)")
+    testing.assert(r.ok)
+    testing.assertEq(r.name, "serde")
+    testing.assertEq(r.version, "1.2.3")
+    testing.assertEq(r.source, "path:./vendor/serde")
+}
+fn testParseDependencyTrimsLeadingTrailing() {
+    let r = parseDependency("  serde 1.2.3  ")
+    testing.assert(r.ok)
+    testing.assertEq(r.name, "serde")
+    testing.assertEq(r.version, "1.2.3")
+}
+fn testParseDependencyRejectsSingleField() {
+    let r = parseDependency("serde")
+    testing.assert(!(r.ok))
+}
+fn testParseDependencyRejectsTooManyFields() {
+    let r = parseDependency("serde 1.2.3 extra")
+    testing.assert(!(r.ok))
+}
+fn testParseDependencyRejectsEmpty() {
+    let r = parseDependency("")
+    testing.assert(!(r.ok))
+    let r2 = parseDependency("   ")
+    testing.assert(!(r2.ok))
+}
+fn testParseDependencySourceWithEmbeddedParens() {
+    // The source group is everything between the FIRST `(` and the
+    // closing `)`. Embedded parens inside the source body are kept
+    // as part of the source string.
+    let r = parseDependency("crate 0.1.0 (registry+(local))")
+    testing.assert(r.ok)
+    testing.assertEq(r.source, "registry+(local)")
+}
+fn testParseDependencyRoundTrip() {
+    let original = "tokio 1.5.0 (git+https://github.com/tokio-rs/tokio)"
+    let parsed = parseDependency(original)
+    testing.assert(parsed.ok)
+    testing.assertEq(
+        dependencyString(parsed.name, parsed.version, parsed.source),
+        original,
+    )
+}
