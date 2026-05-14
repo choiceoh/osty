@@ -1,0 +1,74 @@
+/// Pure registry-client/server policy. Host code in
+/// `internal/registry` owns network/filesystem I/O; this module
+/// decides the small naming/sanitization rules that make registry
+/// state filesystem-safe.
+///
+/// Currently exposed:
+///
+///   - `sanitizeIndexName`: produces a filesystem-safe stem from
+///     a crate name. Crate names per the manifest validator are
+///     restricted to `[A-Za-z0-9_-]`, but defensive sanitization
+///     keeps a malicious or future-permissive registry from
+///     writing index entries outside the cache root.
+///
+/// Mirrored by `internal/runner/registry_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// sanitizeIndexName lowercases-hex-escapes every char that isn't
+/// in the safe alphabet (`[A-Za-z0-9._-]`). Empty input collapses
+/// to `"_empty"` so `os.Stat(path + "")` never operates on the
+/// cache directory itself.
+///
+/// Unicode chars become `_<lowercase-hex-codepoint>` — the result
+/// stays ASCII regardless of the input alphabet.
+pub fn sanitizeIndexName(name: String) -> String {
+    let chars = name.chars()
+    let mut out: List<String> = []
+    for c in chars {
+        if registrySafeChar(c) {
+            out.push(c.toString())
+        } else {
+            out.push("_")
+            out.push(registryLowerHex(c.toInt()))
+        }
+    }
+    if out.len() == 0 {
+        return "_empty"
+    }
+    strings.join(out, "")
+}
+/// registrySafeChar matches the filesystem alphabet
+/// `[A-Za-z0-9._-]`. Dot is allowed because crate names like
+/// `serde.json` aren't in the manifest validator's regex but the
+/// cache shouldn't blow up on them either.
+fn registrySafeChar(c: Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+        (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') ||
+        c == '-' || c == '_' || c == '.'
+}
+/// registryLowerHex renders `n` (a Unicode codepoint, always
+/// non-negative when reached from `Char.toInt()`) as a
+/// lowercase-hex string with no leading `0x` and no padding. `0`
+/// renders as `"0"` so the output is never empty.
+fn registryLowerHex(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let alphabet = "0123456789abcdef"
+    let mut digits: List<String> = []
+    let mut x = n
+    for x > 0 {
+        let d = x % 16
+        digits.push(strings.slice(alphabet, d, d + 1))
+        x = x / 16
+    }
+    let mut out = ""
+    let mut i = digits.len() - 1
+    for i >= 0 {
+        out = out + digits[i]
+        i = i - 1
+    }
+    out
+}
