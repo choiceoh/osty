@@ -1352,10 +1352,11 @@ fn main() {
 	}
 }
 
-// G20: keyword argument through fn-value with unknown name.
-// The self-host parser doesn't yet produce AstNField_ for keyword
-// args at call sites, so fnArgListHasKeyword returns false and the
-// name-mismatch check (E0769) is skipped. Once parser support lands
-// this test should assert E0769.
+// G20: keyword argument through fn-value with unknown name emits E0769.
+// Parser fix applied (creates AstNField_ for keyword args at call sites),
+// but the frozen Go seed checker (generated.go) predates the G20
+// fnArgListHasKeyword/elabReorderKeywordArgs logic. The check only
+// fires through the native checker path. Restore this test once the
+// frozen seed catches up: it should assert E0769 = 1.
 //
-// TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch — would assert E0769.
+// func TestCheckSourceStructuredRejectsFnValueKeywordArgNameMismatch(t *testing.T)

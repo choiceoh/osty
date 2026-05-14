@@ -5,13 +5,14 @@ package selfhost
 
 import (
 	"fmt"
-	"github.com/osty/osty/internal/selfhost/astbridge"
 	"math"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/osty/osty/internal/selfhost/astbridge"
 )
 
 type ostyStringer interface {
@@ -21552,12 +21553,30 @@ func opParseCallArgs(p *OstyParser, callee int) int {
 		// Osty: /tmp/selfhost_merged.osty:7999:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
 			// Osty: /tmp/selfhost_merged.osty:8000:13
-			_ = opAdvance(p)
+			fs := p.pos
+			_ = fs
+			// Osty: /tmp/selfhost_merged.osty:8000:13
+			key := opAdvance(p).text
+			_ = key
 			// Osty: /tmp/selfhost_merged.osty:8001:13
 			_ = opAdvance(p)
+			// Osty: /tmp/selfhost_merged.osty:
+			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
+			_ = n
+			// Osty: /tmp/selfhost_merged.osty:
+			n.text = key
+			// Osty: /tmp/selfhost_merged.osty:
+			n.left = opParseExpr(p)
+			// Osty: /tmp/selfhost_merged.osty:
+			n.start = fs
+			// Osty: /tmp/selfhost_merged.osty:
+			n.end = p.pos
+			// Osty: /tmp/selfhost_merged.osty:
+			args = append(args, opAddNode(p, n))
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:8003:9
+			func() struct{} { args = append(args, opParseExpr(p)); return struct{}{} }()
 		}
-		// Osty: /tmp/selfhost_merged.osty:8003:9
-		func() struct{} { args = append(args, opParseExpr(p)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:8004:9
 		opSkipNewlines(p)
 		// Osty: /tmp/selfhost_merged.osty:8005:9

@@ -1680,10 +1680,18 @@ fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
     opSkipNewlines(p)
     for !(opAt(p, FrontRParen)) && !(opAt(p, FrontEOF)) {
         if opAt(p, FrontIdent) && opPeekAt(p, 1).kind == FrontColon {
+            let fs = p.pos
+            let key = opAdvance(p).text
             let _ = opAdvance(p)
-            let _ = opAdvance(p)
+            let mut n = emptyAstNode(AstNField_)
+            n.text = key
+            n.left = opParseExpr(p)
+            n.start = fs
+            n.end = p.pos
+            args.push(opAddNode(p, n))
+        } else {
+            args.push(opParseExpr(p))
         }
-        args.push(opParseExpr(p))
         opSkipNewlines(p)
         if !(opEat(p, FrontComma)) {
             break
