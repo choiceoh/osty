@@ -68,7 +68,7 @@ pub fn stripRangeSuffix(h: String) -> String {
 ///     `\{` escape path during render),
 ///   - a `=>` token (the static-error trigger).
 pub fn unsafeForBootstrapGen(example: String) -> Bool {
-    let hasBrace = strings.contains(example, "{") || strings.contains(example, "}")
+    let hasBrace = strings.contains(example, r"{") || strings.contains(example, r"}")
     let hasFatArrow = strings.contains(example, "=>")
     hasBrace && hasFatArrow
 }
@@ -95,28 +95,28 @@ pub fn proseExample(example: String) -> Bool {
 /// because non-ASCII bytes are never in the switch above.
 pub fn ostyEscape(s: String) -> String {
     let chars = s.chars()
-    let mut out = ""
+    let mut parts: List<String> = []
     let mut i = 0
     for i < chars.len() {
         let c = chars[i]
         if c == '\\' {
-            out = out + "\\\\"
+            parts.push("\\\\")
         } else if c == '"' {
-            out = out + "\\\""
+            parts.push("\\\"")
         } else if c == '\n' {
-            out = out + "\\n"
+            parts.push("\\n")
         } else if c == '\r' {
-            out = out + "\\r"
+            parts.push("\\r")
         } else if c == '\t' {
-            out = out + "\\t"
+            parts.push("\\t")
         } else if c == '\{' {
-            out = out + "\\\{"
+            parts.push("\\\{")
         } else if c == '\}' {
-            out = out + "\\\}"
+            parts.push("\\\}")
         } else {
-            out = out + c.toString()
+            parts.push(c.toString())
         }
         i = i + 1
     }
-    out
+    strings.join(parts, "")
 }

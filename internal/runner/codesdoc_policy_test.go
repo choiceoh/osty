@@ -93,6 +93,11 @@ func TestOstyEscape(t *testing.T) {
 		{"a\rb", `a\rb`},
 		{"a{b}c", `a\{b\}c`},
 		{"한글", "한글"},
+		// Locks parity with the Osty side: non-ASCII runes are
+		// passed through as their original UTF-8 bytes (Go's
+		// b.WriteRune ↔ Osty's Char.toString()), while ASCII
+		// metachars still take the escape path.
+		{`한\글"日{本}`, `한\\글\"日\{本\}`},
 	}
 	for _, c := range cases {
 		if got := OstyEscape(c.in); got != c.want {

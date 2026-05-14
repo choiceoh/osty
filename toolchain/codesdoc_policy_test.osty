@@ -78,3 +78,9 @@ fn testOstyEscapeBraces() {
 fn testOstyEscapePreservesNonAscii() {
     testing.assertEq(ostyEscape("한글"), "한글")
 }
+fn testOstyEscapeMixedNonAsciiAndEscapes() {
+    // Locks parity with the Go snapshot: non-ASCII characters are
+    // emitted as their original UTF-8 bytes via Char.toString(),
+    // ASCII metachars in the middle still take the escape path.
+    testing.assertEq(ostyEscape("한\\글\"日\{本\}"), "한\\\\글\\\"日\\\{本\\\}")
+}
