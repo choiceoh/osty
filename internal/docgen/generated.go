@@ -12653,8 +12653,19 @@ func opParseFnType(p *OstyParser) int {
 	_ = params
 	// Osty: /tmp/docgen_merged.osty:8074:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/docgen_merged.osty:8074:59
-		func() struct{} { params = append(params, opParseType(p)); return struct{}{} }()
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
+			fs := p.pos
+			key := opAdvance(p).text
+			_ = opAdvance(p)
+			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
+			n.text = key
+			n.left = opParseType(p)
+			n.start = fs
+			n.end = p.pos
+			params = append(params, opAddNode(p, n))
+		} else {
+			func() struct{} { params = append(params, opParseType(p)); return struct{}{} }()
+		}
 		// Osty: /tmp/docgen_merged.osty:8075:5
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
 			// Osty: /tmp/docgen_merged.osty:8075:34
