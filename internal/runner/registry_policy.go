@@ -143,17 +143,19 @@ type RegistrySearchRequest struct {
 
 // RegistrySearchRequestNormalize handles the per-request policy:
 // query trim+lowercase, default page size 20, and the
-// empty-query rejection message.
+// empty-query rejection message. The effective limit is
+// populated even on the rejection path so callers can echo it
+// without a second lookup.
 //
 // Osty: toolchain/registry_policy.osty:207
 func RegistrySearchRequestNormalize(rawQuery string, rawLimit int) RegistrySearchRequest {
-	q := strings.ToLower(strings.TrimSpace(rawQuery))
-	if q == "" {
-		return RegistrySearchRequest{ErrorMessage: "registry search query is empty"}
-	}
 	limit := rawLimit
 	if limit <= 0 {
 		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(rawQuery))
+	if q == "" {
+		return RegistrySearchRequest{Limit: limit, ErrorMessage: "registry search query is empty"}
 	}
 	return RegistrySearchRequest{Query: q, Limit: limit}
 }

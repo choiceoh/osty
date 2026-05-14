@@ -501,10 +501,14 @@ func (fs *FileStore) SetYanked(name, version string, yanked bool) error {
 
 // Search performs a small case-insensitive name/metadata search.
 // limit <= 0 selects the server default page size.
+//
+// Request-validation errors (e.g. empty query) are returned as a
+// `statusError`/`badRequest` so writeRegistryError surfaces them
+// as HTTP 400 instead of falling through to the 500 default.
 func (fs *FileStore) Search(query string, limit int) (*SearchResults, error) {
 	req := runner.RegistrySearchRequestNormalize(query, limit)
 	if req.ErrorMessage != "" {
-		return nil, errors.New(req.ErrorMessage)
+		return nil, badRequest("%s", req.ErrorMessage)
 	}
 	q := req.Query
 	limit = req.Limit

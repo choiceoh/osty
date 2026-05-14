@@ -170,8 +170,9 @@ func TestRegistrySearchRequestNormalize(t *testing.T) {
 	}{
 		{"basic", "Serde", 50, "serde", 50, ""},
 		{"trim-then-lower", "  JSON  ", 10, "json", 10, ""},
-		{"empty-query", "", 50, "", 0, "registry search query is empty"},
-		{"whitespace-only-query", "   \t\n  ", 5, "", 0, "registry search query is empty"},
+		{"empty-query", "", 50, "", 50, "registry search query is empty"},
+		{"whitespace-only-query", "   \t\n  ", 5, "", 5, "registry search query is empty"},
+		{"empty-query-default-limit", "", 0, "", 20, "registry search query is empty"},
 		{"default-limit-zero", "foo", 0, "foo", 20, ""},
 		{"default-limit-negative", "foo", -5, "foo", 20, ""},
 	}

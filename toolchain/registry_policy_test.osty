@@ -184,11 +184,20 @@ fn testRegistrySearchRequestNormalizeEmpty() {
     let r = registrySearchRequestNormalize("", 50)
     testing.assertEq(r.errorMessage, "registry search query is empty")
     testing.assertEq(r.query, "")
-    testing.assertEq(r.limit, 0)
+    // limit still carries the effective value even on rejection,
+    // so callers can echo it without a re-lookup.
+    testing.assertEq(r.limit, 50)
 }
 fn testRegistrySearchRequestNormalizeWhitespaceOnly() {
     let r = registrySearchRequestNormalize("   \t\n  ", 5)
     testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 5)
+}
+fn testRegistrySearchRequestNormalizeEmptyDefaultLimit() {
+    // Rejection path also collapses limit <= 0 to the default.
+    let r = registrySearchRequestNormalize("", 0)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 20)
 }
 fn testRegistrySearchRequestNormalizeDefaultLimit() {
     let r = registrySearchRequestNormalize("foo", 0)
