@@ -1,0 +1,36 @@
+use std.testing
+fn testIsLintCodeBasic() {
+    testing.assertEq(isLintCode("L0001"), true)
+    testing.assertEq(isLintCode("L0040"), true)
+    testing.assertEq(isLintCode("L9999"), true)
+}
+fn testIsLintCodeSingleDigit() {
+    testing.assertEq(isLintCode("L1"), true)
+    testing.assertEq(isLintCode("L0"), true)
+}
+fn testIsLintCodeRejectsBareL() {
+    testing.assertEq(isLintCode("L"), false)
+}
+fn testIsLintCodeRejectsEmpty() {
+    testing.assertEq(isLintCode(""), false)
+}
+fn testIsLintCodeRejectsNonLPrefix() {
+    testing.assertEq(isLintCode("E0001"), false)
+    testing.assertEq(isLintCode("W0750"), false)
+    testing.assertEq(isLintCode("l0001"), false)
+    testing.assertEq(isLintCode("X0001"), false)
+}
+fn testIsLintCodeRejectsAlphaTail() {
+    testing.assertEq(isLintCode("L00aa"), false)
+    testing.assertEq(isLintCode("LABC"), false)
+    testing.assertEq(isLintCode("L_1"), false)
+}
+fn testIsLintCodeRejectsAlias() {
+    testing.assertEq(isLintCode("unused"), false)
+    testing.assertEq(isLintCode("dead_code"), false)
+    testing.assertEq(isLintCode("all"), false)
+}
+fn testIsLintCodeRejectsTrailingSpace() {
+    testing.assertEq(isLintCode("L0001 "), false)
+    testing.assertEq(isLintCode(" L0001"), false)
+}

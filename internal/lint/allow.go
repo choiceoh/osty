@@ -1,5 +1,9 @@
 package lint
 
+import (
+	"github.com/osty/osty/internal/runner"
+)
+
 // Lint name expansion shared by project-level config. Declaration-level
 // #[allow(...)] suppression is implemented by the self-hosted lint pass.
 //
@@ -44,17 +48,9 @@ func resolveAllowName(name string) []string {
 	return nil
 }
 
-// isLintCode reports whether a code string belongs to the L-prefixed
-// lint namespace.
+// isLintCode bridges to runner.IsLintCode (mirror of
+// toolchain/lint_codes.osty). The Lxxxx namespace rule lives in
+// toolchain.
 func isLintCode(code string) bool {
-	if len(code) < 2 || code[0] != 'L' {
-		return false
-	}
-	for i := 1; i < len(code); i++ {
-		c := code[i]
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return runner.IsLintCode(code)
 }

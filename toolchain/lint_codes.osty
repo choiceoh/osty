@@ -1,0 +1,43 @@
+/// Pure policy for the lint code namespace (`Lxxxx`). Host code
+/// in `internal/lint` shares one validator across:
+///
+///   - `osty.toml`'s `[lint] allow = [...]` / `deny = [...]`
+///     entries (project-level config),
+///   - `#[allow(...)]` annotations on declarations (decl-level
+///     suppression — already self-hosted via the lint pass),
+///   - `Config.Apply` 's per-diagnostic dispatch — see
+///     `internal/lint/config.go`.
+///
+/// Mirrored by `internal/runner/lint_codes_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// isLintCode reports whether `code` belongs to the `Lxxxx`
+/// namespace — exactly one `L` followed by one or more ASCII
+/// digits. Empty strings and short tokens are rejected.
+///
+/// Used to:
+///
+///   - short-circuit `resolveAllowName` for entries like
+///     `L0001` so the alias scan doesn't have to consider them,
+///   - gate which diagnostics `Config.Apply` mutates (it leaves
+///     non-`L` codes untouched).
+pub fn isLintCode(code: String) -> Bool {
+    let bs = code.bytes()
+    let n = bs.len()
+    if n < 2 {
+        return false
+    }
+    if bs[0].toInt() != 0x4C {
+        return false
+    }
+    let mut i = 1
+    for i < n {
+        let b = bs[i].toInt()
+        if b < 0x30 || b > 0x39 {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
