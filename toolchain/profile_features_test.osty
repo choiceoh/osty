@@ -99,3 +99,67 @@ fn testExpandFeaturesSortsDeterministically() {
     testing.assertEq(out[2], "x")
     testing.assertEq(out[3], "z")
 }
+fn testGoFlagsOptLevelOnly() {
+    let flags = goFlags(0, [], false, [])
+    testing.assertEq(flags.len(), 1)
+    testing.assertEq(flags[0], "-gcflags=all=-N -l")
+}
+fn testGoFlagsDedupesOptLevelAgainstProfile() {
+    // Profile also lists the -gcflags=all=-N -l flag — should appear once.
+    let flags = goFlags(0, ["-gcflags=all=-N -l", "-trimpath"], false, [])
+    testing.assertEq(flags.len(), 2)
+    testing.assertEq(flags[0], "-gcflags=all=-N -l")
+    testing.assertEq(flags[1], "-trimpath")
+}
+fn testGoFlagsAppendsStrip() {
+    let flags = goFlags(2, ["-trimpath"], true, [])
+    testing.assertEq(flags.len(), 2)
+    testing.assertEq(flags[0], "-trimpath")
+    testing.assertEq(flags[1], "-ldflags=-s -w")
+}
+fn testGoFlagsStripDedupes() {
+    let flags = goFlags(2, ["-ldflags=-s -w"], true, [])
+    testing.assertEq(flags.len(), 1)
+    testing.assertEq(flags[0], "-ldflags=-s -w")
+}
+fn testGoFlagsFeaturesEmitsTags() {
+    let flags = goFlags(2, [], false, ["x", "a", "m"])
+    testing.assertEq(flags.len(), 1)
+    testing.assertEq(flags[0], "-tags=feat_a,feat_m,feat_x")
+}
+fn testGoFlagsFeaturesEmptyOmitsTags() {
+    let flags = goFlags(2, [], false, [])
+    testing.assertEq(flags.len(), 0)
+}
+fn testGoFlagsFullStack() {
+    let flags = goFlags(0, ["-trimpath"], true, ["foo", "bar"])
+    testing.assertEq(flags.len(), 4)
+    testing.assertEq(flags[0], "-gcflags=all=-N -l")
+    testing.assertEq(flags[1], "-trimpath")
+    testing.assertEq(flags[2], "-ldflags=-s -w")
+    testing.assertEq(flags[3], "-tags=feat_bar,feat_foo")
+}
+fn testFileNeedsFeaturesNoPragma() {
+    let active: Map<String, Bool> = {:}
+    let r = fileNeedsFeatures("let x = 1\n", active)
+    testing.assert(r.ok)
+    testing.assertEq(r.missing, "")
+}
+fn testFileNeedsFeaturesAllPresent() {
+    let active: Map<String, Bool> = {"a": true, "b": true}
+    let r = fileNeedsFeatures("// @feature: a, b\nlet x = 1\n", active)
+    testing.assert(r.ok)
+}
+fn testFileNeedsFeaturesMissingReturnsFirst() {
+    let active: Map<String, Bool> = {"a": true}
+    let r = fileNeedsFeatures("// @feature: a, b\nlet x = 1\n", active)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.missing, "b")
+}
+fn testFileNeedsFeaturesInactiveCountsAsMissing() {
+    // Present but false → counts as missing (active was switched off).
+    let active: Map<String, Bool> = {"a": false}
+    let r = fileNeedsFeatures("// @feature: a\nlet x = 1\n", active)
+    testing.assert(!(r.ok))
+    testing.assertEq(r.missing, "a")
+}

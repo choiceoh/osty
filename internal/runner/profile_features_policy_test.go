@@ -24,6 +24,86 @@ func TestOptLevelFlags(t *testing.T) {
 	}
 }
 
+func TestGoFlags(t *testing.T) {
+	cases := []struct {
+		name           string
+		optLevel       int
+		profileGoFlags []string
+		strip          bool
+		features       []string
+		want           []string
+	}{
+		{
+			name: "opt-level-only", optLevel: 0,
+			want: []string{"-gcflags=all=-N -l"},
+		},
+		{
+			name: "dedupes-opt-against-profile", optLevel: 0,
+			profileGoFlags: []string{"-gcflags=all=-N -l", "-trimpath"},
+			want:           []string{"-gcflags=all=-N -l", "-trimpath"},
+		},
+		{
+			name: "appends-strip", optLevel: 2,
+			profileGoFlags: []string{"-trimpath"}, strip: true,
+			want: []string{"-trimpath", "-ldflags=-s -w"},
+		},
+		{
+			name: "strip-dedupes", optLevel: 2,
+			profileGoFlags: []string{"-ldflags=-s -w"}, strip: true,
+			want: []string{"-ldflags=-s -w"},
+		},
+		{
+			name: "features-emit-sorted-tags", optLevel: 2,
+			features: []string{"x", "a", "m"},
+			want:     []string{"-tags=feat_a,feat_m,feat_x"},
+		},
+		{
+			name: "features-empty-omits-tags", optLevel: 2,
+			want: nil,
+		},
+		{
+			name: "full-stack", optLevel: 0,
+			profileGoFlags: []string{"-trimpath"}, strip: true,
+			features: []string{"foo", "bar"},
+			want: []string{
+				"-gcflags=all=-N -l", "-trimpath",
+				"-ldflags=-s -w", "-tags=feat_bar,feat_foo",
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GoFlags(c.optLevel, c.profileGoFlags, c.strip, c.features)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("GoFlags(...) = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestFileNeedsFeatures(t *testing.T) {
+	cases := []struct {
+		name       string
+		src        string
+		active     map[string]bool
+		wantOk     bool
+		wantMissin string
+	}{
+		{"no-pragma", "let x = 1\n", map[string]bool{}, true, ""},
+		{"all-present", "// @feature: a, b\nlet x = 1\n", map[string]bool{"a": true, "b": true}, true, ""},
+		{"missing-returns-first", "// @feature: a, b\nlet x = 1\n", map[string]bool{"a": true}, false, "b"},
+		{"inactive-counts-as-missing", "// @feature: a\nlet x = 1\n", map[string]bool{"a": false}, false, "a"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := FileNeedsFeatures([]byte(c.src), c.active)
+			if got.Ok != c.wantOk || got.Missing != c.wantMissin {
+				t.Errorf("FileNeedsFeatures = %+v, want {ok:%v missing:%q}", got, c.wantOk, c.wantMissin)
+			}
+		})
+	}
+}
+
 func TestExpandFeatures(t *testing.T) {
 	cases := []struct {
 		name        string

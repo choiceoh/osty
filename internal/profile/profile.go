@@ -326,34 +326,7 @@ func (r *Resolved) GoFlags() []string {
 	if r == nil || r.Profile == nil {
 		return nil
 	}
-	var flags []string
-	optFlags := r.Profile.OptLevelFlags()
-	flags = append(flags, optFlags...)
-	seen := map[string]bool{}
-	for _, f := range optFlags {
-		seen[f] = true
-	}
-	for _, f := range r.Profile.GoFlags {
-		if seen[f] {
-			continue
-		}
-		flags = append(flags, f)
-		seen[f] = true
-	}
-	stripFlag := "-ldflags=-s -w"
-	if r.Profile.Strip && !seen[stripFlag] {
-		flags = append(flags, stripFlag)
-		seen[stripFlag] = true
-	}
-	if len(r.Features) > 0 {
-		tags := make([]string, 0, len(r.Features))
-		for _, f := range r.Features {
-			tags = append(tags, "feat_"+f)
-		}
-		sort.Strings(tags)
-		flags = append(flags, "-tags="+strings.Join(tags, ","))
-	}
-	return flags
+	return runner.GoFlags(r.Profile.OptLevel, r.Profile.GoFlags, r.Profile.Strip, r.Features)
 }
 
 // Resolve builds a Resolved from a profile name, an optional target
@@ -410,12 +383,10 @@ func ReadFeaturePragma(src []byte) []string {
 // every required feature is present in `active`. Files without a
 // pragma are unconditionally included. Returns (ok, missing) where
 // missing is the first feature that wasn't active.
+// FileNeedsFeatures delegates to toolchain/profile_features.osty.
+// The result struct collapses to the legacy (ok, missing) tuple
+// shape callers expect.
 func FileNeedsFeatures(src []byte, active map[string]bool) (bool, string) {
-	needed := ReadFeaturePragma(src)
-	for _, f := range needed {
-		if !active[f] {
-			return false, f
-		}
-	}
-	return true, ""
+	r := runner.FileNeedsFeatures(src, active)
+	return r.Ok, r.Missing
 }
