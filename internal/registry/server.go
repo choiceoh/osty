@@ -502,13 +502,12 @@ func (fs *FileStore) SetYanked(name, version string, yanked bool) error {
 // Search performs a small case-insensitive name/metadata search.
 // limit <= 0 selects the server default page size.
 func (fs *FileStore) Search(query string, limit int) (*SearchResults, error) {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return nil, fmt.Errorf("registry search query is empty")
+	req := runner.RegistrySearchRequestNormalize(query, limit)
+	if req.ErrorMessage != "" {
+		return nil, errors.New(req.ErrorMessage)
 	}
-	if limit <= 0 {
-		limit = 20
-	}
+	q := req.Query
+	limit = req.Limit
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

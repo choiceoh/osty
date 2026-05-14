@@ -158,3 +158,31 @@ func TestValidateRegistryPackageNameEscapesEchoedName(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistrySearchRequestNormalize(t *testing.T) {
+	cases := []struct {
+		name           string
+		rawQuery       string
+		rawLimit       int
+		wantQuery      string
+		wantLimit      int
+		wantErrMessage string
+	}{
+		{"basic", "Serde", 50, "serde", 50, ""},
+		{"trim-then-lower", "  JSON  ", 10, "json", 10, ""},
+		{"empty-query", "", 50, "", 0, "registry search query is empty"},
+		{"whitespace-only-query", "   \t\n  ", 5, "", 0, "registry search query is empty"},
+		{"default-limit-zero", "foo", 0, "foo", 20, ""},
+		{"default-limit-negative", "foo", -5, "foo", 20, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RegistrySearchRequestNormalize(c.rawQuery, c.rawLimit)
+			if got.Query != c.wantQuery || got.Limit != c.wantLimit || got.ErrorMessage != c.wantErrMessage {
+				t.Errorf("RegistrySearchRequestNormalize(%q, %d) = %+v, want {%q %d %q}",
+					c.rawQuery, c.rawLimit, got,
+					c.wantQuery, c.wantLimit, c.wantErrMessage)
+			}
+		})
+	}
+}

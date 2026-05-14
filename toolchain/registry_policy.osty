@@ -181,3 +181,46 @@ pub fn validateRegistryPackageName(name: String) -> String {
     }
     ""
 }
+/// RegistrySearchRequest is the normalised inputs the registry's
+/// search handler operates on: the trimmed+lowercased query, the
+/// effective page size, and an optional error message that tells
+/// the host to reject the request before hitting the store.
+///
+/// `errorMessage == ""` signals "proceed"; any non-empty value is
+/// the user-facing error string to wrap in `badRequest`.
+pub struct RegistrySearchRequest {
+    pub query: String,
+    pub limit: Int,
+    pub errorMessage: String,
+}
+/// registrySearchRequestNormalize handles the per-request policy
+/// for `osty search`:
+///
+///   - Query: trim outer whitespace, then lowercase. An empty
+///     result (no non-whitespace chars) becomes
+///     `"registry search query is empty"` so callers can refuse
+///     before paying any I/O.
+///   - Limit: `<= 0` collapses to the default page size (20).
+///
+/// The default page size matches the historical Go value; bump
+/// here and the host + cmd CLI will follow.
+pub fn registrySearchRequestNormalize(rawQuery: String, rawLimit: Int) -> RegistrySearchRequest {
+    let q = strings.toLower(strings.trimSpace(rawQuery))
+    if q == "" {
+        return RegistrySearchRequest {
+            query: "",
+            limit: 0,
+            errorMessage: "registry search query is empty",
+        }
+    }
+    let effectiveLimit = if rawLimit <= 0 {
+        20
+    } else {
+        rawLimit
+    }
+    RegistrySearchRequest {
+        query: q,
+        limit: effectiveLimit,
+        errorMessage: "",
+    }
+}

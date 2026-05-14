@@ -128,3 +128,32 @@ func ValidateRegistryPackageName(name string) string {
 	}
 	return ""
 }
+
+// RegistrySearchRequest is the normalised inputs the registry's
+// search handler operates on. ErrorMessage == "" signals
+// "proceed"; any non-empty value is the user-facing error
+// string to wrap in badRequest.
+//
+// Osty: toolchain/registry_policy.osty:191
+type RegistrySearchRequest struct {
+	Query        string
+	Limit        int
+	ErrorMessage string
+}
+
+// RegistrySearchRequestNormalize handles the per-request policy:
+// query trim+lowercase, default page size 20, and the
+// empty-query rejection message.
+//
+// Osty: toolchain/registry_policy.osty:207
+func RegistrySearchRequestNormalize(rawQuery string, rawLimit int) RegistrySearchRequest {
+	q := strings.ToLower(strings.TrimSpace(rawQuery))
+	if q == "" {
+		return RegistrySearchRequest{ErrorMessage: "registry search query is empty"}
+	}
+	limit := rawLimit
+	if limit <= 0 {
+		limit = 20
+	}
+	return RegistrySearchRequest{Query: q, Limit: limit}
+}
