@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // HashPrefix is the algorithm tag used in lockfile `checksum` fields.
@@ -105,15 +107,10 @@ func VerifyChecksum(want, got string) error {
 }
 
 // skipDirEntry returns true for filesystem entries the packager
-// should ignore: our own cache, version-control metadata, OS cruft.
-func skipDirEntry(rel string, info os.FileInfo) bool {
-	base := filepath.Base(rel)
-	if rel == "." {
-		return false
-	}
-	switch base {
-	case ".osty", ".git", ".hg", ".svn", ".DS_Store":
-		return true
-	}
-	return false
+// should ignore. Decision policy lives in
+// toolchain/pkg_policy.osty::pkgSkipDirEntry; this wrapper just
+// drops the unused FileInfo so existing filepath.Walk call sites
+// don't have to change.
+func skipDirEntry(rel string, _ os.FileInfo) bool {
+	return runner.PkgSkipDirEntry(rel)
 }
