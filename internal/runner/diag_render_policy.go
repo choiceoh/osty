@@ -178,3 +178,20 @@ func DiagShortError(code string, severity, line, column int, message string) str
 	b.WriteString(message)
 	return b.String()
 }
+
+// DiagSeverityAnsiColor maps a Severity int to its terminal ANSI
+// escape sequence — the lead-in code only; callers append the
+// reset themselves. Returns "" for unknown severities.
+//
+// Osty: toolchain/diag_render.osty:176
+func DiagSeverityAnsiColor(sev int) string {
+	switch sev {
+	case DiagSeverityError:
+		return "\x1b[31m"
+	case DiagSeverityWarning:
+		return "\x1b[33m"
+	case DiagSeverityNote:
+		return "\x1b[36m"
+	}
+	return ""
+}
