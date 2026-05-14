@@ -1,0 +1,96 @@
+use std.testing
+fn stats(parse: Int, resolve: Int, check: Int, totalErr: Int, totalWarn: Int) -> ProbeStats {
+    ProbeStats {
+        parse: ProbeStageStats {errors: parse, warnings: 0},
+        resolve: ProbeStageStats {errors: resolve, warnings: 0},
+        check: ProbeStageStats {errors: check, warnings: 0},
+        totalErrors: totalErr,
+        totalWarnings: totalWarn,
+    }
+}
+fn testCompareParseAssistImproved() {
+    let before = stats(3, 1, 1, 5, 0)
+    let after = stats(1, 1, 1, 3, 0)
+    testing.assertEq(compareParseAssist(before, after), 1)
+}
+fn testCompareParseAssistRegressed() {
+    let before = stats(1, 1, 1, 3, 0)
+    let after = stats(2, 1, 1, 4, 0)
+    testing.assertEq(compareParseAssist(before, after), -1)
+}
+fn testCompareParseAssistTieFallsToTotal() {
+    let before = stats(1, 2, 1, 4, 0)
+    let after = stats(1, 1, 1, 3, 0)
+    testing.assertEq(compareParseAssist(before, after), 1)
+}
+fn testCompareParseAssistAllEqual() {
+    let s = stats(1, 1, 1, 3, 0)
+    testing.assertEq(compareParseAssist(s, s), 0)
+}
+fn testCompareParseAssistWarningsFallback() {
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 3)
+    testing.assertEq(compareParseAssist(before, after), 1)
+}
+fn testCompareAutoAssistAllStagesValued() {
+    let before = stats(0, 0, 5, 5, 0)
+    let after = stats(0, 0, 2, 2, 0)
+    testing.assertEq(compareAutoAssist(before, after), 1)
+    let before2 = stats(0, 3, 0, 3, 0)
+    let after2 = stats(0, 1, 0, 1, 0)
+    testing.assertEq(compareAutoAssist(before2, after2), 1)
+}
+fn testCompareAutoAssistParseRegressionDominates() {
+    let before = stats(1, 5, 5, 11, 0)
+    // parse went up, even though resolve+check dropped.
+    let after = stats(2, 0, 0, 2, 0)
+    testing.assertEq(compareAutoAssist(before, after), -1)
+}
+fn testCompareFrontEndAssistByTotal() {
+    let before = stats(2, 2, 2, 6, 0)
+    // Mixed shift: parse worse but total better.
+    let after = stats(3, 1, 1, 5, 0)
+    testing.assertEq(compareFrontEndAssist(before, after), 1)
+}
+fn testCompareFrontEndAssistParseTiebreaker() {
+    // Equal totals, parse improved → wins.
+    let before = stats(3, 1, 1, 5, 0)
+    let after = stats(1, 3, 1, 5, 0)
+    testing.assertEq(compareFrontEndAssist(before, after), 1)
+}
+fn testRepairedChangedCounts() {
+    testing.assert(!(repairedChanged(0, 0)))
+    testing.assert(repairedChanged(1, 0))
+    testing.assert(repairedChanged(0, 1))
+    testing.assert(repairedChanged(5, 3))
+}
+fn testCompareFrontEndAssistCrossStageTradeIsNeutral() {
+    // Parse and total errors stay equal; resolve and check trade
+    // places (resolve down 1, check up 1). The front-end scorer
+    // collapses the three stages into a single total + a parse
+    // tiebreaker, so cross-stage trades MUST score neutral.
+    let before = stats(1, 2, 1, 4, 0)
+    let after = stats(1, 1, 2, 4, 0)
+    testing.assertEq(compareFrontEndAssist(before, after), 0)
+}
+fn testCompareAutoAssistWarningOnlyImproved() {
+    // All stage errors equal; only totalWarnings drops.
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 2)
+    testing.assertEq(compareAutoAssist(before, after), 1)
+}
+fn testCompareAutoAssistWarningOnlyRegressed() {
+    let before = stats(1, 1, 1, 3, 2)
+    let after = stats(1, 1, 1, 3, 5)
+    testing.assertEq(compareAutoAssist(before, after), -1)
+}
+fn testCompareFrontEndAssistWarningOnlyImproved() {
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 2)
+    testing.assertEq(compareFrontEndAssist(before, after), 1)
+}
+fn testCompareFrontEndAssistWarningOnlyRegressed() {
+    let before = stats(1, 1, 1, 3, 2)
+    let after = stats(1, 1, 1, 3, 5)
+    testing.assertEq(compareFrontEndAssist(before, after), -1)
+}
