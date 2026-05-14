@@ -93,3 +93,31 @@ func TestLineBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagRenderReplacement(t *testing.T) {
+	cases := []struct {
+		name         string
+		replacement  string
+		excerpt      string
+		haveExcerpt  bool
+		want         string
+	}{
+		{"empty-replacement-uses-excerpt", "", "foo()", true, "foo()"},
+		{"empty-replacement-fallback", "", "", false, "<expr>"},
+		{"literal-without-template", "replacement-only", "foo()", true, "foo()"},
+		{"template-substitution", "wrap(%s)", "expr", true, "wrap(expr)"},
+		{"template-at-start", "%s.field", "obj", true, "obj.field"},
+		{"template-at-end", "prefix:%s", "tail", true, "prefix:tail"},
+		{"only-first-occurrence", "%s vs %s", "expr", true, "expr vs %s"},
+		{"fallback-with-template", "wrap(%s)", "", false, "wrap(<expr>)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DiagRenderReplacement(c.replacement, c.excerpt, c.haveExcerpt)
+			if got != c.want {
+				t.Errorf("DiagRenderReplacement(%q, %q, %v) = %q, want %q",
+					c.replacement, c.excerpt, c.haveExcerpt, got, c.want)
+			}
+		})
+	}
+}

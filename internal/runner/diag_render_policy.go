@@ -92,3 +92,33 @@ func LineBounds(src []byte, line int) LineBoundsResult {
 	}
 	return LineBoundsResult{Start: -1, End: -1}
 }
+
+// DiagRenderReplacement resolves a Suggestion's replacement
+// template into the human-readable text shown after the `→`
+// marker. The host computes whether the CopyFrom span fits the
+// source (haveExcerpt) and extracts the bytes (excerpt); this
+// helper decides:
+//
+//   - the fallback placeholder ("<expr>") when the excerpt is
+//     unavailable,
+//   - the precedence between literal replacements and the `%s`
+//     template form (empty replacement OR no `%s` → just emit
+//     the excerpt/fallback),
+//   - first-occurrence substitution `%s` → excerpt (matches
+//     Go's `strings.Replace(.., 1)`).
+//
+// Osty: toolchain/diag_render.osty:120
+func DiagRenderReplacement(replacement, excerpt string, haveExcerpt bool) string {
+	body := excerpt
+	if !haveExcerpt {
+		body = "<expr>"
+	}
+	if replacement == "" {
+		return body
+	}
+	idx := strings.Index(replacement, "%s")
+	if idx < 0 {
+		return body
+	}
+	return replacement[:idx] + body + replacement[idx+2:]
+}

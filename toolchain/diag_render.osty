@@ -102,3 +102,36 @@ pub fn lineBounds(src: String, line: Int) -> LineBoundsResult {
     }
     LineBoundsResult {start: -1, end: -1}
 }
+/// diagRenderReplacement resolves a Suggestion's replacement
+/// template into the human-readable text shown after the
+/// `→` marker.
+///
+/// The host computes whether the CopyFrom span fits the source
+/// (`haveExcerpt`) and extracts the bytes (`excerpt`); this
+/// module decides:
+///
+///   - the fallback placeholder ("<expr>") emitted when the
+///     excerpt is unavailable,
+///   - the precedence between literal replacements and the `%s`
+///     template form (empty replacement OR no `%s` → just emit
+///     the excerpt/fallback),
+///   - the first-occurrence substitution `%s` → excerpt (matches
+///     Go's `strings.Replace(.., 1)`).
+pub fn diagRenderReplacement(replacement: String, excerpt: String, haveExcerpt: Bool) -> String {
+    let body = if haveExcerpt {
+        excerpt
+    } else {
+        "<expr>"
+    }
+    if replacement == "" {
+        return body
+    }
+    let idx = strings.indexOf(replacement, "%s")
+    match idx {
+        Some(i) -> {
+            let n = replacement.len()
+            strings.slice(replacement, 0, i) + body + strings.slice(replacement, i + 2, n)
+        },
+        None -> body,
+    }
+}
