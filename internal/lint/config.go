@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/runner"
 )
 
 // Config is the project-level configuration for the lint pass. It is
@@ -184,44 +185,12 @@ func (c Config) MatchingExclude(path, base string) (string, bool) {
 	return "", false
 }
 
-// matchGlob implements filepath.Match-style globbing with the
-// extension that `**` matches zero or more path segments (including
-// slashes). The implementation converts `**` to a single-segment
-// wildcard by splitting and matching piecewise — simpler than a
-// dedicated state machine and adequate for lint exclusions.
+// matchGlob bridges to runner.LintMatchGlob (mirror of
+// toolchain/lint_glob.osty). Both arguments are normalised to
+// forward-slash form before the policy module sees them so the
+// matcher itself stays platform-agnostic.
 func matchGlob(pattern, path string) bool {
-	pattern = filepath.ToSlash(pattern)
-	path = filepath.ToSlash(path)
-	return globParts(strings.Split(pattern, "/"), strings.Split(path, "/"))
-}
-
-func globParts(pat, p []string) bool {
-	for len(pat) > 0 && len(p) > 0 {
-		if pat[0] == "**" {
-			// `**` at the end swallows everything.
-			if len(pat) == 1 {
-				return true
-			}
-			// Try to match the rest at every suffix of p.
-			for i := 0; i <= len(p); i++ {
-				if globParts(pat[1:], p[i:]) {
-					return true
-				}
-			}
-			return false
-		}
-		ok, err := filepath.Match(pat[0], p[0])
-		if err != nil || !ok {
-			return false
-		}
-		pat = pat[1:]
-		p = p[1:]
-	}
-	// Trailing `**` patterns on pat side may match zero segments on p.
-	for len(pat) > 0 && pat[0] == "**" {
-		pat = pat[1:]
-	}
-	return len(pat) == 0 && len(p) == 0
+	return runner.LintMatchGlob(filepath.ToSlash(pattern), filepath.ToSlash(path))
 }
 
 // Apply returns a filtered / mutated copy of r's Diags according to c.
