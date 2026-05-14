@@ -61,3 +61,35 @@ func LockedDiffMessage(lockfileName string, changes []string) string {
 	b.WriteString("rerun without --locked to update the lockfile.")
 	return b.String()
 }
+
+// PkgSkipDirEntry reports whether a filesystem entry should be
+// excluded when hashing a path-source directory or packing a
+// publish tarball. Pure basename match; `rel == "."` (the walk
+// root itself) is never skipped.
+//
+// Osty: toolchain/pkg_policy.osty:64
+func PkgSkipDirEntry(rel string) bool {
+	if rel == "." {
+		return false
+	}
+	base := pkgPathBase(rel)
+	switch base {
+	case ".osty", ".git", ".hg", ".svn", ".DS_Store":
+		return true
+	}
+	return false
+}
+
+func pkgPathBase(p string) string {
+	last := -1
+	for i := 0; i < len(p); i++ {
+		b := p[i]
+		if b == '/' || b == '\\' {
+			last = i
+		}
+	}
+	if last < 0 {
+		return p
+	}
+	return p[last+1:]
+}

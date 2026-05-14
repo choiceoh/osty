@@ -64,3 +64,32 @@ func TestLockedDiffMessageFormatsChanges(t *testing.T) {
 		t.Errorf("LockedDiffMessage =\n%q\nwant\n%q", got, want)
 	}
 }
+
+func TestPkgSkipDirEntry(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"dot-kept", ".", false},
+		{"osty-cache-root", ".osty", true},
+		{"osty-cache-nested", "sub/.osty", true},
+		{"path-inside-osty-not-skipped", ".osty/cache/x", false},
+		{"git", ".git", true},
+		{"hg", ".hg", true},
+		{"svn", ".svn", true},
+		{"ds-store", ".DS_Store", true},
+		{"ds-store-nested", "sub/.DS_Store", true},
+		{"normal-source", "src/main.osty", false},
+		{"normal-readme", "README.md", false},
+		{"backslash-git", "sub\\.git", true},
+		{"backslash-normal", "sub\\src\\main.osty", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := PkgSkipDirEntry(c.in); got != c.want {
+				t.Errorf("PkgSkipDirEntry(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

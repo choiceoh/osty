@@ -52,3 +52,44 @@ pub fn lockedDiffMessage(lockfileName: String, changes: List<String>) -> String?
     lines.push("rerun without --locked to update the lockfile.")
     Some(strings.join(lines, "\n"))
 }
+/// pkgSkipDirEntry reports whether a filesystem entry should be
+/// excluded when hashing a path-source directory or packing a
+/// publish tarball. Used by both `internal/pkgmgr/hash.go::HashDir`
+/// and `internal/pkgmgr/tarball.go::CreateTarGz`.
+///
+/// The decision is purely a basename match — `info.IsDir()` is
+/// ignored by the Go caller too, so this policy only takes the
+/// relative path. `rel == "."` (the walk root itself) is never
+/// skipped.
+pub fn pkgSkipDirEntry(rel: String) -> Bool {
+    if rel == "." {
+        return false
+    }
+    let base = pkgPathBase(rel)
+    base == ".osty"
+        || base == ".git"
+        || base == ".hg"
+        || base == ".svn"
+        || base == ".DS_Store"
+}
+/// pkgPathBase mirrors Go's `filepath.Base` on forward-slash and
+/// backslash paths. `pkgmgr` passes platform-native paths through
+/// `filepath.Rel`, which yields `\\`-separated relatives on Windows;
+/// the matcher must agree there too, so we split on both.
+fn pkgPathBase(p: String) -> String {
+    let bs = p.bytes()
+    let n = bs.len()
+    let mut last = -1
+    let mut i = 0
+    for i < n {
+        let b = bs[i].toInt()
+        if b == 0x2F || b == 0x5C {
+            last = i
+        }
+        i = i + 1
+    }
+    if last < 0 {
+        return p
+    }
+    strings.slice(p, last + 1, n)
+}

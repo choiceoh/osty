@@ -44,3 +44,30 @@ fn testLockedDiffMessageFormatsChanges() {
         None -> testing.assert(false),
     }
 }
+fn testPkgSkipDirEntryDotKept() {
+    testing.assertEq(pkgSkipDirEntry("."), false)
+}
+fn testPkgSkipDirEntryOstyCache() {
+    testing.assertEq(pkgSkipDirEntry(".osty"), true)
+    testing.assertEq(pkgSkipDirEntry("sub/.osty"), true)
+    testing.assertEq(pkgSkipDirEntry(".osty/cache/x"), false)
+}
+fn testPkgSkipDirEntryVcsDirs() {
+    testing.assertEq(pkgSkipDirEntry(".git"), true)
+    testing.assertEq(pkgSkipDirEntry(".hg"), true)
+    testing.assertEq(pkgSkipDirEntry(".svn"), true)
+}
+fn testPkgSkipDirEntryMacosFile() {
+    testing.assertEq(pkgSkipDirEntry(".DS_Store"), true)
+    testing.assertEq(pkgSkipDirEntry("sub/.DS_Store"), true)
+}
+fn testPkgSkipDirEntryNormalFile() {
+    testing.assertEq(pkgSkipDirEntry("src/main.osty"), false)
+    testing.assertEq(pkgSkipDirEntry("README.md"), false)
+}
+fn testPkgSkipDirEntryWindowsSeparator() {
+    // pkgmgr passes filepath.Rel output which is backslash-separated
+    // on Windows. The basename matcher must agree on either separator.
+    testing.assertEq(pkgSkipDirEntry("sub\\.git"), true)
+    testing.assertEq(pkgSkipDirEntry("sub\\src\\main.osty"), false)
+}
