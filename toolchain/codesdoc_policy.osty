@@ -1,0 +1,122 @@
+/// Pure helpers for `cmd/codesdoc`, the build-time generator that
+/// derives `ERROR_CODES.md`, `toolchain/diag_manifest.osty`, and
+/// `toolchain/diag_examples.osty` from `internal/diag/codes.go`.
+///
+/// Host code in `cmd/codesdoc/main.go` owns the Go-AST walk, file
+/// I/O, and per-section rendering; this module decides the small
+/// lexical transformations that are pure functions of strings:
+///
+///   - the default phase heading for a code whose const block has
+///     no doc comment;
+///   - removing the auto-appended `(Exxxx–Eyyyy)` range suffix
+///     before mapping a heading to a `DiagnosticFamily`;
+///   - whether an Example block from a doc comment is currently
+///     unsafe to splice into the harvest fixtures (bootstrap-gen
+///     lexer hazard) or is a prose pseudocode block that can't be
+///     run as real Osty source;
+///   - escaping a payload for a regular Osty string literal.
+///
+/// Mirrored by `internal/runner/codesdoc_policy.go`. The drift
+/// test under internal/runner keeps the two in sync — the Osty
+/// file is the source of truth at review time.
+use std.strings as strings
+/// defaultHeadingFor invents a phase heading when the const block
+/// has no leading doc comment. Rare — only hit while developing
+/// a new phase grouping. The mapping uses the first byte:
+///
+///   - `E` → `Errors starting at <code>`
+///   - `W` → `Warnings starting at <code>`
+///   - `L` → `Lint warnings starting at <code>`
+///   - anything else → `Miscellaneous`
+pub fn defaultHeadingFor(code: String) -> String {
+    if strings.hasPrefix(code, "E") {
+        return "Errors starting at " + code
+    }
+    if strings.hasPrefix(code, "W") {
+        return "Warnings starting at " + code
+    }
+    if strings.hasPrefix(code, "L") {
+        return "Lint warnings starting at " + code
+    }
+    "Miscellaneous"
+}
+/// stripRangeSuffix removes the ` (Exxxx-Eyyyy)` (or ` (Exxxx)`)
+/// suffix that `rangeSuffix` appends to phase headings for
+/// markdown rendering. Used before mapping a heading to its
+/// DiagnosticFamily variant.
+///
+/// Returns `strings.trimSpace(h)` when no ` (` is present so
+/// "Lexical" and "Lexical (E0001–E0099)" both normalise to
+/// "Lexical".
+pub fn stripRangeSuffix(h: String) -> String {
+    let pos = strings.lastIndexOf(h, " (")
+    match pos {
+        Some(i) -> strings.trimSpace(strings.slice(h, 0, i)),
+        None -> strings.trimSpace(h),
+    }
+}
+/// unsafeForBootstrapGen guards against Example blocks that the
+/// bootstrap-gen lexer mishandles when they get spliced into the
+/// selfhost bundle as a string literal. Specifically, the
+/// historical lexer treats `\{` inside a string as the start of an
+/// interpolation, and then chokes on tokens like `=>` that are a
+/// static error outside an expression context.
+///
+/// The conservative check fires only when **both** signals are
+/// present, since each in isolation is fine to harvest:
+///   - any `{` or `}` byte in the example (would trigger the
+///     `\{` escape path during render),
+///   - a `=>` token (the static-error trigger).
+pub fn unsafeForBootstrapGen(example: String) -> Bool {
+    let hasBrace = strings.contains(example, "{") || strings.contains(example, "}")
+    let hasFatArrow = strings.contains(example, "=>")
+    hasBrace && hasFatArrow
+}
+/// proseExample reports whether an Example block contains prose
+/// placeholders (`...`, `…`, `→`) that make it unrunnable as real
+/// Osty source. These examples illustrate the rule in
+/// `ERROR_CODES.md` but the harvest runner skips them rather than
+/// emit known-failing cases.
+pub fn proseExample(example: String) -> Bool {
+    strings.contains(example, "...") ||
+        strings.contains(example, "…") ||
+        strings.contains(example, "→")
+}
+/// ostyEscape escapes `s` so it's safe to splice inside an Osty
+/// regular-string literal (`"..."`). The escape set is the
+/// minimum needed to round-trip arbitrary bytes:
+///
+///   - backslash → `\\`
+///   - double quote → `\"`
+///   - newline → `\n`, CR → `\r`, tab → `\t`
+///   - `{` / `}` → `\{` / `\}` (§1.6.3 interpolation braces)
+///
+/// All other bytes pass through. The escape preserves UTF-8
+/// because non-ASCII bytes are never in the switch above.
+pub fn ostyEscape(s: String) -> String {
+    let chars = s.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if c == '\\' {
+            out = out + "\\\\"
+        } else if c == '"' {
+            out = out + "\\\""
+        } else if c == '\n' {
+            out = out + "\\n"
+        } else if c == '\r' {
+            out = out + "\\r"
+        } else if c == '\t' {
+            out = out + "\\t"
+        } else if c == '\{' {
+            out = out + "\\\{"
+        } else if c == '\}' {
+            out = out + "\\\}"
+        } else {
+            out = out + c.toString()
+        }
+        i = i + 1
+    }
+    out
+}

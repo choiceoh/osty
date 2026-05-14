@@ -40,6 +40,7 @@ func TestPolicySnapshotParityWithOsty(t *testing.T) {
 		"airepair_flags.osty",
 		"airepair_rewrite.osty",
 		"airepair_source.osty",
+		"codesdoc_policy.osty",
 		"diag_explain.osty",
 		"diag_render.osty",
 		"format_policy.osty",
