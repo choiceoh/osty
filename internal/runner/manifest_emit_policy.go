@@ -21,7 +21,7 @@ type ManifestGitSpec struct {
 // nested git source uses `URL == ""` as its absent sentinel so
 // host call sites don't have to thread a pointer.
 //
-// Osty: toolchain/manifest_emit.osty:30
+// Osty: toolchain/manifest_emit.osty:31
 type ManifestDepEmitSpec struct {
 	Name         string
 	VersionReq   string
@@ -39,7 +39,7 @@ type ManifestDepEmitSpec struct {
 // preferred for version-only deps with default flags; otherwise
 // the inline-table form lists each non-default selector.
 //
-// Osty: toolchain/manifest_emit.osty:47
+// Osty: toolchain/manifest_emit.osty:46
 func RenderManifestDepLine(d ManifestDepEmitSpec) string {
 	if manifestDepCanShortForm(d) {
 		return d.Name + " = " + TomlBasicString(d.VersionReq) + "\n"

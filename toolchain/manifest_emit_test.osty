@@ -121,7 +121,7 @@ fn testRenderManifestDepLineDefaultFeaturesFalse() {
 }
 fn testRenderManifestDepLineCombined() {
     // version + features + optional + default-features=false. The
-    // emission order is fixed: version, features, optional, default-features.
+    // emission order is fixed: version, optional, features, default-features.
     let d = ManifestDepEmitSpec {
         ..defaultDep("x"),
         versionReq: "1.0.0",
