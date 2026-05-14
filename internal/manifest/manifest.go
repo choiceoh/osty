@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -1085,61 +1086,30 @@ func writeDeps(b *strings.Builder, section string, deps []Dependency) {
 	}
 }
 
+// writeDepLine bridges to runner.RenderManifestDepLine (mirror of
+// toolchain/manifest_emit.osty). Short-form vs inline-table-form
+// decision, key order, and quoting all live in toolchain.
 func writeDepLine(b *strings.Builder, d Dependency) {
-	// Short form
-	if d.VersionReq != "" &&
-		d.Path == "" &&
-		d.Git == nil &&
-		d.PackageName == "" &&
-		d.Registry == "" &&
-		!d.Optional &&
-		len(d.Features) == 0 &&
-		d.DefaultFeats {
-		fmt.Fprintf(b, "%s = %q\n", d.Name, d.VersionReq)
-		return
-	}
-	// Long form
-	fmt.Fprintf(b, "%s = { ", d.Name)
-	var parts []string
-	if d.VersionReq != "" {
-		parts = append(parts, fmt.Sprintf("version = %q", d.VersionReq))
-	}
-	if d.Path != "" {
-		parts = append(parts, fmt.Sprintf("path = %q", d.Path))
-	}
+	git := runner.ManifestGitSpec{}
 	if d.Git != nil {
-		parts = append(parts, fmt.Sprintf("git = %q", d.Git.URL))
-		if d.Git.Tag != "" {
-			parts = append(parts, fmt.Sprintf("tag = %q", d.Git.Tag))
-		}
-		if d.Git.Branch != "" {
-			parts = append(parts, fmt.Sprintf("branch = %q", d.Git.Branch))
-		}
-		if d.Git.Rev != "" {
-			parts = append(parts, fmt.Sprintf("rev = %q", d.Git.Rev))
+		git = runner.ManifestGitSpec{
+			URL:    d.Git.URL,
+			Tag:    d.Git.Tag,
+			Branch: d.Git.Branch,
+			Rev:    d.Git.Rev,
 		}
 	}
-	if d.PackageName != "" {
-		parts = append(parts, fmt.Sprintf("package = %q", d.PackageName))
-	}
-	if d.Registry != "" {
-		parts = append(parts, fmt.Sprintf("registry = %q", d.Registry))
-	}
-	if d.Optional {
-		parts = append(parts, "optional = true")
-	}
-	if len(d.Features) > 0 {
-		var qs []string
-		for _, f := range d.Features {
-			qs = append(qs, fmt.Sprintf("%q", f))
-		}
-		parts = append(parts, fmt.Sprintf("features = [%s]", strings.Join(qs, ", ")))
-	}
-	if !d.DefaultFeats {
-		parts = append(parts, "default-features = false")
-	}
-	b.WriteString(strings.Join(parts, ", "))
-	b.WriteString(" }\n")
+	b.WriteString(runner.RenderManifestDepLine(runner.ManifestDepEmitSpec{
+		Name:         d.Name,
+		VersionReq:   d.VersionReq,
+		Path:         d.Path,
+		Git:          git,
+		PackageName:  d.PackageName,
+		Registry:     d.Registry,
+		Optional:     d.Optional,
+		Features:     d.Features,
+		DefaultFeats: d.DefaultFeats,
+	}))
 }
 
 func writeString(b *strings.Builder, key, val string) {
