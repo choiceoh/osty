@@ -1,6 +1,8 @@
 package runner
 
-import "testing"
+import (
+	"testing"
+)
 
 func defaultManifestDep(name string) ManifestDepEmitSpec {
 	return ManifestDepEmitSpec{
@@ -141,4 +143,87 @@ func TestRenderManifestDepLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenderManifestStringField(t *testing.T) {
+	cases := []struct {
+		name, key, val, want string
+	}{
+		{"plain", "name", "demo", `name = "demo"` + "\n"},
+		{"version", "version", "1.0.0", `version = "1.0.0"` + "\n"},
+		{"quoting-special", "desc", `needs "quotes"`, `desc = "needs \"quotes\""` + "\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestStringField(c.key, c.val); got != c.want {
+				t.Errorf("RenderManifestStringField = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestStringArrayField(t *testing.T) {
+	cases := []struct {
+		name, key string
+		vals      []string
+		want      string
+	}{
+		{"two-values", "authors", []string{"Alice", "Bob"}, `authors = ["Alice", "Bob"]` + "\n"},
+		{"empty", "authors", []string{}, "authors = []\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestStringArrayField(c.key, c.vals); got != c.want {
+				t.Errorf("RenderManifestStringArrayField = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestBoolField(t *testing.T) {
+	cases := []struct {
+		name, key string
+		val       bool
+		want      string
+	}{
+		{"true", "runtime", true, "runtime = true\n"},
+		{"false", "runtime", false, "runtime = false\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestBoolField(c.key, c.val); got != c.want {
+				t.Errorf("RenderManifestBoolField = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestDepsSection(t *testing.T) {
+	t.Run("empty-returns-empty", func(t *testing.T) {
+		if got := RenderManifestDepsSection("dependencies", nil); got != "" {
+			t.Errorf("empty deps must return empty string, got %q", got)
+		}
+	})
+	t.Run("sorts-by-name", func(t *testing.T) {
+		a := defaultManifestDep("alpha")
+		a.VersionReq = "1.0.0"
+		z := defaultManifestDep("zed")
+		z.VersionReq = "2.0.0"
+		got := RenderManifestDepsSection("dependencies", []ManifestDepEmitSpec{z, a})
+		want := "\n[dependencies]\nalpha = \"1.0.0\"\nzed = \"2.0.0\"\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
+	t.Run("mixed-short-long-forms", func(t *testing.T) {
+		s := defaultManifestDep("a")
+		s.VersionReq = "1.0.0"
+		l := defaultManifestDep("b")
+		l.Path = "../b"
+		got := RenderManifestDepsSection("dev-dependencies", []ManifestDepEmitSpec{s, l})
+		want := "\n[dev-dependencies]\na = \"1.0.0\"\nb = { path = \"../b\" }\n"
+		if got != want {
+			t.Errorf("=\n%q\nwant\n%q", got, want)
+		}
+	})
 }

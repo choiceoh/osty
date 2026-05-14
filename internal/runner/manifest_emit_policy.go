@@ -3,7 +3,10 @@
 // the drift test in this package keeps the two in sync.
 package runner
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // ManifestGitSpec mirrors toolchain/manifest_emit.osty's
 // ManifestGitSpec — the per-dep git source for the emit path.
@@ -94,4 +97,59 @@ func manifestDepCanShortForm(d ManifestDepEmitSpec) bool {
 		!d.Optional &&
 		len(d.Features) == 0 &&
 		d.DefaultFeats
+}
+
+// RenderManifestStringField emits a `key = "value"` line (newline
+// included). Wraps TomlBasicString so callers don't duplicate the
+// quoting policy at every section.
+//
+// Osty: toolchain/manifest_emit.osty:108
+func RenderManifestStringField(key, val string) string {
+	return key + " = " + TomlBasicString(val) + "\n"
+}
+
+// RenderManifestStringArrayField emits a `key = ["a", "b", ...]`
+// line. Empty arrays render as `key = []`; the host suppresses the
+// call when it doesn't want the field at all.
+//
+// Osty: toolchain/manifest_emit.osty:114
+func RenderManifestStringArrayField(key string, vals []string) string {
+	quoted := make([]string, 0, len(vals))
+	for _, v := range vals {
+		quoted = append(quoted, TomlBasicString(v))
+	}
+	return key + " = [" + strings.Join(quoted, ", ") + "]\n"
+}
+
+// RenderManifestBoolField emits `key = true` / `key = false`.
+//
+// Osty: toolchain/manifest_emit.osty:122
+func RenderManifestBoolField(key string, val bool) string {
+	if val {
+		return key + " = true\n"
+	}
+	return key + " = false\n"
+}
+
+// RenderManifestDepsSection emits a `[section]` header followed
+// by one dep line per entry, sorted by Name. Returns the empty
+// string when deps is empty so the host can call it unconditionally
+// without producing an orphan header.
+//
+// Osty: toolchain/manifest_emit.osty:132
+func RenderManifestDepsSection(section string, deps []ManifestDepEmitSpec) string {
+	if len(deps) == 0 {
+		return ""
+	}
+	sorted := make([]ManifestDepEmitSpec, len(deps))
+	copy(sorted, deps)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	var b strings.Builder
+	b.WriteString("\n[")
+	b.WriteString(section)
+	b.WriteString("]\n")
+	for _, d := range sorted {
+		b.WriteString(RenderManifestDepLine(d))
+	}
+	return b.String()
 }

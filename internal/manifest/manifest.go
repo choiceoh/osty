@@ -20,7 +20,6 @@ package manifest
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/runner"
@@ -1074,22 +1073,21 @@ func Marshal(m *Manifest) []byte {
 // header. Short forms (`dep = "1.0"`) are preferred when the
 // dependency has only a version requirement; the long inline-table
 // form is emitted otherwise.
+// writeDeps bridges to runner.RenderManifestDepsSection (mirror of
+// toolchain/manifest_emit.osty). Section header, sort, and per-dep
+// rendering all live in toolchain.
 func writeDeps(b *strings.Builder, section string, deps []Dependency) {
 	if len(deps) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\n[%s]\n", section)
-	sorted := append([]Dependency(nil), deps...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	for _, d := range sorted {
-		writeDepLine(b, d)
+	specs := make([]runner.ManifestDepEmitSpec, 0, len(deps))
+	for _, d := range deps {
+		specs = append(specs, depEmitSpec(d))
 	}
+	b.WriteString(runner.RenderManifestDepsSection(section, specs))
 }
 
-// writeDepLine bridges to runner.RenderManifestDepLine (mirror of
-// toolchain/manifest_emit.osty). Short-form vs inline-table-form
-// decision, key order, and quoting all live in toolchain.
-func writeDepLine(b *strings.Builder, d Dependency) {
+func depEmitSpec(d Dependency) runner.ManifestDepEmitSpec {
 	git := runner.ManifestGitSpec{}
 	if d.Git != nil {
 		git = runner.ManifestGitSpec{
@@ -1099,7 +1097,7 @@ func writeDepLine(b *strings.Builder, d Dependency) {
 			Rev:    d.Git.Rev,
 		}
 	}
-	b.WriteString(runner.RenderManifestDepLine(runner.ManifestDepEmitSpec{
+	return runner.ManifestDepEmitSpec{
 		Name:         d.Name,
 		VersionReq:   d.VersionReq,
 		Path:         d.Path,
@@ -1109,26 +1107,29 @@ func writeDepLine(b *strings.Builder, d Dependency) {
 		Optional:     d.Optional,
 		Features:     d.Features,
 		DefaultFeats: d.DefaultFeats,
-	}))
+	}
 }
 
+// writeDepLine bridges to runner.RenderManifestDepLine (mirror of
+// toolchain/manifest_emit.osty). Short-form vs inline-table-form
+// decision, key order, and quoting all live in toolchain.
+func writeDepLine(b *strings.Builder, d Dependency) {
+	b.WriteString(runner.RenderManifestDepLine(depEmitSpec(d)))
+}
+
+// writeString, writeStringArray, writeBool bridge to the matching
+// runner.RenderManifest* helpers (mirror of toolchain/manifest_emit.osty).
+// Quoting + array formatting policy lives in toolchain.
 func writeString(b *strings.Builder, key, val string) {
-	fmt.Fprintf(b, "%s = %q\n", key, val)
+	b.WriteString(runner.RenderManifestStringField(key, val))
 }
 
 func writeStringArray(b *strings.Builder, key string, vals []string) {
-	fmt.Fprintf(b, "%s = [", key)
-	for i, v := range vals {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(b, "%q", v)
-	}
-	b.WriteString("]\n")
+	b.WriteString(runner.RenderManifestStringArrayField(key, vals))
 }
 
 func writeBool(b *strings.Builder, key string, val bool) {
-	fmt.Fprintf(b, "%s = %t\n", key, val)
+	b.WriteString(runner.RenderManifestBoolField(key, val))
 }
 
 // FindUp searches cwd and each parent directory for osty.toml,
