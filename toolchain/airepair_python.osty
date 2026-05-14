@@ -1,0 +1,192 @@
+/// Pure Python-style colon-block header rewriter for the
+/// `osty airepair` semantic pass. Host code in
+/// `internal/airepair/diagnostic.go` owns the per-line scan + stack
+/// management; this module decides:
+///
+///   - the canonical `scopeKind` enum values (Block / Match /
+///     MatchArm) callers thread through the stack,
+///   - how a single trimmed line maps to its rewritten form,
+///     change kind, and scope kind (or `ok = false` when the line
+///     is not a recognised Python colon header).
+///
+/// 12 patterns recognised, in source order:
+///
+///   1. `expr ->` — multi-line match-arm body (trailing arrow).
+///   2. `else:`              7. `for X:`
+///   3. `elif X:`            8. `while X:`
+///   4. `elseif X:`          9. `match X:`
+///   5. `else if X:`        10. `case X:`
+///   6. `if X:`             11. `default:`
+///                         12. function-shaped headers
+///                             (`fn`/`pub fn`/`struct`/`interface`)
+///
+/// Mirrored by `internal/runner/airepair_python_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// pythonScopeBlock / pythonScopeMatch / pythonScopeMatchArm are
+/// the scope kinds the rewriter threads through the stack.
+/// Encoded as `Int` (with explicit constants instead of a
+/// dedicated enum type) so the host can mirror them as their
+/// `iota` analogue without a wire-format translation step.
+pub let pythonScopeBlock: Int = 0
+pub let pythonScopeMatch: Int = 1
+pub let pythonScopeMatchArm: Int = 2
+/// PythonColonHeader is the structured outcome of recognising a
+/// Python-style block header. `ok == false` leaves all the
+/// string fields empty.
+///
+///   - `rewritten`: the substituted Osty form (with leading
+///     indent stripped — caller adds it back).
+///   - `changeKind`: stable identifier for the rewrite that lands
+///     in the diag (`python_else_block` etc.).
+///   - `message`: human-readable rewrite description.
+///   - `scopeKind`: which scope to push onto the rewriter's stack.
+///   - `elseish`: continuation header that consumes a closing
+///     brace from the enclosing scope (`else`/`elif`/`else if`).
+///   - `requiresMatch`: arm header that's only valid inside a
+///     `match` scope (case/default/arrow).
+pub struct PythonColonHeader {
+    pub rewritten: String,
+    pub changeKind: String,
+    pub message: String,
+    pub scopeKind: Int,
+    pub elseish: Bool,
+    pub requiresMatch: Bool,
+    pub ok: Bool,
+}
+/// rewritePythonColonHeader classifies a single trimmed line as
+/// one of 12 recognised Python-block headers. Returns
+/// `{ok = false}` when no rule matches; the host falls back to
+/// emitting the line verbatim.
+pub fn rewritePythonColonHeader(trimmed: String) -> PythonColonHeader {
+    if strings.hasSuffix(trimmed, "->") {
+        let head = strings.trimSpace(strings.trimSuffix(trimmed, "->"))
+        if head == "" {
+            return airepairPyColonNone()
+        }
+        return PythonColonHeader {
+            rewritten: head + " -> \{",
+            changeKind: "python_arrow_arm_block",
+            message: "wrap a multiline match arm body in Osty braces",
+            scopeKind: pythonScopeMatchArm,
+            elseish: false,
+            requiresMatch: true,
+            ok: true,
+        }
+    }
+    if !strings.hasSuffix(trimmed, ":") {
+        return airepairPyColonNone()
+    }
+    let head = strings.trimSpace(strings.trimSuffix(trimmed, ":"))
+    if head == "else" {
+        return airepairPyColonBlock("else \{", "python_else_block",
+            "replace Python-style `else:` block with Osty braces", true)
+    }
+    if strings.hasPrefix(head, "elif ") {
+        let rest = strings.trimPrefix(head, "elif ")
+        return airepairPyColonBlock("else if " + rest + " \{", "python_elif_block",
+            "replace Python-style `elif:` block with Osty braces", true)
+    }
+    if strings.hasPrefix(head, "elseif ") {
+        let rest = strings.trimPrefix(head, "elseif ")
+        return airepairPyColonBlock("else if " + rest + " \{", "python_elif_block",
+            "replace alternate `elseif:` block with Osty braces", true)
+    }
+    if strings.hasPrefix(head, "else if ") {
+        return airepairPyColonBlock(head + " \{", "python_else_if_block",
+            "replace Python-style `else if:` block with Osty braces", true)
+    }
+    if strings.hasPrefix(head, "if ") {
+        return airepairPyColonBlock(head + " \{", "python_if_block",
+            "replace Python-style `if:` block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "for ") {
+        return airepairPyColonBlock(head + " \{", "python_for_block",
+            "replace Python-style `for:` block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "while ") {
+        let rest = strings.trimPrefix(head, "while ")
+        return airepairPyColonBlock("for " + rest + " \{", "python_while_block",
+            "replace Python-style `while:` block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "match ") {
+        return PythonColonHeader {
+            rewritten: head + " \{",
+            changeKind: "python_match_block",
+            message: "replace Python-style `match:` block with Osty braces",
+            scopeKind: pythonScopeMatch,
+            elseish: false,
+            requiresMatch: false,
+            ok: true,
+        }
+    }
+    if strings.hasPrefix(head, "case ") {
+        let rest = strings.trimPrefix(head, "case ")
+        return PythonColonHeader {
+            rewritten: rest + " -> \{",
+            changeKind: "python_case_arm",
+            message: "replace Python-style `case:` arm with Osty match syntax",
+            scopeKind: pythonScopeMatchArm,
+            elseish: false,
+            requiresMatch: true,
+            ok: true,
+        }
+    }
+    if head == "default" {
+        return PythonColonHeader {
+            rewritten: "_ -> \{",
+            changeKind: "python_default_arm",
+            message: "replace Python-style `default:` arm with Osty match syntax",
+            scopeKind: pythonScopeMatchArm,
+            elseish: false,
+            requiresMatch: true,
+            ok: true,
+        }
+    }
+    if strings.hasPrefix(head, "fn ") {
+        return airepairPyColonBlock(head + " \{", "python_fn_block",
+            "replace Python-style function block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "pub fn ") {
+        return airepairPyColonBlock(head + " \{", "python_fn_block",
+            "replace Python-style function block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "struct ") {
+        return airepairPyColonBlock(head + " \{", "python_struct_block",
+            "replace Python-style struct block with Osty braces", false)
+    }
+    if strings.hasPrefix(head, "interface ") {
+        return airepairPyColonBlock(head + " \{", "python_interface_block",
+            "replace Python-style interface block with Osty braces", false)
+    }
+    airepairPyColonNone()
+}
+/// airepairPyColonBlock is a tiny constructor for the common
+/// "Block-kind rewrite" case where the scopeKind is always
+/// pythonScopeBlock and requiresMatch is always false. Reduces
+/// the boilerplate at the dozen call sites inside the dispatcher.
+fn airepairPyColonBlock(rewritten: String, changeKind: String, message: String, elseish: Bool) -> PythonColonHeader {
+    PythonColonHeader {
+        rewritten: rewritten,
+        changeKind: changeKind,
+        message: message,
+        scopeKind: pythonScopeBlock,
+        elseish: elseish,
+        requiresMatch: false,
+        ok: true,
+    }
+}
+/// airepairPyColonNone returns the "no rule matched" sentinel —
+/// all string fields empty, all bool fields false, ok=false.
+fn airepairPyColonNone() -> PythonColonHeader {
+    PythonColonHeader {
+        rewritten: "",
+        changeKind: "",
+        message: "",
+        scopeKind: pythonScopeBlock,
+        elseish: false,
+        requiresMatch: false,
+        ok: false,
+    }
+}
