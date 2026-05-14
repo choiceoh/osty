@@ -10,6 +10,7 @@
 /// Mirrored by `internal/runner/lockfile_policy.go`. The drift
 /// test under internal/runner keeps the two in sync — the Osty
 /// file is the source of truth at review time.
+use std.bytes as bytes
 use std.strings as strings
 /// DependencyParts is the outcome of parsing a single dependency
 /// line back into its `(name, version, source)` triple. `ok ==
@@ -181,55 +182,71 @@ fn lockSortKey(name: String, version: String) -> String {
 ///
 /// Used by `marshalLockfile`; safe for any input the manifest /
 /// lockfile pipeline actually surfaces (all-ASCII package names,
-/// SemVer versions, URLs, checksums). The high-byte passthrough
-/// keeps user-provided non-ASCII metadata literal so TOML readers
-/// (Osty's own + external) accept it.
+/// SemVer versions, URLs, checksums). High bytes (0x80+) pass
+/// through verbatim — multi-byte UTF-8 stays intact byte-for-byte
+/// like Go's `b.WriteByte(c)`. Building the result as `List<Byte>`
+/// and converting at the end (mirrors `std.json`'s escape pattern)
+/// is what guarantees no accidental `Byte→Char→UTF-8` re-encoding.
 pub fn tomlBasicString(s: String) -> String {
     let bs = s.bytes()
     let n = bs.len()
-    let mut parts: List<String> = []
-    parts.push("\"")
+    let mut buf: List<Byte> = []
+    buf.push(0x22.toByte())
     let mut i = 0
     for i < n {
-        let b = bs[i].toInt()
-        if b == 0x22 {
-            parts.push("\\\"")
-        } else if b == 0x5C {
-            parts.push("\\\\")
-        } else if b == 0x07 {
-            parts.push("\\a")
-        } else if b == 0x08 {
-            parts.push("\\b")
-        } else if b == 0x09 {
-            parts.push("\\t")
-        } else if b == 0x0A {
-            parts.push("\\n")
-        } else if b == 0x0B {
-            parts.push("\\v")
-        } else if b == 0x0C {
-            parts.push("\\f")
-        } else if b == 0x0D {
-            parts.push("\\r")
-        } else if b >= 0x20 && b <= 0x7E {
-            parts.push(bs[i].toChar().toString())
-        } else if b < 0x20 || b == 0x7F {
-            parts.push("\\x")
-            parts.push(twoHexLower(b))
+        let b = bs[i]
+        let c = b.toInt()
+        if c == 0x22 {
+            tomlPushAscii(buf, "\\\"")
+        } else if c == 0x5C {
+            tomlPushAscii(buf, "\\\\")
+        } else if c == 0x07 {
+            tomlPushAscii(buf, "\\a")
+        } else if c == 0x08 {
+            tomlPushAscii(buf, "\\b")
+        } else if c == 0x09 {
+            tomlPushAscii(buf, "\\t")
+        } else if c == 0x0A {
+            tomlPushAscii(buf, "\\n")
+        } else if c == 0x0B {
+            tomlPushAscii(buf, "\\v")
+        } else if c == 0x0C {
+            tomlPushAscii(buf, "\\f")
+        } else if c == 0x0D {
+            tomlPushAscii(buf, "\\r")
+        } else if c >= 0x20 && c <= 0x7E {
+            buf.push(b)
+        } else if c < 0x20 || c == 0x7F {
+            tomlPushAscii(buf, "\\x")
+            tomlPushHexNibble(buf, (c >> 4) & 0xF)
+            tomlPushHexNibble(buf, c & 0xF)
         } else {
-            parts.push(bs[i].toChar().toString())
+            // 0x80+: raw UTF-8 continuation / leading byte. Push the
+            // byte unchanged so a multi-byte sequence in `s` survives
+            // intact instead of being transcoded through Char.
+            buf.push(b)
         }
         i = i + 1
     }
-    parts.push("\"")
-    strings.join(parts, "")
+    buf.push(0x22.toByte())
+    bytes.toString(bytes.from(buf)).unwrap()
 }
-/// twoHexLower renders a byte value (0-255) as exactly two
-/// lowercase hex digits — the form Go's `%q` uses for `\xNN`.
-fn twoHexLower(b: Int) -> String {
-    let hi = (b >> 4) & 0xF
-    let lo = b & 0xF
-    strings.slice(hexDigitsLower, hi, hi + 1) + strings.slice(hexDigitsLower, lo, lo + 1)
+/// tomlPushAscii appends each byte of an ASCII string `s` to `buf`.
+/// `s` is assumed to be ASCII-only — the escape literals emitted by
+/// `tomlBasicString` all are.
+fn tomlPushAscii(buf: List<Byte>, s: String) {
+    let bs = s.bytes()
+    let n = bs.len()
+    let mut i = 0
+    for i < n {
+        buf.push(bs[i])
+        i = i + 1
+    }
 }
-/// hexDigitsLower is the ASCII alphabet for lowercase hex output;
-/// indexed 0..15 by `twoHexLower`.
-let hexDigitsLower: String = "0123456789abcdef"
+/// tomlPushHexNibble writes the lowercase ASCII hex digit for the
+/// 4-bit value `n` (0-15). Used twice per `\xNN` escape inside
+/// `tomlBasicString`.
+fn tomlPushHexNibble(buf: List<Byte>, n: Int) {
+    let code = if n < 10 { 0x30 + n } else { 0x61 + (n - 10) }
+    buf.push(code.toByte())
+}
