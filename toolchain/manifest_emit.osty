@@ -1,0 +1,104 @@
+/// Pure `osty.toml` dependency line renderer. Host code in
+/// `internal/manifest/manifest.go::writeDepLine` already owns the
+/// per-section iteration + sort; this module decides:
+///
+///   - when a Dependency can be emitted in the short form
+///     (`name = "1.0.0"`) vs the long inline-table form
+///     (`name = { version = "...", path = "...", ... }`),
+///   - the order of inline-table keys (matches the historical
+///     `osty.toml` output so tooling round-trips cleanly),
+///   - quoting via the shared `tomlBasicString` helper from
+///     `toolchain/lockfile_policy.osty`.
+///
+/// Mirrored by `internal/runner/manifest_emit_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// ManifestGitSpec mirrors the host `manifest.GitSource` for the
+/// emit path. `url` is always populated when this is non-`None`;
+/// the three ref selectors are empty strings when absent so the
+/// renderer can decide which lines to emit.
+pub struct ManifestGitSpec {
+    pub url: String,
+    pub tag: String,
+    pub branch: String,
+    pub rev: String,
+}
+/// ManifestDepEmitSpec is the host shape the emit policy needs.
+/// Empty-string fields signal "not set"; `git.url == ""` plays
+/// the same role for the optional nested struct (an Osty `T?`
+/// would force boilerplate at every host call site).
+pub struct ManifestDepEmitSpec {
+    pub name: String,
+    pub versionReq: String,
+    pub path: String,
+    pub git: ManifestGitSpec,
+    pub packageName: String,
+    pub registry: String,
+    pub optional: Bool,
+    pub features: List<String>,
+    pub defaultFeats: Bool,
+}
+/// renderManifestDepLine emits one `osty.toml` dependency entry,
+/// trailing newline included. Short form is preferred for
+/// version-only deps with default flags; everything else takes
+/// the inline-table form so each non-default selector is visible.
+pub fn renderManifestDepLine(d: ManifestDepEmitSpec) -> String {
+    if manifestDepCanShortForm(d) {
+        return d.name + " = " + tomlBasicString(d.versionReq) + "\n"
+    }
+    let mut parts: List<String> = []
+    if d.versionReq != "" {
+        parts.push("version = " + tomlBasicString(d.versionReq))
+    }
+    if d.path != "" {
+        parts.push("path = " + tomlBasicString(d.path))
+    }
+    if d.git.url != "" {
+        parts.push("git = " + tomlBasicString(d.git.url))
+        if d.git.tag != "" {
+            parts.push("tag = " + tomlBasicString(d.git.tag))
+        }
+        if d.git.branch != "" {
+            parts.push("branch = " + tomlBasicString(d.git.branch))
+        }
+        if d.git.rev != "" {
+            parts.push("rev = " + tomlBasicString(d.git.rev))
+        }
+    }
+    if d.packageName != "" {
+        parts.push("package = " + tomlBasicString(d.packageName))
+    }
+    if d.registry != "" {
+        parts.push("registry = " + tomlBasicString(d.registry))
+    }
+    if d.optional {
+        parts.push("optional = true")
+    }
+    if d.features.len() > 0 {
+        let mut quoted: List<String> = []
+        for f in d.features {
+            quoted.push(tomlBasicString(f))
+        }
+        parts.push("features = [" + strings.join(quoted, ", ") + "]")
+    }
+    if !d.defaultFeats {
+        parts.push("default-features = false")
+    }
+    d.name + " = { " + strings.join(parts, ", ") + " }\n"
+}
+/// manifestDepCanShortForm reports whether `d` qualifies for the
+/// `name = "1.0.0"` short emission. The host's `writeDepLine`
+/// uses the same predicate; keep this in lockstep with the
+/// caller's expectations (a stray field there would silently
+/// flip every dep to the long form).
+fn manifestDepCanShortForm(d: ManifestDepEmitSpec) -> Bool {
+    d.versionReq != ""
+        && d.path == ""
+        && d.git.url == ""
+        && d.packageName == ""
+        && d.registry == ""
+        && !d.optional
+        && d.features.len() == 0
+        && d.defaultFeats
+}

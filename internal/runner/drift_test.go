@@ -48,6 +48,7 @@ func TestPolicySnapshotParityWithOsty(t *testing.T) {
 		"format_policy.osty",
 		"lint_glob.osty",
 		"lockfile_policy.osty",
+		"manifest_emit.osty",
 		"profile_features.osty",
 		"profile_flags.osty",
 		"profile_pragma.osty",
