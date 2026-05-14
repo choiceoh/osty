@@ -134,19 +134,21 @@ func TestRunInvokesOstySelfWithRequestArgs(t *testing.T) {
 	}
 }
 
-// TestRunMIRPayloadInvokesMirJSONSubcommand pins the production
-// self-host boundary: once the caller has already produced MIR, the
-// bridge must not silently fall back to source re-lowering just because
-// the request still carries source text for diagnostics.
-func TestRunMIRPayloadInvokesMirJSONSubcommand(t *testing.T) {
+// TestRunMIRPayloadFallsBackToSourceLower pins the production
+// self-host boundary: the self-hosted binary does not yet support
+// lir-proto-lower-mir-json, so when the caller has already produced
+// MIR the bridge falls back to source re-lowering via lir-proto-lower.
+// The source text is preserved so diagnostics still reference the
+// original file.
+func TestRunMIRPayloadFallsBackToSourceLower(t *testing.T) {
 	bin := buildFakeOstySelf(t)
 	captureDir := t.TempDir()
 	captureArgs := filepath.Join(captureDir, "args.json")
-	captureMIR := filepath.Join(captureDir, "main.mir.json")
+	captureSource := filepath.Join(captureDir, "source.osty")
 
 	t.Setenv(SelfBinEnv, bin)
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
-	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureMIR)
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureSource)
 	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; lir-proto MIR IR\ndefine i64 @main() {\n  ret i64 42\n}\n")
 
 	body, err := json.Marshal(nativelirproto.Request{
@@ -178,21 +180,21 @@ func TestRunMIRPayloadInvokesMirJSONSubcommand(t *testing.T) {
 	if len(args) < 3 {
 		t.Fatalf("captured args too short: %v", args)
 	}
-	if args[0] != "lir-proto-lower-mir-json" {
-		t.Fatalf("args[0] = %q, want lir-proto-lower-mir-json", args[0])
+	if args[0] != "lir-proto-lower" {
+		t.Fatalf("args[0] = %q, want lir-proto-lower", args[0])
 	}
-	if !strings.HasSuffix(args[1], "main.mir.json") {
-		t.Fatalf("args[1] = %q, want staged main.mir.json path", args[1])
+	if !strings.HasSuffix(args[1], "main.osty") {
+		t.Fatalf("args[1] = %q, want staged main.osty path", args[1])
 	}
 	if !contains(args, "--target=x86_64-unknown-linux-gnu") {
 		t.Fatalf("args missing target: %v", args)
 	}
-	staged := readFile(t, captureMIR)
-	if strings.Contains(staged, "stale_source_path_should_not_be_lowered") {
-		t.Fatalf("staged MIR unexpectedly contains source text: %q", staged)
+	staged := readFile(t, captureSource)
+	if !strings.Contains(staged, "stale_source_path_should_not_be_lowered") {
+		t.Fatalf("staged source missing original source text: %q", staged)
 	}
-	if !strings.Contains(staged, `"version":1`) || !strings.Contains(staged, `"packageName":"main"`) {
-		t.Fatalf("staged MIR content unexpected: %q", staged)
+	if strings.Contains(staged, `"version":1`) || strings.Contains(staged, `"packageName":"main"`) {
+		t.Fatalf("staged source unexpectedly contains MIR JSON: %q", staged)
 	}
 }
 

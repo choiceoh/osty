@@ -97,10 +97,10 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 	if pkgName == "" {
 		pkgName = "main"
 	}
+	// osty-self currently only supports lir-proto-lower (source-based).
+	// MIR JSON path is reserved for when the self-hosted binary grows
+	// a lir-proto-lower-mir-json subcommand (Phase 1+).
 	command := "lir-proto-lower"
-	if req.MIR != nil {
-		command = "lir-proto-lower-mir-json"
-	}
 	args := []string{command, sourcePath, "--package-name=" + pkgName}
 	if req.Target != "" {
 		args = append(args, "--target="+req.Target)
@@ -175,13 +175,13 @@ func stageInput(req nativelirproto.Request) (string, func(), error) {
 		name = filepath.Base(req.SourcePath)
 	}
 	data := []byte(req.Source)
-	if req.MIR != nil {
-		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".mir.json"
-		encoded, err := json.Marshal(req.MIR)
-		if err != nil {
-			return "", cleanup, err
+	if len(data) == 0 && req.SourcePath != "" {
+		if read, err := os.ReadFile(req.SourcePath); err == nil {
+			data = read
 		}
-		data = encoded
+	}
+	if len(data) == 0 {
+		return "", cleanup, errors.New("source text is empty; lir-proto-lower requires source")
 	}
 	stagedPath := filepath.Join(root, name)
 	if err := os.WriteFile(stagedPath, data, 0o644); err != nil {

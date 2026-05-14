@@ -757,7 +757,14 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 		if chk == nil {
 			chk = &check.Result{}
 		}
-		return backend.PrepareGraphPackage("main", sourcePath, graph, "", entryFile, chk)
+		entry, err := backend.PrepareGraphPackage("main", sourcePath, graph, "", entryFile, chk)
+		if err != nil {
+			return backend.Entry{}, err
+		}
+		if entryFile != nil {
+			entry.Source = entryFile.Source
+		}
+		return entry, nil
 	}
 	file, src, err := parseGenEmitFile(pkg)
 	if err != nil {
