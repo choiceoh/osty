@@ -180,3 +180,60 @@ fn testRenderManifestDepsSectionHonorsDepLineForm() {
     let expected = "\n[dev-dependencies]\na = \"1.0.0\"\nb = { path = \"../b\" }\n"
     testing.assertEq(out, expected)
 }
+fn testRenderManifestBinSectionBothEmpty() {
+    testing.assertEq(
+        renderManifestBinSection(ManifestBinEmitSpec {name: "", path: ""}),
+        "",
+    )
+}
+fn testRenderManifestBinSectionNameOnly() {
+    testing.assertEq(
+        renderManifestBinSection(ManifestBinEmitSpec {name: "demo", path: ""}),
+        "\n[bin]\nname = \"demo\"\n",
+    )
+}
+fn testRenderManifestBinSectionPathOnly() {
+    testing.assertEq(
+        renderManifestBinSection(ManifestBinEmitSpec {name: "", path: "src/main.osty"}),
+        "\n[bin]\npath = \"src/main.osty\"\n",
+    )
+}
+fn testRenderManifestBinSectionBoth() {
+    testing.assertEq(
+        renderManifestBinSection(ManifestBinEmitSpec {name: "demo", path: "src/main.osty"}),
+        "\n[bin]\nname = \"demo\"\npath = \"src/main.osty\"\n",
+    )
+}
+fn testRenderManifestLibSectionEmpty() {
+    testing.assertEq(renderManifestLibSection(ManifestLibEmitSpec {path: ""}), "")
+}
+fn testRenderManifestLibSection() {
+    testing.assertEq(
+        renderManifestLibSection(ManifestLibEmitSpec {path: "src/lib.osty"}),
+        "\n[lib]\npath = \"src/lib.osty\"\n",
+    )
+}
+fn testRenderManifestWorkspaceSection() {
+    testing.assertEq(
+        renderManifestWorkspaceSection(ManifestWorkspaceEmitSpec {members: ["pkg-a", "pkg-b"]}),
+        "\n[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]\n",
+    )
+}
+fn testRenderManifestWorkspaceSectionEmptyMembers() {
+    // Empty members still emits the section — matches the historical
+    // Go output for a present-but-empty workspace.
+    testing.assertEq(
+        renderManifestWorkspaceSection(ManifestWorkspaceEmitSpec {members: []}),
+        "\n[workspace]\nmembers = []\n",
+    )
+}
+fn testRenderManifestCapabilitiesSection() {
+    testing.assertEq(
+        renderManifestCapabilitiesSection(ManifestCapabilitiesEmitSpec {runtime: true}),
+        "\n[capabilities]\nruntime = true\n",
+    )
+    testing.assertEq(
+        renderManifestCapabilitiesSection(ManifestCapabilitiesEmitSpec {runtime: false}),
+        "\n[capabilities]\nruntime = false\n",
+    )
+}

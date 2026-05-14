@@ -153,3 +153,82 @@ func RenderManifestDepsSection(section string, deps []ManifestDepEmitSpec) strin
 	}
 	return b.String()
 }
+
+// ManifestBinEmitSpec mirrors the host manifest.BinTarget. Empty
+// Name+Path signals "no [bin] section"; the renderer elides the
+// block in that case.
+//
+// Osty: toolchain/manifest_emit.osty:147
+type ManifestBinEmitSpec struct {
+	Name string
+	Path string
+}
+
+// RenderManifestBinSection emits `\n[bin]\n` plus optional name
+// and path lines. Returns "" when both fields are empty so the
+// host can call unconditionally.
+//
+// Osty: toolchain/manifest_emit.osty:156
+func RenderManifestBinSection(bin ManifestBinEmitSpec) string {
+	if bin.Name == "" && bin.Path == "" {
+		return ""
+	}
+	out := "\n[bin]\n"
+	if bin.Name != "" {
+		out += RenderManifestStringField("name", bin.Name)
+	}
+	if bin.Path != "" {
+		out += RenderManifestStringField("path", bin.Path)
+	}
+	return out
+}
+
+// ManifestLibEmitSpec mirrors the host manifest.LibTarget.
+//
+// Osty: toolchain/manifest_emit.osty:171
+type ManifestLibEmitSpec struct {
+	Path string
+}
+
+// RenderManifestLibSection emits `\n[lib]\npath = "..."\n` or the
+// empty string when Path is empty.
+//
+// Osty: toolchain/manifest_emit.osty:176
+func RenderManifestLibSection(lib ManifestLibEmitSpec) string {
+	if lib.Path == "" {
+		return ""
+	}
+	return "\n[lib]\n" + RenderManifestStringField("path", lib.Path)
+}
+
+// ManifestWorkspaceEmitSpec mirrors the host manifest.Workspace.
+//
+// Osty: toolchain/manifest_emit.osty:185
+type ManifestWorkspaceEmitSpec struct {
+	Members []string
+}
+
+// RenderManifestWorkspaceSection emits the [workspace] block;
+// members is always rendered even when empty.
+//
+// Osty: toolchain/manifest_emit.osty:192
+func RenderManifestWorkspaceSection(ws ManifestWorkspaceEmitSpec) string {
+	return "\n[workspace]\n" + RenderManifestStringArrayField("members", ws.Members)
+}
+
+// ManifestCapabilitiesEmitSpec mirrors the host
+// manifest.Capabilities.
+//
+// Osty: toolchain/manifest_emit.osty:199
+type ManifestCapabilitiesEmitSpec struct {
+	Runtime bool
+}
+
+// RenderManifestCapabilitiesSection emits the [capabilities]
+// block. Always emitted by the renderer; the host's nil-check
+// controls presence.
+//
+// Osty: toolchain/manifest_emit.osty:204
+func RenderManifestCapabilitiesSection(caps ManifestCapabilitiesEmitSpec) string {
+	return "\n[capabilities]\n" + RenderManifestBoolField("runtime", caps.Runtime)
+}

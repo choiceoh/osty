@@ -227,3 +227,77 @@ func TestRenderManifestDepsSection(t *testing.T) {
 		}
 	})
 }
+
+func TestRenderManifestBinSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestBinEmitSpec
+		want string
+	}{
+		{"both-empty", ManifestBinEmitSpec{}, ""},
+		{"name-only", ManifestBinEmitSpec{Name: "demo"}, "\n[bin]\nname = \"demo\"\n"},
+		{"path-only", ManifestBinEmitSpec{Path: "src/main.osty"}, "\n[bin]\npath = \"src/main.osty\"\n"},
+		{"both", ManifestBinEmitSpec{Name: "demo", Path: "src/main.osty"}, "\n[bin]\nname = \"demo\"\npath = \"src/main.osty\"\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestBinSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestLibSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestLibEmitSpec
+		want string
+	}{
+		{"empty", ManifestLibEmitSpec{}, ""},
+		{"with-path", ManifestLibEmitSpec{Path: "src/lib.osty"}, "\n[lib]\npath = \"src/lib.osty\"\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestLibSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestWorkspaceSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestWorkspaceEmitSpec
+		want string
+	}{
+		{"two-members", ManifestWorkspaceEmitSpec{Members: []string{"pkg-a", "pkg-b"}}, "\n[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]\n"},
+		{"empty-members", ManifestWorkspaceEmitSpec{}, "\n[workspace]\nmembers = []\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestWorkspaceSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRenderManifestCapabilitiesSection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ManifestCapabilitiesEmitSpec
+		want string
+	}{
+		{"runtime-true", ManifestCapabilitiesEmitSpec{Runtime: true}, "\n[capabilities]\nruntime = true\n"},
+		{"runtime-false", ManifestCapabilitiesEmitSpec{Runtime: false}, "\n[capabilities]\nruntime = false\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RenderManifestCapabilitiesSection(c.in); got != c.want {
+				t.Errorf("=\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
