@@ -1,0 +1,114 @@
+/// Pure compute helpers for `internal/profile` that don't need a
+/// live `manifest.*` struct — just the primitive inputs the
+/// `Config` and `Profile` types hold:
+///
+///   - `optLevelFlags`: the `-gcflags=all=-N -l` / `-gcflags=all=-l`
+///     fixed list that backs a profile's `OptLevel`.
+///   - `expandFeatures`: BFS closure over a feature-name graph
+///     keyed by `Map<String, List<String>>`, with `/`-suffixed
+///     "<dep>/<feat>" tokens passed through opaque.
+///
+/// Mirrored by `internal/runner/profile_features_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// optLevelFlags returns the `-gcflags` argv chunk for an
+/// integer optimisation level. Levels outside {0, 1} return an
+/// empty list — the user's profile-level `GoFlags` takes over for
+/// the default cases.
+///
+///   - level 0 (debug): `-gcflags=all=-N -l` — no optimisation,
+///     no inlining
+///   - level 1 (light): `-gcflags=all=-l` — no inlining
+///   - level 2+: empty (let `GoFlags` handle it)
+pub fn optLevelFlags(level: Int) -> List<String> {
+    if level == 0 {
+        return ["-gcflags=all=-N -l"]
+    }
+    if level == 1 {
+        return ["-gcflags=all=-l"]
+    }
+    []
+}
+/// expandFeatures computes the deterministic transitive closure
+/// of `requested` (and, when `useDefaults` is true, `defaults`)
+/// through the feature graph `features`. The result is sorted by
+/// name for stable downstream consumers.
+///
+/// Feature tokens that contain a `/` (e.g. `serde/derive`) are
+/// **not** recursed through `features` — they're cross-package
+/// references that the package-manager layer interprets later.
+/// They still land in the output set so the resolver sees the
+/// full requested list.
+///
+/// Unknown bare feature names (no entry in `features`) are passed
+/// through unchanged; cross-checking is the resolver's concern.
+pub fn expandFeatures(features: Map<String, List<String>>, defaults: List<String>, requested: List<String>, useDefaults: Bool) -> List<String> {
+    let mut seen: Map<String, Bool> = {:}
+    let mut queue: List<String> = []
+    if useDefaults {
+        for f in defaults {
+            if !seen.containsKey(f) {
+                seen.insert(f, true)
+                queue.push(f)
+            }
+        }
+    }
+    for f in requested {
+        if !seen.containsKey(f) {
+            seen.insert(f, true)
+            queue.push(f)
+        }
+    }
+    let mut visited: Map<String, Bool> = {:}
+    let mut out: List<String> = []
+    let mut head = 0
+    for head < queue.len() {
+        let f = queue[head]
+        head = head + 1
+        if visited.containsKey(f) {
+            continue
+        }
+        visited.insert(f, true)
+        out.push(f)
+        // Cross-package "<dep>/<feat>" refs land in the output but
+        // don't recurse through the local features map.
+        if strings.contains(f, "/") {
+            continue
+        }
+        let children = features.get(f)
+        match children {
+            Some(list) -> {
+                for child in list {
+                    if !seen.containsKey(child) {
+                        seen.insert(child, true)
+                        queue.push(child)
+                    }
+                }
+            },
+            None -> {
+            },
+        }
+    }
+    expandFeaturesSorted(out)
+}
+/// expandFeaturesSorted sorts the closure list in lex order. The
+/// Go side uses `sort.Strings`; the Osty version uses an in-place
+/// insertion sort over the `List<String>` because the standard
+/// library doesn't yet expose a generic sort on `List<T>`.
+fn expandFeaturesSorted(xs: List<String>) -> List<String> {
+    let mut out = xs
+    let n = out.len()
+    let mut i = 1
+    for i < n {
+        let cur = out[i]
+        let mut j = i
+        for j > 0 && out[j - 1] > cur {
+            out[j] = out[j - 1]
+            j = j - 1
+        }
+        out[j] = cur
+        i = i + 1
+    }
+    out
+}
