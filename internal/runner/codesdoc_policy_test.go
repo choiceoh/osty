@@ -120,6 +120,57 @@ func TestCodesdocHeadingPrefixRulesOrder(t *testing.T) {
 	}
 }
 
+func TestRangeSuffix(t *testing.T) {
+	cases := []struct {
+		name    string
+		heading string
+		lo      string
+		hi      string
+		want    string
+	}{
+		{"multiple-codes", "Lexical", "E0001", "E0099", "Lexical (E0001–E0099)"},
+		{"single-code", "Deprecation warning", "W0750", "W0750", "Deprecation warning (W0750)"},
+		{"empty-range", "Lexical", "", "", "Lexical"},
+		{"already-suffixed", "Lexical (E0001-E0099)", "E0100", "E0199", "Lexical (E0001-E0099)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := RangeSuffix(c.heading, c.lo, c.hi); got != c.want {
+				t.Errorf("RangeSuffix(%q, %q, %q) = %q, want %q",
+					c.heading, c.lo, c.hi, got, c.want)
+			}
+		})
+	}
+}
+
+func TestHarvestPhaseFor(t *testing.T) {
+	cases := []struct {
+		family string
+		want   string
+	}{
+		{"FamilyLexical", "resolve"},
+		{"FamilyDeclaration", "resolve"},
+		{"FamilyExpression", "resolve"},
+		{"FamilyTypePattern", "resolve"},
+		{"FamilyAnnotation", "resolve"},
+		{"FamilyResolution", "resolve"},
+		{"FamilyControlFlow", "check"},
+		{"FamilyTypeChecking", "check"},
+		{"FamilyWarning", "check"},
+		{"FamilyLint", "lint"},
+		{"FamilyManifest", "skip"},
+		{"FamilyScaffold", "skip"},
+		{"FamilyUnknown", "skip"},
+		{"", "skip"},
+		{"NotAFamily", "skip"},
+	}
+	for _, c := range cases {
+		if got := HarvestPhaseFor(c.family); got != c.want {
+			t.Errorf("HarvestPhaseFor(%q) = %q, want %q", c.family, got, c.want)
+		}
+	}
+}
+
 func TestOstyEscape(t *testing.T) {
 	cases := []struct {
 		in   string

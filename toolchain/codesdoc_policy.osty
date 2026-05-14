@@ -209,3 +209,77 @@ pub fn familyForHeading(heading: String) -> String {
     }
     ""
 }
+/// rangeSuffix appends an `Exxxx-Eyyyy` (or single `Exxxx`) range
+/// to a phase `heading` when the entries span at least one code.
+/// Empty range (`lo == ""` AND `hi == ""`) returns the heading
+/// unchanged — that's the no-entries path the host caller covers
+/// via `len(entries) == 0`.
+///
+/// Idempotency: if `heading` already carries a `(...)` suffix the
+/// caller's previous pass added, return it untouched. cmd/codesdoc
+/// occasionally re-uses already-suffixed headings via
+/// `stripRangeSuffix`/`familyForHeading` round-trip, and we don't
+/// want a doubled `(E0001-E0099) (E0001)`.
+///
+/// `lo == hi` collapses to the single-code form.
+pub fn rangeSuffix(heading: String, lo: String, hi: String) -> String {
+    if lo == "" && hi == "" {
+        return heading
+    }
+    if strings.contains(heading, "(") {
+        return heading
+    }
+    if lo == hi {
+        return heading + " (" + lo + ")"
+    }
+    heading + " (" + lo + "–" + hi + ")"
+}
+/// harvestPhaseFor maps a DiagnosticFamily variant name (e.g.
+/// `FamilyLexical`) to the self-host pipeline stage that can
+/// observe the diagnostic (`resolve` / `check` / `lint` / `skip`).
+/// Unknown families collapse to `skip` so the harvest runner
+/// silently drops them rather than executing a runner that
+/// doesn't apply.
+///
+/// Manifest/Scaffold codes aren't reachable from a String input
+/// via the current self-host entry points; they're tagged `skip`
+/// here so the harvest runner never tries to execute them.
+pub fn harvestPhaseFor(family: String) -> String {
+    if family == "FamilyLexical" {
+        return "resolve"
+    }
+    if family == "FamilyDeclaration" {
+        return "resolve"
+    }
+    if family == "FamilyExpression" {
+        return "resolve"
+    }
+    if family == "FamilyTypePattern" {
+        return "resolve"
+    }
+    if family == "FamilyAnnotation" {
+        return "resolve"
+    }
+    if family == "FamilyResolution" {
+        return "resolve"
+    }
+    if family == "FamilyControlFlow" {
+        return "check"
+    }
+    if family == "FamilyTypeChecking" {
+        return "check"
+    }
+    if family == "FamilyWarning" {
+        return "check"
+    }
+    if family == "FamilyLint" {
+        return "lint"
+    }
+    if family == "FamilyManifest" {
+        return "skip"
+    }
+    if family == "FamilyScaffold" {
+        return "skip"
+    }
+    "skip"
+}

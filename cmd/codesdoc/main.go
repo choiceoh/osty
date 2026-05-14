@@ -469,21 +469,17 @@ func defaultHeadingFor(code string) string {
 	return runner.DefaultHeadingFor(code)
 }
 
-// rangeSuffix appends an Exxxx–Eyyyy range to the heading if the
-// entries span more than one code.
+// rangeSuffix delegates to toolchain/codesdoc_policy.osty for the
+// suffix policy. The host extracts the low/high code values from
+// the (already-sorted) entry slice and hands them across as
+// primitives.
 func rangeSuffix(heading string, entries []codeEntry) string {
 	if len(entries) == 0 {
 		return heading
 	}
 	lo := entries[0].Value
 	hi := entries[len(entries)-1].Value
-	if strings.Contains(heading, "(") {
-		return heading
-	}
-	if lo == hi {
-		return fmt.Sprintf("%s (%s)", heading, lo)
-	}
-	return fmt.Sprintf("%s (%s–%s)", heading, lo, hi)
+	return runner.RangeSuffix(heading, lo, hi)
 }
 
 // ---- render ----
@@ -627,28 +623,10 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
 
 // ---- harvest render ----
 
-// harvestPhaseForFamily maps the Osty DiagnosticFamily variant name to
-// the self-host pipeline stage that can observe the diagnostic. The
-// Osty-side harvest runner dispatches to selfResolveSource vs
-// frontendCheckSource vs selfLintSource based on this phase string.
-//
-// Manifest/Scaffold codes aren't reachable from a String input via the
-// current self-host entry points, so they're tagged "skip" and the
-// harvest runner never executes them.
-var harvestPhaseForFamily = map[string]string{
-	"FamilyLexical":      "resolve",
-	"FamilyDeclaration":  "resolve",
-	"FamilyExpression":   "resolve",
-	"FamilyTypePattern":  "resolve",
-	"FamilyAnnotation":   "resolve",
-	"FamilyResolution":   "resolve",
-	"FamilyControlFlow":  "check",
-	"FamilyTypeChecking": "check",
-	"FamilyWarning":      "check",
-	"FamilyLint":         "lint",
-	"FamilyManifest":     "skip",
-	"FamilyScaffold":     "skip",
-}
+// harvestPhaseForFamily delegates to toolchain/codesdoc_policy.osty.
+// The Osty-side harvest runner dispatches to selfResolveSource /
+// frontendCheckSource / selfLintSource based on this phase string;
+// the table itself lives in `codesdoc_policy.osty::harvestPhaseFor`.
 
 // unsafeForBootstrapGen reports whether an example string would trip
 // the Go-hosted bootstrap transpiler's lexer when embedded as an Osty
@@ -698,10 +676,7 @@ pub fn diagHarvestCases() -> List<DiagHarvestCase> {
 	first := true
 	for _, g := range doc.Groups {
 		fam := familyForHeading(g.Heading)
-		phase, ok := harvestPhaseForFamily[fam]
-		if !ok {
-			phase = "skip"
-		}
+		phase := runner.HarvestPhaseFor(fam)
 		for _, e := range g.Entries {
 			if e.Doc.Example == "" {
 				continue

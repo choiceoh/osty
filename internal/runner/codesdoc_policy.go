@@ -170,3 +170,51 @@ func FamilyForHeading(heading string) string {
 	}
 	return ""
 }
+
+// RangeSuffix appends an `Exxxx-Eyyyy` (or single `Exxxx`) range
+// to a phase `heading`. Empty range (both lo and hi empty)
+// returns the heading unchanged so the caller's no-entries path
+// is a no-op. If the heading already carries a `(...)` suffix
+// from a prior pass it's left untouched. `lo == hi` collapses to
+// the single-code form.
+//
+// Osty: toolchain/codesdoc_policy.osty:227
+func RangeSuffix(heading, lo, hi string) string {
+	if lo == "" && hi == "" {
+		return heading
+	}
+	if strings.Contains(heading, "(") {
+		return heading
+	}
+	if lo == hi {
+		return heading + " (" + lo + ")"
+	}
+	return heading + " (" + lo + "–" + hi + ")"
+}
+
+// HarvestPhaseFor maps a `DiagnosticFamily` variant name to the
+// self-host pipeline stage that can observe the diagnostic
+// (`resolve` / `check` / `lint` / `skip`). Unknown families
+// collapse to `skip` so the harvest runner silently drops them.
+//
+// Osty: toolchain/codesdoc_policy.osty:253
+func HarvestPhaseFor(family string) string {
+	switch family {
+	case "FamilyLexical",
+		"FamilyDeclaration",
+		"FamilyExpression",
+		"FamilyTypePattern",
+		"FamilyAnnotation",
+		"FamilyResolution":
+		return "resolve"
+	case "FamilyControlFlow",
+		"FamilyTypeChecking",
+		"FamilyWarning":
+		return "check"
+	case "FamilyLint":
+		return "lint"
+	case "FamilyManifest", "FamilyScaffold":
+		return "skip"
+	}
+	return "skip"
+}
