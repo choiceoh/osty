@@ -1,0 +1,73 @@
+use std.testing
+fn testFormatEscapeCommonBackslash() {
+    testing.assertEq(formatEscapeCommon(0x5C), "\\\\")
+}
+fn testFormatEscapeCommonNewline() {
+    testing.assertEq(formatEscapeCommon(0x0A), "\\n")
+}
+fn testFormatEscapeCommonCR() {
+    testing.assertEq(formatEscapeCommon(0x0D), "\\r")
+}
+fn testFormatEscapeCommonTab() {
+    testing.assertEq(formatEscapeCommon(0x09), "\\t")
+}
+fn testFormatEscapeCommonNul() {
+    testing.assertEq(formatEscapeCommon(0), "\\0")
+}
+fn testFormatEscapeCommonOther() {
+    testing.assertEq(formatEscapeCommon(0x41), "")
+    testing.assertEq(formatEscapeCommon(0x7F), "")
+}
+fn testFormatUnicodeEscapeZero() {
+    testing.assertEq(formatUnicodeEscape(0), "\\u\{0\}")
+}
+fn testFormatUnicodeEscapeSingleDigit() {
+    testing.assertEq(formatUnicodeEscape(0xA), "\\u\{A\}")
+}
+fn testFormatUnicodeEscapeTwoDigits() {
+    testing.assertEq(formatUnicodeEscape(0xFF), "\\u\{FF\}")
+}
+fn testFormatUnicodeEscapeFourDigits() {
+    testing.assertEq(formatUnicodeEscape(0xD55C), "\\u\{D55C\}")
+}
+fn testFormatUnicodeEscapeStripsLeadingZeros() {
+    // 0x100 → "100", not "0100".
+    testing.assertEq(formatUnicodeEscape(0x100), "\\u\{100\}")
+}
+fn testFormatEscapeByteForCharSingleQuote() {
+    testing.assertEq(formatEscapeByteForChar(0x27), "\\'")
+}
+fn testFormatEscapeByteForCharBraces() {
+    testing.assertEq(formatEscapeByteForChar(0x7B), "\\\{")
+    testing.assertEq(formatEscapeByteForChar(0x7D), "\\\}")
+}
+fn testFormatEscapeByteForCharCommonEscapes() {
+    testing.assertEq(formatEscapeByteForChar(0x0A), "\\n")
+    testing.assertEq(formatEscapeByteForChar(0x5C), "\\\\")
+}
+fn testFormatEscapeByteForCharPrintableAscii() {
+    testing.assertEq(formatEscapeByteForChar(0x41), "A")
+    testing.assertEq(formatEscapeByteForChar(0x20), " ")
+    testing.assertEq(formatEscapeByteForChar(0x7E), "~")
+}
+fn testFormatEscapeByteForCharLowControl() {
+    testing.assertEq(formatEscapeByteForChar(0x01), "\\x01")
+    testing.assertEq(formatEscapeByteForChar(0x1F), "\\x1F")
+}
+fn testFormatEscapeByteForCharHighByte() {
+    testing.assertEq(formatEscapeByteForChar(0x80), "\\x80")
+    testing.assertEq(formatEscapeByteForChar(0xFF), "\\xFF")
+    testing.assertEq(formatEscapeByteForChar(0x7F), "\\x7F")
+}
+fn testFormatEscapeByteForBytesDoubleQuote() {
+    testing.assertEq(formatEscapeByteForBytes(0x22), "\\\"")
+}
+fn testFormatEscapeByteForBytesSingleQuoteLiteral() {
+    // In bytes context, single quote is NOT escaped.
+    testing.assertEq(formatEscapeByteForBytes(0x27), "\\'")
+}
+fn testFormatEscapeByteForBytesDelegatesPrintable() {
+    testing.assertEq(formatEscapeByteForBytes(0x41), "A")
+    testing.assertEq(formatEscapeByteForBytes(0x0A), "\\n")
+    testing.assertEq(formatEscapeByteForBytes(0xFF), "\\xFF")
+}

@@ -1,0 +1,118 @@
+/// Pure byte/rune escape policy for Osty's source formatter.
+/// Host code in `internal/format/escapes.go` re-emits AST literal
+/// values back to source form; this module decides:
+///
+///   - the five universal escapes (`\\`, `\n`, `\r`, `\t`, `\0`)
+///     that behave the same across Char, Byte, and String literals,
+///   - how a rune renders as `\u{HEX}` (uppercase, no leading
+///     zeros — matches `strconv.Quote`'s `\u`-style output but
+///     adapted to Osty's brace form),
+///   - byte-level emission for `b'X'` (Byte) and `b"..."`
+///     (Bytes) literals, including `\xNN` for non-ASCII.
+///
+/// Higher-level char/string escapers (which need `unicode.IsPrint`
+/// for invisible-rune detection) stay in Go for now; this module
+/// just provides the byte-level + universal-escape building blocks.
+///
+/// Mirrored by `internal/runner/format_escape_policy.go`. The
+/// drift test under internal/runner keeps the two in sync — the
+/// Osty file is the source of truth at review time.
+use std.strings as strings
+/// formatEscapeCommon returns the Osty escape for the five runes
+/// (codepoints) that behave the same across Char, Byte, and String
+/// literals, or `""` when `r` needs no shared handling. `r` is
+/// passed as `Int` so the host can call with both `rune` (Char)
+/// and `byte` widened inputs.
+pub fn formatEscapeCommon(r: Int) -> String {
+    if r == 0x5C {
+        return "\\\\"
+    }
+    if r == 0x0A {
+        return "\\n"
+    }
+    if r == 0x0D {
+        return "\\r"
+    }
+    if r == 0x09 {
+        return "\\t"
+    }
+    if r == 0 {
+        return "\\0"
+    }
+    ""
+}
+/// formatUnicodeEscape renders the Osty `\u{HEX}` escape for the
+/// codepoint `r` with uppercase hex and no leading zeros. `r == 0`
+/// emits `\u{0}` (single digit, the empty form is invalid Osty).
+pub fn formatUnicodeEscape(r: Int) -> String {
+    if r == 0 {
+        return "\\u\{0\}"
+    }
+    let mut parts: List<String> = []
+    parts.push("\\u\{")
+    let mut digits = 0
+    let mut x = r
+    for x > 0 {
+        digits = digits + 1
+        x = x >> 4
+    }
+    let mut i = digits - 1
+    for i >= 0 {
+        let nibble = (r >> (4 * i)) & 0xF
+        parts.push(strings.slice(formatHexDigitsUpper, nibble, nibble + 1))
+        i = i - 1
+    }
+    parts.push("\}")
+    strings.join(parts, "")
+}
+/// formatHexDigitsUpper is the ASCII alphabet for uppercase hex
+/// output; indexed 0..15 by `formatUnicodeEscape` and the `\xNN`
+/// branch of `formatEscapeByteForChar`.
+let formatHexDigitsUpper: String = "0123456789ABCDEF"
+/// formatEscapeByteForChar emits one Char-literal-context escape
+/// for the byte `b` (0..255). The Char form preserves `\'` as a
+/// quote escape and uses `\{`/`\}` to prevent interpolation
+/// re-introduction on the next parse pass.
+pub fn formatEscapeByteForChar(b: Int) -> String {
+    if b == 0x27 {
+        return "\\'"
+    }
+    if b == 0x7B {
+        return "\\\{"
+    }
+    if b == 0x7D {
+        return "\\\}"
+    }
+    let common = formatEscapeCommon(b)
+    if common != "" {
+        return common
+    }
+    if b < 0x20 || b > 0x7E {
+        return "\\x" + formatTwoHexUpper(b)
+    }
+    formatByteAsAscii(b)
+}
+/// formatEscapeByteForBytes emits one bytes-literal-context
+/// escape. Identical to `formatEscapeByteForChar` except `"` is
+/// escaped (bytes literals are double-quoted) instead of `'`.
+pub fn formatEscapeByteForBytes(b: Int) -> String {
+    if b == 0x22 {
+        return "\\\""
+    }
+    formatEscapeByteForChar(b)
+}
+/// formatTwoHexUpper renders the byte value `b` (0..255) as
+/// exactly two uppercase hex digits, the form Osty's `\xNN`
+/// escape uses.
+fn formatTwoHexUpper(b: Int) -> String {
+    let hi = (b >> 4) & 0xF
+    let lo = b & 0xF
+    strings.slice(formatHexDigitsUpper, hi, hi + 1) + strings.slice(formatHexDigitsUpper, lo, lo + 1)
+}
+/// formatByteAsAscii lifts a single printable ASCII byte (0x20-0x7E
+/// excluding the escapes already handled) into its 1-character
+/// String form. Used only after callers have checked `0x20 <= b <=
+/// 0x7E`; non-ASCII bytes would split a UTF-8 sequence.
+fn formatByteAsAscii(b: Int) -> String {
+    b.toChar().toString()
+}
