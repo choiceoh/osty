@@ -159,8 +159,16 @@ fn trimExampleBlock(lines: List<String>) -> String {
         if strings.trimSpace(l) == "" {
             continue
         }
-        let leadingTrimmed = strings.trimStartChars(l, " ")
-        let count = l.len() - leadingTrimmed.len()
+        // Count leading ASCII spaces directly from the byte view —
+        // strings.trimStartChars allocates a new String per line just
+        // to measure a prefix length, which is wasteful for example
+        // blocks of any size.
+        let lbs = l.bytes()
+        let lbn = lbs.len()
+        let mut count = 0
+        for count < lbn && lbs[count].toInt() == 0x20 {
+            count = count + 1
+        }
         if minIndent < 0 || count < minIndent {
             minIndent = count
         }
