@@ -1,0 +1,102 @@
+use std.testing
+fn testParseTripleSimple() {
+    let r = parseTriple("x86_64-linux")
+    testing.assert(r.ok)
+    testing.assertEq(r.arch, "x86_64")
+    testing.assertEq(r.os, "linux")
+}
+fn testParseTripleKeepsInternalDashes() {
+    let r = parseTriple("x86_64-apple-darwin")
+    testing.assert(r.ok)
+    testing.assertEq(r.arch, "x86_64")
+    testing.assertEq(r.os, "apple-darwin")
+}
+fn testParseTripleRejectsMissingDash() {
+    let r = parseTriple("x86_64")
+    testing.assert(!(r.ok))
+    testing.assertEq(r.arch, "")
+    testing.assertEq(r.os, "")
+}
+fn testParseTripleRejectsEmptyArch() {
+    let r = parseTriple("-linux")
+    testing.assert(!(r.ok))
+}
+fn testParseTripleRejectsEmptyOS() {
+    let r = parseTriple("x86_64-")
+    testing.assert(!(r.ok))
+}
+fn testParseTripleRejectsEmpty() {
+    let r = parseTriple("")
+    testing.assert(!(r.ok))
+}
+fn testReadFeaturePragmaLineComment() {
+    let src = "// @feature: a, b\nlet x = 1\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 2)
+    testing.assertEq(features[0], "a")
+    testing.assertEq(features[1], "b")
+}
+fn testReadFeaturePragmaTightComment() {
+    let src = "//@feature: foo bar\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 2)
+    testing.assertEq(features[0], "foo")
+    testing.assertEq(features[1], "bar")
+}
+fn testReadFeaturePragmaSkipsBlankAndCommentLines() {
+    let src = "\n// preamble comment\n// @feature: x\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 1)
+    testing.assertEq(features[0], "x")
+}
+fn testReadFeaturePragmaStopsAtFirstCode() {
+    let src = "let x = 1\n// @feature: ignored\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 0)
+}
+fn testReadFeaturePragmaNoPragmaReturnsEmpty() {
+    let src = "let x = 1\nlet y = 2\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 0)
+}
+fn testReadFeaturePragmaMixedSeparators() {
+    let src = "// @feature: a, b c\td\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 4)
+    testing.assertEq(features[0], "a")
+    testing.assertEq(features[1], "b")
+    testing.assertEq(features[2], "c")
+    testing.assertEq(features[3], "d")
+}
+fn testParsePragmaFeatureListCommaOnly() {
+    let r = parsePragmaFeatureList("a,b,c")
+    testing.assertEq(r.len(), 3)
+    testing.assertEq(r[0], "a")
+}
+fn testParsePragmaFeatureListSpaceOnly() {
+    let r = parsePragmaFeatureList("a b c")
+    testing.assertEq(r.len(), 3)
+    testing.assertEq(r[1], "b")
+}
+fn testParsePragmaFeatureListTabSeparator() {
+    let r = parsePragmaFeatureList("a\tb\tc")
+    testing.assertEq(r.len(), 3)
+}
+fn testParsePragmaFeatureListDropsEmpty() {
+    let r = parsePragmaFeatureList("a,,b , c")
+    testing.assertEq(r.len(), 3)
+    testing.assertEq(r[0], "a")
+    testing.assertEq(r[1], "b")
+    testing.assertEq(r[2], "c")
+}
+fn testParsePragmaFeatureListEmpty() {
+    let r = parsePragmaFeatureList("")
+    testing.assertEq(r.len(), 0)
+}
+fn testReadFeaturePragmaCRLFLine() {
+    let src = "// @feature: a\r, b\r\n"
+    let features = readFeaturePragma(src)
+    testing.assertEq(features.len(), 2)
+    testing.assertEq(features[0], "a")
+    testing.assertEq(features[1], "b")
+}
