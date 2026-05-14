@@ -8,6 +8,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
@@ -298,45 +299,8 @@ func (p *printer) rawString(s string) { p.buf.WriteString(s) }
 // finalize walks the formatted buffer once, producing the final bytes:
 // trailing whitespace on each line is stripped, runs of blank lines
 // collapse to a single blank, leading blank lines are removed, and the
-// output ends with exactly one newline. A single pass avoids the two
-// full-buffer copies that a bytes.Split-based approach would require.
+// output ends with exactly one newline. Policy lives in
+// toolchain/format_policy.osty; this wrapper just delegates.
 func finalize(in []byte) []byte {
-	out := bytes.Buffer{}
-	out.Grow(len(in) + 1)
-	lineStart := 0
-	prevBlank := false
-	leading := true
-	writeLine := func(line []byte) {
-		// Trim trailing spaces/tabs.
-		end := len(line)
-		for end > 0 && (line[end-1] == ' ' || line[end-1] == '\t') {
-			end--
-		}
-		blank := end == 0
-		if blank && (leading || prevBlank) {
-			return
-		}
-		leading = false
-		out.Write(line[:end])
-		out.WriteByte('\n')
-		prevBlank = blank
-	}
-	for i := 0; i < len(in); i++ {
-		if in[i] == '\n' {
-			writeLine(in[lineStart:i])
-			lineStart = i + 1
-		}
-	}
-	if lineStart < len(in) {
-		writeLine(in[lineStart:])
-	}
-	b := out.Bytes()
-	// Drop any trailing blank line(s) but keep exactly one final newline.
-	for len(b) >= 2 && b[len(b)-1] == '\n' && b[len(b)-2] == '\n' {
-		b = b[:len(b)-1]
-	}
-	if len(b) == 0 || b[len(b)-1] != '\n' {
-		b = append(b, '\n')
-	}
-	return b
+	return runner.FinalizeFormatted(in)
 }

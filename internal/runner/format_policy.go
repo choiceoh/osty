@@ -96,3 +96,53 @@ func ShouldBreakChain(baseEndLine int, segs []ChainSegLines) bool {
 	}
 	return false
 }
+
+// FinalizeFormatted normalises the formatter's raw output into
+// the canonical on-disk shape:
+//
+//   - Every line has its trailing ASCII space (0x20) and tab
+//     (0x09) bytes stripped.
+//   - Consecutive blank lines collapse to a single blank.
+//   - Leading blank lines are removed.
+//   - Output ends with exactly one newline byte.
+//
+// Non-ASCII content and intra-line whitespace are preserved
+// byte-for-byte.
+//
+// Osty: toolchain/format_policy.osty:130
+func FinalizeFormatted(in []byte) []byte {
+	out := make([]byte, 0, len(in)+1)
+	lineStart := 0
+	prevBlank := false
+	leading := true
+	writeLine := func(line []byte) {
+		end := len(line)
+		for end > 0 && (line[end-1] == ' ' || line[end-1] == '\t') {
+			end--
+		}
+		blank := end == 0
+		if blank && (leading || prevBlank) {
+			return
+		}
+		leading = false
+		out = append(out, line[:end]...)
+		out = append(out, '\n')
+		prevBlank = blank
+	}
+	for i := 0; i < len(in); i++ {
+		if in[i] == '\n' {
+			writeLine(in[lineStart:i])
+			lineStart = i + 1
+		}
+	}
+	if lineStart < len(in) {
+		writeLine(in[lineStart:])
+	}
+	for len(out) >= 2 && out[len(out)-1] == '\n' && out[len(out)-2] == '\n' {
+		out = out[:len(out)-1]
+	}
+	if len(out) == 0 || out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	return out
+}

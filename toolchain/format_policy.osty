@@ -14,6 +14,7 @@
 /// Mirrored by `internal/runner/format_policy.go`. The drift test
 /// under internal/runner keeps the two in sync — the Osty file is
 /// the source of truth at review time.
+use std.bytes as bytes
 use std.strings as strings
 /// CSurfaceLib is the outcome of inspecting a FFI runtime path
 /// for the `runtime.cabi.<lib>` sugar. `ok == false` leaves `lib`
@@ -112,4 +113,83 @@ pub fn shouldBreakChain(baseEndLine: Int, segs: List<ChainSegLines>) -> Bool {
         prev = s.endLine
     }
     false
+}
+/// finalizeFormatted normalises the formatter's raw output into
+/// the canonical on-disk shape:
+///
+///   - Every line has its trailing ASCII space (0x20) and tab
+///     (0x09) bytes stripped.
+///   - Consecutive blank lines collapse to a single blank.
+///   - Leading blank lines (before any non-blank line) are
+///     removed entirely.
+///   - The output ends with exactly one newline byte.
+///
+/// Non-ASCII characters and intra-line whitespace are preserved
+/// byte-for-byte. The function is the formatter's last pass
+/// before write — host code in `internal/format` produces the
+/// `strings.Builder`-style raw output, then hands the bytes here
+/// for normalisation.
+pub fn finalizeFormatted(input: String) -> String {
+    let bs = input.bytes()
+    let n = bs.len()
+    let mut out: List<Byte> = []
+    let mut lineStart = 0
+    let mut prevBlank = false
+    let mut leading = true
+    let mut i = 0
+    for i < n {
+        if bs[i].toInt() == 0x0A {
+            let result = formatPolicyWriteLine(out, bs, lineStart, i, leading, prevBlank)
+            out = result.out
+            leading = result.leading
+            prevBlank = result.prevBlank
+            lineStart = i + 1
+        }
+        i = i + 1
+    }
+    if lineStart < n {
+        let result = formatPolicyWriteLine(out, bs, lineStart, n, leading, prevBlank)
+        out = result.out
+        leading = result.leading
+        prevBlank = result.prevBlank
+    }
+    for out.len() >= 2 && out[out.len() - 1].toInt() == 0x0A && out[out.len() - 2].toInt() == 0x0A {
+        let _ = out.pop()
+    }
+    if out.len() == 0 || out[out.len() - 1].toInt() != 0x0A {
+        out.push(formatPolicyNewlineByte())
+    }
+    let buf = bytes.from(out)
+    bytes.toString(buf).unwrapOr(input)
+}
+struct FinalizeWriteResult {
+    out: List<Byte>,
+    leading: Bool,
+    prevBlank: Bool,
+}
+fn formatPolicyWriteLine(out: List<Byte>, bs: List<Byte>, start: Int, end: Int, leading: Bool, prevBlank: Bool) -> FinalizeWriteResult {
+    let mut e = end
+    for e > start {
+        let b = bs[e - 1].toInt()
+        if b != 0x20 && b != 0x09 {
+            break
+        }
+        e = e - 1
+    }
+    let blank = e == start
+    if blank && (leading || prevBlank) {
+        return FinalizeWriteResult {out: out, leading: leading, prevBlank: prevBlank}
+    }
+    let mut acc = out
+    let mut j = start
+    for j < e {
+        acc.push(bs[j])
+        j = j + 1
+    }
+    acc.push(formatPolicyNewlineByte())
+    FinalizeWriteResult {out: acc, leading: false, prevBlank: blank}
+}
+fn formatPolicyNewlineByte() -> Byte {
+    let n: Int = 0x0A
+    n.toByte()
 }
