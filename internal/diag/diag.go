@@ -32,6 +32,15 @@ const (
 	Note
 )
 
+// Compile-time guard: the Severity iota MUST match the int
+// constants the runner snapshot (toolchain/diag_render.osty)
+// uses. A future reorder of the iota declaration above would
+// silently desync the two sources of truth without this; the
+// array length check forces a build failure instead.
+var _ = [1]struct{}{}[int(Error)-runner.DiagSeverityError]
+var _ = [1]struct{}{}[int(Warning)-runner.DiagSeverityWarning]
+var _ = [1]struct{}{}[int(Note)-runner.DiagSeverityNote]
+
 func (s Severity) String() string {
 	return runner.DiagSeverityString(int(s))
 }
