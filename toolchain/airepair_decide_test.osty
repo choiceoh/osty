@@ -64,3 +64,33 @@ fn testRepairedChangedCounts() {
     testing.assert(repairedChanged(0, 1))
     testing.assert(repairedChanged(5, 3))
 }
+fn testCompareFrontEndAssistCrossStageTradeIsNeutral() {
+    // Parse and total errors stay equal; resolve and check trade
+    // places (resolve down 1, check up 1). The front-end scorer
+    // collapses the three stages into a single total + a parse
+    // tiebreaker, so cross-stage trades MUST score neutral.
+    let before = stats(1, 2, 1, 4, 0)
+    let after = stats(1, 1, 2, 4, 0)
+    testing.assertEq(compareFrontEndAssist(before, after), 0)
+}
+fn testCompareAutoAssistWarningOnlyImproved() {
+    // All stage errors equal; only totalWarnings drops.
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 2)
+    testing.assertEq(compareAutoAssist(before, after), 1)
+}
+fn testCompareAutoAssistWarningOnlyRegressed() {
+    let before = stats(1, 1, 1, 3, 2)
+    let after = stats(1, 1, 1, 3, 5)
+    testing.assertEq(compareAutoAssist(before, after), -1)
+}
+fn testCompareFrontEndAssistWarningOnlyImproved() {
+    let before = stats(1, 1, 1, 3, 5)
+    let after = stats(1, 1, 1, 3, 2)
+    testing.assertEq(compareFrontEndAssist(before, after), 1)
+}
+fn testCompareFrontEndAssistWarningOnlyRegressed() {
+    let before = stats(1, 1, 1, 3, 2)
+    let after = stats(1, 1, 1, 3, 5)
+    testing.assertEq(compareFrontEndAssist(before, after), -1)
+}

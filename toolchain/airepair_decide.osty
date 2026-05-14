@@ -19,9 +19,11 @@ pub struct ProbeStageStats {
 }
 /// ProbeStats is the per-source pipeline snapshot the accept/reject
 /// scorers compare. Field shapes match the host's `ProbeStats`.
-/// `totalErrors` and `totalWarnings` are pre-computed sums across
-/// the three stages plus any cross-cutting diagnostics — callers
-/// don't recompute them inside the scorers.
+/// `totalErrors` and `totalWarnings` are pre-computed sums of the
+/// three stage counts (parse + resolve + check) — no cross-cutting
+/// diagnostics are folded in, so `compareAutoAssist`'s deliberate
+/// silence on `totalErrors` keeps the same observational power as
+/// the stage-by-stage check.
 pub struct ProbeStats {
     pub parse: ProbeStageStats,
     pub resolve: ProbeStageStats,

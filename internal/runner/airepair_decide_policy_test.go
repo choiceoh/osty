@@ -44,6 +44,8 @@ func TestCompareAutoAssist(t *testing.T) {
 		{"check-stage-valued", mkStats(0, 0, 5, 5, 0), mkStats(0, 0, 2, 2, 0), 1},
 		{"resolve-stage-valued", mkStats(0, 3, 0, 3, 0), mkStats(0, 1, 0, 1, 0), 1},
 		{"parse-regression-dominates", mkStats(1, 5, 5, 11, 0), mkStats(2, 0, 0, 2, 0), -1},
+		{"warning-only-improved", mkStats(1, 1, 1, 3, 5), mkStats(1, 1, 1, 3, 2), 1},
+		{"warning-only-regressed", mkStats(1, 1, 1, 3, 2), mkStats(1, 1, 1, 3, 5), -1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -63,6 +65,11 @@ func TestCompareFrontEndAssist(t *testing.T) {
 	}{
 		{"by-total", mkStats(2, 2, 2, 6, 0), mkStats(3, 1, 1, 5, 0), 1},
 		{"parse-tiebreaker", mkStats(3, 1, 1, 5, 0), mkStats(1, 3, 1, 5, 0), 1},
+		// Parse + totals equal, resolve↔check trade places → neutral
+		// because the front-end scorer aggregates the stages.
+		{"cross-stage-trade-neutral", mkStats(1, 2, 1, 4, 0), mkStats(1, 1, 2, 4, 0), 0},
+		{"warning-only-improved", mkStats(1, 1, 1, 3, 5), mkStats(1, 1, 1, 3, 2), 1},
+		{"warning-only-regressed", mkStats(1, 1, 1, 3, 2), mkStats(1, 1, 1, 3, 5), -1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
