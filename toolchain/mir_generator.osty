@@ -17538,14 +17538,17 @@ fn mirEmitCallInstr(func: MirFunction, instr: MirInstr) -> String {
         "@" + instr.calleeSymbol
     }
     if instr.hasDest {
-        if mirPlaceHasProjections(instr.dest) {
-            return "  ; TODO Phase 1f call-into-projection dest\n"
-        }
-        let dest = mirEmitLocalRegName(instr.dest.local)
         let retTy = mirEmitCallReturnType(func, instr)
         if retTy == "void" {
             return mirEmitCallStmtLine(calleeText, argList)
         }
+        if mirPlaceHasProjections(instr.dest) {
+            let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".calltmp"
+            let mut out = mirEmitCallValueLine(tmpReg, retTy, calleeText, argList)
+            out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, retTy)
+            return out
+        }
+        let dest = mirEmitLocalRegName(instr.dest.local)
         return mirEmitCallValueLine(dest, retTy, calleeText, argList)
     }
     mirEmitCallStmtLine(calleeText, argList)
@@ -17784,13 +17787,22 @@ fn mirEmitToStringSymbol(typeName: String) -> String {
     if typeName == "Int" || typeName == "Int64" || typeName == "UInt64" {
         return "osty_rt_int_to_string"
     }
+    if typeName == "Int8" || typeName == "Int16" || typeName == "Int32" {
+        return "osty_rt_int_to_string"
+    }
+    if typeName == "UInt8" || typeName == "UInt16" || typeName == "UInt32" {
+        return "osty_rt_int_to_string"
+    }
     if typeName == "Bool" {
         return "osty_rt_bool_to_string"
     }
     if typeName == "Char" {
         return "osty_rt_char_to_string"
     }
-    if typeName == "Float" || typeName == "Float64" {
+    if typeName == "Byte" {
+        return "osty_rt_byte_to_string"
+    }
+    if typeName == "Float" || typeName == "Float64" || typeName == "Float32" {
         return "osty_rt_float_to_string"
     }
     ""
@@ -18550,18 +18562,24 @@ fn mirEmitListGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO list.get expects 2 args\n"
     }
-    if instr.hasDest == false || mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO list.get without simple dest\n"
+    if instr.hasDest == false {
+        return "  ; TODO list.get without dest\n"
     }
     let listText = mirEmitOperand(instr.args[0])
     let idxText = mirEmitOperand(instr.args[1])
-    let dest = mirEmitLocalRegName(instr.dest.local)
     let destType = func.locals[instr.dest.local].typ
     let destLLVM = mirEmitParamType(func, instr.dest.local)
     let getSym = mirEmitListGetSymbolForType(destType, destLLVM)
     if getSym == "" {
         return "  ; TODO Phase 1j list_get for dest type \"" + destLLVM + "\"\n"
     }
+    if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".gettmp"
+        let mut out = "  " + tmpReg + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
+        out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, destLLVM)
+        return out
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
     "  " + dest + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
 }
 /// mirEmitStringPredicateIntrinsic lowers `s.<pred>(other)` as
@@ -18573,11 +18591,17 @@ fn mirEmitStringPredicateIntrinsic(func: MirFunction, instr: MirInstr, runtimeSy
     if instr.args.len() != 2 {
         return "  ; TODO string predicate expects 2 args\n"
     }
-    if instr.hasDest == false || mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO string predicate without simple dest\n"
+    if instr.hasDest == false {
+        return "  ; TODO string predicate without dest\n"
     }
     let lhs = mirEmitOperand(instr.args[0])
     let rhs = mirEmitOperand(instr.args[1])
+    if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".predtmp"
+        let mut out = "  " + tmpReg + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
+        out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, "i1")
+        return out
+    }
     let dest = mirEmitLocalRegName(instr.dest.local)
     "  " + dest + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
@@ -19183,7 +19207,11 @@ fn mirEmitContainerLenIntrinsic(func: MirFunction, instr: MirInstr, sym: String)
         return "  ; TODO container len intrinsic without dest\n"
     }
     if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO len intrinsic into projected dest\n"
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".lentmp"
+        let arg = mirEmitOperand(instr.args[0])
+        let mut out = "  " + tmpReg + " = call i64 @" + sym + "(ptr " + arg + ")\n"
+        out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, "i64")
+        return out
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     let arg = mirEmitOperand(instr.args[0])
@@ -19520,10 +19548,6 @@ fn mirEmitListIndexOfIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, i
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO list indexOf intrinsic\n"
     }
-    if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO list indexOf into projected dest\n"
-    }
-    let dest = mirEmitLocalRegName(instr.dest.local)
     let optLLVM = mirEmitParamType(func, instr.dest.local)
     if mirStringStartsWith(optLLVM, "\{") == false {
         return "  ; TODO list indexOf dest type \"" + optLLVM + "\"\n"
@@ -19582,13 +19606,19 @@ fn mirEmitListIndexOfIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, i
     out = out + mirEmitOptionNoneToSlotLines(base + ".idxmiss", optLLVM, resultSlot)
     out = out + "  br label %" + doneLabel + "\n"
     out = out + mirLabelLine(doneLabel)
-    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+    let loadDest = if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".idxtmp"
+        let loadLine = "  " + tmpReg + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+        return out + loadLine + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, optLLVM)
+    } else {
+        mirEmitLocalRegName(instr.dest.local)
+    }
+    out + "  " + loadDest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
 fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool, popAfterRead: Bool) -> String {
-    if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO list option probe into projected dest\n"
+    if instr.hasDest == false {
+        return "  ; TODO list option probe without dest\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
     let optLLVM = mirEmitParamType(func, instr.dest.local)
     if mirStringStartsWith(optLLVM, "\{") == false {
         return "  ; TODO list option probe dest type \"" + optLLVM + "\"\n"
@@ -19632,7 +19662,14 @@ fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     out = out + mirEmitOptionSomeToSlotLines(base + ".some", optLLVM, elemLLVM, elemReg, resultSlot)
     out = out + "  br label %" + doneLabel + "\n"
     out = out + mirLabelLine(doneLabel)
-    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+    let loadDest = if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".probetmp"
+        let loadLine = "  " + tmpReg + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+        return out + loadLine + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, optLLVM)
+    } else {
+        mirEmitLocalRegName(instr.dest.local)
+    }
+    out + "  " + loadDest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
 fn mirEmitListSortedIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -20418,10 +20455,6 @@ fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, inst
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO bytes get\n"
     }
-    if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO bytes get into projected dest\n"
-    }
-    let dest = mirEmitLocalRegName(instr.dest.local)
     let optLLVM = mirEmitParamType(func, instr.dest.local)
     if mirStringStartsWith(optLLVM, "\{") == false {
         return "  ; TODO bytes get dest type \"" + optLLVM + "\"\n"
@@ -20452,7 +20485,14 @@ fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, inst
     out = out + mirEmitOptionNoneToSlotLines(base + ".none", optLLVM, resultSlot)
     out = out + "  br label %" + doneLabel + "\n"
     out = out + mirLabelLine(doneLabel)
-    out + "  " + dest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+    let loadDest = if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".bytesgettmp"
+        let loadLine = "  " + tmpReg + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
+        return out + loadLine + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, optLLVM)
+    } else {
+        mirEmitLocalRegName(instr.dest.local)
+    }
+    out + "  " + loadDest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
 fn mirEmitBytesIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
@@ -20612,22 +20652,18 @@ fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO algebraic unwrap intrinsic\n"
     }
-    if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO algebraic unwrap into projected dest\n"
-    }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let value = mirEmitOperand(instr.args[0])
-    let aggTy = mirEmitOperandLLVMType(instr.args[0])
     let destLLVM = mirEmitParamType(func, instr.dest.local)
     if destLLVM == "void" {
         return "  ; TODO algebraic unwrap for dest type \"" + destLLVM + "\"\n"
     }
+    let value = mirEmitOperand(instr.args[0])
+    let aggTy = mirEmitOperandLLVMType(instr.args[0])
     let base = mirEmitFreshTempName(blockId, instrIdx)
     let disc = base + ".disc"
     let isAbsent = base + ".absent"
     let absentLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrap.absent")
     let presentLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "algebraic.unwrap.present")
-    let raw = dest + ".raw"
+    let raw = base + ".raw"
     let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
     out = out + "  " + isAbsent + " = icmp eq i64 " + disc + ", " + absentTag + "\n"
     out = out + "  br i1 " + isAbsent + ", label %" + absentLabel + ", label %" + presentLabel + "\n"
@@ -20636,6 +20672,16 @@ fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     out = out + "  unreachable\n"
     out = out + mirLabelLine(presentLabel)
     out = out + "  " + raw + " = extractvalue " + aggTy + " " + value + ", 1\n"
+    if mirPlaceHasProjections(instr.dest) {
+        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".unwraptmp"
+        let finalLine = if destLLVM == "i64" {
+            "  " + tmpReg + " = add i64 0, " + raw + "\n"
+        } else {
+            mirEmitNarrowPayloadLine(tmpReg, raw, destLLVM)
+        }
+        return out + finalLine + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, destLLVM)
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
     if destLLVM == "i64" {
         return out + "  " + dest + " = add i64 0, " + raw + "\n"
     }
@@ -21267,4 +21313,126 @@ fn mirEmitMultiStepDerefWrite(instr: MirInstr) -> String {
     out = out + mirEmitRValue(valueDest, instr.src)
     let valueTy = mirEmitRValueLLVMType(instr.src)
     out + "  store " + valueTy + " " + valueDest + ", ptr " + prev + "\n"
+}
+/// mirEmitStoreIntoProjectedPlace writes a pre-computed register value
+/// into a projected place.  Reuses the same extractvalue / insertvalue
+/// / list_set / store patterns as the assign path but takes a register
+/// name and LLVM type instead of an instr.src rvalue.  Used by
+/// call-into-projection and intrinsic-into-projection lowering.
+fn mirEmitStoreIntoProjectedPlace(place: MirPlace, valueReg: String, valueTy: String) -> String {
+    let n = place.projections.len()
+    if n == 0 {
+        return ""
+    }
+    let baseReg = mirEmitLocalRegName(place.local)
+    if n == 1 {
+        let proj = place.projections[0]
+        if proj.kind == MirProjField || proj.kind == MirProjTuple {
+            return "  " + baseReg + " = insertvalue \{ i64, i64 \} " + baseReg + ", " + valueTy + " " + valueReg + ", " + mirGenIntToString(proj.index) + "\n"
+        }
+        if proj.kind == MirProjIndex {
+            let idxOp = if proj.indexLocal >= 0 {
+                mirEmitLocalRegName(proj.indexLocal)
+            } else {
+                mirGenIntToString(proj.indexConst)
+            }
+            let setSym = mirEmitListSetSymbolForType(proj.typ, valueTy)
+            if setSym == "" {
+                return "  ; TODO list_set for elem type \"" + valueTy + "\" into projected place\n"
+            }
+            return "  call void @" + setSym + "(ptr " + baseReg + ", i64 " + idxOp + ", " + valueTy + " " + valueReg + ")\n"
+        }
+        if proj.kind == MirProjDeref {
+            return "  store " + valueTy + " " + valueReg + ", ptr " + baseReg + "\n"
+        }
+        return "  ; TODO write through 1-step " + mirProjectionKindName(proj.kind) + " into projected place\n"
+    }
+    let lastIdx = n - 1
+    let mut k = 0
+    for proj in place.projections {
+        if k < lastIdx && proj.kind != MirProjField && proj.kind != MirProjTuple {
+            return "  ; TODO multi-step write with non-Field intermediate " + mirProjectionKindName(proj.kind) + "\n"
+        }
+        k = k + 1
+    }
+    let lastProj = place.projections[lastIdx]
+    if lastProj.kind == MirProjIndex {
+        let mut out = ""
+        let mut prev = baseReg
+        let mut i = 0
+        for proj in place.projections {
+            if i == lastIdx {
+                i = i + 1
+                continue
+            }
+            let target = baseReg + ".pr" + mirGenIntToString(i)
+            out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+            prev = target
+            i = i + 1
+        }
+        let idxOp = if lastProj.indexLocal >= 0 {
+            mirEmitLocalRegName(lastProj.indexLocal)
+        } else {
+            mirGenIntToString(lastProj.indexConst)
+        }
+        let setSym = mirEmitListSetSymbolForType(lastProj.typ, valueTy)
+        if setSym == "" {
+            return out + "  ; TODO list_set for elem type \"" + valueTy + "\" into projected place\n"
+        }
+        return out + "  call void @" + setSym + "(ptr " + prev + ", i64 " + idxOp + ", " + valueTy + " " + valueReg + ")\n"
+    }
+    if lastProj.kind == MirProjDeref {
+        let mut out = ""
+        let mut prev = baseReg
+        let mut i = 0
+        for proj in place.projections {
+            if i == lastIdx {
+                i = i + 1
+                continue
+            }
+            let target = baseReg + ".pr" + mirGenIntToString(i)
+            out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+            prev = target
+            i = i + 1
+        }
+        return out + "  store " + valueTy + " " + valueReg + ", ptr " + prev + "\n"
+    }
+    if lastProj.kind != MirProjField && lastProj.kind != MirProjTuple {
+        return "  ; TODO multi-step write ending in " + mirProjectionKindName(lastProj.kind) + " into projected place\n"
+    }
+    let mut out = ""
+    let mut prev = baseReg
+    let mut i = 0
+    for proj in place.projections {
+        if i == lastIdx {
+            i = i + 1
+            continue
+        }
+        let target = baseReg + ".pr" + mirGenIntToString(i)
+        out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+        prev = target
+        i = i + 1
+    }
+    let lastFieldIdx = place.projections[lastIdx].index
+    let wb0 = baseReg + ".pw" + mirGenIntToString(lastIdx)
+    out = out + "  " + wb0 + " = insertvalue \{ i64, i64 \} " + prev + ", " + valueTy + " " + valueReg + ", " + mirGenIntToString(lastFieldIdx) + "\n"
+    let mut nested = wb0
+    let mut j = lastIdx - 1
+    for j >= 0 {
+        let outer = if j == 0 {
+            baseReg
+        } else {
+            baseReg + ".pr" + mirGenIntToString(j - 1)
+        }
+        let target = if j == 0 {
+            baseReg
+        } else {
+            baseReg + ".pw" + mirGenIntToString(j)
+        }
+        let outerIdx = place.projections[j].index
+        out = out + "  " + target + " = insertvalue \{ i64, i64 \} " + outer + ", \{ i64, i64 \} " + nested + ", " + mirGenIntToString(outerIdx) + "\n"
+        nested = target
+        j = j - 1
+    }
+    out
 }
