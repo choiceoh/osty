@@ -463,11 +463,3 @@ func FileNeedsFeatures(src []byte, active map[string]bool) (bool, string) {
 	}
 	return true, ""
 }
-
-// parseFeatureList delegates to toolchain/profile_pragma.osty.
-// Note: this is the pragma-side parser (comma + space + tab
-// separators). The CLI `--features=a,b` parser lives in
-// toolchain/profile_flags.osty under the same name.
-func parseFeatureList(s string) []string {
-	return runner.ParsePragmaFeatureList(s)
-}
