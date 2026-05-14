@@ -612,7 +612,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
 			// Fatal: unknown phase heading means generator mapping is
 			// out of date. Fail loud so the missing entry gets added
 			// instead of silently classifying as FamilyUnknown.
-			fmt.Fprintf(os.Stderr, "codesdoc: unknown phase heading %q — add it to headingFamily in cmd/codesdoc/main.go\n", g.Heading)
+			fmt.Fprintf(os.Stderr, "codesdoc: unknown phase heading %q — add it to codesdocHeadingExactFamily in toolchain/codesdoc_policy.osty (mirror in internal/runner/codesdoc_policy.go)\n", g.Heading)
 			os.Exit(1)
 		}
 		fmt.Fprintf(&b, "    // %s\n", g.Heading)
