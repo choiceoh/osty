@@ -23,8 +23,12 @@ func IsLintCode(code string) bool {
 
 // LintMergeStringSlices returns the union of two string slices
 // with dedup. Entries from `a` come first, then entries from `b`
-// that haven't been seen yet. Returns nil when both inputs are
-// empty.
+// that haven't been seen yet.
+//
+// When both inputs are empty the result has `len == 0`; the
+// concrete form (this implementation returns a nil slice; the
+// Osty source returns `[]`) is an implementation detail callers
+// MUST NOT depend on.
 //
 // Osty: toolchain/lint_codes.osty:49
 func LintMergeStringSlices(a, b []string) []string {

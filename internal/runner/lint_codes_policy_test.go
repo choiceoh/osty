@@ -43,6 +43,10 @@ func TestLintMergeStringSlices(t *testing.T) {
 		a, b []string
 		want []string
 	}{
+		// "empty" intentionally uses want=nil but the assertions
+		// below check only len() + element equality, so a future
+		// implementation that returns []string{} would still pass.
+		// The contract is "len == 0"; nil vs empty is unobserved.
 		{"empty", nil, nil, nil},
 		{"a-only", []string{"a", "b"}, nil, []string{"a", "b"}},
 		{"b-only", nil, []string{"x", "y"}, []string{"x", "y"}},

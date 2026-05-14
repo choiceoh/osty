@@ -45,7 +45,9 @@ pub fn isLintCode(code: String) -> Bool {
 /// that haven't been seen yet — used by `Config.Merge` to combine
 /// child + parent Allow/Deny lists with stable order.
 ///
-/// `a == [] && b == []` returns `[]`.
+/// When both inputs are empty the result has `len == 0`; the
+/// concrete form (`[]` vs `nil` slice on the Go snapshot side) is
+/// an implementation detail callers MUST NOT depend on.
 pub fn lintMergeStringSlices(a: List<String>, b: List<String>) -> List<String> {
     if a.len() == 0 && b.len() == 0 {
         return []
