@@ -84,3 +84,37 @@ fn testOstyEscapeMixedNonAsciiAndEscapes() {
     // ASCII metachars in the middle still take the escape path.
     testing.assertEq(ostyEscape("한\\글\"日\{本\}"), "한\\\\글\\\"日\\\{本\\\}")
 }
+fn testFamilyForHeadingExactMatch() {
+    testing.assertEq(familyForHeading("Lexical"), "FamilyLexical")
+    testing.assertEq(familyForHeading("Expressions"), "FamilyExpression")
+    testing.assertEq(familyForHeading("Scaffolding"), "FamilyScaffold")
+}
+fn testFamilyForHeadingStripsRangeSuffix() {
+    testing.assertEq(familyForHeading("Lexical (E0001-E0099)"), "FamilyLexical")
+    testing.assertEq(familyForHeading("Annotations (E0400-E0499)"), "FamilyAnnotation")
+}
+fn testFamilyForHeadingPrefixFallback() {
+    testing.assertEq(familyForHeading("Manifest — TOML syntax."), "FamilyManifest")
+    testing.assertEq(familyForHeading("Lint — naming"), "FamilyLint")
+}
+fn testFamilyForHeadingPrefixOrderMatters() {
+    // "Type checking" prefix wins because it's listed before any
+    // narrower "Type ..." rule would be.
+    testing.assertEq(familyForHeading("Type checking — generic instantiation"), "FamilyTypeChecking")
+}
+fn testFamilyForHeadingUnknownReturnsEmpty() {
+    testing.assertEq(familyForHeading("Wholly Unknown Heading"), "")
+    testing.assertEq(familyForHeading(""), "")
+}
+fn testFamilyForHeadingV06Sections() {
+    testing.assertEq(familyForHeading("v0.6 — Hidden-Dependency-Surface"), "FamilyAnnotation")
+    testing.assertEq(familyForHeading("G36 — Capabilities"), "FamilyTypeChecking")
+    testing.assertEq(familyForHeading("G44 — Publishing"), "FamilyManifest")
+}
+fn testCodesdocHeadingPrefixRulesOrder() {
+    let rules = codesdocHeadingPrefixRules()
+    testing.assertEq(rules.len(), 5)
+    testing.assertEq(rules[0].prefix, "Manifest")
+    testing.assertEq(rules[0].family, "FamilyManifest")
+    testing.assertEq(rules[2].prefix, "Type checking")
+}
