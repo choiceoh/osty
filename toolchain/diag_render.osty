@@ -168,3 +168,20 @@ pub fn diagShortError(code: String, severity: Int, line: Int, column: Int, messa
     }
     code + ": " + head
 }
+/// diagSeverityAnsiColor maps a Severity int to its terminal
+/// ANSI escape sequence — the lead-in code only; callers append
+/// `\x1b[0m` (ansiReset) themselves around the colored text.
+/// Returns the empty string for unknown severities so a stray
+/// value doesn't accidentally tint the rest of the line.
+pub fn diagSeverityAnsiColor(sev: Int) -> String {
+    if sev == diagSeverityError {
+        return "\u{1b}[31m"
+    }
+    if sev == diagSeverityWarning {
+        return "\u{1b}[33m"
+    }
+    if sev == diagSeverityNote {
+        return "\u{1b}[36m"
+    }
+    ""
+}

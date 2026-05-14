@@ -166,3 +166,24 @@ func TestDiagShortError(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagSeverityAnsiColor(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want string
+	}{
+		{"error", DiagSeverityError, "\x1b[31m"},
+		{"warning", DiagSeverityWarning, "\x1b[33m"},
+		{"note", DiagSeverityNote, "\x1b[36m"},
+		{"unknown-99", 99, ""},
+		{"unknown-neg", -1, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DiagSeverityAnsiColor(c.in); got != c.want {
+				t.Errorf("DiagSeverityAnsiColor(%d) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

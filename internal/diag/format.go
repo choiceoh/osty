@@ -117,15 +117,7 @@ func (f *Formatter) col(code, s string) string {
 }
 
 func (f *Formatter) sevColor(sev Severity) string {
-	switch sev {
-	case Error:
-		return ansiRed
-	case Warning:
-		return ansiYellow
-	case Note:
-		return ansiCyan
-	}
-	return ""
+	return runner.DiagSeverityAnsiColor(int(sev))
 }
 
 func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {

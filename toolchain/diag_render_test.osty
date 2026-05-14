@@ -151,3 +151,16 @@ fn testDiagShortErrorNoteSeverity() {
         "E0703: note at 42:1: see also",
     )
 }
+fn testDiagSeverityAnsiColorError() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityError), "\u{1b}[31m")
+}
+fn testDiagSeverityAnsiColorWarning() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityWarning), "\u{1b}[33m")
+}
+fn testDiagSeverityAnsiColorNote() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityNote), "\u{1b}[36m")
+}
+fn testDiagSeverityAnsiColorUnknown() {
+    testing.assertEq(diagSeverityAnsiColor(99), "")
+    testing.assertEq(diagSeverityAnsiColor(-1), "")
+}
