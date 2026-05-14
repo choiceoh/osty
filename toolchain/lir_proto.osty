@@ -2236,7 +2236,7 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
         for instr in bb.instrs {
             lirLowerMirInstr(l, instr)
         }
-        let term = lirLowerMirTerm(l, bb.term, ret)
+        let term = lirLowerMirBlockTerm(l, bb, ret)
         for extra in l.extraBlocks {
             blocks.push(extra)
         }
@@ -2254,6 +2254,40 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
         l.out.functions.push(outFn)
     }
     LirLowerResult {module: l.out, diagnostics: l.diagnostics}
+}
+fn lirLowerMirBlockTerm(l: LirMirFunctionLowerer, bb: MirBasicBlock, ret: LirType) -> LirTerm {
+    if bb.term.kind == MirTermGoto {
+        let mut t = lirBr(lirLabelForMirBlock(l, bb.termTarget))
+        if bb.termLoopBackEdge && lirFnHasLoopHints(l.fn_) {
+            t.loopMDRef = lirNextLoopMD(l, l.fn_)
+        }
+        return t
+    }
+    if bb.term.kind == MirTermBranch {
+        let cond = lirLowerMirOperand(l, bb.termCond, "Bool", lirIntType(1))
+        if cond.typ.llvm != "i1" {
+            lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
+            return lirUnreachable()
+        }
+        let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, bb.termThenBlock), lirLabelForMirBlock(l, bb.termElseBlock))
+        if bb.termLoopBackEdge && lirFnHasLoopHints(l.fn_) {
+            t.loopMDRef = lirNextLoopMD(l, l.fn_)
+        }
+        return t
+    }
+    if bb.term.kind == MirTermSwitchInt {
+        let scrutinee = lirLowerMirOperand(l, bb.termCond, bb.termCond.typ, lirTypeInvalid())
+        if scrutinee.typ.className != LirTypeInt {
+            lirLowerError(l, LirDiagUnsupported, "switch scrutinee requires integer type, got `" + scrutinee.typ.llvm + "`", "term.switch")
+            return lirUnreachable()
+        }
+        let mut cases: List<LirSwitchCase> = []
+        for c in bb.termCases {
+            cases.push(lirSwitchCase(lirIntToString(c.value), lirLabelForMirBlock(l, c.target)))
+        }
+        return lirSwitch(scrutinee.typ, scrutinee.value, lirLabelForMirBlock(l, bb.termTarget), cases)
+    }
+    lirLowerMirTerm(l, bb.term, ret)
 }
 // External / intrinsic MIR functions: emit `declare <ret> @<name>(<params>)`
 // and skip body. These are FFI imports (`use go "..."`), declared

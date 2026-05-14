@@ -1,3 +1,4 @@
+use std.strings as strings
 use std.testing
 fn testFrontendLexerSummarizesCompilerTokens() {
     let summary = frontendLexSummary(r"pub fn add ( value : Int ) -> Int { let answer = 42 }")
@@ -50,6 +51,20 @@ fn testFrontendLexerHandlesBomShebangAndCrLf() {
     testing.assertEq(summary.punctuation, 4)
     testing.assertEq(summary.newlines, 2)
     testing.assertEq(summary.errors, 0)
+}
+fn testFrontendLexerPositionIndexMatchesLegacyScanner() {
+    let source = "a\r\nb\nc"
+    let units = strings.split(source, "")
+    let unitCount = stringUnitCount(source)
+    let positions = frontBuildPositionIndex(units, unitCount)
+    let limit = unitCount + 1
+    for idx in 0..limit {
+        let indexed = frontPositionFromIndex(positions, idx)
+        let scanned = frontPositionAt(units, idx)
+        testing.assertEq(indexed.offset, scanned.offset)
+        testing.assertEq(indexed.line, scanned.line)
+        testing.assertEq(indexed.column, scanned.column)
+    }
 }
 fn testFrontendLexerHandlesBasePrefixesAndExponentFloats() {
     let summary = frontendLexSummary("0xFF 0B101 0o77 3.0e+2 1..10")

@@ -735,7 +735,7 @@ pub fn mirLowerSeedFunction(out: MirFunction, params: List<HirParam>, retT: HirT
         let paramSpan = mirSpanFromHir(p.span)
         let id = mirFunctionNewLocal(out, paramName, paramTypeText, true, paramSpan)
         out.locals[id].isParam = true
-        out.params.push(id)
+        mirFunctionAddParam(out, id)
         idx = idx + 1
     }
     let entry = mirFunctionNewBlock(out, span)
@@ -1288,6 +1288,34 @@ pub fn mirLowerTerminate(bs: MirLowerBodyState, t: MirTerm) {
     }
     mirFunctionTerminate(bs.fn_, bs.cur, t)
 }
+pub fn mirLowerTerminateGoto(bs: MirLowerBodyState, target: Int, span: MirSpan) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirFunctionTerminateGoto(bs.fn_, bs.cur, target, span, false)
+}
+pub fn mirLowerTerminateGotoBackEdge(bs: MirLowerBodyState, target: Int, span: MirSpan) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirFunctionTerminateGoto(bs.fn_, bs.cur, target, span, true)
+}
+pub fn mirLowerTerminateBranch(bs: MirLowerBodyState, cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirFunctionTerminateBranch(bs.fn_, bs.cur, cond, thenB, elseB, span)
+}
+pub fn mirLowerTerminateSwitchInt(bs: MirLowerBodyState, scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirFunctionTerminateSwitchInt(bs.fn_, bs.cur, scrutinee, cases, default, span)
+}
 /// mirLowerSwitchTo installs a new cursor block and returns the
 /// previous id.
 pub fn mirLowerSwitchTo(bs: MirLowerBodyState, id: Int) -> Int {
@@ -1303,7 +1331,7 @@ pub fn mirLowerNewBlock(bs: MirLowerBodyState, span: MirSpan) -> Int {
 /// mirLowerGotoBlock terminates the current block with a goto and
 /// switches the cursor to `target`.
 pub fn mirLowerGotoBlock(bs: MirLowerBodyState, target: Int, span: MirSpan) {
-    mirLowerTerminate(bs, mirGotoTerm(target, span))
+    mirLowerTerminateGoto(bs, target, span)
     bs.cur = target
 }
 // ---- Defer helpers -------------------------------------------------
@@ -2081,7 +2109,7 @@ pub fn mirLowerBreakStmt(bs: MirLowerBodyState, s: HirStmt) {
     let top = bs.loopStack[bs.loopStack.len() - 1]
     mirLowerReplayDefersFromDepth(bs, top.deferDepth, span)
     mirLowerEmitStorageDeadFromDepth(bs, top.scopeDepth)
-    mirLowerTerminate(bs, mirGotoTerm(top.breakBlock, span))
+    mirLowerTerminateGoto(bs, top.breakBlock, span)
 }
 pub fn mirLowerContinueStmt(bs: MirLowerBodyState, s: HirStmt) {
     if bs.loopStack.len() == 0 {
@@ -2092,7 +2120,7 @@ pub fn mirLowerContinueStmt(bs: MirLowerBodyState, s: HirStmt) {
     let top = bs.loopStack[bs.loopStack.len() - 1]
     mirLowerReplayDefersFromDepth(bs, top.deferDepth, span)
     mirLowerEmitStorageDeadFromDepth(bs, top.scopeDepth)
-    mirLowerTerminate(bs, mirGotoTerm(top.continueBlock, span))
+    mirLowerTerminateGoto(bs, top.continueBlock, span)
 }
 // ====================================================================
 // Control flow + assignment statement lowering
@@ -2306,15 +2334,15 @@ pub fn mirLowerIfStmt(bs: MirLowerBodyState, s: HirStmt) {
     let thenBB = mirLowerNewBlock(bs, span)
     let elseBB = mirLowerNewBlock(bs, span)
     let merge = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirBranchTerm(cond, thenBB, elseBB, span))
+    mirLowerTerminateBranch(bs, cond, thenBB, elseBB, span)
     bs.cur = thenBB
     mirLowerIfArm(bs, s.ifThen)
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = elseBB
     if s.ifHasElse {
         mirLowerIfArm(bs, s.ifElse)
     }
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = merge
 }
 // Then arm.
@@ -2356,12 +2384,12 @@ fn mirLowerForInfinite(bs: MirLowerBodyState, s: HirStmt) {
     let header = mirLowerNewBlock(bs, span)
     let body = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
-    mirLowerTerminate(bs, mirGotoTerm(body, span))
+    mirLowerTerminateGoto(bs, body, span)
     bs.cur = body
     mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 fn mirLowerForWhile(bs: MirLowerBodyState, s: HirStmt) {
@@ -2369,17 +2397,17 @@ fn mirLowerForWhile(bs: MirLowerBodyState, s: HirStmt) {
     let header = mirLowerNewBlock(bs, span)
     let body = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
     let cond = if s.forHasCond {
         mirLowerExprAsOperand(bs, s.forCond)
     } else {
         mirOperandConst(mirConstBool(true))
     }
-    mirLowerTerminate(bs, mirBranchTerm(cond, body, exit, span))
+    mirLowerTerminateBranch(bs, cond, body, exit, span)
     bs.cur = body
     mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
@@ -2399,7 +2427,7 @@ fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
     let body = mirLowerNewBlock(bs, span)
     let step = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
     let cmpOp = if s.forInclusive {
         MirBinLeq
@@ -2412,16 +2440,16 @@ fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
     let rv = mirRVBinary(cmpOp, leftOp, rightOp, "Bool")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), rv, span))
     let condOp = mirOperandCopy(mirPlace(cmp), "Bool")
-    mirLowerTerminate(bs, mirBranchTerm(condOp, body, exit, span))
+    mirLowerTerminateBranch(bs, condOp, body, exit, span)
     bs.cur = body
     mirLowerBindName(bs, s.forVar, idx)
     mirLowerForBodyWithFramesStep(bs, s.forBody, step, exit)
-    mirLowerTerminate(bs, mirGotoTerm(step, span))
+    mirLowerTerminateGoto(bs, step, span)
     bs.cur = step
     let oneOp = mirOperandConst(mirConstInt(1, "Int"))
     let stepRV = mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(idx), "Int"), oneOp, "Int")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 // Index + end slots.
@@ -2500,7 +2528,7 @@ fn mirLowerForRangePseudoBinding(bs: MirLowerBodyState, s: HirStmt, rb: MirLower
     let body = mirLowerNewBlock(bs, span)
     let step = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
     let cmpOp = if rb.inclusive {
         MirBinLeq
@@ -2513,16 +2541,16 @@ fn mirLowerForRangePseudoBinding(bs: MirLowerBodyState, s: HirStmt, rb: MirLower
     let rv = mirRVBinary(cmpOp, leftOp, rightOp, "Bool")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), rv, span))
     let condOp = mirOperandCopy(mirPlace(cmp), "Bool")
-    mirLowerTerminate(bs, mirBranchTerm(condOp, body, exit, span))
+    mirLowerTerminateBranch(bs, condOp, body, exit, span)
     bs.cur = body
     mirLowerBindName(bs, s.forVar, idx)
     mirLowerForBodyWithFramesStep(bs, s.forBody, step, exit)
-    mirLowerTerminate(bs, mirGotoTerm(step, span))
+    mirLowerTerminateGoto(bs, step, span)
     bs.cur = step
     let oneOp = mirOperandConst(mirConstInt(1, "Int"))
     let stepRV = mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(idx), "Int"), oneOp, "Int")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 /// mirLowerIsRangeIntOrCharType reports whether `t` is `Range<Int>`
@@ -2566,12 +2594,12 @@ fn mirLowerForInList(bs: MirLowerBodyState, s: HirStmt, iterT: HirType, span: Mi
     let body = mirLowerNewBlock(bs, span)
     let step = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
     let cmp = mirLowerFreshTemp(bs, hirTBool(), span)
     let cmpRV = mirRVBinary(MirBinLt, mirOperandCopy(mirPlace(idx), "Int"), mirOperandCopy(mirPlace(lenLocal), "Int"), "Bool")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), cmpRV, span))
-    mirLowerTerminate(bs, mirBranchTerm(mirOperandCopy(mirPlace(cmp), "Bool"), body, exit, span))
+    mirLowerTerminateBranch(bs, mirOperandCopy(mirPlace(cmp), "Bool"), body, exit, span)
     bs.cur = body
     mirLowerPushScope(bs)
     mirLowerPushDeferScope(bs)
@@ -2582,11 +2610,11 @@ fn mirLowerForInList(bs: MirLowerBodyState, s: HirStmt, iterT: HirType, span: Mi
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(elemLocal), mirRVUse(mirOperandCopy(elemPlace, elemTypeText)), span))
     mirLowerBindForElement(bs, s, elemLocal, elemT, span)
     mirLowerForBodyAlreadyFramed(bs, s.forBody, span)
-    mirLowerTerminate(bs, mirGotoTerm(step, span))
+    mirLowerTerminateGoto(bs, step, span)
     bs.cur = step
     let stepRV = mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(idx), "Int"), mirOperandConst(mirConstInt(1, "Int")), "Int")
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 // Capture iterable once so len/index reads are stable across the loop.
@@ -2604,7 +2632,7 @@ fn mirLowerForInChannel(bs: MirLowerBodyState, s: HirStmt, iterT: HirType, span:
     let body = mirLowerNewBlock(bs, span)
     let step = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminateGoto(bs, header, span)
     bs.cur = header
     let recvLocal = mirLowerNewLocal(bs, "_recv", optT, false, span)
     let mut recvArgs: List<MirOperand> = []
@@ -2614,7 +2642,7 @@ fn mirLowerForInChannel(bs: MirLowerBodyState, s: HirStmt, iterT: HirType, span:
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(disc), mirRVDiscriminant(mirPlace(recvLocal), "Int"), span))
     let mut cases: List<MirSwitchCase> = []
     cases.push(mirSwitchCase(mirLowerSomeTagOf(optT), body, "Some"))
-    mirLowerTerminate(bs, mirSwitchIntTerm(mirOperandCopy(mirPlace(disc), "Int"), cases, exit, span))
+    mirLowerTerminateSwitchInt(bs, mirOperandCopy(mirPlace(disc), "Int"), cases, exit, span)
     bs.cur = body
     mirLowerPushScope(bs)
     mirLowerPushDeferScope(bs)
@@ -2625,9 +2653,9 @@ fn mirLowerForInChannel(bs: MirLowerBodyState, s: HirStmt, iterT: HirType, span:
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(elemLocal), mirRVUse(mirOperandCopy(payload, elemTypeText)), span))
     mirLowerBindForElement(bs, s, elemLocal, elemT, span)
     mirLowerForBodyAlreadyFramed(bs, s.forBody, span)
-    mirLowerTerminate(bs, mirGotoTerm(step, span))
+    mirLowerTerminateGoto(bs, step, span)
     bs.cur = step
-    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+    mirLowerTerminateGotoBackEdge(bs, header, span)
     bs.cur = exit
 }
 fn mirLowerBindForElement(bs: MirLowerBodyState, s: HirStmt, elemLocal: Int, elemT: HirType, span: MirSpan) {
@@ -3174,17 +3202,17 @@ pub fn mirLowerIfExprInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, des
     let thenBB = mirLowerNewBlock(bs, span)
     let elseBB = mirLowerNewBlock(bs, span)
     let merge = mirLowerNewBlock(bs, span)
-    mirLowerTerminate(bs, mirBranchTerm(cond, thenBB, elseBB, span))
+    mirLowerTerminateBranch(bs, cond, thenBB, elseBB, span)
     bs.cur = thenBB
     if e.ifExprThen.len() > 0 {
         mirLowerIfExprArm(bs, e.ifExprThen[0], dest, destT)
     }
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = elseBB
     if e.ifExprElse.len() > 0 {
         mirLowerIfExprArm(bs, e.ifExprElse[0], dest, destT)
     }
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = merge
 }
 // Then arm
@@ -3250,19 +3278,19 @@ pub fn mirLowerCoalesceExprInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlac
     let discOp = mirOperandCopy(mirPlace(disc), "Int")
     let mut cases: List<MirSwitchCase> = []
     cases.push(mirSwitchCase(mirLowerSomeTagOf(leftT), someBB, "Some"))
-    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
+    mirLowerTerminateSwitchInt(bs, discOp, cases, noneBB, span)
     bs.cur = someBB
     let destTypeText = hirTypeString(destT)
     let payloadProj = mirVariantProj(mirLowerSomeTagOf(leftT), "Some", 0, destTypeText)
     let payloadPlace = mirPlaceProject(mirPlace(leftLocal), payloadProj)
     let payloadOp = mirOperandCopy(payloadPlace, destTypeText)
     mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(payloadOp), span))
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = noneBB
     if e.coalesceRight.len() > 0 {
         mirLowerExprIntoPlace(bs, e.coalesceRight[0], dest, destT)
     }
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = merge
     mirLowerPopScope(bs)
 }
@@ -3306,7 +3334,7 @@ fn mirLowerOptionalFieldInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, 
     let discOp = mirOperandCopy(mirPlace(disc), "Int")
     let mut cases: List<MirSwitchCase> = []
     cases.push(mirSwitchCase(mirLowerSomeTagOf(recvT), someBB, "Some"))
-    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
+    mirLowerTerminateSwitchInt(bs, discOp, cases, noneBB, span)
     bs.cur = someBB
     let innerT = if recvT.kind == HirTypeOptional && recvT.optionalInner.len() > 0 {
         recvT.optionalInner[0]
@@ -3327,11 +3355,11 @@ fn mirLowerOptionalFieldInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, 
     someFields.push(fieldOp)
     let someRV = mirRVVariant(mirLowerSomeTagOf(destT), "Some", someFields, hirTypeString(destT))
     mirLowerEmitInstr(bs, mirAssignInstr(dest, someRV, span))
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = noneBB
     let noneRV = mirRVNullary(MirNullaryNone, hirTypeString(destT))
     mirLowerEmitInstr(bs, mirAssignInstr(dest, noneRV, span))
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = merge
 }
 // Some path: project payload → field, wrap as Some(field).
@@ -4094,7 +4122,7 @@ fn mirLowerMatchCore(bs: MirLowerBodyState, scrutinee: HirExpr, arms: List<HirMa
     } else {
         mirLowerNoteIssue(bs.l, "mir_lower: match without decision tree — routing to arm 0")
         if armBlocks.len() > 0 {
-            mirLowerTerminate(bs, mirGotoTerm(armBlocks[0], span))
+            mirLowerTerminateGoto(bs, armBlocks[0], span)
         } else {
             mirLowerTerminate(bs, mirUnreachableTerm(span))
         }
@@ -4117,7 +4145,7 @@ fn mirLowerMatchCore(bs: MirLowerBodyState, scrutinee: HirExpr, arms: List<HirMa
         mirLowerReplayTopFrame(bs, mirSpanFromHir(arm.body.span))
         mirLowerPopDeferScope(bs)
         mirLowerPopScope(bs)
-        mirLowerTerminate(bs, mirGotoTerm(merge, mirSpanFromHir(arm.span)))
+        mirLowerTerminateGoto(bs, merge, mirSpanFromHir(arm.span))
         i = i + 1
     }
     bs.cur = merge
@@ -4280,7 +4308,7 @@ pub fn mirLowerQuestionInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, d
     let okName = mirLowerOkVariantName(xT)
     let mut cases: List<MirSwitchCase> = []
     cases.push(mirSwitchCase(okTag, okBB, okName))
-    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, errBB, span))
+    mirLowerTerminateSwitchInt(bs, discOp, cases, errBB, span)
     bs.cur = errBB
     mirLowerRebuildErrorIntoReturn(bs, tmp, xT, span)
     mirLowerRunDefers(bs, span)
@@ -4397,7 +4425,7 @@ fn mirLowerIfLetVariant(bs: MirLowerBodyState, e: HirExpr, scrutLocal: Int, scru
         0
     }
     cases.push(mirSwitchCase(switchIdx, thenBB, pat.variantName))
-    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, elseBB, span))
+    mirLowerTerminateSwitchInt(bs, discOp, cases, elseBB, span)
     bs.cur = thenBB
     mirLowerPushScope(bs)
     mirLowerPushDeferScope(bs)
@@ -4414,7 +4442,7 @@ fn mirLowerIfLetVariant(bs: MirLowerBodyState, e: HirExpr, scrutLocal: Int, scru
     }
     mirLowerPopDeferScope(bs)
     mirLowerPopScope(bs)
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = elseBB
     if e.ifLetHasElse && e.ifLetElse.len() > 0 {
         let body = e.ifLetElse[0]
@@ -4430,7 +4458,7 @@ fn mirLowerIfLetVariant(bs: MirLowerBodyState, e: HirExpr, scrutLocal: Int, scru
         mirLowerPopDeferScope(bs)
         mirLowerPopScope(bs)
     }
-    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+    mirLowerTerminateGoto(bs, merge, span)
     bs.cur = merge
 }
 // Discriminant + SwitchInt.
@@ -5979,7 +6007,7 @@ pub fn mirLowerClosureRValue(bs: MirLowerBodyState, e: HirExpr, hint: HirType) -
     let envType = mirLowerClosureEnvType()
     let envLocal = mirFunctionNewLocal(lifted, "_env", hirTypeString(envType), false, span)
     lifted.locals[envLocal].isParam = true
-    lifted.params.push(envLocal)
+    mirFunctionAddParam(lifted, envLocal)
     let mut userIdx = 0
     for p in e.closureParams {
         let paramName = if p.name == "" {
@@ -5994,7 +6022,7 @@ pub fn mirLowerClosureRValue(bs: MirLowerBodyState, e: HirExpr, hint: HirType) -
         }
         let id = mirFunctionNewLocal(lifted, paramName, hirTypeString(pt), false, mirSpanFromHir(p.span))
         lifted.locals[id].isParam = true
-        lifted.params.push(id)
+        mirFunctionAddParam(lifted, id)
         userIdx = userIdx + 1
     }
     let entry = mirFunctionNewBlock(lifted, span)
@@ -6213,7 +6241,7 @@ fn mirLowerDecisionLeaf(mc: MirLowerMatchContext, node: HirDecisionNode) {
         mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
         return
     }
-    mirLowerTerminate(mc.bs, mirGotoTerm(mc.armBlocks[idx], mc.span))
+    mirLowerTerminateGoto(mc.bs, mc.armBlocks[idx], mc.span)
 }
 fn mirLowerDecisionBind(mc: MirLowerMatchContext, node: HirDecisionNode) {
     let derivedType = if node.bindHasProj {
@@ -6257,7 +6285,7 @@ fn mirLowerDecisionGuard(mc: MirLowerMatchContext, node: HirDecisionNode) {
     let cond = mirLowerExprAsOperand(mc.bs, node.guardCond[0])
     let thenBB = mirLowerNewBlock(mc.bs, mc.span)
     let elseBB = mirLowerNewBlock(mc.bs, mc.span)
-    mirLowerTerminate(mc.bs, mirBranchTerm(cond, thenBB, elseBB, mc.span))
+    mirLowerTerminateBranch(mc.bs, cond, thenBB, elseBB, mc.span)
     mc.bs.cur = thenBB
     if node.guardThen.len() > 0 {
         mirLowerDecisionTree(mc, node.guardThen[0])
@@ -6305,7 +6333,7 @@ fn mirLowerSwitchVariant(mc: MirLowerMatchContext, node: HirDecisionNode) {
         i = i + 1
     }
     let discOp = mirOperandCopy(mirPlace(disc), "Int")
-    mirLowerTerminate(mc.bs, mirSwitchIntTerm(discOp, cases, defaultBB, mc.span))
+    mirLowerTerminateSwitchInt(mc.bs, discOp, cases, defaultBB, mc.span)
     let mut j = 0
     for c in node.switchCases {
         mc.bs.cur = caseBlocks[j]
@@ -6329,7 +6357,7 @@ fn mirLowerSwitchBool(mc: MirLowerMatchContext, node: HirDecisionNode) {
     let thenBB = mirLowerNewBlock(mc.bs, mc.span)
     let elseBB = mirLowerNewBlock(mc.bs, mc.span)
     let condOp = mirOperandCopy(projPlace, "Bool")
-    mirLowerTerminate(mc.bs, mirBranchTerm(condOp, thenBB, elseBB, mc.span))
+    mirLowerTerminateBranch(mc.bs, condOp, thenBB, elseBB, mc.span)
     let mut trueHandled = false
     let mut falseHandled = false
     for c in node.switchCases {
@@ -6426,7 +6454,7 @@ fn mirLowerSwitchLit(mc: MirLowerMatchContext, node: HirDecisionNode) {
         let cmpRV = mirRVBinary(MirBinEq, lhs, rhs, "Bool")
         mirLowerEmitInstr(mc.bs, mirAssignInstr(mirPlace(cmp), cmpRV, mc.span))
         let cmpOp = mirOperandCopy(mirPlace(cmp), "Bool")
-        mirLowerTerminate(mc.bs, mirBranchTerm(cmpOp, caseBB, next, mc.span))
+        mirLowerTerminateBranch(mc.bs, cmpOp, caseBB, next, mc.span)
         mc.bs.cur = caseBB
         mirLowerDecisionTree(mc, c.body)
         mc.bs.cur = testBB
@@ -6460,7 +6488,7 @@ fn mirLowerSwitchLitInt(mc: MirLowerMatchContext, node: HirDecisionNode, projPla
     }
     let defaultBB = mirLowerNewBlock(mc.bs, mc.span)
     let scrutOp = mirOperandCopy(projPlace, projTypeText)
-    mirLowerTerminate(mc.bs, mirSwitchIntTerm(scrutOp, cases, defaultBB, mc.span))
+    mirLowerTerminateSwitchInt(mc.bs, scrutOp, cases, defaultBB, mc.span)
     let mut j = 0
     for c in node.switchCases {
         mc.bs.cur = bodies[j]

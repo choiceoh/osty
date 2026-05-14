@@ -732,6 +732,7 @@ pub fn emptyFrontLexSummary() -> FrontLexSummary {
 pub fn frontendLexStream(source: String) -> FrontLexStream {
     let units = strings.split(source, "")
     let unitCount = stringUnitCount(source)
+    let positions = frontBuildPositionIndex(units, unitCount)
     let mut tokens: List<FrontLexToken> = []
     let mut diagnostics: List<FrontLexDiagnostic> = []
     let mut comments: List<FrontComment> = []
@@ -758,7 +759,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
             let unit = frontUnitAt(units, idx)
             let next = frontUnitAt(units, idx + 1)
             let third = frontUnitAt(units, idx + 2)
-            let start = frontPositionAt(units, idx)
+            let start = frontPositionFromIndex(positions, idx)
             if atFileStart && unit == "\u{FEFF}" {
                 bomStripped = bomStripped + 1
             } else if atFileStart && unit == "#" && next == "!" {
@@ -772,14 +773,14 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let consumed = frontNewlineConsumed(unit, next)
                 atFileStart = false
                 if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(units, idx + consumed, unitCount)) {
-                    tokens.push(frontLexTokenFromScan(units, idx, consumed, FrontNewline, 0, false, 0, false))
+                    tokens.push(frontLexTokenFromScanIndexed(positions, idx, consumed, FrontNewline, 0, false, 0, false))
                     tokenIndex = tokenIndex + 1
                     insertTerm = false
                 }
                 skip = consumed - 1
             } else if unit == "/" && next == "/" {
                 let consumed = frontLineCommentSkip(units, idx + 2, unitCount) + 1
-                let end = frontPositionAt(units, idx + consumed)
+                let end = frontPositionFromIndex(positions, idx + consumed)
                 atFileStart = false
                 if third == "/" && frontUnitAt(units, idx + 3) != "/" {
                     comments.push(frontComment(FrontCommentDoc, start, end, 1))
@@ -792,7 +793,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 skip = consumed - 1
             } else if unit == "/" && next == "*" {
                 let block = frontBlockCommentSkip(units, idx, unitCount)
-                let end = frontPositionAt(units, idx + block.consumed)
+                let end = frontPositionFromIndex(positions, idx + block.consumed)
                 atFileStart = false
                 comments.push(frontComment(FrontCommentBlock, start, end, frontCommentLineCount(start, end)))
                 if !(block.ok) {
@@ -804,7 +805,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
                 let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
@@ -822,7 +823,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontRawString, scan), start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontRawString, scan), start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -837,7 +838,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
                 let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
@@ -855,7 +856,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan), start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan), start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -865,7 +866,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
                 let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
@@ -883,7 +884,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan), start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan), start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -893,7 +894,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
                 let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
@@ -911,7 +912,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontString, scan), start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontString, scan), start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -920,7 +921,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let scan = frontLabelScan(units, idx, unitCount)
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                 tokenIndex = tokenIndex + 1
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -930,7 +931,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 let ownerToken = tokenIndex
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
                 tokenIndex = tokenIndex + 1
                 let facts = frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
                 for part in facts.parts {
@@ -948,7 +949,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
                 escapeErrors = escapeErrors + facts.escapeErrors
                 if scan.errors > 0 {
-                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontChar, scan), start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontChar, scan), start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -957,13 +958,13 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let scan = frontNumberScan(units, idx, unitCount)
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, scan.baseLiteral))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, scan.baseLiteral))
                 tokenIndex = tokenIndex + 1
                 if scan.uppercaseBasePrefix {
-                    diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, start, frontPositionAt(units, idx + 2)))
+                    diagnostics.push(frontLexDiagnostic(FrontDiagUppercaseBasePrefix, start, frontPositionFromIndex(positions, idx + 2)))
                 }
                 if frontNumberHasBadSeparator(units, idx, scan.consumed) {
-                    diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(FrontDiagBadNumericSeparator, start, frontPositionFromIndex(positions, idx + scan.consumed)))
                 }
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -972,7 +973,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let scan = frontIdentScan(units, idx, unitCount)
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
-                tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
+                tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                 tokenIndex = tokenIndex + 1
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
@@ -982,7 +983,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 let leadingDocLines = frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
                 atFileStart = false
                 if scan.ok {
-                    tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
+                    tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
                     tokenIndex = tokenIndex + 1
                     if scan.kind == FrontLParen || scan.kind == FrontLBracket {
                         parenDepth = parenDepth + 1
@@ -994,9 +995,9 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                     insertTerm = frontKindInsertsTerm(scan.kind)
                 } else {
                     let diagCode = frontIllegalDiagnosticCode(units, idx, scan)
-                    tokens.push(frontLexTokenFromScan(units, idx, scan.consumed, FrontIllegal, leadingDocLines, false, 0, false))
+                    tokens.push(frontLexTokenFromScanIndexed(positions, idx, scan.consumed, FrontIllegal, leadingDocLines, false, 0, false))
                     tokenIndex = tokenIndex + 1
-                    diagnostics.push(frontLexDiagnostic(diagCode, start, frontPositionAt(units, idx + scan.consumed)))
+                    diagnostics.push(frontLexDiagnostic(diagCode, start, frontPositionFromIndex(positions, idx + scan.consumed)))
                     insertTerm = false
                 }
                 pendingDocLines = 0
@@ -1004,7 +1005,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
             }
         }
     }
-    let eofPos = frontPositionAt(units, unitCount)
+    let eofPos = frontPositionFromIndex(positions, unitCount)
     if insertTerm {
         tokens.push(frontLexToken(FrontNewline, eofPos, eofPos, 0, 0, false, 0, false))
         tokenIndex = tokenIndex + 1
@@ -1015,6 +1016,53 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
 }
 pub fn frontLexTokenFromScan(units: List<String>, start: Int, consumed: Int, kind: FrontTokenKind, leadingDocLines: Int, triple: Bool, interpolations: Int, baseLiteral: Bool) -> FrontLexToken {
     frontLexToken(kind, frontPositionAt(units, start), frontPositionAt(units, start + consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
+}
+pub fn frontLexTokenFromScanIndexed(positions: List<FrontPos>, start: Int, consumed: Int, kind: FrontTokenKind, leadingDocLines: Int, triple: Bool, interpolations: Int, baseLiteral: Bool) -> FrontLexToken {
+    frontLexToken(kind, frontPositionFromIndex(positions, start), frontPositionFromIndex(positions, start + consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
+}
+pub fn frontBuildPositionIndex(units: List<String>, unitCount: Int) -> List<FrontPos> {
+    let mut positions: List<FrontPos> = []
+    let mut offset = 0
+    let mut line = 1
+    let mut column = 1
+    let mut skipLf = false
+    for idx in 0..unitCount {
+        positions.push(frontPos(offset, line, column))
+        let unit = frontUnitAt(units, idx)
+        let next = frontUnitAt(units, idx + 1)
+        if skipLf {
+            skipLf = false
+            offset = offset + 1
+        } else if unit == "\r" {
+            line = line + 1
+            column = 1
+            offset = offset + 1
+            if next == "\n" {
+                skipLf = true
+            }
+        } else if unit == "\n" {
+            line = line + 1
+            column = 1
+            offset = offset + 1
+        } else {
+            column = column + 1
+            offset = offset + 1
+        }
+    }
+    positions.push(frontPos(offset, line, column))
+    positions
+}
+pub fn frontPositionFromIndex(positions: List<FrontPos>, target: Int) -> FrontPos {
+    if positions.len() == 0 {
+        return emptyFrontPos()
+    }
+    if target <= 0 {
+        return positions[0]
+    }
+    if target >= positions.len() {
+        return positions[positions.len() - 1]
+    }
+    positions[target]
 }
 pub fn frontPositionAt(units: List<String>, target: Int) -> FrontPos {
     let mut offset = 0
