@@ -3888,7 +3888,7 @@ fn mirLowerBuildStructLitFields(bs: MirLowerBodyState, e: HirExpr, typeName: Str
             if f.hasValue {
                 out.push(mirLowerExprAsOperand(bs, f.value))
             } else {
-                out.push(mirLowerShorthandFieldOperand(bs, f))
+                out.push(mirLowerShorthandFieldOperand(bs, f, ""))
             }
         }
         return out
@@ -3909,7 +3909,7 @@ fn mirLowerBuildStructLitFields(bs: MirLowerBodyState, e: HirExpr, typeName: Str
         } else if src.hasValue {
             out.push(mirLowerExprAsOperand(bs, src.value))
         } else {
-            out.push(mirLowerShorthandFieldOperand(bs, src))
+            out.push(mirLowerShorthandFieldOperand(bs, src, fld.typ))
         }
     }
     out
@@ -3929,13 +3929,15 @@ fn mirLowerStructSpreadFieldOperand(spreadPlace: MirPlace, fld: MirFieldLayout) 
     let child = mirPlaceProject(spreadPlace, mirFieldProj(fld.index, fld.name, fld.typ))
     mirOperandCopy(child, fld.typ)
 }
-fn mirLowerShorthandFieldOperand(bs: MirLowerBodyState, f: HirStructLitField) -> MirOperand {
+fn mirLowerShorthandFieldOperand(bs: MirLowerBodyState, f: HirStructLitField, hint: String) -> MirOperand {
     let id = mirLowerLookupName(bs, f.name)
     if id < 0 {
         mirLowerNoteIssue(bs.l, "mir_lower: struct literal shorthand \"" + f.name + "\" — no local in scope")
         return mirOperandConst(mirConstUnit())
     }
-    mirOperandCopy(mirPlace(id), "")
+    let local = mirFunctionLocal(bs.fn_, id)
+    let typeText = if hint != "" { hint } else { local.typ }
+    mirOperandCopy(mirPlace(id), typeText)
 }
 // Shorthand `{ name }` binds the field to a local of the same
 // name in the enclosing scope. Look it up and emit a Copy.

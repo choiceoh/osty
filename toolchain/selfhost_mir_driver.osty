@@ -1,0 +1,183 @@
+use std.env
+use std.fs
+use std.os
+use std.strings
+
+fn selfhostMirDriverHasCommand(args: List<String>, name: String) -> Bool {
+    args.len() > 0 && args[0] == name
+}
+
+fn selfhostMirDriverOptionValue(args: List<String>, name: String) -> String {
+    let prefix = name + "="
+    let mut i = 0
+    for i < args.len() {
+        let arg = args[i]
+        if strings.hasPrefix(arg, prefix) {
+            return strings.trimPrefix(arg, prefix)
+        }
+        if arg == name && i + 1 < args.len() {
+            return args[i + 1]
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn selfhostMirDriverProbeJson() -> String {
+    r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 42}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ]
+    }
+  ]
+}
+"""
+}
+
+fn selfhostMirDriverProbeError() -> String {
+    let mut mir = match mirJsonParseModule(selfhostMirDriverProbeJson()) {
+        Ok(m) -> m,
+        Err(e) -> {
+            return e
+        },
+    }
+    if mir.packageName == "" {
+        mir.packageName = "main"
+    }
+    let mirErrs = mirValidateModule(mir)
+    if mirErrs.len() != 0 {
+        return "MIR validation failed: " + strings.join(mirErrs, "; ")
+    }
+    let result = lirLowerMirModule(lirLowerConfig("main", "<selfhost-mir-doctor>", ""), mir)
+    if !lirLowerOK(result) {
+        let mut rendered: List<String> = []
+        for d in result.diagnostics {
+            if d.severity == LirSeverityError {
+                rendered.push(lirDiagnosticRender(d))
+            }
+        }
+        if rendered.len() == 0 {
+            return "LIR Proto lowering failed without an error diagnostic"
+        }
+        return strings.join(rendered, "; ")
+    }
+    let irText = lirRenderModule(result.module)
+    if irText == "" {
+        return "LLVM IR renderer returned empty output"
+    }
+    if !strings.contains(irText, "define") {
+        return "LLVM IR renderer produced no function definition"
+    }
+    if !strings.contains(irText, "ret ") {
+        return "LLVM IR renderer produced no return instruction"
+    }
+    ""
+}
+
+fn selfhostMirDriverRunDoctor() -> Int {
+    println("osty-self mode: self-rebuild")
+    println("osty-self host compiler: disabled")
+    let probeError = selfhostMirDriverProbeError()
+    if probeError != "" {
+        println("osty-self MIR JSON backend: disabled")
+        eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
+        return 1
+    }
+    println("osty-self MIR JSON backend: enabled")
+    println("osty-self pipeline: MIR JSON -> LIR Proto -> LLVM IR")
+    println("osty-self self-rebuild probe: OK")
+    println("osty-self self-rebuild driver: MIR JSON backend -> clang object/runtime link")
+    0
+}
+
+fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
+    if args.len() < 2 {
+        eprint("osty-self lir-proto-lower-mir-json: missing <file.mir.json> argument\n")
+        return 2
+    }
+    let path = args[1]
+    let packageName = selfhostMirDriverOptionValue(args, "--package-name")
+    let target = selfhostMirDriverOptionValue(args, "--target")
+    let raw = match fs.readToString(path) {
+        Ok(s) -> s,
+        Err(_) -> {
+            eprint("osty-self lir-proto-lower-mir-json: cannot read MIR JSON: " + path + "\n")
+            return 2
+        },
+    }
+    let resolvedPackageName = if packageName == "" { "main" } else { packageName }
+    let mut mir = match mirJsonParseModule(raw) {
+        Ok(m) -> m,
+        Err(e) -> {
+            eprint("osty-self lir-proto-lower-mir-json: " + e + "\n")
+            return 1
+        },
+    }
+    if mir.packageName == "" {
+        mir.packageName = resolvedPackageName
+    }
+    let mirErrs = mirValidateModule(mir)
+    if mirErrs.len() != 0 {
+        eprint("osty-self lir-proto-lower-mir-json: MIR validation failed:\n")
+        for e in mirErrs {
+            eprint("  " + e + "\n")
+        }
+        return 1
+    }
+    let result = lirLowerMirModule(lirLowerConfig(resolvedPackageName, path, target), mir)
+    if !lirLowerOK(result) {
+        for d in result.diagnostics {
+            if d.severity == LirSeverityError {
+                eprint("osty-self lir-proto-lower-mir-json: " + lirDiagnosticRender(d) + "\n")
+            }
+        }
+        return 1
+    }
+    print(lirRenderModule(result.module))
+    0
+}
+
+fn selfhostMirDriverMain() {
+    let args = env.args()
+    if selfhostMirDriverHasCommand(args, "--selfhost-host") {
+        println("disabled")
+        os.exit(0)
+    }
+    if selfhostMirDriverHasCommand(args, "--selfhost-doctor") {
+        os.exit(selfhostMirDriverRunDoctor())
+    }
+    if selfhostMirDriverHasCommand(args, "lir-proto-lower-mir-json") {
+        os.exit(selfhostMirDriverRunLowerMirJson(args))
+    }
+    eprint("osty-self: unsupported command; host compiler forwarding is disabled\n")
+    eprint("supported subcommands: lir-proto-lower-mir-json <file.mir.json>, --selfhost-doctor\n")
+    os.exit(2)
+}

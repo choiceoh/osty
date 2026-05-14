@@ -519,9 +519,22 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 			needles: []string{
 				`hasSelfhostCommand(args, "compile")`,
 				"runCompile(args)",
+				`hasSelfhostCommand(args, "lir-proto-lower-mir-json")`,
+				"runLirProtoLowerMirJson(args)",
 				"hirLowerSource(",
 				"mirLowerModule(",
 				"mirEmitModule(",
+			},
+		},
+		{
+			path: "toolchain/mir_json.osty",
+			needles: []string{
+				"pub fn mirJsonParseModule(",
+				"mirJsonModule(v)",
+				"mirJsonFunction(",
+				"mirJsonInstr(",
+				"mirJsonRValue(",
+				"mirJsonLayouts(",
 			},
 		},
 	}
@@ -569,6 +582,7 @@ func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
 		"selfhostProbeError",
 		"lirLowerMirModule(",
 		"lirRenderModule(",
+		"mirJsonParseModule(raw)",
 		"LLVM IR renderer produced no return instruction",
 		"selfRebuildBundleSource",
 		"selfRebuildRunClang",

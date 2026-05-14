@@ -969,10 +969,10 @@ fn containsInterpolation(text: String) -> Bool {
     for i < n {
         let unit = units[i]
         if unit == r"{" {
-            let prev = if i == 0 {
-                ""
-            } else {
-                units[i - 1]
+            let mut prev = ""
+            if i > 0 {
+                let prevIndex = i - 1
+                prev = units[prevIndex]
             }
             if prev != "\\" {
                 return true
@@ -1552,15 +1552,14 @@ fn enumCheckDiscriminants(cx: ElabCx, arena: AstArena, enumNode: AstNode) {
     }
 }
 fn enumVariantDiscriminant(arena: AstArena, variant: AstNode) -> Int {
-    if variant.right < 0 {
-        return -1
+    let mut out = -1
+    if variant.right >= 0 {
+        let rhs = astArenaNodeAt(arena, variant.right)
+        if rhs.kind == AstNIntLit {
+            out = checkGateParseInt(rhs.text)
+        }
     }
-    let rhs = astArenaNodeAt(arena, variant.right)
-    if rhs.kind == AstNIntLit {
-        let val = checkGateParseInt(rhs.text)
-        return val
-    }
-    -1
+    out
 }
 fn checkGateParseInt(text: String) -> Int {
     let mut value = 0

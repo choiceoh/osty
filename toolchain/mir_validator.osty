@@ -349,22 +349,24 @@ fn mirValidateStorageTarget(func: MirFunction, bb: MirBasicBlock, idx: Int, loca
 }
 fn mirValidateCallee(func: MirFunction, bb: MirBasicBlock, instr: MirInstr) -> List<String> {
     let mut errs: List<String> = []
-    match instr.calleeKind {
-        MirCalleeNone -> {
-            errs.push("function \"{func.name}\" bb{bb.id}: call with no callee")
-        },
-        MirCalleeFn -> {
-            if instr.calleeSymbol == "" {
-                errs.push("function \"{func.name}\" bb{bb.id}: fnRef empty symbol")
-            }
-        },
-        MirCalleeIndirect -> {
-            let oErrs = mirValidateOperand(func, bb, instr.calleeOperand, "indirectCall.callee")
-            for e in oErrs {
-                errs.push(e)
-            }
-        },
+    if instr.calleeKind == MirCalleeNone {
+        errs.push("function \"{func.name}\" bb{bb.id}: call with no callee")
+        return errs
     }
+    if instr.calleeKind == MirCalleeFn {
+        if instr.calleeSymbol == "" {
+            errs.push("function \"{func.name}\" bb{bb.id}: fnRef empty symbol")
+        }
+        return errs
+    }
+    if instr.calleeKind == MirCalleeIndirect {
+        let oErrs = mirValidateOperand(func, bb, instr.calleeOperand, "indirectCall.callee")
+        for e in oErrs {
+            errs.push(e)
+        }
+        return errs
+    }
+    errs.push("function \"{func.name}\" bb{bb.id}: invalid callee kind")
     errs
 }
 // ====================================================================
