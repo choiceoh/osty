@@ -139,3 +139,44 @@ fn testRenderManifestDepLineNoFieldsLongForm() {
     let d = defaultDep("x")
     testing.assertEq(renderManifestDepLine(d), "x = {  }\n")
 }
+fn testRenderManifestStringField() {
+    testing.assertEq(renderManifestStringField("name", "demo"), "name = \"demo\"\n")
+    testing.assertEq(renderManifestStringField("version", "1.0.0"), "version = \"1.0.0\"\n")
+}
+fn testRenderManifestStringFieldQuotesSpecial() {
+    testing.assertEq(
+        renderManifestStringField("desc", "needs \"quotes\""),
+        "desc = \"needs \\\"quotes\\\"\"\n",
+    )
+}
+fn testRenderManifestStringArrayField() {
+    testing.assertEq(
+        renderManifestStringArrayField("authors", ["Alice", "Bob"]),
+        "authors = [\"Alice\", \"Bob\"]\n",
+    )
+}
+fn testRenderManifestStringArrayFieldEmpty() {
+    testing.assertEq(renderManifestStringArrayField("authors", []), "authors = []\n")
+}
+fn testRenderManifestBoolField() {
+    testing.assertEq(renderManifestBoolField("runtime", true), "runtime = true\n")
+    testing.assertEq(renderManifestBoolField("runtime", false), "runtime = false\n")
+}
+fn testRenderManifestDepsSectionEmpty() {
+    testing.assertEq(renderManifestDepsSection("dependencies", []), "")
+}
+fn testRenderManifestDepsSectionSortsByName() {
+    let a = ManifestDepEmitSpec {..defaultDep("alpha"), versionReq: "1.0.0"}
+    let b = ManifestDepEmitSpec {..defaultDep("zed"), versionReq: "2.0.0"}
+    let out = renderManifestDepsSection("dependencies", [b, a])
+    let expected = "\n[dependencies]\nalpha = \"1.0.0\"\nzed = \"2.0.0\"\n"
+    testing.assertEq(out, expected)
+}
+fn testRenderManifestDepsSectionHonorsDepLineForm() {
+    // Mixed short + long deps in one section.
+    let short = ManifestDepEmitSpec {..defaultDep("a"), versionReq: "1.0.0"}
+    let long = ManifestDepEmitSpec {..defaultDep("b"), path: "../b"}
+    let out = renderManifestDepsSection("dev-dependencies", [short, long])
+    let expected = "\n[dev-dependencies]\na = \"1.0.0\"\nb = { path = \"../b\" }\n"
+    testing.assertEq(out, expected)
+}

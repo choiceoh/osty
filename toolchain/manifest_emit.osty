@@ -102,3 +102,42 @@ fn manifestDepCanShortForm(d: ManifestDepEmitSpec) -> Bool {
         && d.features.len() == 0
         && d.defaultFeats
 }
+/// renderManifestStringField emits a `key = "value"` line (newline
+/// included). Wraps `tomlBasicString` so callers don't duplicate the
+/// quoting policy at every section.
+pub fn renderManifestStringField(key: String, val: String) -> String {
+    key + " = " + tomlBasicString(val) + "\n"
+}
+/// renderManifestStringArrayField emits a `key = ["a", "b", ...]`
+/// line. Empty arrays still render the line (e.g. `key = []`); the
+/// host suppresses the call when it doesn't want the field at all.
+pub fn renderManifestStringArrayField(key: String, vals: List<String>) -> String {
+    let mut quoted: List<String> = []
+    for v in vals {
+        quoted.push(tomlBasicString(v))
+    }
+    key + " = [" + strings.join(quoted, ", ") + "]\n"
+}
+/// renderManifestBoolField emits `key = true` / `key = false`.
+pub fn renderManifestBoolField(key: String, val: Bool) -> String {
+    if val {
+        return key + " = true\n"
+    }
+    key + " = false\n"
+}
+/// renderManifestDepsSection emits a `[section]` header followed
+/// by one dep line per entry, sorted by `name`. Returns the empty
+/// string when `deps` is empty so the host can call it
+/// unconditionally without producing an orphan header.
+pub fn renderManifestDepsSection(section: String, deps: List<ManifestDepEmitSpec>) -> String {
+    if deps.len() == 0 {
+        return ""
+    }
+    let sorted = deps.sortedBy(|d| d.name)
+    let mut parts: List<String> = []
+    parts.push("\n[" + section + "]\n")
+    for d in sorted {
+        parts.push(renderManifestDepLine(d))
+    }
+    strings.join(parts, "")
+}
