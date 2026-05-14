@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// FeatureCheckResult mirrors toolchain/profile_features.osty's
+// FeatureCheckResult — the structured outcome of fileNeedsFeatures.
+// Ok=false leaves Missing populated with the first missing feature
+// name so the host can blame it in a diagnostic.
+//
+// Osty: toolchain/profile_features.osty:130
+type FeatureCheckResult struct {
+	Ok      bool
+	Missing string
+}
+
 // OptLevelFlags returns the `-gcflags` argv chunk for an integer
 // optimisation level. Levels outside {0, 1} return nil so the
 // user's profile-level `GoFlags` controls alone.
@@ -76,4 +87,63 @@ func ExpandFeatures(features map[string][]string, defaults, requested []string, 
 	}
 	sort.Strings(out)
 	return out
+}
+
+// GoFlags assembles the flat `go build` flag list for a resolved
+// profile/target/feature config. Order:
+//
+//  1. OptLevelFlags(optLevel) — debug/light switches.
+//  2. profileGoFlags from the merged manifest profile, deduped
+//     against (1).
+//  3. `-ldflags=-s -w` when strip is true, deduped.
+//  4. `-tags=feat_<name>,...` when features non-empty; tags sorted.
+//
+// Feature names map 1:1 to Go build tags so generated code can
+// gate via `//go:build feat_<name>`.
+//
+// Osty: toolchain/profile_features.osty:80
+func GoFlags(optLevel int, profileGoFlags []string, strip bool, features []string) []string {
+	var flags []string
+	seen := map[string]bool{}
+	for _, f := range OptLevelFlags(optLevel) {
+		if !seen[f] {
+			flags = append(flags, f)
+			seen[f] = true
+		}
+	}
+	for _, f := range profileGoFlags {
+		if !seen[f] {
+			flags = append(flags, f)
+			seen[f] = true
+		}
+	}
+	const stripFlag = "-ldflags=-s -w"
+	if strip && !seen[stripFlag] {
+		flags = append(flags, stripFlag)
+		seen[stripFlag] = true
+	}
+	if len(features) > 0 {
+		tags := make([]string, 0, len(features))
+		for _, f := range features {
+			tags = append(tags, "feat_"+f)
+		}
+		sort.Strings(tags)
+		flags = append(flags, "-tags="+strings.Join(tags, ","))
+	}
+	return flags
+}
+
+// FileNeedsFeatures reads the file-header `// @feature:` pragma
+// from `src` and checks every required feature against the
+// `active` map. Returns Ok=true with empty Missing when every
+// required feature is active (or when no pragma is present).
+//
+// Osty: toolchain/profile_features.osty:139
+func FileNeedsFeatures(src []byte, active map[string]bool) FeatureCheckResult {
+	for _, f := range ReadFeaturePragma(src) {
+		if !active[f] {
+			return FeatureCheckResult{Ok: false, Missing: f}
+		}
+	}
+	return FeatureCheckResult{Ok: true}
 }

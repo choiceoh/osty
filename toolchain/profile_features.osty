@@ -117,3 +117,77 @@ fn expandFeaturesSorted(xs: List<String>) -> List<String> {
     }
     out
 }
+/// goFlags assembles the flat `go build` flag list for a resolved
+/// profile/target/feature config. Order (matches Go reference):
+///
+///   1. `optLevelFlags(optLevel)` — debug/light optimisation
+///      switches.
+///   2. `profileGoFlags` — the merged manifest profile's GoFlags,
+///      with deduplication against (1).
+///   3. `-ldflags=-s -w` when `strip` is true (deduplicated).
+///   4. `-tags=feat_<name>,feat_<name>,...` when `features` is
+///      non-empty; tag names sorted for determinism.
+///
+/// Feature names map 1:1 to Go build tags so conditional
+/// generated code can gate via `//go:build feat_<name>`.
+pub fn goFlags(optLevel: Int, profileGoFlags: List<String>, strip: Bool, features: List<String>) -> List<String> {
+    let mut flags: List<String> = []
+    let mut seen: Map<String, Bool> = {:}
+    let optFlags = optLevelFlags(optLevel)
+    for f in optFlags {
+        if !seen.containsKey(f) {
+            flags.push(f)
+            seen.insert(f, true)
+        }
+    }
+    for f in profileGoFlags {
+        if !seen.containsKey(f) {
+            flags.push(f)
+            seen.insert(f, true)
+        }
+    }
+    let stripFlag = "-ldflags=-s -w"
+    if strip && !seen.containsKey(stripFlag) {
+        flags.push(stripFlag)
+        seen.insert(stripFlag, true)
+    }
+    if features.len() > 0 {
+        let mut tags: List<String> = []
+        for f in features {
+            tags.push("feat_" + f)
+        }
+        tags = expandFeaturesSorted(tags)
+        flags.push("-tags=" + strings.join(tags, ","))
+    }
+    flags
+}
+/// FeatureCheckResult is the outcome of `fileNeedsFeatures` —
+/// `ok == false` carries the first missing feature in `missing`
+/// so the host can blame it in a diagnostic.
+pub struct FeatureCheckResult {
+    pub ok: Bool,
+    pub missing: String,
+}
+/// fileNeedsFeatures reads the file-header `// @feature:` pragma
+/// from `src` and checks every required feature against the
+/// `active` map. Returns ok=true (and empty missing) when every
+/// required feature is active, or when the file has no pragma.
+/// The host treats ok=false as "this file is gated off — skip
+/// build" and uses `missing` in the diagnostic.
+pub fn fileNeedsFeatures(src: String, active: Map<String, Bool>) -> FeatureCheckResult {
+    let needed = readFeaturePragma(src)
+    for f in needed {
+        let entry = active.get(f)
+        match entry {
+            Some(on) -> {
+                if !on {
+                    return FeatureCheckResult {ok: false, missing: f}
+                }
+            },
+            None -> {
+                return FeatureCheckResult {ok: false, missing: f}
+            },
+        }
+    }
+    FeatureCheckResult {ok: true, missing: ""}
+}
