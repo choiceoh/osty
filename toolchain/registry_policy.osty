@@ -147,8 +147,11 @@ pub fn registryStatusErrorMessage(url: String, statusCode: Int, body: String, st
 /// accepted name alphabet. Returns the empty string on success;
 /// otherwise an error message the host wraps in `badRequest`:
 ///
-///   - empty input → `"package name is empty"`
-///   - any other rejection → `"invalid package name \"<name>\""`
+///   - empty input → `package name is empty`
+///   - any other rejection → `invalid package name <quoted>` where
+///     `<quoted>` is `tomlBasicString(name)` — embedded quotes,
+///     backslashes, and control characters are escaped so the
+///     echoed name cannot break log lines or HTTP error responses.
 ///
 /// Rules:
 ///
@@ -172,7 +175,7 @@ pub fn validateRegistryPackageName(name: String) -> String {
         let always = isUpper || isLower || isUnderscore
         let nonFirst = i > 0 && (isDigit || isDash)
         if !(always || nonFirst) {
-            return "invalid package name \"" + name + "\""
+            return "invalid package name " + tomlBasicString(name)
         }
         i = i + 1
     }

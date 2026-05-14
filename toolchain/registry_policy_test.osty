@@ -142,3 +142,29 @@ fn testValidateRegistryPackageNameUnicode() {
 fn testValidateRegistryPackageNameUnderscoreFirst() {
     testing.assertEq(validateRegistryPackageName("_foo"), "")
 }
+fn testValidateRegistryPackageNameEmbeddedQuote() {
+    // `a"b` echoes with the embedded quote escaped — `tomlBasicString`
+    // adds outer quotes and `\"` for the embedded one.
+    testing.assertEq(
+        validateRegistryPackageName("a\"b"),
+        "invalid package name \"a\\\"b\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedBackslash() {
+    testing.assertEq(
+        validateRegistryPackageName("a\\b"),
+        "invalid package name \"a\\\\b\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedNewline() {
+    testing.assertEq(
+        validateRegistryPackageName("a\nb"),
+        "invalid package name \"a\\nb\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedTab() {
+    testing.assertEq(
+        validateRegistryPackageName("a\tb"),
+        "invalid package name \"a\\tb\"",
+    )
+}

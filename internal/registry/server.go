@@ -781,7 +781,7 @@ func copyStringSliceMap(in map[string][]string) map[string][]string {
 // rejection text.
 func validatePackageName(name string) error {
 	if msg := runner.ValidateRegistryPackageName(name); msg != "" {
-		return fmt.Errorf("%s", msg)
+		return errors.New(msg)
 	}
 	return nil
 }

@@ -133,3 +133,28 @@ func TestValidateRegistryPackageName(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRegistryPackageNameEscapesEchoedName(t *testing.T) {
+	// Embedded characters that commonly cause ambiguity in logs/strings
+	// (`"`, `\`, control chars) MUST be echoed back escaped — otherwise
+	// a malicious name could break log lines or HTTP responses.
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"embedded-quote", "a\"b", `invalid package name "a\"b"`},
+		{"embedded-backslash", "a\\b", `invalid package name "a\\b"`},
+		{"embedded-newline", "a\nb", `invalid package name "a\nb"`},
+		{"embedded-tab", "a\tb", `invalid package name "a\tb"`},
+		{"embedded-cr", "a\rb", `invalid package name "a\rb"`},
+		{"low-control", "a\x01b", `invalid package name "a\x01b"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ValidateRegistryPackageName(c.in); got != c.want {
+				t.Errorf("ValidateRegistryPackageName(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
