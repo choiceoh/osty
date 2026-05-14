@@ -34,3 +34,49 @@ fn testIsLintCodeRejectsTrailingSpace() {
     testing.assertEq(isLintCode("L0001 "), false)
     testing.assertEq(isLintCode(" L0001"), false)
 }
+fn testLintMergeStringSlicesEmpty() {
+    let r = lintMergeStringSlices([], [])
+    testing.assertEq(r.len(), 0)
+}
+fn testLintMergeStringSlicesAOnly() {
+    let r = lintMergeStringSlices(["a", "b"], [])
+    testing.assertEq(r.len(), 2)
+    testing.assertEq(r[0], "a")
+    testing.assertEq(r[1], "b")
+}
+fn testLintMergeStringSlicesBOnly() {
+    let r = lintMergeStringSlices([], ["x", "y"])
+    testing.assertEq(r.len(), 2)
+    testing.assertEq(r[0], "x")
+    testing.assertEq(r[1], "y")
+}
+fn testLintMergeStringSlicesUnion() {
+    let r = lintMergeStringSlices(["a", "b"], ["c", "d"])
+    testing.assertEq(r.len(), 4)
+    testing.assertEq(r[0], "a")
+    testing.assertEq(r[1], "b")
+    testing.assertEq(r[2], "c")
+    testing.assertEq(r[3], "d")
+}
+fn testLintMergeStringSlicesDedup() {
+    // Entries in b that already appear in a are dropped.
+    let r = lintMergeStringSlices(["a", "b"], ["b", "c"])
+    testing.assertEq(r.len(), 3)
+    testing.assertEq(r[0], "a")
+    testing.assertEq(r[1], "b")
+    testing.assertEq(r[2], "c")
+}
+fn testLintMergeStringSlicesDedupWithinA() {
+    // Duplicates within a are also collapsed.
+    let r = lintMergeStringSlices(["a", "a", "b"], [])
+    testing.assertEq(r.len(), 2)
+    testing.assertEq(r[0], "a")
+    testing.assertEq(r[1], "b")
+}
+fn testLintMergeStringSlicesPreservesOrderAFirst() {
+    // Even if b lists entries earlier, a's order wins.
+    let r = lintMergeStringSlices(["z", "a"], ["a", "z"])
+    testing.assertEq(r.len(), 2)
+    testing.assertEq(r[0], "z")
+    testing.assertEq(r[1], "a")
+}

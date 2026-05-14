@@ -36,3 +36,32 @@ func TestIsLintCode(t *testing.T) {
 		})
 	}
 }
+
+func TestLintMergeStringSlices(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []string
+		want []string
+	}{
+		{"empty", nil, nil, nil},
+		{"a-only", []string{"a", "b"}, nil, []string{"a", "b"}},
+		{"b-only", nil, []string{"x", "y"}, []string{"x", "y"}},
+		{"union", []string{"a", "b"}, []string{"c", "d"}, []string{"a", "b", "c", "d"}},
+		{"dedup-b-overlap-a", []string{"a", "b"}, []string{"b", "c"}, []string{"a", "b", "c"}},
+		{"dedup-within-a", []string{"a", "a", "b"}, nil, []string{"a", "b"}},
+		{"preserves-a-order", []string{"z", "a"}, []string{"a", "z"}, []string{"z", "a"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := LintMergeStringSlices(c.a, c.b)
+			if len(got) != len(c.want) {
+				t.Fatalf("len = %d, want %d (got=%v)", len(got), len(c.want), got)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
