@@ -71,12 +71,22 @@ func TestExpandFeatures(t *testing.T) {
 			want: []string{"a", "b", "c"},
 		},
 		{
-			name: "cross-package-not-recursed",
+			// Transitive cross-package tokens MUST be filtered —
+			// downstream `feat_<name>` Go build tags can't carry `/`.
+			name: "transitive-cross-package-dropped",
 			features: map[string][]string{
 				"a": {"dep/feat", "b"},
 			},
 			requested: []string{"a"}, useDefaults: false,
-			want: []string{"a", "b", "dep/feat"},
+			want: []string{"a", "b"},
+		},
+		{
+			// Top-level cross-package tokens DO land in the output —
+			// resolver layer interprets them separately.
+			name:     "top-level-cross-package-kept",
+			features: map[string][]string{},
+			requested: []string{"dep/feat"}, useDefaults: false,
+			want: []string{"dep/feat"},
 		},
 		{
 			name: "unknown-passes-through", features: map[string][]string{},

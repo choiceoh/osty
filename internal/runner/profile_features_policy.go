@@ -28,12 +28,13 @@ func OptLevelFlags(level int) []string {
 // the feature graph `features`. Result is sorted by name for
 // stable downstream consumers.
 //
-// Feature tokens that contain a `/` (e.g. `serde/derive`) are not
-// recursed through `features` — they land in the output set so
-// the resolver sees the full requested list, but children come
-// from the package-manager layer.
+// Cross-package tokens (`<dep>/<feat>`) reached as children are
+// filtered out so they never join the local closure — downstream
+// `Resolved.GoFlags()` would otherwise emit `feat_dep/feat` build
+// tags, which Go rejects. Top-level `<dep>/<feat>` tokens passed
+// in via requested/defaults still land in the output.
 //
-// Osty: toolchain/profile_features.osty:55
+// Osty: toolchain/profile_features.osty:60
 func ExpandFeatures(features map[string][]string, defaults, requested []string, useDefaults bool) []string {
 	seen := map[string]bool{}
 	queue := make([]string, 0, len(defaults)+len(requested))
@@ -60,10 +61,13 @@ func ExpandFeatures(features map[string][]string, defaults, requested []string, 
 		}
 		visited[f] = true
 		out = append(out, f)
-		if strings.Contains(f, "/") {
-			continue
-		}
 		for _, child := range features[f] {
+			// Drop transitive cross-package refs at the enqueue
+			// site — they must NOT enter the local closure
+			// (prevents "feat_dep/feat" Go build tags downstream).
+			if strings.Contains(child, "/") {
+				continue
+			}
 			if !seen[child] {
 				seen[child] = true
 				queue = append(queue, child)

@@ -35,11 +35,13 @@ pub fn optLevelFlags(level: Int) -> List<String> {
 /// through the feature graph `features`. The result is sorted by
 /// name for stable downstream consumers.
 ///
-/// Feature tokens that contain a `/` (e.g. `serde/derive`) are
-/// **not** recursed through `features` — they're cross-package
-/// references that the package-manager layer interprets later.
-/// They still land in the output set so the resolver sees the
-/// full requested list.
+/// Cross-package feature tokens (`<dep>/<feat>`) reached as
+/// **children** during BFS are filtered out — they're not part of
+/// the local closure and would corrupt downstream consumers like
+/// `Resolved.GoFlags()` that build `feat_<name>` Go build tags
+/// (slashes aren't valid in build tags). Top-level `<dep>/<feat>`
+/// tokens that come in via `requested`/`defaults` directly do
+/// land in the output so the resolver layer can still see them.
 ///
 /// Unknown bare feature names (no entry in `features`) are passed
 /// through unchanged; cross-checking is the resolver's concern.
@@ -71,15 +73,18 @@ pub fn expandFeatures(features: Map<String, List<String>>, defaults: List<String
         }
         visited.insert(f, true)
         out.push(f)
-        // Cross-package "<dep>/<feat>" refs land in the output but
-        // don't recurse through the local features map.
-        if strings.contains(f, "/") {
-            continue
-        }
         let children = features.get(f)
         match children {
             Some(list) -> {
                 for child in list {
+                    // Drop transitive cross-package refs at the
+                    // enqueue site — they must NOT enter the
+                    // local closure (matches the Go reference
+                    // semantics, prevents "feat_dep/feat" build
+                    // tags downstream).
+                    if strings.contains(child, "/") {
+                        continue
+                    }
                     if !seen.containsKey(child) {
                         seen.insert(child, true)
                         queue.push(child)

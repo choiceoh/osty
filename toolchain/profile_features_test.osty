@@ -58,13 +58,24 @@ fn testExpandFeaturesDedupes() {
     testing.assertEq(out[1], "b")
     testing.assertEq(out[2], "c")
 }
-fn testExpandFeaturesPassesThroughCrossPackage() {
+fn testExpandFeaturesDropsTransitiveCrossPackage() {
+    // `dep/feat` reached as a child must NOT land in the closure
+    // — downstream consumers turn each name into a `feat_<name>`
+    // Go build tag, and `/` is invalid in build tags.
     let features: Map<String, List<String>> = {"a": ["dep/feat", "b"]}
     let out = expandFeatures(features, [], ["a"], false)
-    testing.assertEq(out.len(), 3)
+    testing.assertEq(out.len(), 2)
     testing.assertEq(out[0], "a")
     testing.assertEq(out[1], "b")
-    testing.assertEq(out[2], "dep/feat")
+}
+fn testExpandFeaturesKeepsTopLevelCrossPackage() {
+    // Top-level cross-package refs (passed in via requested or
+    // defaults) DO survive — the resolver layer interprets them
+    // separately. Only transitive ones get filtered.
+    let features: Map<String, List<String>> = {:}
+    let out = expandFeatures(features, [], ["dep/feat"], false)
+    testing.assertEq(out.len(), 1)
+    testing.assertEq(out[0], "dep/feat")
 }
 fn testExpandFeaturesPassesThroughUnknown() {
     let features: Map<String, List<String>> = {:}
