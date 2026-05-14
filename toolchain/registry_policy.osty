@@ -72,3 +72,44 @@ fn registryLowerHex(n: Int) -> String {
     }
     out
 }
+/// RegistrySearchScore is the structured outcome of ranking one
+/// package against the user's search query. `ok == false` means
+/// "no match" — the host drops the entry; lower `score` ranks
+/// better (0 = exact name match).
+pub struct RegistrySearchScore {
+    pub score: Int,
+    pub ok: Bool,
+}
+/// registrySearchScore ranks one package against query `q`.
+/// Tiered match — lower score wins:
+///
+///   0  name (case-insensitive) equals q
+///   1  name has q as a prefix
+///   2  name contains q
+///   3  description contains q
+///   4  any keyword contains q
+///
+/// All comparisons use case-insensitive containment; the caller
+/// pre-lowercases `q` so the host doesn't re-pay the trim cost
+/// for every record.
+pub fn registrySearchScore(name: String, description: String, keywords: List<String>, q: String) -> RegistrySearchScore {
+    let lowerName = strings.toLower(name)
+    if lowerName == q {
+        return RegistrySearchScore {score: 0, ok: true}
+    }
+    if strings.hasPrefix(lowerName, q) {
+        return RegistrySearchScore {score: 1, ok: true}
+    }
+    if strings.contains(lowerName, q) {
+        return RegistrySearchScore {score: 2, ok: true}
+    }
+    if strings.contains(strings.toLower(description), q) {
+        return RegistrySearchScore {score: 3, ok: true}
+    }
+    for kw in keywords {
+        if strings.contains(strings.toLower(kw), q) {
+            return RegistrySearchScore {score: 4, ok: true}
+        }
+    }
+    RegistrySearchScore {score: 0, ok: false}
+}

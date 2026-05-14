@@ -41,3 +41,47 @@ fn testSanitizeIndexNameOnlyUnsafe() {
     // All chars are unsafe → result is purely hex escapes.
     testing.assertEq(sanitizeIndexName("//"), "_2f_2f")
 }
+fn testRegistrySearchScoreExactName() {
+    let r = registrySearchScore("serde", "JSON lib", [], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 0)
+}
+fn testRegistrySearchScoreCaseInsensitiveExact() {
+    let r = registrySearchScore("Serde", "", [], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 0)
+}
+fn testRegistrySearchScorePrefix() {
+    let r = registrySearchScore("serdex", "", [], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 1)
+}
+fn testRegistrySearchScoreContainsName() {
+    let r = registrySearchScore("my-serde-helper", "", [], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 2)
+}
+fn testRegistrySearchScoreDescription() {
+    let r = registrySearchScore("foo", "A JSON serde library", [], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 3)
+}
+fn testRegistrySearchScoreKeyword() {
+    let r = registrySearchScore("foo", "bar", ["serialization", "serde"], "serde")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 4)
+}
+fn testRegistrySearchScoreNoMatch() {
+    let r = registrySearchScore("foo", "bar", ["baz"], "serde")
+    testing.assertEq(r.ok, false)
+}
+fn testRegistrySearchScorePrefersExactOverPrefix() {
+    // Same string matches both rules; exact (0) wins over prefix (1).
+    let r = registrySearchScore("serde", "", [], "serde")
+    testing.assertEq(r.score, 0)
+}
+fn testRegistrySearchScoreKeywordCaseInsensitive() {
+    let r = registrySearchScore("foo", "", ["JSON"], "json")
+    testing.assertEq(r.ok, true)
+    testing.assertEq(r.score, 4)
+}

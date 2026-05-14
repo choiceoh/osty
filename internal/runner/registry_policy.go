@@ -3,7 +3,10 @@
 // the drift test in this package keeps the two in sync.
 package runner
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SanitizeIndexName lowercases-hex-escapes every char that isn't
 // in the safe alphabet (`[A-Za-z0-9._-]`). Empty input collapses
@@ -36,4 +39,42 @@ func registrySafeRune(r rune) bool {
 		(r >= 'A' && r <= 'Z') ||
 		(r >= '0' && r <= '9') ||
 		r == '-' || r == '_' || r == '.'
+}
+
+// RegistrySearchScore is the structured outcome of ranking one
+// package against the user's search query. Ok=false means
+// "no match"; lower Score ranks better.
+//
+// Osty: toolchain/registry_policy.osty:79
+type RegistrySearchScore struct {
+	Score int
+	Ok    bool
+}
+
+// RegistrySearchScoreOf ranks one package against query q.
+// Tiered match: 0 exact-name / 1 prefix / 2 contains-name /
+// 3 contains-description / 4 contains-keyword. Callers
+// pre-lowercase q so the host doesn't re-pay trim cost.
+//
+// Osty: toolchain/registry_policy.osty:95
+func RegistrySearchScoreOf(name, description string, keywords []string, q string) RegistrySearchScore {
+	lowerName := strings.ToLower(name)
+	if lowerName == q {
+		return RegistrySearchScore{Score: 0, Ok: true}
+	}
+	if strings.HasPrefix(lowerName, q) {
+		return RegistrySearchScore{Score: 1, Ok: true}
+	}
+	if strings.Contains(lowerName, q) {
+		return RegistrySearchScore{Score: 2, Ok: true}
+	}
+	if strings.Contains(strings.ToLower(description), q) {
+		return RegistrySearchScore{Score: 3, Ok: true}
+	}
+	for _, kw := range keywords {
+		if strings.Contains(strings.ToLower(kw), q) {
+			return RegistrySearchScore{Score: 4, Ok: true}
+		}
+	}
+	return RegistrySearchScore{Score: 0, Ok: false}
 }
