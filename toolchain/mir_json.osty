@@ -7,6 +7,10 @@ use std.strings
 pub type MirJsonObject = Map<String, MirJsonValue>
 pub type MirJsonArray = List<MirJsonValue>
 
+fn mirJsonObjectGet(obj: Map<String, MirJsonValue>, key: String) -> Option<MirJsonValue> {
+    obj.get(key)
+}
+
 pub enum MirJsonValue {
     MJObject(MirJsonObject),
     MJArray(MirJsonArray),
@@ -443,28 +447,28 @@ fn mirJsonBool(value: MirJsonValue, ctx: String) -> Result<Bool, String> {
 }
 
 fn mirJsonStringField(obj: MirJsonObject, key: String, fallback: String) -> Result<String, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonString(v, key),
         None -> Ok(fallback),
     }
 }
 
 fn mirJsonIntField(obj: MirJsonObject, key: String, fallback: Int) -> Result<Int, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonNumber(v, key),
         None -> Ok(fallback),
     }
 }
 
 fn mirJsonBoolField(obj: MirJsonObject, key: String, fallback: Bool) -> Result<Bool, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonBool(v, key),
         None -> Ok(fallback),
     }
 }
 
 fn mirJsonNumberTextField(obj: MirJsonObject, key: String, fallback: String) -> Result<String, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> match mirJsonAsNumber(v) {
             Ok(n) -> Ok(n),
             Err(_) -> Err(mirJsonErr(key, "expected number")),
@@ -474,21 +478,21 @@ fn mirJsonNumberTextField(obj: MirJsonObject, key: String, fallback: String) -> 
 }
 
 fn mirJsonArrayField(obj: MirJsonObject, key: String) -> Result<List<MirJsonValue>, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonArray(v, key),
         None -> Ok([]),
     }
 }
 
 fn mirJsonTypeField(obj: MirJsonObject, key: String) -> Result<String, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonTypeText(v),
         None -> Ok(""),
     }
 }
 
 fn mirJsonSpanField(obj: MirJsonObject, key: String) -> Result<MirSpan, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonSpan(v),
         None -> Ok(mirNoSpan()),
     }
@@ -528,7 +532,7 @@ fn mirJsonTypeText(value: MirJsonValue) -> Result<String, String> {
         return Ok(name + mirJsonJoinTypeArgs(args))
     }
     if kind == "optional" {
-        let innerText = match obj.get("inner") {
+        let innerText = match mirJsonObjectGet(obj, "inner") {
             Some(inner) -> mirJsonTypeText(inner)?,
             None -> "",
         }
@@ -543,7 +547,7 @@ fn mirJsonTypeText(value: MirJsonValue) -> Result<String, String> {
     }
     if kind == "fn" {
         let params = mirJsonTypeList(mirJsonArrayField(obj, "params")?)?
-        let ret = match obj.get("return") {
+        let ret = match mirJsonObjectGet(obj, "return") {
             Some(v) -> mirJsonTypeText(v)?,
             None -> "()",
         }
@@ -581,7 +585,7 @@ fn mirJsonModule(value: MirJsonValue) -> Result<MirModule, String> {
     }
     let mut m = mirModule(mirJsonStringField(obj, "packageName", "main")?)
     m.span = mirJsonSpanField(obj, "span")?
-    m.layouts = mirJsonLayouts(match obj.get("layouts") {
+    m.layouts = mirJsonLayouts(match mirJsonObjectGet(obj, "layouts") {
         Some(v) -> v,
         None -> mirJsonEmptyObject(),
     })?
@@ -687,7 +691,7 @@ fn mirJsonBlock(value: MirJsonValue) -> Result<MirBasicBlock, String> {
     for instrJson in mirJsonArrayField(obj, "instrs")? {
         b.instrs.push(mirJsonInstr(instrJson)?)
     }
-    match obj.get("term") {
+    match mirJsonObjectGet(obj, "term") {
         Some(termJson) -> {
             if !mirJsonIsNull(termJson) {
                 mirBlockSetTerminator(b, mirJsonTerm(termJson)?)
@@ -707,13 +711,13 @@ fn mirJsonInstr(value: MirJsonValue) -> Result<MirInstr, String> {
         return Ok(mirAssignInstr(mirJsonPlaceRequired(obj, "dest")?, mirJsonRValueRequired(obj, "src")?, span))
     }
     if kind == "call" {
-        let hasDest = obj.get("dest").isSome()
+        let hasDest = mirJsonObjectGet(obj, "dest").isSome()
         let dest = if hasDest { mirJsonPlaceRequired(obj, "dest")? } else { mirPlace(-1) }
         let callee = mirJsonCalleeRequired(obj, "callee")?
         return Ok(mirCallInstr(hasDest, dest, callee.symbol, callee.typ, mirJsonOperands(mirJsonArrayField(obj, "args")?)?, span))
     }
     if kind == "intrinsic" {
-        let hasDest = obj.get("dest").isSome()
+        let hasDest = mirJsonObjectGet(obj, "dest").isSome()
         let dest = if hasDest { mirJsonPlaceRequired(obj, "dest")? } else { mirPlace(-1) }
         return Ok(mirIntrinsicInstr(hasDest, dest, mirJsonIntrinsic(mirJsonIntField(obj, "intrinsic", 0)?), mirJsonOperands(mirJsonArrayField(obj, "args")?)?, span))
     }
@@ -734,7 +738,7 @@ struct MirJsonCallee {
 }
 
 fn mirJsonCalleeRequired(obj: MirJsonObject, key: String) -> Result<MirJsonCallee, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonCallee(v),
         None -> Err(mirJsonErr(key, "missing callee")),
     }
@@ -784,7 +788,7 @@ fn mirJsonSwitchCase(value: MirJsonValue) -> Result<MirSwitchCase, String> {
 }
 
 fn mirJsonPlaceRequired(obj: MirJsonObject, key: String) -> Result<MirPlace, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonPlace(v),
         None -> Err(mirJsonErr(key, "missing place")),
     }
@@ -813,7 +817,7 @@ fn mirJsonProjection(value: MirJsonValue) -> Result<MirProjection, String> {
         return Ok(mirVariantProj(mirJsonIntField(obj, "index", 0)?, mirJsonStringField(obj, "name", "")?, mirJsonIntField(obj, "fieldIdx", -1)?, typ))
     }
     if kind == "index" {
-        match obj.get("indexOp") {
+        match mirJsonObjectGet(obj, "indexOp") {
             Some(indexJson) -> {
                 let op = mirJsonOperand(indexJson)?
                 if op.kind == MirOpConst && op.const.kind == MirConstInt {
@@ -835,7 +839,7 @@ fn mirJsonProjection(value: MirJsonValue) -> Result<MirProjection, String> {
 }
 
 fn mirJsonOperandRequired(obj: MirJsonObject, key: String) -> Result<MirOperand, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonOperand(v),
         None -> Err(mirJsonErr(key, "missing operand")),
     }
@@ -866,7 +870,7 @@ fn mirJsonOperand(value: MirJsonValue) -> Result<MirOperand, String> {
 }
 
 fn mirJsonConstRequired(obj: MirJsonObject, key: String) -> Result<MirConst, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonConst(v),
         None -> Err(mirJsonErr(key, "missing const")),
     }
@@ -907,7 +911,7 @@ fn mirJsonConst(value: MirJsonValue) -> Result<MirConst, String> {
 }
 
 fn mirJsonRValueRequired(obj: MirJsonObject, key: String) -> Result<MirRValue, String> {
-    match obj.get(key) {
+    match mirJsonObjectGet(obj, key) {
         Some(v) -> mirJsonRValue(v),
         None -> Err(mirJsonErr(key, "missing rvalue")),
     }

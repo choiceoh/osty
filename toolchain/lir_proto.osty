@@ -2590,6 +2590,10 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "direct call has empty symbol", "call")
         return
     }
+    if instr.calleeSymbol == "std.fs.readToString" {
+        lirLowerMirStdFsReadToStringCall(l, instr)
+        return
+    }
     let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
     if callee.name == "" {
         // Interface method-call indirect dispatch (E4).
@@ -2678,6 +2682,32 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         let loc = mirFunctionLocal(l.fn_, instr.dest.local)
         lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "cross-module call result")
     }
+}
+fn lirLowerMirStdFsReadToStringCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if !instr.hasDest {
+        lirLowerError(l, LirDiagInvalidInput, "std.fs.readToString call requires a destination", "call.std.fs.readToString")
+        return
+    }
+    if instr.args.len() == 0 {
+        lirLowerError(l, LirDiagInvalidInput, "std.fs.readToString call requires a path argument", "call.std.fs.readToString")
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "std.fs.readToString destination local out of range", "call.std.fs.readToString")
+        return
+    }
+    let path = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if path.value == "" {
+        return
+    }
+    let resultType = lirLowerMirType(l, loc.typ)
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl("std.fs.readToString", lirPtrType(), [lirPtrType()], false))
+    let boxed = lirFresh(l)
+    l.instrs.push(lirCall(boxed, lirPtrType(), "@std.fs.readToString", [lirOperand(lirPtrType(), path.value)]))
+    let loaded = lirFresh(l)
+    l.instrs.push(lirLoad(loaded, resultType, boxed, 8))
+    lirStoreMirResult(l, instr.dest, lirOperand(resultType, loaded), loc.typ, "std.fs.readToString result")
 }
 /// `lirTryLowerMirInterfaceCall` detects a CallInstr whose callee
 /// symbol has shape `<iface>__<method>` and whose first argument is

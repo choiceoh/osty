@@ -2361,66 +2361,47 @@ pub struct MirRuntimeDecls {
 /// pointer-free / runtime-free modules emit no declare block.
 /// §12 string-literal interning pool.
 ///
-/// MirStringPool owns the dedup + insertion-order side of the
-/// emitter's string-literal pool — `@.str.N = private unnamed_addr
-/// constant ...` lines that prepend any module that uses string
-/// constants. Mirrors the `mirGen.strings map[string]string +
-/// stringOrder []string` Go fields. Sibling of `MirRuntimeDecls`
-/// (this slice) and `MirLayoutCache` (#888) — the third member of
-/// the dedup-with-order family.
-///
-/// The interning convention: each unique literal content gets the
-/// next `@.str.N` symbol where `N = order.len()` before push. A
-/// repeat call with the same content returns the cached symbol
-/// rather than minting a new one — this is what lets `printf`
-/// callsites share format strings ("%s\n", "%ld\n", etc.) across
-/// the module without the binary growing per-callsite.
+/// MirStringPool records candidate string literal contents in source
+/// order. Emission dedupes by deterministic hash symbol so direct
+/// MIR string references and the pool declaration agree without
+/// threading mutable pool state through every operand emitter.
 pub struct MirStringPool {
     pub byContent: Map<String, String>,
     pub order: List<String>,
     pub fn intern(mut self, content: String) -> String {
-        let cached = self.byContent.get(content)
-        if cached.isSome() {
-            return cached.unwrap()
-        }
-        let sym = "@.str." + mirGenIntToString(self.order.len())
-        self.byContent.insert(content, sym)
-        self.order.push(content)
-        sym
+        mirStringPoolIntern(self, content)
     }
     pub fn symbol(self, content: String) -> String {
-        self.byContent.get(content) ?? ""
+        mirStringPoolSymbol(self, content)
     }
     pub fn orderedKeys(self) -> List<String> {
-        self.order
+        mirStringPoolOrderedKeys(self)
     }
     pub fn isEmpty(self) -> Bool {
-        self.order.len() == 0
+        mirStringPoolIsEmpty(self)
     }
 }
-/// byContent maps the literal content (the raw bytes between the
-/// opening `c"` and closing `"` of the user's source-level string
-/// literal) to its assigned `@.str.N` symbol. Same value
-/// re-encoded later via `mirEncodeLLVMString` at emission time.
-/// order is the insertion-ordered list of literal contents — the
-/// keys of `byContent` in the order they were interned. Walked by
-/// `emitStringPool` to build the pool block deterministically
-/// regardless of map iteration order.
-/// intern returns the `@.str.N` symbol for `content`, allocating
-/// a fresh one when this is the first call for that content and
-/// returning the cached symbol on repeat calls. The N suffix is
-/// `order.len()` at the moment of allocation, matching the Go
-/// `fmt.Sprintf("@.str.%d", len(g.strings))` shape byte-for-byte.
-/// symbol looks up the `@.str.N` symbol for an already-interned
-/// content; returns `""` when not present. Used by
-/// `emitStringPool`'s walk over `order` to recover each entry's
-/// symbol without re-interning.
-/// orderedKeys returns the insertion-ordered list of literal
-/// contents — the keys of `byContent` in the order interned.
-/// Used by `emitStringPool` to walk the pool deterministically.
-/// isEmpty reports whether the pool holds no literals — the
-/// early-exit gate in `emitStringPool` so modules that don't
-/// use any string constants emit no pool block.
+fn mirStringPoolIntern(pool: MirStringPool, content: String) -> String {
+    let sym = mirStringRefSymbol(content)
+    pool.byContent.insert(content, sym)
+    pool.order.push(content)
+    sym
+}
+fn mirStringPoolSymbol(pool: MirStringPool, content: String) -> String {
+    let _ = pool
+    mirStringRefSymbol(content)
+}
+fn mirStringPoolOrderedKeys(pool: MirStringPool) -> List<String> {
+    pool.order
+}
+fn mirStringPoolIsEmpty(pool: MirStringPool) -> Bool {
+    pool.order.len() == 0
+}
+/// byContent maps raw literal content to the hash symbol used by
+/// operand emission. order keeps every collected candidate in source
+/// order; `mirEmitStringPoolSection` performs final symbol-level
+/// dedupe so repeated literals and hash-stable direct references
+/// remain consistent.
 /// §4 closure-thunk definition cache.
 ///
 /// MirThunkDefs owns the dedup + insertion-order side of the
@@ -17012,9 +16993,13 @@ pub struct MirEmitOpts {
     pub packageName: String,
     pub sourcePath: String,
     pub target: String,
+    pub sourceText: String,
 }
 pub fn mirEmitOpts(packageName: String, sourcePath: String, target: String) -> MirEmitOpts {
-    MirEmitOpts {packageName, sourcePath, target}
+    MirEmitOpts {packageName, sourcePath, target, sourceText: ""}
+}
+pub fn mirEmitOptsWithSource(packageName: String, sourcePath: String, target: String, sourceText: String) -> MirEmitOpts {
+    MirEmitOpts {packageName, sourcePath, target, sourceText}
 }
 /// mirEmitModule renders a fully-lowered MirModule as LLVM IR text.
 ///
@@ -17037,7 +17022,8 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     out = out + mirEmitRuntimeDeclarationsSection()
     out = out + mirEmitTypeDefsSection(m)
     out = out + mirEmitGlobalsSection(m)
-    let pool = mirCollectStringPool(m)
+    let mut pool = mirCollectStringPool(m)
+    pool = mirCollectStringPoolFromSource(pool, opts.sourceText)
     out = out + mirEmitStringPoolSection(pool)
     out = out + mirEmitModuleInitDispatcher(m)
     for func in m.functions {
@@ -18314,6 +18300,9 @@ fn mirEmitCallInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, instr
     if instr.calleeKind == MirCalleeNone {
         return "  ; TODO unknown call kind (calleeKind=None)\n"
     }
+    if instr.calleeKind == MirCalleeFn && instr.calleeSymbol == "std.fs.readToString" {
+        return mirEmitStdFsReadToStringCall(func, block, instrIdx, instr)
+    }
     let argList = mirEmitCallArgList(m, func, block, instrIdx, instr.args)
     let calleeText = if instr.calleeKind == MirCalleeIndirect {
         mirEmitOperand(instr.calleeOperand)
@@ -18332,6 +18321,19 @@ fn mirEmitCallInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, instr
         return mirEmitCallValueLine(dest, retTy, calleeText, argList)
     }
     mirEmitCallStmtLine(calleeText, argList)
+}
+fn mirEmitStdFsReadToStringCall(func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
+    if !instr.hasDest || instr.args.len() == 0 {
+        return "  ; TODO std.fs.readToString without destination/path\n"
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO std.fs.readToString call-into-projection dest\n"
+    }
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let pathArg = mirEmitFunctionTypedOperandValue(func, block, instrIdx, instr.args[0], "ptr")
+    let boxed = dest + ".fsread"
+    "  " + boxed + " = call ptr @std.fs.readToString(ptr " + pathArg + ")\n" +
+    "  " + dest + " = load \{ i64, i64 \}, ptr " + boxed + ", align 8\n"
 }
 /// mirEmitCallStmtLine renders `  call void @<sym>(<args>)` or
 /// `  call void %<reg>(<args>)`. Generalises `mirCallVoidLine` to
@@ -18961,7 +18963,7 @@ fn mirEmitLenSymbol(typeName: String) -> String {
         return "osty_rt_set_len"
     }
     if typeName == "String" {
-        return "osty_rt_string_byte_len"
+        return "osty_rt_strings_ByteLen"
     }
     if typeName == "Bytes" {
         return "osty_rt_bytes_len"
@@ -19679,13 +19681,17 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_bool_to_string(i1)\n"
     out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
     out = out + "declare ptr @osty_rt_float_to_string(double)\n"
+    out = out + "declare ptr @std.fs.readToString(ptr)\n"
+    out = out + "declare ptr @std.env.args()\n"
+    out = out + "declare ptr @std.env.get(ptr)\n"
+    out = out + "declare void @std.os.exit(i64)\n"
     out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
     out = out + "declare void @osty_rt_option_unwrap_none()\n"
     out = out + "declare void @osty_rt_result_unwrap_err()\n"
     out = out + "declare i64 @osty_rt_list_len(ptr)\n"
     out = out + "declare i64 @osty_rt_map_len(ptr)\n"
     out = out + "declare i64 @osty_rt_set_len(ptr)\n"
-    out = out + "declare i64 @osty_rt_string_byte_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_strings_ByteLen(ptr)\n"
     out = out + "declare i64 @osty_rt_bytes_len(ptr)\n"
     out = out + "declare ptr @osty_rt_list_new()\n"
     out = out + "declare i64 @osty_rt_list_get_i64(ptr, i64)\n"
@@ -20109,7 +20115,7 @@ fn mirEmitAssignIntoTwoStepProjection(m: MirModule, func: MirFunction, block: Mi
     let innerWrite = baseReg + ".w" + mirGenIntToString(instrIdx) + "_1"
     let finalTarget = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
     let mut out = "  " + midRead + " = extractvalue " + baseTy + " " + baseValue + ", " + mirGenIntToString(firstProj.index) + "\n"
-    out = out + mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, instr.dest.local)
+    out = out + mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
     let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
     out = out + "  " + innerWrite + " = insertvalue " + midTy + " " + midRead + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastProj.index) + "\n"
     out + "  " + finalTarget + " = insertvalue " + baseTy + " " + baseValue + ", " + midTy + " " + innerWrite + ", " + mirGenIntToString(firstProj.index) + "\n"
@@ -20136,7 +20142,7 @@ fn mirEmitAssignIntoSingleProjection(m: MirModule, func: MirFunction, block: Mir
     let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
     let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
     let valueDest = baseReg + ".w" + mirGenIntToString(instrIdx) + "_" + mirGenIntToString(proj.index)
-    let mut out = mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, instr.dest.local)
+    let mut out = mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
     let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
     let target = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
     out + "  " + target + " = insertvalue " + baseTy + " " + baseValue + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(proj.index) + "\n"
@@ -20440,7 +20446,7 @@ fn mirEmitStringLenIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInst
     }
     let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
     let arg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
-    "  " + dest + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+    "  " + dest + " = call i64 @osty_rt_strings_ByteLen(ptr " + arg + ")\n"
 }
 fn mirEmitStringIsEmptyIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -20449,7 +20455,7 @@ fn mirEmitStringIsEmptyIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: Mir
     let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
     let arg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
     let lenReg = dest + ".sl"
-    let mut out = "  " + lenReg + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+    let mut out = "  " + lenReg + " = call i64 @osty_rt_strings_ByteLen(ptr " + arg + ")\n"
     out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
 }
 fn mirEmitStringIndexOfIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
@@ -22388,44 +22394,72 @@ pub fn mirCollectStringPool(m: MirModule) -> MirStringPool {
         }
         for block in func.blocks {
             for instr in block.instrs {
-                mirCollectStringPoolFromInstr(pool, instr)
+                pool = mirCollectStringPoolFromInstr(pool, instr)
             }
         }
     }
     pool
 }
-fn mirCollectStringPoolFromInstr(pool: MirStringPool, instr: MirInstr) {
+fn mirCollectStringPoolFromSource(pool: MirStringPool, source: String) -> MirStringPool {
+    if source == "" {
+        return pool
+    }
+    let mut next = pool
+    let lexed = ostyLexSource(source)
+    let facts = ostyLexFactsFromStream(lexed.source, lexed.stream)
+    for part in facts.stringParts {
+        if part.kindCode == 0 {
+            mirStringPoolIntern(next, part.text)
+        }
+    }
+    next
+}
+fn mirCollectStringPoolFromInstr(pool: MirStringPool, instr: MirInstr) -> MirStringPool {
+    let mut next = pool
     if instr.kind == MirInstrAssign {
-        mirCollectStringPoolFromOperand(pool, instr.src.arg)
-        mirCollectStringPoolFromOperand(pool, instr.src.right)
+        next = mirCollectStringPoolFromOperand(next, instr.src.arg)
+        next = mirCollectStringPoolFromOperand(next, instr.src.right)
         for f in instr.src.aggFields {
-            mirCollectStringPoolFromOperand(pool, f)
+            next = mirCollectStringPoolFromOperand(next, f)
         }
     }
     for arg in instr.args {
-        mirCollectStringPoolFromOperand(pool, arg)
+        next = mirCollectStringPoolFromOperand(next, arg)
     }
-    mirCollectStringPoolFromOperand(pool, instr.calleeOperand)
+    mirCollectStringPoolFromOperand(next, instr.calleeOperand)
 }
-fn mirCollectStringPoolFromOperand(pool: MirStringPool, op: MirOperand) {
+fn mirCollectStringPoolFromOperand(pool: MirStringPool, op: MirOperand) -> MirStringPool {
     if op.kind != MirOpConst {
-        return
+        return pool
     }
-    if op.const.kind != MirConstString && op.const.kind != MirConstBytes {
-        return
+    let mut next = pool
+    if op.const.kind == MirConstString || op.const.kind == MirConstBytes {
+        mirStringPoolIntern(next, op.const.strValue)
+        return next
     }
-    pool.intern(op.const.strValue)
+    if op.const.strValue != "" {
+        mirStringPoolIntern(next, op.const.strValue)
+        return next
+    }
+    if op.typ == "String" || op.typ == "Bytes" {
+        mirStringPoolIntern(next, op.const.strValue)
+    }
+    next
 }
 pub fn mirEmitStringPoolSection(pool: MirStringPool) -> String {
-    if pool.isEmpty() {
+    if mirStringPoolIsEmpty(pool) {
         return ""
     }
     let mut out = mirModuleSectionDirective("string pool")
-    for literal in pool.orderedKeys() {
+    let mut emitted: Map<String, Bool> = {:}
+    for literal in mirStringPoolOrderedKeys(pool) {
         let sym = mirStringRefSymbol(literal)
-        let encoded = mirEncodeStringLiteral(literal)
-        let lengthDigits = mirGenIntToString(literal.len() + 1)
-        out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
+        if emitted.containsKey(sym) == false {
+            emitted.insert(sym, true)
+            let encoded = mirEncodeStringLiteral(literal)
+            let lengthDigits = mirGenIntToString(literal.len() + 1)
+            out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
+        }
     }
     out + "\n"
 }

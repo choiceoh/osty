@@ -3,8 +3,31 @@ use std.fs
 use std.os
 use std.strings
 
+fn selfhostMirDriverStringEq(a: String, b: String) -> Bool {
+    if a.len() == b.len() {
+        return strings.hasPrefix(a, b)
+    }
+    false
+}
+
 fn selfhostMirDriverHasCommand(args: List<String>, name: String) -> Bool {
-    args.len() > 0 && args[0] == name
+    selfhostMirDriverCommandOffset(args, name) != 0
+}
+
+fn selfhostMirDriverCommandOffset(args: List<String>, name: String) -> Int {
+    if args.len() > 0 {
+        let first = args[0]
+        if selfhostMirDriverStringEq(first, name) {
+            return 1
+        }
+    }
+    if args.len() > 1 {
+        let second = args[1]
+        if selfhostMirDriverStringEq(second, name) {
+            return 2
+        }
+    }
+    0
 }
 
 fn selfhostMirDriverOptionValue(args: List<String>, name: String) -> String {
@@ -15,8 +38,10 @@ fn selfhostMirDriverOptionValue(args: List<String>, name: String) -> String {
         if strings.hasPrefix(arg, prefix) {
             return strings.trimPrefix(arg, prefix)
         }
-        if arg == name && i + 1 < args.len() {
-            return args[i + 1]
+        if selfhostMirDriverStringEq(arg, name) {
+            if i + 1 < args.len() {
+                return args[i + 1]
+            }
         }
         i = i + 1
     }
@@ -119,11 +144,13 @@ fn selfhostMirDriverRunDoctor() -> Int {
 }
 
 fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
-    if args.len() < 2 {
+    let commandOffset = selfhostMirDriverCommandOffset(args, "lir-proto-lower-mir-json")
+    let pathIndex = if commandOffset == 2 { 2 } else { 1 }
+    if args.len() < pathIndex + 1 {
         eprint("osty-self lir-proto-lower-mir-json: missing <file.mir.json> argument\n")
         return 2
     }
-    let path = args[1]
+    let path = args[pathIndex]
     let packageName = selfhostMirDriverOptionValue(args, "--package-name")
     let target = selfhostMirDriverOptionValue(args, "--target")
     let raw = match fs.readToString(path) {

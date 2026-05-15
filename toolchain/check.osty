@@ -317,6 +317,10 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
             registerStdTestingGenAliasFns(env, alias)
         } else if node.text == "std.fs" {
             registerStdFsAliasFns(env, alias)
+        } else if node.text == "std.env" {
+            registerStdEnvAliasFns(env, alias)
+        } else if node.text == "std.os" {
+            registerStdOsAliasFns(env, alias)
         } else if node.text == "std.debug" {
             registerStdDebugAliasFns(env, alias)
         } else if node.text == "std.thread" {
@@ -541,6 +545,42 @@ fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
     for sig in add {
         checkRegisterFn(env, sig)
     }
+}
+/// registerStdEnvAliasFns — tool-facing std.env surface.
+fn registerStdEnvAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tUnit_ = tUnit(tys)
+    let tError_ = tyNamed(tys, "Error", [])
+    let tListString = tyNamed(tys, "List", [tString_])
+    let tMapStringString = tyNamed(tys, "Map", [tString_, tString_])
+    let tOptString = tyOptional(tys, tString_)
+    let tResString = tyNamed(tys, "Result", [tString_, tError_])
+    let tResUnit = tyNamed(tys, "Result", [tUnit_, tError_])
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+    let add = [CheckFnSig {name: "args", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString, paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "get", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptString, paramNames: ["name"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "require", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: ["name"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "set", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["name", "value"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "unset", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["name"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "vars", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tMapStringString, paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "currentDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds}, CheckFnSig {name: "setCurrentDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds}]
+    for sig in add {
+        checkRegisterFn(env, sig)
+    }
+}
+/// registerStdOsAliasFns — process-control subset used by selfhost drivers.
+fn registerStdOsAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tInt_ = tInt(tys)
+    let tError_ = tyNamed(tys, "Error", [])
+    let tOutput = tyNamed(tys, "Output", [])
+    let tListString = tyNamed(tys, "List", [tString_])
+    let tResOutput = tyNamed(tys, "Result", [tOutput, tError_])
+    let tResString = tyNamed(tys, "Result", [tString_, tError_])
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+    checkRegisterFn(env, CheckFnSig {name: "exit", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tNever(tys), paramNames: ["code"], paramTys: [tInt_], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "pid", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_, paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "hostname", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "exec", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResOutput, paramNames: ["cmd", "args"], paramTys: [tString_, tListString], generics: emptyGenerics, genericBounds: emptyBounds})
+    checkRegisterFn(env, CheckFnSig {name: "execShell", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResOutput, paramNames: ["cmd"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds})
 }
 /// registerStdDebugAliasFns — dbg.
 fn registerStdDebugAliasFns(env: CheckEnv, alias: String) {
