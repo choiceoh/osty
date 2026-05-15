@@ -524,7 +524,7 @@ fn runCompile(args: List<String>) -> Int {
         }
         return 1
     }
-    let opts = mirEmitOpts("main", path, "")
+    let opts = mirEmitOptsWithSource("main", path, "", source)
     let irText = mirEmitModule(mir, opts)
     print(irText)
     0
