@@ -17095,7 +17095,7 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
             out = out + mirEmitInstruction(func, block.id, instrIdx, instr)
             instrIdx = instrIdx + 1
         }
-        out = out + mirEmitTerminatorLine(func, block.term, block.hasTerm)
+        out = out + mirEmitTerminatorLine(func, block.id, block.term, block.hasTerm)
     }
     out + mirFunctionDefineFooter()
 }
@@ -17111,7 +17111,7 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
 /// valid IR but leaks no actual return value into the caller. Trivial
 /// `fn main() {}` and `fn f() -> Int { 0 }` both compile structurally;
 /// only the latter behaves incorrectly at runtime.
-fn mirEmitTerminatorLine(func: MirFunction, term: MirTerm, hasTerm: Bool) -> String {
+fn mirEmitTerminatorLine(func: MirFunction, blockId: Int, term: MirTerm, hasTerm: Bool) -> String {
     if hasTerm == false {
         return "  unreachable ; TODO Phase 1c: missing terminator\n"
     }
@@ -17119,8 +17119,8 @@ fn mirEmitTerminatorLine(func: MirFunction, term: MirTerm, hasTerm: Bool) -> Str
         MirTermReturn -> mirEmitReturnTerminator(func),
         MirTermGoto -> mirBrUncondLine(mirEmitBlockTargetLabel(func, term.target)),
         MirTermUnreachable -> mirUnreachableLine(),
-        MirTermBranch -> mirEmitBranchTerminator(func, term),
-        MirTermSwitchInt -> mirEmitSwitchTerminator(func, term),
+        MirTermBranch -> mirEmitBranchTerminator(func, blockId, term),
+        MirTermSwitchInt -> mirEmitSwitchTerminator(func, blockId, term),
         MirTermInvalid -> "  unreachable ; TODO: invalid terminator (lowering bug)\n",
     }
 }
@@ -17146,11 +17146,12 @@ fn mirEmitReturnTerminator(func: MirFunction) -> String {
 /// `mirEmitBlockTargetLabel`. When the cond resolves to a stub
 /// (uncovered operand kind), the verifier surfaces the dangling
 /// reference rather than the emitter producing a malformed `br`.
-fn mirEmitBranchTerminator(func: MirFunction, term: MirTerm) -> String {
-    let cond = mirEmitOperand(term.cond)
+fn mirEmitBranchTerminator(func: MirFunction, blockId: Int, term: MirTerm) -> String {
+    let tmpBase = "%b" + mirGenIntToString(blockId) + ".cond"
+    let (p, cond) = mirEmitOperandRead(term.cond, tmpBase)
     let thenLabel = mirEmitBlockTargetLabel(func, term.thenBlock)
     let elseLabel = mirEmitBlockTargetLabel(func, term.elseBlock)
-    "  br i1 " + cond + ", label %" + thenLabel + ", label %" + elseLabel + "\n"
+    p + "  br i1 " + cond + ", label %" + thenLabel + ", label %" + elseLabel + "\n"
 }
 /// mirEmitLocalRegName returns the LLVM SSA register name for a MIR
 /// local index. The `%v<id>` scheme matches what the future
@@ -17180,6 +17181,13 @@ fn mirEmitOperandPlace(place: MirPlace) -> String {
         return "0"
     }
     mirEmitLocalRegName(place.local)
+}
+fn mirEmitOperandRead(op: MirOperand, tmpBase: String) -> (String, String) {
+    if (op.kind == MirOpCopy || op.kind == MirOpMove) && mirPlaceHasProjections(op.place) {
+        let lines = mirEmitProjectedReadChain(tmpBase, op.place, op.typ)
+        return (lines, tmpBase)
+    }
+    ("", mirEmitOperand(op))
 }
 fn mirEmitConstOperand(c: MirConst) -> String {
     match c.kind {
@@ -17342,7 +17350,7 @@ fn mirEmitInstruction(func: MirFunction, blockId: Int, instrIdx: Int, instr: Mir
     match instr.kind {
         MirInstrInvalid -> "  ; TODO invalid MIR instruction\n",
         MirInstrAssign -> mirEmitAssignInstr(func, instr),
-        MirInstrCall -> mirEmitCallInstr(func, instr),
+        MirInstrCall -> mirEmitCallInstr(func, blockId, instrIdx, instr),
         MirInstrIntrinsic -> mirEmitIntrinsicInstr(func, blockId, instrIdx, instr),
         MirInstrStorageLive -> mirEmitStorageLifetimeLine("llvm.lifetime.start.p0", instr),
         MirInstrStorageDead -> mirEmitStorageLifetimeLine("llvm.lifetime.end.p0", instr),
@@ -17413,8 +17421,8 @@ fn mirOperandHasProjections(op: MirOperand) -> Bool {
 /// or bool operands. Plus is a Use-shaped copy.
 fn mirEmitRValueUnary(dest: String, rv: MirRValue) -> String {
     let ty = mirEmitRValueLLVMType(rv)
-    let op = mirEmitOperand(rv.arg)
-    match rv.unaryOp {
+    let (p0, op) = mirEmitOperandRead(rv.arg, dest + ".a0")
+    p0 + match rv.unaryOp {
         MirUnNeg -> {
             if ty == "double" || ty == "float" {
                 "  " + dest + " = fneg " + ty + " " + op + "\n"
@@ -17448,9 +17456,9 @@ fn mirEmitRValueBinary(dest: String, rv: MirRValue) -> String {
     } else {
         argTy
     }
-    let left = mirEmitOperand(rv.arg)
-    let right = mirEmitOperand(rv.right)
-    "  " + dest + " = " + opcode + " " + opTy + " " + left + ", " + right + "\n"
+    let (pL, left) = mirEmitOperandRead(rv.arg, dest + ".l")
+    let (pR, right) = mirEmitOperandRead(rv.right, dest + ".r")
+    pL + pR + "  " + dest + " = " + opcode + " " + opTy + " " + left + ", " + right + "\n"
 }
 /// mirBinaryOpSymbol mirrors the (private) `mirBinaryOpName` in
 /// `toolchain/mir.osty` so the generator can look up the symbol
@@ -17527,31 +17535,35 @@ fn mirEmitOperandLLVMType(op: MirOperand) -> String {
 /// Direct calls only (calleeKind == MirCalleeFn). Indirect / unknown
 /// callees stub with TODO. The return type comes from `func.locals`
 /// when `hasDest` so the call signature matches the dest slot.
-fn mirEmitCallInstr(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitCallInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.calleeKind == MirCalleeNone {
         return "  ; TODO unknown call kind (calleeKind=None)\n"
     }
-    let argList = mirEmitCallArgList(instr.args)
-    let calleeText = if instr.calleeKind == MirCalleeIndirect {
-        mirEmitOperand(instr.calleeOperand)
+    let tmpBase = mirEmitFreshTempName(blockId, instrIdx)
+    let (argPre, argList) = mirEmitCallArgListRead(instr.args, tmpBase)
+    let (calleePre, calleeText) = if instr.calleeKind == MirCalleeIndirect {
+        let calleeTmp = tmpBase + ".callee"
+        let (p, val) = mirEmitOperandRead(instr.calleeOperand, calleeTmp)
+        (p, val)
     } else {
-        "@" + instr.calleeSymbol
+        ("", "@" + instr.calleeSymbol)
     }
+    let pre = calleePre + argPre
     if instr.hasDest {
         let retTy = mirEmitCallReturnType(func, instr)
         if retTy == "void" {
-            return mirEmitCallStmtLine(calleeText, argList)
+            return pre + mirEmitCallStmtLine(calleeText, argList)
         }
         if mirPlaceHasProjections(instr.dest) {
             let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".calltmp"
-            let mut out = mirEmitCallValueLine(tmpReg, retTy, calleeText, argList)
+            let mut out = pre + mirEmitCallValueLine(tmpReg, retTy, calleeText, argList)
             out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, retTy)
             return out
         }
         let dest = mirEmitLocalRegName(instr.dest.local)
-        return mirEmitCallValueLine(dest, retTy, calleeText, argList)
+        return pre + mirEmitCallValueLine(dest, retTy, calleeText, argList)
     }
-    mirEmitCallStmtLine(calleeText, argList)
+    pre + mirEmitCallStmtLine(calleeText, argList)
 }
 /// mirEmitCallStmtLine renders `  call void @<sym>(<args>)` or
 /// `  call void %<reg>(<args>)`. Generalises `mirCallVoidLine` to
@@ -17594,6 +17606,23 @@ fn mirEmitCallArgList(args: List<MirOperand>) -> String {
         i = i + 1
     }
     out
+}
+fn mirEmitCallArgListRead(args: List<MirOperand>, tmpBase: String) -> (String, String) {
+    let mut pre = ""
+    let mut out = ""
+    let mut i = 0
+    for op in args {
+        if i > 0 {
+            out = out + ", "
+        }
+        let tmpName = tmpBase + ".a" + mirGenIntToString(i)
+        let (p, val) = mirEmitOperandRead(op, tmpName)
+        pre = pre + p
+        let ty = mirEmitOperandLLVMType(op)
+        out = out + ty + " " + val
+        i = i + 1
+    }
+    (pre, out)
 }
 /// mirEmitIntrinsicInstr lowers MirIntrinsicKind shapes the Phase 1d
 /// emitter understands. Print / println / eprint / eprintln of String
@@ -17763,17 +17792,17 @@ fn mirEmitIoWriteIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr, newline
         "false"
     }
     if arg.typ == "String" {
-        let argText = mirEmitOperand(arg)
-        return "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+        let (p0, argText) = mirEmitOperandRead(arg, mirEmitFreshTempName(blockId, instrIdx) + ".a0")
+        return p0 + "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
     }
     let toStringSym = mirEmitToStringSymbol(arg.typ)
     if toStringSym == "" {
         return "  ; TODO Phase 1f print of " + arg.typ + " (no to_string runtime helper)\n"
     }
     let llvmTy = mirEmitOperandLLVMType(arg)
-    let argText = mirEmitOperand(arg)
+    let (p1, argText) = mirEmitOperandRead(arg, mirEmitFreshTempName(blockId, instrIdx) + ".a1")
     let textReg = mirEmitFreshTempName(blockId, instrIdx)
-    let mut out = "  " + textReg + " = call ptr @" + toStringSym + "(" + llvmTy + " " + argText + ")\n"
+    let mut out = p1 + "  " + textReg + " = call ptr @" + toStringSym + "(" + llvmTy + " " + argText + ")\n"
     out = out + "  call void @osty_rt_io_write(ptr " + textReg + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
     out
 }
@@ -17822,12 +17851,15 @@ fn mirEmitFreshTempName(blockId: Int, instrIdx: Int) -> String {
 /// helper symbol is `osty_rt_panic` (LANG_SPEC §A.6 prelude
 /// `panic / unreachable / todo / abort` all route here).
 fn mirEmitAbortIntrinsic(instr: MirInstr) -> String {
+    let mut pre = ""
     let msg = if instr.args.len() >= 1 {
-        mirEmitOperand(instr.args[0])
+        let (p0, v) = mirEmitOperandRead(instr.args[0], mirEmitLocalRegName(instr.dest.local) + ".a0")
+        pre = p0
+        v
     } else {
         "null"
     }
-    let mut out = "  call void @osty_rt_panic(ptr " + msg + ")\n"
+    let mut out = pre + "  call void @osty_rt_panic(ptr " + msg + ")\n"
     out = out + "  unreachable\n"
     out
 }
@@ -17865,7 +17897,8 @@ fn mirEmitTupleAggregate(dest: String, rv: MirRValue) -> String {
     let mut i = 0
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
-        let fieldOp = mirEmitOperand(field)
+        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
+        out = out + pf
         let target = if i == n - 1 {
             dest
         } else {
@@ -17978,11 +18011,12 @@ fn mirEmitParamCopyLine(dest: String, ty: String, src: String) -> String {
 ///
 /// `term.target` is the default block; `term.cases` are the value→
 /// target arms; operand type comes from the cond operand.
-fn mirEmitSwitchTerminator(func: MirFunction, term: MirTerm) -> String {
+fn mirEmitSwitchTerminator(func: MirFunction, blockId: Int, term: MirTerm) -> String {
+    let tmpBase = "%b" + mirGenIntToString(blockId) + ".swcond"
+    let (pre, condText) = mirEmitOperandRead(term.cond, tmpBase)
     let condTy = mirEmitOperandLLVMType(term.cond)
-    let condText = mirEmitOperand(term.cond)
     let defaultLabel = mirEmitBlockTargetLabel(func, term.target)
-    let mut out = "  switch " + condTy + " " + condText + ", label %" + defaultLabel + " [\n"
+    let mut out = pre + "  switch " + condTy + " " + condText + ", label %" + defaultLabel + " [\n"
     for c in term.cases {
         let caseLabel = mirEmitBlockTargetLabel(func, c.target)
         out = out + "    " + condTy + " " + mirGenIntToString(c.value) + ", label %" + caseLabel + "\n"
@@ -18009,8 +18043,8 @@ fn mirEmitSwitchTerminator(func: MirFunction, term: MirTerm) -> String {
 fn mirEmitRValueCast(dest: String, rv: MirRValue) -> String {
     let fromLLVM = mirEmitCastTypeLLVM(rv.castFrom)
     let toLLVM = mirEmitCastTypeLLVM(rv.castTo)
-    let argText = mirEmitOperand(rv.arg)
-    match rv.castKind {
+    let (p0, argText) = mirEmitOperandRead(rv.arg, dest + ".a0")
+    p0 + match rv.castKind {
         MirCastIntResize -> mirEmitIntResizeCastLine(dest, fromLLVM, toLLVM, argText),
         MirCastIntToFloat -> "  " + dest + " = sitofp " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
         MirCastFloatToInt -> "  " + dest + " = fptosi " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
@@ -18463,9 +18497,9 @@ fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
     }
     if rv.aggFields.len() == 1 {
         let payload = rv.aggFields[0]
-        let payloadOp = mirEmitOperand(payload)
+        let (p0, payloadOp) = mirEmitOperandRead(payload, dest + ".a0")
         let payloadTy = mirEmitOperandLLVMType(payload)
-        let mut out = "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
+        let mut out = p0 + "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
         if payloadTy == "i64" {
             out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + payloadOp + ", 1\n"
             return out
@@ -18476,9 +18510,9 @@ fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
         return out
     }
     let payload = rv.aggFields[0]
-    let payloadOp = mirEmitOperand(payload)
+    let (p1, payloadOp) = mirEmitOperandRead(payload, dest + ".a0")
     let payloadTy = mirEmitOperandLLVMType(payload)
-    let mut out = "  ; NOTE: enum payload has " + mirGenIntToString(rv.aggFields.len()) + " fields; only first packed (Phase 1k limitation)\n"
+    let mut out = p1 + "  ; NOTE: enum payload has " + mirGenIntToString(rv.aggFields.len()) + " fields; only first packed (Phase 1k limitation)\n"
     out = out + "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
     if payloadTy == "i64" {
         out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + payloadOp + ", 1\n"
@@ -20243,7 +20277,8 @@ fn mirEmitClosureAggregate(dest: String, rv: MirRValue) -> String {
     let mut i = 0
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
-        let fieldOp = mirEmitOperand(field)
+        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
+        out = out + pf
         let target = if i == n - 1 {
             dest
         } else {
@@ -20268,7 +20303,8 @@ fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
             out = out + "  ; TODO list aggregate push for elem type \"" + fieldTy + "\"\n"
             continue
         }
-        let fieldOp = mirEmitOperand(field)
+        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
+        out = out + pf
         out = out + "  call void @" + pushSym + "(ptr " + dest + ", " + fieldTy + " " + fieldOp + ")\n"
     }
     out
@@ -20296,8 +20332,9 @@ fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
         let vOp = rv.aggFields[i + 1]
         let kTy = mirEmitOperandLLVMType(kOp)
         let vTy = mirEmitOperandLLVMType(vOp)
-        let kText = mirEmitOperand(kOp)
-        let vText = mirEmitOperand(vOp)
+        let (pk, kText) = mirEmitOperandRead(kOp, dest + ".k" + mirGenIntToString(i))
+        let (pv, vText) = mirEmitOperandRead(vOp, dest + ".v" + mirGenIntToString(i))
+        out = out + pk + pv
         let sym = mirMapInsertSymbolForType(kOp.typ, kTy)
         if sym == "" {
             out = out + "  ; TODO map aggregate insert for key type \"" + kTy + "\"\n"
@@ -20446,9 +20483,9 @@ fn mirEmitBytesIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
         return "  ; TODO bytes isEmpty\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
+    let (p0, arg) = mirEmitOperandRead(instr.args[0], dest + ".a0")
     let lenReg = dest + ".bl"
-    let mut out = "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + arg + ")\n"
+    let mut out = p0 + "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + arg + ")\n"
     out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
 }
 fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
@@ -20459,9 +20496,9 @@ fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, inst
     if mirStringStartsWith(optLLVM, "\{") == false {
         return "  ; TODO bytes get dest type \"" + optLLVM + "\"\n"
     }
-    let bs = mirEmitOperand(instr.args[0])
-    let idx = mirEmitOperand(instr.args[1])
     let base = mirEmitFreshTempName(blockId, instrIdx)
+    let (p0, bs) = mirEmitOperandRead(instr.args[0], base + ".a0")
+    let (p1, idx) = mirEmitOperandRead(instr.args[1], base + ".a1")
     let resultSlot = base + ".bytesget"
     let lenReg = base + ".len"
     let nonNegReg = base + ".nonneg"
@@ -20471,7 +20508,7 @@ fn mirEmitBytesGetIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, inst
     let someLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.some")
     let noneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.none")
     let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "bytes.get.done")
-    let mut out = "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
+    let mut out = p0 + p1 + "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
     out = out + "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + bs + ")\n"
     out = out + "  " + nonNegReg + " = icmp sge i64 " + idx + ", 0\n"
     out = out + "  " + beforeEndReg + " = icmp slt i64 " + idx + ", " + lenReg + "\n"
@@ -20499,19 +20536,19 @@ fn mirEmitBytesIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
         return "  ; TODO bytes indexOf\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let lhs = mirEmitOperand(instr.args[0])
-    let rhs = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call i64 @osty_rt_bytes_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
+    let (p0, lhs) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, rhs) = mirEmitOperandRead(instr.args[1], dest + ".a1")
+    p0 + p1 + "  " + dest + " = call i64 @osty_rt_bytes_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
 fn mirEmitBytesContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO bytes contains\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let bytes = mirEmitOperand(instr.args[0])
-    let needle = mirEmitOperand(instr.args[1])
+    let (p0, bytes) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, needle) = mirEmitOperandRead(instr.args[1], dest + ".a1")
     let idx = dest + ".idx"
-    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + needle + ")\n"
+    let mut out = p0 + p1 + "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + needle + ")\n"
     out + "  " + dest + " = icmp sge i64 " + idx + ", 0\n"
 }
 fn mirEmitBytesStartsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -20519,10 +20556,10 @@ fn mirEmitBytesStartsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String
         return "  ; TODO bytes startsWith\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let bytes = mirEmitOperand(instr.args[0])
-    let prefix = mirEmitOperand(instr.args[1])
+    let (p0, bytes) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, prefix) = mirEmitOperandRead(instr.args[1], dest + ".a1")
     let idx = dest + ".idx"
-    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + prefix + ")\n"
+    let mut out = p0 + p1 + "  " + idx + " = call i64 @osty_rt_bytes_index_of(ptr " + bytes + ", ptr " + prefix + ")\n"
     out + "  " + dest + " = icmp eq i64 " + idx + ", 0\n"
 }
 fn mirEmitBytesEndsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -20530,15 +20567,15 @@ fn mirEmitBytesEndsWithIntrinsic(func: MirFunction, instr: MirInstr) -> String {
         return "  ; TODO bytes endsWith\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let bytes = mirEmitOperand(instr.args[0])
-    let suffix = mirEmitOperand(instr.args[1])
+    let (p0, bytes) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, suffix) = mirEmitOperandRead(instr.args[1], dest + ".a1")
     let idx = dest + ".idx"
     let suffixLen = dest + ".slen"
     let bytesLen = dest + ".blen"
     let end = dest + ".end"
     let nonNeg = dest + ".nonneg"
     let atEnd = dest + ".atend"
-    let mut out = "  " + idx + " = call i64 @osty_rt_bytes_last_index_of(ptr " + bytes + ", ptr " + suffix + ")\n"
+    let mut out = p0 + p1 + "  " + idx + " = call i64 @osty_rt_bytes_last_index_of(ptr " + bytes + ", ptr " + suffix + ")\n"
     out = out + "  " + suffixLen + " = call i64 @osty_rt_bytes_len(ptr " + suffix + ")\n"
     out = out + "  " + bytesLen + " = call i64 @osty_rt_bytes_len(ptr " + bytes + ")\n"
     out = out + "  " + end + " = add i64 " + idx + ", " + suffixLen + "\n"
@@ -20551,45 +20588,45 @@ fn mirEmitBytesLastIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> Strin
         return "  ; TODO bytes lastIndexOf\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let lhs = mirEmitOperand(instr.args[0])
-    let rhs = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call i64 @osty_rt_bytes_last_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
+    let (p0, lhs) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, rhs) = mirEmitOperandRead(instr.args[1], dest + ".a1")
+    p0 + p1 + "  " + dest + " = call i64 @osty_rt_bytes_last_index_of(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
 fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO bytes split\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let lhs = mirEmitOperand(instr.args[0])
-    let sep = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call ptr @osty_rt_bytes_split(ptr " + lhs + ", ptr " + sep + ")\n"
+    let (p0, lhs) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, sep) = mirEmitOperandRead(instr.args[1], dest + ".a1")
+    p0 + p1 + "  " + dest + " = call ptr @osty_rt_bytes_split(ptr " + lhs + ", ptr " + sep + ")\n"
 }
 fn mirEmitBytesUnaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO bytes unary intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let value = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call ptr @" + sym + "(ptr " + value + ")\n"
+    let (p0, value) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    p0 + "  " + dest + " = call ptr @" + sym + "(ptr " + value + ")\n"
 }
 fn mirEmitBytesBinaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO bytes binary intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let a = mirEmitOperand(instr.args[0])
-    let b = mirEmitOperand(instr.args[1])
-    "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ")\n"
+    let (p0, a) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, b) = mirEmitOperandRead(instr.args[1], dest + ".a1")
+    p0 + p1 + "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ")\n"
 }
 fn mirEmitBytesTernaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO bytes ternary intrinsic\n"
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
-    let a = mirEmitOperand(instr.args[0])
-    let b = mirEmitOperand(instr.args[1])
-    let c = mirEmitOperand(instr.args[2])
-    "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ", ptr " + c + ")\n"
+    let (p0, a) = mirEmitOperandRead(instr.args[0], dest + ".a0")
+    let (p1, b) = mirEmitOperandRead(instr.args[1], dest + ".a1")
+    let (p2, c) = mirEmitOperandRead(instr.args[2], dest + ".a2")
+    p0 + p1 + p2 + "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ", ptr " + c + ")\n"
 }
 fn mirEmitBytesRepeatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
