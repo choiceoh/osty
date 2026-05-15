@@ -1,6 +1,7 @@
 package toolchain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -134,6 +135,9 @@ func installManagedBinary(tmpPath, dest, label string) error {
 		return nil
 	} else {
 		firstErr := err
+		if !shouldRetryManagedReplace(tmpPath, dest, firstErr) {
+			return fmt.Errorf("install managed %s: %w", label, firstErr)
+		}
 		if err := removeManagedFile(dest); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("replace managed %s: remove stale artifact: %w (initial rename failed: %v)", label, err, firstErr)
 		}
@@ -142,4 +146,11 @@ func installManagedBinary(tmpPath, dest, label string) error {
 		}
 	}
 	return nil
+}
+
+func shouldRetryManagedReplace(tmpPath, dest string, err error) bool {
+	if !errors.Is(err, os.ErrExist) {
+		return false
+	}
+	return fileExists(tmpPath) && fileExists(dest)
 }
