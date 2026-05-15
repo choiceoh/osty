@@ -103,3 +103,27 @@ func pkgPathBase(p string) string {
 	}
 	return p[sep+1 : end]
 }
+
+// PkgSourceKind enum constants. Order matches
+// toolchain/pkg_policy.osty + internal/pkgmgr.SourceKind iota.
+const (
+	PkgSourceKindPath     int = 0
+	PkgSourceKindGit      int = 1
+	PkgSourceKindRegistry int = 2
+)
+
+// PkgSourceKindString maps a SourceKind int back to its
+// human-readable label. Unknown values collapse to "unknown".
+//
+// Osty: toolchain/pkg_policy.osty:118
+func PkgSourceKindString(kind int) string {
+	switch kind {
+	case PkgSourceKindPath:
+		return "path"
+	case PkgSourceKindGit:
+		return "git"
+	case PkgSourceKindRegistry:
+		return "registry"
+	}
+	return "unknown"
+}

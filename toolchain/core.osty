@@ -815,15 +815,14 @@ pub fn coreLetDecl(arena: CoreArena, name: String, ty: Int, value: Int, isPub: B
     n.text = name
     n.ty = ty
     n.left = value
-    n.flags = (if isPub {
-        1
-    } else {
-        0
-    }) + (if mutable {
-        2
-    } else {
-        0
-    })
+    let mut flags = 0
+    if isPub {
+        flags = flags + 1
+    }
+    if mutable {
+        flags = flags + 2
+    }
+    n.flags = flags
     n.start = start
     n.end = end
     coreArenaAdd(arena, n)

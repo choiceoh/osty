@@ -126,6 +126,41 @@ func TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing(t *testing.T) {
 	}
 }
 
+func TestEmitLLVMFallbackUsesStage0WhenPartialOstySelfDeclines(t *testing.T) {
+	t.Setenv(Stage0FallbackEnv, "1")
+	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    println(1)
+}
+`)
+
+	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
+		return nil, false, []error{errors.New("osty-self: stage0 declined function: mirJsonParseValue")}, nil
+	})
+	stage0Called := false
+	withStage0FallbackOverride(t, func(entry Entry, opts llvmabi.Options) ([]byte, error) {
+		stage0Called = true
+		if entry.MIR == nil {
+			t.Fatal("stage0 fallback received nil MIR")
+		}
+		return []byte("; stage0 fallback after partial osty-self\n"), nil
+	})
+
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if !stage0Called {
+		t.Fatal("expected stage0 fallback to be invoked")
+	}
+	if !strings.Contains(string(got), "partial osty-self") {
+		t.Fatalf("expected stage0 IR in output:\n%s", got)
+	}
+	if !findWarning(warnings, "stage0 fallback: emitted MIR through bootstrap-only path") {
+		t.Fatalf("expected fallback breadcrumb in warnings: %v", warnings)
+	}
+}
+
 func TestEmitLLVMFallbackSkipsStage0WhenEnvNotSet(t *testing.T) {
 	// No env var set — stage0 must not be reached even when the
 	// native subprocess declined with the osty-self signal.

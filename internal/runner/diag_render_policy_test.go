@@ -121,3 +121,105 @@ func TestDiagRenderReplacement(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagSeverityString(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want string
+	}{
+		{"error", DiagSeverityError, "error"},
+		{"warning", DiagSeverityWarning, "warning"},
+		{"note", DiagSeverityNote, "note"},
+		{"unknown-positive", 99, "unknown"},
+		{"unknown-negative", -1, "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DiagSeverityString(c.in); got != c.want {
+				t.Errorf("DiagSeverityString(%d) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDiagShortError(t *testing.T) {
+	cases := []struct {
+		name     string
+		code     string
+		severity int
+		line     int
+		column   int
+		message  string
+		want     string
+	}{
+		{"with-code", "E0500", DiagSeverityError, 12, 3, "name not found", "E0500: error at 12:3: name not found"},
+		{"without-code", "", DiagSeverityWarning, 1, 5, "unused let", "warning at 1:5: unused let"},
+		{"note-severity", "E0703", DiagSeverityNote, 42, 1, "see also", "E0703: note at 42:1: see also"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DiagShortError(c.code, c.severity, c.line, c.column, c.message)
+			if got != c.want {
+				t.Errorf("DiagShortError = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDiagSeverityAnsiColor(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want string
+	}{
+		{"error", DiagSeverityError, "\x1b[31m"},
+		{"warning", DiagSeverityWarning, "\x1b[33m"},
+		{"note", DiagSeverityNote, "\x1b[36m"},
+		{"unknown-99", 99, ""},
+		{"unknown-neg", -1, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DiagSeverityAnsiColor(c.in); got != c.want {
+				t.Errorf("DiagSeverityAnsiColor(%d) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDiagSuggestionDisplayOf(t *testing.T) {
+	cases := []struct {
+		name              string
+		userLabel         string
+		machineApplicable bool
+		rendered          string
+		wantTag           string
+		wantLabel         string
+		wantReplacement   string
+	}{
+		{"fix-applicable", "rename to foo", true, "let foo = 1", "fix", "rename to foo", "let foo = 1"},
+		{"suggest-only", "rename to foo", false, "let foo = 1", "suggest", "rename to foo", "let foo = 1"},
+		{"empty-label", "", true, "x", "fix", "suggested fix", "x"},
+		{"empty-replacement", "rm unused", true, "", "fix", "rm unused", "(delete)"},
+		{"all-defaults", "", false, "", "suggest", "suggested fix", "(delete)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DiagSuggestionDisplayOf(c.userLabel, c.machineApplicable, c.rendered)
+			if got.Tag != c.wantTag || got.Label != c.wantLabel || got.Replacement != c.wantReplacement {
+				t.Errorf("DiagSuggestionDisplayOf = %+v, want {%q %q %q}",
+					got, c.wantTag, c.wantLabel, c.wantReplacement)
+			}
+		})
+	}
+}
+
+func TestDiagNoteHelpLabels(t *testing.T) {
+	if got := DiagNoteLabel(); got != "note" {
+		t.Errorf("DiagNoteLabel = %q, want %q", got, "note")
+	}
+	if got := DiagHelpLabel(); got != "help" {
+		t.Errorf("DiagHelpLabel = %q, want %q", got, "help")
+	}
+}

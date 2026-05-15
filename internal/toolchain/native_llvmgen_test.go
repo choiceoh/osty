@@ -78,6 +78,7 @@ func TestEnsureNativeLLVMGenRebuildsWhenSourcesAreNewer(t *testing.T) {
 		"internal/backend/llvm.go",
 		"internal/llvmabi/api.go",
 		"internal/nativellvmgen/exec.go",
+		"internal/toolchain/native_lirproto.go",
 		"go.mod",
 	} {
 		path := filepath.Join(repo, rel)

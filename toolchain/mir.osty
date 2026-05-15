@@ -708,61 +708,22 @@ pub fn mirInstrInvalid() -> MirInstr {
     MirInstr {kind: MirInstrInvalid, span: mirNoSpan(), dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: -1}
 }
 pub fn mirAssignInstr(dest: MirPlace, src: MirRValue, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrAssign
-    i.dest = dest
-    i.hasDest = true
-    i.src = src
-    i.span = span
-    i
+    MirInstr {kind: MirInstrAssign, span, dest, hasDest: true, src, calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: -1}
 }
 pub fn mirCallInstr(hasDest: Bool, dest: MirPlace, calleeSymbol: String, calleeType: String, args: List<MirOperand>, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrCall
-    i.hasDest = hasDest
-    i.dest = dest
-    i.calleeKind = MirCalleeFn
-    i.calleeSymbol = calleeSymbol
-    i.calleeType = calleeType
-    i.args = args
-    i.span = span
-    i
+    MirInstr {kind: MirInstrCall, span, dest, hasDest, src: mirRValueInvalid(), calleeKind: MirCalleeFn, calleeSymbol, calleeOperand: mirOperandInvalid(), calleeType, intrinsic: MirIntrinsicInvalid, args, storageLocal: -1}
 }
 pub fn mirIndirectCallInstr(hasDest: Bool, dest: MirPlace, callee: MirOperand, args: List<MirOperand>, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrCall
-    i.hasDest = hasDest
-    i.dest = dest
-    i.calleeKind = MirCalleeIndirect
-    i.calleeOperand = callee
-    i.calleeType = callee.typ
-    i.args = args
-    i.span = span
-    i
+    MirInstr {kind: MirInstrCall, span, dest, hasDest, src: mirRValueInvalid(), calleeKind: MirCalleeIndirect, calleeSymbol: "", calleeOperand: callee, calleeType: callee.typ, intrinsic: MirIntrinsicInvalid, args, storageLocal: -1}
 }
 pub fn mirIntrinsicInstr(hasDest: Bool, dest: MirPlace, intrinsic: MirIntrinsicKind, args: List<MirOperand>, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrIntrinsic
-    i.hasDest = hasDest
-    i.dest = dest
-    i.intrinsic = intrinsic
-    i.args = args
-    i.span = span
-    i
+    MirInstr {kind: MirInstrIntrinsic, span, dest, hasDest, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic, args, storageLocal: -1}
 }
 pub fn mirStorageLiveInstr(local: Int, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrStorageLive
-    i.storageLocal = local
-    i.span = span
-    i
+    MirInstr {kind: MirInstrStorageLive, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: local}
 }
 pub fn mirStorageDeadInstr(local: Int, span: MirSpan) -> MirInstr {
-    let mut i = mirInstrInvalid()
-    i.kind = MirInstrStorageDead
-    i.storageLocal = local
-    i.span = span
-    i
+    MirInstr {kind: MirInstrStorageDead, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: local}
 }
 // ====================================================================
 // Terminators

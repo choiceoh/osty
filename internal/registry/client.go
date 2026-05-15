@@ -31,6 +31,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 // DefaultTimeout bounds how long any single request may take. Tuned
@@ -407,7 +409,8 @@ func (c *Client) addHeaders(req *http.Request) {
 
 // checkStatus returns nil iff resp.StatusCode is in allowed.
 // Consumes a portion of the body for the error message so the user
-// sees the registry's own diagnostic.
+// sees the registry's own diagnostic. The error text format lives
+// in toolchain/registry_policy.osty (`registryStatusErrorMessage`).
 func checkStatus(resp *http.Response, allowed ...int) error {
 	for _, code := range allowed {
 		if resp.StatusCode == code {
@@ -415,9 +418,7 @@ func checkStatus(resp *http.Response, allowed ...int) error {
 		}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
-	msg := strings.TrimSpace(string(body))
-	if msg == "" {
-		msg = resp.Status
-	}
-	return fmt.Errorf("registry %s: HTTP %d: %s", resp.Request.URL, resp.StatusCode, msg)
+	return fmt.Errorf("%s", runner.RegistryStatusErrorMessage(
+		resp.Request.URL.String(), resp.StatusCode, string(body), resp.Status,
+	))
 }

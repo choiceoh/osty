@@ -92,27 +92,10 @@ func (c Config) Merge(parent Config) Config {
 	return out
 }
 
-// mergeStringSlices returns the union of two string slices with dedup.
-// Entries from a come first, then entries from b that are not duplicates.
+// mergeStringSlices bridges to runner.LintMergeStringSlices (mirror
+// of toolchain/lint_codes.osty). Union with dedup, `a` order first.
 func mergeStringSlices(a, b []string) []string {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(a)+len(b))
-	out := make([]string, 0, len(a)+len(b))
-	for _, s := range a {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	for _, s := range b {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
+	return runner.LintMergeStringSlices(a, b)
 }
 
 // codeSetToSortedSlice converts a concrete code set (map[string]bool)

@@ -667,15 +667,17 @@ pub fn mirIsUnitTypeText(typeText: String) -> Bool {
 /// deliberately small and ASCII-only because type strings are compiler-
 /// authored, not user text.
 pub fn mirTrimTypeText(typeText: String) -> String {
-    let mut lo = 0
-    let mut hi = typeText.len()
-    for lo < hi && typeText[lo..(lo + 1)] == " " {
-        lo = lo + 1
+    let n = typeText.len()
+    if n == 0 {
+        return typeText
     }
-    for hi > lo && typeText[(hi - 1)..hi] == " " {
-        hi = hi - 1
+    if typeText[0..1] == " " {
+        return mirTrimTypeText(typeText[1..n])
     }
-    typeText[lo..hi]
+    if typeText[(n - 1)..n] == " " {
+        return mirTrimTypeText(typeText[0..(n - 1)])
+    }
+    typeText
 }
 /// mirTopLevelTypeCommaIndex returns the comma that splits a generic
 /// argument list at depth zero. Nested generic / tuple / fn shapes are
@@ -684,13 +686,14 @@ pub fn mirTrimTypeText(typeText: String) -> String {
 pub fn mirTopLevelTypeCommaIndex(typeText: String) -> Int {
     let mut depth = 0
     let mut i = 0
-    let n = typeText.len()
-    for i < n {
+    for i < typeText.len() {
         let ch = typeText[i..(i + 1)]
         if ch == "<" || ch == "(" {
             depth = depth + 1
         } else if ch == ">" || ch == ")" {
-            depth = depth - 1
+            if depth > 0 {
+                depth = depth - 1
+            }
         } else if ch == "," && depth == 0 {
             return i
         }
@@ -2358,66 +2361,47 @@ pub struct MirRuntimeDecls {
 /// pointer-free / runtime-free modules emit no declare block.
 /// §12 string-literal interning pool.
 ///
-/// MirStringPool owns the dedup + insertion-order side of the
-/// emitter's string-literal pool — `@.str.N = private unnamed_addr
-/// constant ...` lines that prepend any module that uses string
-/// constants. Mirrors the `mirGen.strings map[string]string +
-/// stringOrder []string` Go fields. Sibling of `MirRuntimeDecls`
-/// (this slice) and `MirLayoutCache` (#888) — the third member of
-/// the dedup-with-order family.
-///
-/// The interning convention: each unique literal content gets the
-/// next `@.str.N` symbol where `N = order.len()` before push. A
-/// repeat call with the same content returns the cached symbol
-/// rather than minting a new one — this is what lets `printf`
-/// callsites share format strings ("%s\n", "%ld\n", etc.) across
-/// the module without the binary growing per-callsite.
+/// MirStringPool records candidate string literal contents in source
+/// order. Emission dedupes by deterministic hash symbol so direct
+/// MIR string references and the pool declaration agree without
+/// threading mutable pool state through every operand emitter.
 pub struct MirStringPool {
     pub byContent: Map<String, String>,
     pub order: List<String>,
     pub fn intern(mut self, content: String) -> String {
-        let cached = self.byContent.get(content)
-        if cached.isSome() {
-            return cached.unwrap()
-        }
-        let sym = "@.str." + mirGenIntToString(self.order.len())
-        self.byContent.insert(content, sym)
-        self.order.push(content)
-        sym
+        mirStringPoolIntern(self, content)
     }
     pub fn symbol(self, content: String) -> String {
-        self.byContent.get(content) ?? ""
+        mirStringPoolSymbol(self, content)
     }
     pub fn orderedKeys(self) -> List<String> {
-        self.order
+        mirStringPoolOrderedKeys(self)
     }
     pub fn isEmpty(self) -> Bool {
-        self.order.len() == 0
+        mirStringPoolIsEmpty(self)
     }
 }
-/// byContent maps the literal content (the raw bytes between the
-/// opening `c"` and closing `"` of the user's source-level string
-/// literal) to its assigned `@.str.N` symbol. Same value
-/// re-encoded later via `mirEncodeLLVMString` at emission time.
-/// order is the insertion-ordered list of literal contents — the
-/// keys of `byContent` in the order they were interned. Walked by
-/// `emitStringPool` to build the pool block deterministically
-/// regardless of map iteration order.
-/// intern returns the `@.str.N` symbol for `content`, allocating
-/// a fresh one when this is the first call for that content and
-/// returning the cached symbol on repeat calls. The N suffix is
-/// `order.len()` at the moment of allocation, matching the Go
-/// `fmt.Sprintf("@.str.%d", len(g.strings))` shape byte-for-byte.
-/// symbol looks up the `@.str.N` symbol for an already-interned
-/// content; returns `""` when not present. Used by
-/// `emitStringPool`'s walk over `order` to recover each entry's
-/// symbol without re-interning.
-/// orderedKeys returns the insertion-ordered list of literal
-/// contents — the keys of `byContent` in the order interned.
-/// Used by `emitStringPool` to walk the pool deterministically.
-/// isEmpty reports whether the pool holds no literals — the
-/// early-exit gate in `emitStringPool` so modules that don't
-/// use any string constants emit no pool block.
+fn mirStringPoolIntern(pool: MirStringPool, content: String) -> String {
+    let sym = mirStringRefSymbol(content)
+    pool.byContent.insert(content, sym)
+    pool.order.push(content)
+    sym
+}
+fn mirStringPoolSymbol(pool: MirStringPool, content: String) -> String {
+    let _ = pool
+    mirStringRefSymbol(content)
+}
+fn mirStringPoolOrderedKeys(pool: MirStringPool) -> List<String> {
+    pool.order
+}
+fn mirStringPoolIsEmpty(pool: MirStringPool) -> Bool {
+    pool.order.len() == 0
+}
+/// byContent maps raw literal content to the hash symbol used by
+/// operand emission. order keeps every collected candidate in source
+/// order; `mirEmitStringPoolSection` performs final symbol-level
+/// dedupe so repeated literals and hash-stable direct references
+/// remain consistent.
 /// §4 closure-thunk definition cache.
 ///
 /// MirThunkDefs owns the dedup + insertion-order side of the
@@ -17009,9 +16993,13 @@ pub struct MirEmitOpts {
     pub packageName: String,
     pub sourcePath: String,
     pub target: String,
+    pub sourceText: String,
 }
 pub fn mirEmitOpts(packageName: String, sourcePath: String, target: String) -> MirEmitOpts {
-    MirEmitOpts {packageName, sourcePath, target}
+    MirEmitOpts {packageName, sourcePath, target, sourceText: ""}
+}
+pub fn mirEmitOptsWithSource(packageName: String, sourcePath: String, target: String, sourceText: String) -> MirEmitOpts {
+    MirEmitOpts {packageName, sourcePath, target, sourceText}
 }
 /// mirEmitModule renders a fully-lowered MirModule as LLVM IR text.
 ///
@@ -17034,14 +17022,15 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     out = out + mirEmitRuntimeDeclarationsSection()
     out = out + mirEmitTypeDefsSection(m)
     out = out + mirEmitGlobalsSection(m)
-    let pool = mirCollectStringPool(m)
+    let mut pool = mirCollectStringPool(m)
+    pool = mirCollectStringPoolFromSource(pool, opts.sourceText)
     out = out + mirEmitStringPoolSection(pool)
     out = out + mirEmitModuleInitDispatcher(m)
     for func in m.functions {
         if func.isExternal {
             continue
         }
-        out = out + mirEmitFunctionStub(func)
+        out = out + mirEmitFunctionStub(m, func)
     }
     out
 }
@@ -17072,30 +17061,32 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
 ///
 /// When `func.blocks` is empty (e.g. a synthetic decl that never got
 /// a body), falls back to the Phase 0 single-`entry:`+stub form.
-fn mirEmitFunctionStub(func: MirFunction) -> String {
-    let paramListJoined = mirEmitParamListJoined(func)
+fn mirEmitFunctionStub(m: MirModule, func: MirFunction) -> String {
+    let paramListJoined = mirEmitParamListJoined(m, func)
     let attrs = mirEmitFnAttrsFromMir(func)
-    let mut out = mirFunctionDefineHeader("", func.returnType, func.name, paramListJoined, attrs)
+    let returnType = mirEmitFunctionReturnLLVMType(m, func)
+    let mut out = mirFunctionDefineHeader("", returnType, func.name, paramListJoined, attrs)
     if func.blocks.len() == 0 {
         out = out + "entry:\n"
         out = out + mirEmitEntryGcSafepoint()
-        out = out + mirEmitReturnStub(func.returnType)
+        out = out + mirEmitReturnStub(returnType)
         return out + mirFunctionDefineFooter()
     }
     for block in func.blocks {
         let isEntry = block.id == func.entry
         let label = mirBlockLabelName(isEntry, mirGenIntToString(block.id))
         out = out + mirBlockHeaderLine(label)
+        out = out + mirEmitBlockPhiPrologue(m, func, block)
         if isEntry {
             out = out + mirEmitEntryGcSafepoint()
-            out = out + mirEmitParamBindingPrologue(func)
+            out = out + mirEmitParamBindingPrologue(m, func)
         }
         let mut instrIdx = 0
         for instr in block.instrs {
-            out = out + mirEmitInstruction(func, block.id, instrIdx, instr)
+            out = out + mirEmitInstruction(m, func, block, instrIdx, instr)
             instrIdx = instrIdx + 1
         }
-        out = out + mirEmitTerminatorLine(func, block.id, block.term, block.hasTerm)
+        out = out + mirEmitTerminatorLine(m, func, block, block.term, block.hasTerm)
     }
     out + mirFunctionDefineFooter()
 }
@@ -17111,16 +17102,16 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
 /// valid IR but leaks no actual return value into the caller. Trivial
 /// `fn main() {}` and `fn f() -> Int { 0 }` both compile structurally;
 /// only the latter behaves incorrectly at runtime.
-fn mirEmitTerminatorLine(func: MirFunction, blockId: Int, term: MirTerm, hasTerm: Bool) -> String {
+fn mirEmitTerminatorLine(m: MirModule, func: MirFunction, block: MirBasicBlock, term: MirTerm, hasTerm: Bool) -> String {
     if hasTerm == false {
         return "  unreachable ; TODO Phase 1c: missing terminator\n"
     }
     match term.kind {
-        MirTermReturn -> mirEmitReturnTerminator(func),
+        MirTermReturn -> mirEmitReturnTerminator(m, func, block),
         MirTermGoto -> mirBrUncondLine(mirEmitBlockTargetLabel(func, term.target)),
         MirTermUnreachable -> mirUnreachableLine(),
-        MirTermBranch -> mirEmitBranchTerminator(func, blockId, term),
-        MirTermSwitchInt -> mirEmitSwitchTerminator(func, blockId, term),
+        MirTermBranch -> mirEmitBranchTerminator(m, func, block, term),
+        MirTermSwitchInt -> mirEmitSwitchTerminator(m, func, block, term),
         MirTermInvalid -> "  unreachable ; TODO: invalid terminator (lowering bug)\n",
     }
 }
@@ -17131,14 +17122,15 @@ fn mirEmitTerminatorLine(func: MirFunction, blockId: Int, term: MirTerm, hasTerm
 /// instruction emit) will define the register; until then the
 /// reference is dangling but the IR text is structurally correct.
 /// Void-returning functions still emit `ret void` directly.
-fn mirEmitReturnTerminator(func: MirFunction) -> String {
-    if func.returnType == "void" {
+fn mirEmitReturnTerminator(m: MirModule, func: MirFunction, block: MirBasicBlock) -> String {
+    let returnType = mirEmitFunctionReturnLLVMType(m, func)
+    if returnType == "void" {
         return mirRetVoidLine()
     }
     if func.returnLocal < 0 {
-        return mirEmitReturnStub(func.returnType)
+        return mirEmitReturnStub(returnType)
     }
-    mirRetLine(func.returnType, mirEmitLocalRegName(func.returnLocal))
+    mirRetLine(returnType, mirEmitFunctionLocalValueBefore(func, block, block.instrs.len(), func.returnLocal))
 }
 /// mirEmitBranchTerminator renders the conditional branch shape
 /// `br i1 %cond, label %then, label %else`. The cond operand is
@@ -17146,12 +17138,18 @@ fn mirEmitReturnTerminator(func: MirFunction) -> String {
 /// `mirEmitBlockTargetLabel`. When the cond resolves to a stub
 /// (uncovered operand kind), the verifier surfaces the dangling
 /// reference rather than the emitter producing a malformed `br`.
-fn mirEmitBranchTerminator(func: MirFunction, blockId: Int, term: MirTerm) -> String {
-    let tmpBase = "%b" + mirGenIntToString(blockId) + ".cond"
-    let (p, cond) = mirEmitOperandRead(term.cond, tmpBase)
+fn mirEmitBranchTerminator(m: MirModule, func: MirFunction, block: MirBasicBlock, term: MirTerm) -> String {
+    let instrIdx = block.instrs.len()
+    let condTmp = "%termcond.b" + mirGenIntToString(block.id) + ".i" + mirGenIntToString(instrIdx)
+    let (prelude, cond) = if mirOperandHasProjections(term.cond) {
+        let pre = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, condTmp, term.cond.place, term.cond.typ)
+        (pre, condTmp)
+    } else {
+        ("", mirEmitFunctionTypedOperandValue(func, block, instrIdx, term.cond, "i1"))
+    }
     let thenLabel = mirEmitBlockTargetLabel(func, term.thenBlock)
     let elseLabel = mirEmitBlockTargetLabel(func, term.elseBlock)
-    p + "  br i1 " + cond + ", label %" + thenLabel + ", label %" + elseLabel + "\n"
+    prelude + "  br i1 " + cond + ", label %" + thenLabel + ", label %" + elseLabel + "\n"
 }
 /// mirEmitLocalRegName returns the LLVM SSA register name for a MIR
 /// local index. The `%v<id>` scheme matches what the future
@@ -17160,6 +17158,305 @@ fn mirEmitBranchTerminator(func: MirFunction, blockId: Int, term: MirTerm) -> St
 /// land.
 fn mirEmitLocalRegName(local: Int) -> String {
     "%v" + mirGenIntToString(local)
+}
+fn mirEmitDefinitionLocalName(block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    mirPlainDefinitionValueName(block, instrIdx, local)
+}
+fn mirPlainDefinitionValueName(block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    let base = mirEmitLocalRegName(local)
+    if mirBlockHasProjectionWriteAfter(block, instrIdx, local) {
+        return base + ".base"
+    }
+    if block.id == 0 {
+        if mirBlockHasPlainDefinitionBefore(block, instrIdx, local) {
+            return base + ".d" + mirGenIntToString(instrIdx)
+        }
+        return base
+    }
+    base + ".b" + mirGenIntToString(block.id) + ".d" + mirGenIntToString(instrIdx)
+}
+fn mirPhiValueNameForBlock(block: MirBasicBlock, local: Int) -> String {
+    mirEmitLocalRegName(local) + ".b" + mirGenIntToString(block.id) + ".phi"
+}
+fn mirEmitBlockPhiPrologue(m: MirModule, func: MirFunction, block: MirBasicBlock) -> String {
+    if mirBlockHasMultiplePredecessors(func, block.id) == false {
+        return ""
+    }
+    let mut out = ""
+    let mut emittedReturn = false
+    for loc in func.locals {
+        if loc.mutable {
+            if mirBlockNeedsLocalPhi(func, block, loc.id) {
+                let ty = mirEmitModuleTypeLLVM(m, loc.typ)
+                if ty != "" && ty != "void" {
+                    let line = mirEmitBlockLocalPhiLine(func, block, loc.id, ty)
+                    if line != "" {
+                        out = out + line
+                        if loc.id == func.returnLocal {
+                            emittedReturn = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if emittedReturn == false {
+        if func.returnLocal >= 0 {
+            if mirBlockNeedsLocalPhi(func, block, func.returnLocal) {
+                let returnTy = mirEmitFunctionReturnLLVMType(m, func)
+                if returnTy != "" && returnTy != "void" {
+                    let line = mirEmitBlockLocalPhiLine(func, block, func.returnLocal, returnTy)
+                    if line != "" {
+                        out = out + line
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+fn mirEmitBlockLocalPhiLine(func: MirFunction, block: MirBasicBlock, local: Int, ty: String) -> String {
+    let mut out = "  " + mirPhiValueNameForBlock(block, local) + " = phi " + ty + " "
+    let mut first = true
+    let mut saw = false
+    for pred in func.blocks {
+        if mirBlockTargets(pred, block.id) {
+            let value = mirLocalIncomingValueForPhi(func, pred, local, 0)
+            if value == "" {
+                return ""
+            }
+            if first == false {
+                out = out + ", "
+            }
+            let predLabel = mirBlockLabelName(pred.id == func.entry, mirGenIntToString(pred.id))
+            out = out + "[ " + value + ", %" + predLabel + " ]"
+            first = false
+            saw = true
+        }
+    }
+    if saw {
+        return out + "\n"
+    }
+    ""
+}
+fn mirBlockNeedsLocalPhi(func: MirFunction, block: MirBasicBlock, local: Int) -> Bool {
+    if mirFunctionLocalIsMutable(func, local) == false {
+        return false
+    }
+    if func.locals[local].typ == "" {
+        return false
+    }
+    if mirBlockHasMultiplePredecessors(func, block.id) == false {
+        return false
+    }
+    let mut found = ""
+    let mut saw = false
+    let mut differs = false
+    let mut count = 0
+    for pred in func.blocks {
+        if mirBlockTargets(pred, block.id) {
+            count = count + 1
+            let value = mirLocalIncomingValueForPhi(func, pred, local, 0)
+            if value == "" {
+                return false
+            }
+            if saw == false {
+                found = value
+                saw = true
+            } else if found != value {
+                differs = true
+            }
+        }
+    }
+    differs
+}
+fn mirFunctionLocalIsMutable(func: MirFunction, local: Int) -> Bool {
+    if local < 0 {
+        return false
+    }
+    if local >= func.locals.len() {
+        return false
+    }
+    func.locals[local].mutable
+}
+fn mirBlockHasMultiplePredecessors(func: MirFunction, blockId: Int) -> Bool {
+    let mut count = 0
+    for pred in func.blocks {
+        if mirBlockTargets(pred, blockId) {
+            count = count + 1
+            if count > 1 {
+                return true
+            }
+        }
+    }
+    false
+}
+fn mirInstrIsProjectionWriteToLocal(instr: MirInstr, local: Int) -> Bool {
+    if instr.kind != MirInstrAssign {
+        return false
+    }
+    if instr.dest.local != local {
+        return false
+    }
+    mirPlaceHasProjections(instr.dest)
+}
+fn mirBlockHasProjectionWriteAfter(block: MirBasicBlock, instrIdx: Int, local: Int) -> Bool {
+    let mut i = instrIdx + 1
+    for i < block.instrs.len() {
+        if mirInstrIsProjectionWriteToLocal(block.instrs[i], local) {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+fn mirBlockPreviousProjectionWriteIndex(block: MirBasicBlock, instrIdx: Int, local: Int) -> Int {
+    let mut out = -1
+    let mut i = 0
+    for i < instrIdx {
+        if mirInstrIsProjectionWriteToLocal(block.instrs[i], local) {
+            out = i
+        }
+        i = i + 1
+    }
+    out
+}
+fn mirBlockPreviousPlainDefinitionIndex(block: MirBasicBlock, instrIdx: Int, local: Int) -> Int {
+    let mut out = -1
+    let mut i = 0
+    for i < instrIdx {
+        if mirInstrDefinesPlainLocal(block.instrs[i], local) {
+            out = i
+        }
+        i = i + 1
+    }
+    out
+}
+fn mirInstrDefinesPlainLocal(instr: MirInstr, local: Int) -> Bool {
+    if instr.kind == MirInstrAssign {
+        if instr.dest.local == local && mirPlaceHasProjections(instr.dest) == false {
+            return true
+        }
+    }
+    if instr.kind == MirInstrCall || instr.kind == MirInstrIntrinsic {
+        if instr.hasDest && instr.dest.local == local && mirPlaceHasProjections(instr.dest) == false {
+            return true
+        }
+    }
+    false
+}
+fn mirBlockHasPlainDefinitionBefore(block: MirBasicBlock, instrIdx: Int, local: Int) -> Bool {
+    mirBlockPreviousPlainDefinitionIndex(block, instrIdx, local) >= 0
+}
+fn mirProjectionWriteValueName(local: Int, instrIdx: Int) -> String {
+    mirEmitLocalRegName(local) + ".p" + mirGenIntToString(instrIdx)
+}
+fn mirProjectionWriteValueNameForBlock(block: MirBasicBlock, local: Int, instrIdx: Int) -> String {
+    let base = mirEmitLocalRegName(local)
+    if block.id == 0 {
+        return base + ".p" + mirGenIntToString(instrIdx)
+    }
+    base + ".b" + mirGenIntToString(block.id) + ".p" + mirGenIntToString(instrIdx)
+}
+fn mirProjectionBaseValueName(func: MirFunction, block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    let prev = mirBlockPreviousProjectionWriteIndex(block, instrIdx, local)
+    if prev >= 0 {
+        return mirProjectionWriteValueNameForBlock(block, local, prev)
+    }
+    let prevPlain = mirBlockPreviousPlainDefinitionIndex(block, instrIdx, local)
+    if prevPlain >= 0 {
+        return mirPlainDefinitionValueName(block, prevPlain, local)
+    }
+    mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, local)
+}
+fn mirProjectionWriteTargetName(block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    mirProjectionWriteValueNameForBlock(block, local, instrIdx)
+}
+fn mirProjectionBaseLLVMType(m: MirModule, func: MirFunction, local: Int) -> String {
+    if local < 0 || local >= func.locals.len() {
+        return "\{ i64, i64 \}"
+    }
+    let loc = func.locals[local]
+    let ty = mirEmitModuleTypeLLVM(m, loc.typ)
+    if ty == "" || ty == "ptr" || ty == "void" {
+        return "\{ i64, i64 \}"
+    }
+    ty
+}
+fn mirEmitBlockLocalValueAtEnd(block: MirBasicBlock, local: Int) -> String {
+    let endIdx = block.instrs.len()
+    let prevProj = mirBlockPreviousProjectionWriteIndex(block, endIdx, local)
+    if prevProj >= 0 {
+        return mirProjectionWriteValueNameForBlock(block, local, prevProj)
+    }
+    let prevPlain = mirBlockPreviousPlainDefinitionIndex(block, endIdx, local)
+    if prevPlain >= 0 {
+        return mirPlainDefinitionValueName(block, prevPlain, local)
+    }
+    mirEmitLocalRegName(local)
+}
+fn mirEmitBlockLocalValueBefore(block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    let prevProj = mirBlockPreviousProjectionWriteIndex(block, instrIdx, local)
+    if prevProj >= 0 {
+        return mirProjectionWriteValueNameForBlock(block, local, prevProj)
+    }
+    let prevPlain = mirBlockPreviousPlainDefinitionIndex(block, instrIdx, local)
+    if prevPlain >= 0 {
+        return mirPlainDefinitionValueName(block, prevPlain, local)
+    }
+    mirEmitLocalRegName(local)
+}
+fn mirEmitFunctionLocalValueBefore(func: MirFunction, block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    if mirBlockHasLocalValueBefore(block, instrIdx, local) {
+        return mirEmitBlockLocalValueBefore(block, instrIdx, local)
+    }
+    if block.id != func.entry {
+        if mirFunctionLocalIsMutable(func, local) {
+            if mirBlockNeedsLocalPhi(func, block, local) {
+                return mirPhiValueNameForBlock(block, local)
+            }
+            let predValue = mirDominatingLocalValueFromPred(func, block.id, local, 0)
+            if predValue != "" {
+                return predValue
+            }
+        }
+        let predValue = mirImmediateForwardPredLocalValue(func, block, local)
+        if predValue != "" {
+            return predValue
+        }
+    }
+    return mirEmitLocalRegName(local)
+}
+fn mirImmediateForwardPredLocalValue(func: MirFunction, block: MirBasicBlock, local: Int) -> String {
+    let predIdx = mirUniquePredecessorIndex(func, block.id)
+    if predIdx < 0 || predIdx >= func.blocks.len() {
+        return ""
+    }
+    let pred = func.blocks[predIdx]
+    if pred.id >= block.id {
+        return ""
+    }
+    if mirBlockHasLocalValueBefore(pred, pred.instrs.len(), local) {
+        return mirEmitBlockLocalValueAtEnd(pred, local)
+    }
+    ""
+}
+fn mirEmitFunctionLocalAggregateValueBefore(func: MirFunction, block: MirBasicBlock, instrIdx: Int, local: Int) -> String {
+    if mirBlockHasLocalValueBefore(block, instrIdx, local) {
+        return mirEmitBlockLocalValueBefore(block, instrIdx, local)
+    }
+    if block.id != func.entry {
+        if mirFunctionLocalIsMutable(func, local) {
+            if mirBlockNeedsLocalPhi(func, block, local) {
+                return mirPhiValueNameForBlock(block, local)
+            }
+        }
+    }
+    let predValue = mirDominatingLocalValueFromPredNoPhi(func, block.id, local, 0)
+    if predValue != "" {
+        return predValue
+    }
+    return mirEmitLocalRegName(local)
 }
 /// mirEmitOperand renders a MirOperand as an LLVM operand text
 /// fragment (no leading type, no trailing whitespace). Coverage
@@ -17216,6 +17513,21 @@ fn mirEmitConstOperand(c: MirConst) -> String {
         },
     }
 }
+fn mirEmitConstLLVMType(c: MirConst) -> String {
+    match c.kind {
+        MirConstString -> "ptr",
+        MirConstBytes -> "ptr",
+        MirConstFn -> "ptr",
+        MirConstNull -> "ptr",
+        MirConstFloat -> "double",
+        MirConstBool -> "i1",
+        MirConstChar -> "i64",
+        MirConstByte -> "i64",
+        MirConstInt -> "i64",
+        MirConstUnit -> "i64",
+        MirConstInvalid -> "i64",
+    }
+}
 /// mirEmitBlockTargetLabel resolves a MIR block-ID target into its
 /// LLVM label name by scanning `func.blocks` for a matching `id`.
 /// Falls back to `bb<targetID>` when no block matches (defensive —
@@ -17234,14 +17546,14 @@ fn mirEmitBlockTargetLabel(func: MirFunction, target: Int) -> String {
 /// and falls back to `i64` for any local whose llvmType cannot be
 /// determined (defensive — keeps the emitter from producing an
 /// invalid `(  )` signature on locals leftover from a partial lower).
-fn mirEmitParamListJoined(func: MirFunction) -> String {
+fn mirEmitParamListJoined(m: MirModule, func: MirFunction) -> String {
     let mut out = ""
     let mut i = 0
     for paramLocal in func.params {
         if i > 0 {
             out = out + ", "
         }
-        let ty = mirEmitParamType(func, paramLocal)
+        let ty = mirEmitModuleParamType(m, func, paramLocal)
         let nameStr = mirEmitParamLocalName(func, paramLocal)
         let isNoalias = mirParamIsNoalias(ty, nameStr, func.noaliasAll, func.noaliasParams)
         let noaliasTag = if isNoalias {
@@ -17275,6 +17587,17 @@ fn mirEmitParamLocalName(func: MirFunction, paramLocal: Int) -> String {
 fn mirEmitFnAttrsFromMir(func: MirFunction) -> String {
     let disc = mirInlineModeDiscriminant(func.inlineMode)
     mirFormatFnAttrs(disc, func.hot, func.cold, func.pure, func.targetFeatures)
+}
+fn mirEmitModuleParamType(m: MirModule, func: MirFunction, paramLocal: Int) -> String {
+    if paramLocal < 0 || paramLocal >= func.locals.len() {
+        return "i64"
+    }
+    let loc = func.locals[paramLocal]
+    let known = mirEmitModuleTypeLLVM(m, loc.typ)
+    if known != "" {
+        return known
+    }
+    "i64"
 }
 fn mirEmitParamType(func: MirFunction, paramLocal: Int) -> String {
     if paramLocal < 0 || paramLocal >= func.locals.len() {
@@ -17346,25 +17669,780 @@ fn mirEmitReturnStub(returnType: String) -> String {
 /// mirEmitInstruction renders one MirInstr as zero or more LLVM
 /// instruction lines. Unsupported shapes degrade to a `; TODO`
 /// comment so the IR text stays parseable.
-fn mirEmitInstruction(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitInstruction(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     match instr.kind {
         MirInstrInvalid -> "  ; TODO invalid MIR instruction\n",
-        MirInstrAssign -> mirEmitAssignInstr(func, instr),
-        MirInstrCall -> mirEmitCallInstr(func, blockId, instrIdx, instr),
-        MirInstrIntrinsic -> mirEmitIntrinsicInstr(func, blockId, instrIdx, instr),
-        MirInstrStorageLive -> mirEmitStorageLifetimeLine("llvm.lifetime.start.p0", instr),
-        MirInstrStorageDead -> mirEmitStorageLifetimeLine("llvm.lifetime.end.p0", instr),
+        MirInstrAssign -> mirEmitAssignInstr(m, func, block, instrIdx, instr),
+        MirInstrCall -> mirEmitCallInstr(m, func, block, instrIdx, instr),
+        MirInstrIntrinsic -> mirEmitIntrinsicInstr(m, func, block, instrIdx, instr),
+        MirInstrStorageLive -> "",
+        MirInstrStorageDead -> "",
     }
 }
 /// mirEmitAssignInstr lowers `dest = rvalue`. The dest must be a
 /// no-projection MirPlace today (`%v<local>`); projection chains are
 /// stubbed at TODO. Rvalue dispatch fans out to the per-kind arms.
-fn mirEmitAssignInstr(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitAssignInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if mirPlaceHasProjections(instr.dest) {
-        return mirEmitAssignIntoProjection(func, instr)
+        return mirEmitAssignIntoProjection(m, func, block, instrIdx, instr)
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    mirEmitRValue(dest, instr.src)
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    mirEmitModuleRValue(m, func, block, instrIdx, dest, instr.src, instr.dest.local)
+}
+fn mirEmitModuleRValue(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, destLocal: Int) -> String {
+    match rv.kind {
+        MirRVUse -> mirEmitModuleRValueUse(m, func, block, instrIdx, dest, rv, destLocal),
+        MirRVLen -> mirEmitModuleRValueLen(m, func, block, instrIdx, dest, rv),
+        MirRVUnary -> mirEmitModuleRValueUnary(m, func, block, instrIdx, dest, rv, destLocal),
+        MirRVBinary -> mirEmitModuleRValueBinary(m, func, block, instrIdx, dest, rv),
+        MirRVAggregate -> mirEmitModuleRValueAggregate(m, func, block, instrIdx, dest, rv, destLocal),
+        MirRVCast -> mirEmitModuleRValueCast(m, func, block, instrIdx, dest, rv),
+        MirRVDiscriminant -> mirEmitModuleRValueDiscriminant(m, func, block, instrIdx, dest, rv),
+        _ -> mirEmitRValue(dest, rv),
+    }
+}
+fn mirEmitModuleRValueUse(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, destLocal: Int) -> String {
+    if mirOperandHasProjections(rv.arg) {
+        return mirEmitModuleProjectedReadChain(m, func, block, instrIdx, dest, rv.arg.place, rv.typ)
+    }
+    let mut ty = mirEmitModuleRValueDestLLVMType(m, func, rv, destLocal)
+    if ty == "" {
+        ty = "i64"
+    }
+    let op = mirEmitFunctionTypedOperandValue(func, block, instrIdx, rv.arg, ty)
+    if mirStringStartsWith(ty, "%") || mirStringStartsWith(ty, "\{") {
+        return "  " + dest + " = freeze " + ty + " " + op + "\n"
+    }
+    if ty == "ptr" {
+        return "  " + dest + " = select i1 true, ptr " + op + ", ptr " + op + "\n"
+    }
+    if ty == "double" || ty == "float" {
+        return "  " + dest + " = fadd " + ty + " 0.0, " + op + "\n"
+    }
+    if ty == "i1" {
+        return "  " + dest + " = or i1 0, " + op + "\n"
+    }
+    "  " + dest + " = add " + ty + " 0, " + op + "\n"
+}
+fn mirEmitModuleRValueUnary(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, destLocal: Int) -> String {
+    let mut ty = mirEmitModuleRValueDestLLVMType(m, func, rv, destLocal)
+    if ty == "" {
+        ty = "i64"
+    }
+    let mut argTy = mirEmitModuleOperandLLVMType(m, func, rv.arg)
+    if argTy == "" {
+        argTy = ty
+    }
+    let mut out = ""
+    let op = if mirOperandHasProjections(rv.arg) {
+        let tmp = dest + ".unarg"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.arg.place, rv.arg.typ)
+        tmp
+    } else {
+        mirEmitFunctionTypedOperandValue(func, block, instrIdx, rv.arg, argTy)
+    }
+    match rv.unaryOp {
+        MirUnNeg -> {
+            if ty == "double" || ty == "float" {
+                out + "  " + dest + " = fneg " + ty + " " + op + "\n"
+            } else {
+                out + "  " + dest + " = sub " + ty + " 0, " + op + "\n"
+            }
+        },
+        MirUnPlus -> out + mirEmitModuleRValueUse(m, func, block, instrIdx, dest, rv, destLocal),
+        MirUnNot -> out + "  " + dest + " = xor i1 " + op + ", true\n",
+        MirUnBitNot -> out + "  " + dest + " = xor " + ty + " " + op + ", -1\n",
+        MirUnInvalid -> out + "  ; TODO invalid unary op\n",
+    }
+}
+fn mirEmitModuleRValueDestLLVMType(m: MirModule, func: MirFunction, rv: MirRValue, destLocal: Int) -> String {
+    if destLocal >= 0 && destLocal < func.locals.len() {
+        let loc = func.locals[destLocal]
+        let destTy = mirEmitModuleTypeLLVM(m, loc.typ)
+        if destTy != "" && destTy != "void" {
+            return destTy
+        }
+    }
+    let rvTy = mirEmitModuleTypeLLVM(m, rv.typ)
+    if rvTy != "" && rvTy != "void" {
+        return rvTy
+    }
+    let opTy = mirEmitModuleOperandLLVMType(m, func, rv.arg)
+    if opTy != "" && opTy != "void" {
+        return opTy
+    }
+    "i64"
+}
+fn mirEmitBlockOperandValue(block: MirBasicBlock, instrIdx: Int, op: MirOperand) -> String {
+    if op.kind == MirOpCopy || op.kind == MirOpMove {
+        if mirPlaceHasProjections(op.place) == false {
+            let prev = mirBlockPreviousProjectionWriteIndex(block, instrIdx, op.place.local)
+            if prev >= 0 {
+                return mirProjectionWriteValueNameForBlock(block, op.place.local, prev)
+            }
+            let prevPlain = mirBlockPreviousPlainDefinitionIndex(block, instrIdx, op.place.local)
+            if prevPlain >= 0 {
+                return mirPlainDefinitionValueName(block, prevPlain, op.place.local)
+            }
+        }
+    }
+    mirEmitOperand(op)
+}
+fn mirEmitModuleRValueLen(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let lenSym = mirEmitLenSymbol(rv.typ)
+    if lenSym == "" {
+        return "  ; TODO MirRVLen on container type \"" + rv.typ + "\"\n"
+    }
+    if mirPlaceHasProjections(rv.place) == false {
+        let src = mirEmitFunctionLocalValueBefore(func, block, instrIdx, rv.place.local)
+        return "  " + dest + " = call i64 @" + lenSym + "(ptr " + src + ")\n"
+    }
+    let tmp = dest + ".lx"
+    let mut out = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.place, rv.typ)
+    out + "  " + dest + " = call i64 @" + lenSym + "(ptr " + tmp + ")\n"
+}
+fn mirEmitModuleRValueDiscriminant(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let aggTy = mirEmitModuleDiscriminantAggType(m, func, rv)
+    if mirPlaceHasProjections(rv.place) == false {
+        let src = mirEmitFunctionLocalValueBefore(func, block, instrIdx, rv.place.local)
+        return "  " + dest + " = extractvalue " + aggTy + " " + src + ", 0\n"
+    }
+    let tmp = dest + ".dx"
+    let mut out = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.place, rv.typ)
+    out + "  " + dest + " = extractvalue " + aggTy + " " + tmp + ", 0\n"
+}
+fn mirEmitModuleDiscriminantAggType(m: MirModule, func: MirFunction, rv: MirRValue) -> String {
+    if rv.place.local >= 0 && rv.place.local < func.locals.len() {
+        let loc = func.locals[rv.place.local]
+        let locTy = mirEmitModuleTypeLLVM(m, loc.typ)
+        if mirEmitLLVMTypeIsAggregate(locTy) {
+            return locTy
+        }
+    }
+    let rvTy = mirEmitModuleTypeLLVM(m, rv.typ)
+    if mirEmitLLVMTypeIsAggregate(rvTy) {
+        return rvTy
+    }
+    mirEmitDiscriminantAggType(rv)
+}
+fn mirEmitModuleRValueBinary(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let symbol = mirBinaryOpSymbol(rv.binaryOp)
+    if symbol == "" {
+        return "  ; TODO unknown binary op\n"
+    }
+    let argTy = mirEmitModuleOperandLLVMType(m, func, rv.arg)
+    let mut out = ""
+    let left = if mirOperandHasProjections(rv.arg) {
+        let tmp = dest + ".lhs"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.arg.place, rv.arg.typ)
+        tmp
+    } else {
+        mirEmitFunctionTypedOperandValue(func, block, instrIdx, rv.arg, argTy)
+    }
+    let right = if mirOperandHasProjections(rv.right) {
+        let tmp = dest + ".rhs"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.right.place, rv.right.typ)
+        tmp
+    } else {
+        mirEmitFunctionTypedOperandValue(func, block, instrIdx, rv.right, argTy)
+    }
+    if argTy == "ptr" {
+        if symbol == "+" {
+            return out + "  " + dest + " = call ptr @osty_rt_strings_Concat(ptr " + left + ", ptr " + right + ")\n"
+        }
+        let opcode = mirBinaryOpcode(symbol, false)
+        if opcode == "icmp eq" || opcode == "icmp ne" {
+            return out + "  " + dest + " = " + opcode + " ptr " + left + ", " + right + "\n"
+        }
+        return "  ; TODO pointer binary op " + symbol + "\n"
+    }
+    if mirStringStartsWith(argTy, "%") || mirStringStartsWith(argTy, "\{") {
+        let opcode = mirBinaryOpcode(symbol, false)
+        if opcode != "icmp eq" && opcode != "icmp ne" {
+            return "  ; TODO aggregate binary op " + symbol + "\n"
+        }
+        let pred = if opcode == "icmp ne" {
+            "ne"
+        } else {
+            "eq"
+        }
+        let leftDisc = dest + ".ldisc"
+        let rightDisc = dest + ".rdisc"
+        out = out + "  " + leftDisc + " = extractvalue " + argTy + " " + left + ", 0\n"
+        out = out + "  " + rightDisc + " = extractvalue " + argTy + " " + right + ", 0\n"
+        return out + "  " + dest + " = icmp " + pred + " i64 " + leftDisc + ", " + rightDisc + "\n"
+    }
+    let isFloat = argTy == "double" || argTy == "float"
+    let opcode = mirBinaryOpcode(symbol, isFloat)
+    if opcode == "" {
+        return "  ; TODO no opcode for binary op " + symbol + "\n"
+    }
+    out + "  " + dest + " = " + opcode + " " + argTy + " " + left + ", " + right + "\n"
+}
+fn mirEmitModuleRValueCast(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let fromLLVM = mirEmitCastTypeLLVM(rv.castFrom)
+    let toLLVM = mirEmitCastTypeLLVM(rv.castTo)
+    let mut out = ""
+    let argText = if mirOperandHasProjections(rv.arg) {
+        let tmp = dest + ".castarg"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.arg.place, rv.arg.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, rv.arg, fromLLVM)
+    }
+    match rv.castKind {
+        MirCastIntResize -> out + mirEmitModuleIntResizeCastLine(dest, fromLLVM, toLLVM, argText),
+        MirCastIntToFloat -> out + "  " + dest + " = sitofp " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
+        MirCastFloatToInt -> out + "  " + dest + " = fptosi " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
+        MirCastFloatResize -> out + mirEmitFloatResizeCastLine(dest, fromLLVM, toLLVM, argText),
+        MirCastBitcast -> out + "  " + dest + " = bitcast " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
+        MirCastOptionalWrap -> out + mirEmitOptionalWrapCast(dest, rv, argText),
+        MirCastOptionalUnwrap -> out + mirEmitOptionalUnwrapCast(dest, rv, argText, fromLLVM),
+        MirCastInvalid -> "  ; TODO invalid cast\n",
+    }
+}
+fn mirEmitModuleIntResizeCastLine(dest: String, fromTy: String, toTy: String, arg: String) -> String {
+    if fromTy == "i8" && toTy == "i64" {
+        return "  " + dest + " = zext i8 " + arg + " to i64\n"
+    }
+    mirEmitIntResizeCastLine(dest, fromTy, toTy, arg)
+}
+fn mirEmitModuleRValueAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, destLocal: Int) -> String {
+    let resultTypeText = mirEmitAggregateResultTypeText(func, destLocal, rv)
+    if resultTypeText != "" {
+        return mirEmitModuleResultAggregate(m, func, block, instrIdx, dest, rv, resultTypeText)
+    }
+    let head = mirLlvmTypeHeadName(rv.typ)
+    if head == "List" {
+        return mirEmitModuleListAggregate(m, func, block, instrIdx, dest, rv)
+    }
+    if head == "Map" {
+        return mirEmitMapAggregate(dest, rv)
+    }
+    if rv.aggKind == MirAggEnumVariant {
+        return mirEmitModuleEnumVariantAggregate(m, func, block, instrIdx, dest, rv, rv.typ)
+    }
+    match rv.aggKind {
+        MirAggTuple -> mirEmitModuleTupleAggregate(m, func, block, instrIdx, dest, rv),
+        MirAggStruct -> mirEmitModuleTupleAggregate(m, func, block, instrIdx, dest, rv),
+        MirAggClosure -> mirEmitModuleTupleAggregate(m, func, block, instrIdx, dest, rv),
+        MirAggList -> mirEmitModuleListAggregate(m, func, block, instrIdx, dest, rv),
+        MirAggMap -> mirEmitMapAggregate(dest, rv),
+        _ -> mirEmitRValueAggregate(dest, rv),
+    }
+}
+fn mirEmitAggregateResultTypeText(func: MirFunction, destLocal: Int, rv: MirRValue) -> String {
+    if mirLlvmTypeHeadName(rv.typ) == "Result" {
+        return rv.typ
+    }
+    if destLocal >= 0 && destLocal < func.locals.len() {
+        let loc = func.locals[destLocal]
+        if mirLlvmTypeHeadName(loc.typ) == "Result" {
+            return loc.typ
+        }
+    }
+    ""
+}
+fn mirEmitModuleResultAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, resultTypeText: String) -> String {
+    if rv.aggFields.len() != 1 {
+        return mirEmitModuleEnumVariantAggregate(m, func, block, instrIdx, dest, rv, resultTypeText)
+    }
+    let payload = rv.aggFields[0]
+    let payloadTy = mirEmitModuleOperandLLVMType(m, func, payload)
+    let payloadOp = mirEmitFunctionTypedOperandPredValue(func, block, instrIdx, payload, payloadTy)
+    let disc = if rv.aggKind == MirAggEnumVariant {
+        mirGenIntToString(rv.aggVariantIdx)
+    } else {
+        mirInferResultPayloadDiscriminant(m, resultTypeText, payload)
+    }
+    let aggTy = "\{ i64, i64 \}"
+    let step = dest + ".r0"
+    let widened = dest + ".r1"
+    let mut out = "  " + step + " = insertvalue " + aggTy + " undef, i64 " + disc + ", 0\n"
+    out = out + mirEmitWidenPayloadLine(widened, payloadTy, payloadOp)
+    out + "  " + dest + " = insertvalue " + aggTy + " " + step + ", i64 " + widened + ", 1\n"
+}
+fn mirEmitModuleEnumVariantAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, resultTypeText: String) -> String {
+    let mut aggTy = mirEmitModuleTypeLLVM(m, resultTypeText)
+    if aggTy == "" || aggTy == "ptr" || aggTy == "void" {
+        aggTy = "\{ i64, i64 \}"
+    }
+    let disc = if rv.aggKind == MirAggEnumVariant {
+        mirGenIntToString(rv.aggVariantIdx)
+    } else {
+        mirDiscriminantOk()
+    }
+    let step = dest + ".r0"
+    let mut out = "  " + step + " = insertvalue " + aggTy + " undef, i64 " + disc + ", 0\n"
+    if rv.aggFields.len() == 0 {
+        return out + "  " + dest + " = insertvalue " + aggTy + " " + step + ", i64 0, 1\n"
+    }
+    let payload = rv.aggFields[0]
+    let payloadTy = mirEmitModuleOperandLLVMType(m, func, payload)
+    let payloadOp = mirEmitFunctionTypedOperandPredValue(func, block, instrIdx, payload, payloadTy)
+    let widened = dest + ".r1"
+    out = out + mirEmitWidenPayloadLine(widened, payloadTy, payloadOp)
+    out + "  " + dest + " = insertvalue " + aggTy + " " + step + ", i64 " + widened + ", 1\n"
+}
+fn mirInferResultPayloadDiscriminant(m: MirModule, resultTypeText: String, payload: MirOperand) -> String {
+    if payload.typ == "String" {
+        return mirDiscriminantErr()
+    }
+    let payloadTy = mirEmitModuleTypeLLVM(m, payload.typ)
+    if payloadTy == "ptr" && payload.typ != "MirJsonValue" && payload.typ != "(MirJsonValue, Int)" && payload.typ != "(String, Int)" {
+        return mirDiscriminantErr()
+    }
+    mirDiscriminantOk()
+}
+fn mirEmitModuleListAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let mut out = "  " + dest + " = call ptr @osty_rt_list_new()\n"
+    let mut i = 0
+    for field in rv.aggFields {
+        let fieldTy = mirEmitModuleOperandLLVMType(m, func, field)
+        let fieldOp = mirEmitFunctionTypedOperandValue(func, block, instrIdx, field, fieldTy)
+        if mirEmitListElementUsesBytesV1(fieldTy) {
+            let base = dest + ".la" + mirGenIntToString(i)
+            out = out + mirEmitListPushBytesV1Line(base, dest, fieldOp, fieldTy)
+            i = i + 1
+            continue
+        }
+        let pushSym = mirEmitListPushSymbolForType(field.typ, fieldTy)
+        if pushSym == "" {
+            out = out + "  ; TODO list aggregate push for elem type \"" + fieldTy + "\"\n"
+        } else {
+            out = out + "  call void @" + pushSym + "(ptr " + dest + ", " + fieldTy + " " + fieldOp + ")\n"
+        }
+        i = i + 1
+    }
+    out
+}
+fn mirEmitModuleTupleAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let mut tupleTy = mirEmitModuleTypeLLVM(m, rv.typ)
+    if tupleTy == "" || tupleTy == "ptr" || tupleTy == "void" {
+        tupleTy = mirEmitModuleTupleTypeText(m, func, rv.aggFields)
+    }
+    mirEmitModuleAggregateInsertValues(m, func, block, instrIdx, dest, tupleTy, rv.aggFields)
+}
+fn mirEmitModuleAggregateInsertValues(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, tupleTy: String, fields: List<MirOperand>) -> String {
+    let n = fields.len()
+    if n == 0 {
+        return "  " + dest + " = freeze " + tupleTy + " undef\n"
+    }
+    let mut out = ""
+    let mut prev = "undef"
+    let mut i = 0
+    for field in fields {
+        let fieldTy = mirEmitModuleOperandLLVMType(m, func, field)
+        let fieldOp = mirEmitFunctionTypedOperandValue(func, block, instrIdx, field, fieldTy)
+        let target = if i == n - 1 {
+            dest
+        } else {
+            dest + ".t" + mirGenIntToString(i)
+        }
+        out = out + "  " + target + " = insertvalue " + tupleTy + " " + prev
+        out = out + ", " + fieldTy + " " + fieldOp + ", " + mirGenIntToString(i) + "\n"
+        prev = target
+        i = i + 1
+    }
+    out
+}
+fn mirEmitModuleLocalLLVMType(m: MirModule, func: MirFunction, local: Int) -> String {
+    if local < 0 || local >= func.locals.len() {
+        return "i64"
+    }
+    let loc = func.locals[local]
+    let known = mirEmitModuleTypeLLVM(m, loc.typ)
+    if known != "" {
+        return known
+    }
+    "i64"
+}
+fn mirEmitModuleProjectionResultLLVM(m: MirModule, resultType: String, proj: MirProjection) -> String {
+    let projKnown = mirEmitModuleTypeLLVM(m, proj.typ)
+    if projKnown != "" {
+        return projKnown
+    }
+    let resultKnown = mirEmitModuleTypeLLVM(m, resultType)
+    if resultKnown != "" {
+        return resultKnown
+    }
+    mirEmitProjectionResultLLVM(resultType, proj)
+}
+fn mirEmitModuleProjectedReadChain(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, place: MirPlace, resultType: String) -> String {
+    let n = place.projections.len()
+    if n == 0 {
+        return "  ; TODO mirEmitModuleProjectedReadChain called on bare local\n"
+    }
+    let mut out = ""
+    let mut prevReg = mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, place.local)
+    let mut prevTy = mirEmitModuleLocalLLVMType(m, func, place.local)
+    let mut prevTypeName = mirEmitModuleLocalTypeName(func, place.local)
+    let mut justUnwrappedAlgebraic = false
+    let mut i = 0
+    for proj in place.projections {
+        let target = if i == n - 1 {
+            dest
+        } else {
+            dest + ".p" + mirGenIntToString(i)
+        }
+        if justUnwrappedAlgebraic && (proj.kind == MirProjField || proj.kind == MirProjTuple || proj.kind == MirProjVariant) {
+            out = out + mirEmitParamCopyLine(target, prevTy, prevReg)
+            prevReg = target
+            justUnwrappedAlgebraic = false
+            i = i + 1
+            continue
+        }
+        let unwrappedAlgebraic = mirEmitProjectionIsAlgebraicVariantSource(prevTypeName, proj)
+        let stepTypeName = mirEmitModuleProjectionStepTypeName(prevTypeName, resultType, proj)
+        let stepLLVM = mirEmitModuleProjectionStepLLVM(m, stepTypeName, resultType, proj)
+        out = out + mirEmitModuleProjectionStepLine(m, func, block, instrIdx, target, prevReg, prevTy, proj, stepLLVM)
+        prevReg = target
+        prevTy = stepLLVM
+        prevTypeName = stepTypeName
+        justUnwrappedAlgebraic = unwrappedAlgebraic
+        i = i + 1
+    }
+    out
+}
+fn mirEmitModuleLocalTypeName(func: MirFunction, local: Int) -> String {
+    if local < 0 || local >= func.locals.len() {
+        return ""
+    }
+    func.locals[local].typ
+}
+fn mirEmitModuleProjectionStepTypeName(prevTypeName: String, resultType: String, proj: MirProjection) -> String {
+    if proj.kind == MirProjVariant {
+        let head = mirLlvmTypeHeadName(prevTypeName)
+        if mirLlvmTypeIsOptionalSurface(prevTypeName) {
+            return prevTypeName[0..(prevTypeName.len() - 1)]
+        }
+        if head == "Result" {
+            if proj.index == 1 || proj.name == "Err" {
+                return mirResultErrTypeText(prevTypeName)
+            }
+            return mirResultOkTypeText(prevTypeName)
+        }
+        if head == "Option" || head == "Maybe" {
+            return mirEmitSingleTypeArgText(prevTypeName)
+        }
+    }
+    if proj.typ != "" {
+        return proj.typ
+    }
+    resultType
+}
+fn mirEmitProjectionIsAlgebraicVariantSource(prevTypeName: String, proj: MirProjection) -> Bool {
+    if proj.kind != MirProjVariant {
+        return false
+    }
+    if mirLlvmTypeIsOptionalSurface(prevTypeName) {
+        return true
+    }
+    let head = mirLlvmTypeHeadName(prevTypeName)
+    head == "Result" || head == "Option" || head == "Maybe"
+}
+fn mirEmitModuleProjectionStepLLVM(m: MirModule, stepTypeName: String, resultType: String, proj: MirProjection) -> String {
+    let stepKnown = mirEmitModuleTypeLLVM(m, stepTypeName)
+    if stepKnown != "" {
+        return stepKnown
+    }
+    mirEmitModuleProjectionResultLLVM(m, resultType, proj)
+}
+fn mirEmitModuleProjectionStepLine(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, target: String, prevReg: String, prevTy: String, proj: MirProjection, resultLLVM: String) -> String {
+    if !(mirEmitLLVMTypeIsAggregate(prevTy)) {
+        if proj.kind == MirProjField || proj.kind == MirProjTuple || proj.kind == MirProjVariant {
+            return mirEmitParamCopyLine(target, prevTy, prevReg)
+        }
+    }
+    match proj.kind {
+        MirProjField -> mirEmitModuleProjectFieldLineFrom(target, prevReg, prevTy, proj.index),
+        MirProjTuple -> mirEmitModuleProjectFieldLineFrom(target, prevReg, prevTy, proj.index),
+        MirProjVariant -> mirEmitModuleProjectVariantLineFrom(target, prevReg, prevTy, proj, resultLLVM),
+        MirProjIndex -> mirEmitModuleProjectIndexLineFrom(func, block, instrIdx, target, prevReg, proj, resultLLVM),
+        MirProjDeref -> "  " + target + " = load " + resultLLVM + ", ptr " + prevReg + "\n",
+        MirProjInvalid -> "  ; TODO invalid module projection step\n",
+    }
+}
+fn mirEmitModuleProjectFieldLineFrom(target: String, src: String, srcTy: String, idx: Int) -> String {
+    "  " + target + " = extractvalue " + srcTy + " " + src + ", " + mirGenIntToString(idx) + "\n"
+}
+fn mirEmitModuleProjectVariantLineFrom(target: String, src: String, srcTy: String, proj: MirProjection, resultLLVM: String) -> String {
+    let payloadReg = target + ".vp"
+    let mut out = "  " + payloadReg + " = extractvalue " + srcTy + " " + src + ", 1\n"
+    if resultLLVM == "" || resultLLVM == "i64" {
+        return out + "  " + target + " = add i64 0, " + payloadReg + "\n"
+    }
+    out + mirEmitNarrowPayloadLine(target, payloadReg, resultLLVM)
+}
+fn mirEmitModuleProjectIndexLineFrom(func: MirFunction, block: MirBasicBlock, instrIdx: Int, target: String, src: String, proj: MirProjection, resultLLVM: String) -> String {
+    let elemSym = mirEmitListGetSymbolForType(proj.typ, resultLLVM)
+    let idxOp = if proj.indexLocal >= 0 {
+        mirEmitFunctionLocalValueBefore(func, block, instrIdx, proj.indexLocal)
+    } else {
+        mirGenIntToString(proj.indexConst)
+    }
+    if elemSym == "" {
+        if mirEmitListGetUsesBytesV1(resultLLVM) {
+            return mirEmitListGetBytesV1Line(target, src, idxOp, resultLLVM)
+        }
+        return "  ; TODO list_get for elem type \"" + resultLLVM + "\"\n"
+    }
+    "  " + target + " = call " + resultLLVM + " @" + elemSym + "(ptr " + src + ", i64 " + idxOp + ")\n"
+}
+fn mirEmitModuleTupleTypeText(m: MirModule, func: MirFunction, fields: List<MirOperand>) -> String {
+    if fields.len() == 0 {
+        return "\{\}"
+    }
+    let mut out = "\{ "
+    let mut i = 0
+    for f in fields {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + mirEmitModuleOperandLLVMType(m, func, f)
+        i = i + 1
+    }
+    out + " \}"
+}
+fn mirEmitTypedOperandValue(op: MirOperand, llvmTy: String) -> String {
+    let raw = mirEmitOperand(op)
+    mirNormalizeTypedOperandValue(op, llvmTy, raw)
+}
+fn mirEmitBlockTypedOperandValue(block: MirBasicBlock, instrIdx: Int, op: MirOperand, llvmTy: String) -> String {
+    let raw = mirEmitBlockOperandValue(block, instrIdx, op)
+    mirNormalizeTypedOperandValue(op, llvmTy, raw)
+}
+fn mirEmitFunctionTypedOperandValue(func: MirFunction, block: MirBasicBlock, instrIdx: Int, op: MirOperand, llvmTy: String) -> String {
+    if op.kind == MirOpCopy {
+        if mirPlaceHasProjections(op.place) == false {
+            let raw = if mirLLVMTypeNeedsAggregatePredValue(llvmTy) {
+                mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, op.place.local)
+            } else {
+                mirEmitFunctionLocalValueBefore(func, block, instrIdx, op.place.local)
+            }
+            return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+        }
+    }
+    if op.kind == MirOpMove {
+        if mirPlaceHasProjections(op.place) == false {
+            let raw = if mirLLVMTypeNeedsAggregatePredValue(llvmTy) {
+                mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, op.place.local)
+            } else {
+                mirEmitFunctionLocalValueBefore(func, block, instrIdx, op.place.local)
+            }
+            return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+        }
+    }
+    let raw = mirEmitOperand(op)
+    return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+}
+fn mirEmitModuleOperandRead(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, op: MirOperand, llvmTy: String, tmpBase: String) -> (String, String) {
+    if (op.kind == MirOpCopy || op.kind == MirOpMove) && mirPlaceHasProjections(op.place) {
+        let prelude = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmpBase, op.place, op.typ)
+        let value = mirNormalizeTypedOperandValue(op, llvmTy, tmpBase)
+        return (prelude, value)
+    }
+    ("", mirEmitFunctionTypedOperandValue(func, block, instrIdx, op, llvmTy))
+}
+fn mirEmitFunctionTypedOperandPredValue(func: MirFunction, block: MirBasicBlock, instrIdx: Int, op: MirOperand, llvmTy: String) -> String {
+    if op.kind == MirOpCopy {
+        if mirPlaceHasProjections(op.place) == false {
+            let raw = mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, op.place.local)
+            return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+        }
+    }
+    if op.kind == MirOpMove {
+        if mirPlaceHasProjections(op.place) == false {
+            let raw = mirEmitFunctionLocalAggregateValueBefore(func, block, instrIdx, op.place.local)
+            return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+        }
+    }
+    let raw = mirEmitOperand(op)
+    return mirNormalizeTypedOperandValue(op, llvmTy, raw)
+}
+fn mirLLVMTypeNeedsAggregatePredValue(llvmTy: String) -> Bool {
+    if mirStringStartsWith(llvmTy, "%") {
+        return true
+    }
+    mirStringStartsWith(llvmTy, "\{")
+}
+fn mirBlockHasLocalValueBefore(block: MirBasicBlock, instrIdx: Int, local: Int) -> Bool {
+    if mirBlockPreviousProjectionWriteIndex(block, instrIdx, local) >= 0 {
+        return true
+    }
+    mirBlockPreviousPlainDefinitionIndex(block, instrIdx, local) >= 0
+}
+fn mirBlockHasLocalValueAtEnd(block: MirBasicBlock, local: Int) -> Bool {
+    mirBlockHasLocalValueBefore(block, block.instrs.len(), local)
+}
+fn mirDominatingLocalValueFromPred(func: MirFunction, blockId: Int, local: Int, depth: Int) -> String {
+    if depth > 6 {
+        return ""
+    }
+    let predIdx = mirUniquePredecessorIndex(func, blockId)
+    if predIdx == -2 {
+        return ""
+    }
+    if predIdx < 0 || predIdx >= func.blocks.len() {
+        return ""
+    }
+    let pred = func.blocks[predIdx]
+    let incoming = mirLocalIncomingValueForBlock(func, pred, local, depth + 1)
+    if incoming != "" {
+        return incoming
+    }
+    mirDominatingLocalValueFromPred(func, pred.id, local, depth + 1)
+}
+fn mirLocalIncomingValueForBlock(func: MirFunction, block: MirBasicBlock, local: Int, depth: Int) -> String {
+    if depth > 32 {
+        return ""
+    }
+    if mirBlockHasLocalValueAtEnd(block, local) {
+        return mirEmitBlockLocalValueAtEnd(block, local)
+    }
+    if block.id != func.entry {
+        if mirFunctionLocalIsMutable(func, local) {
+            if mirBlockNeedsLocalPhi(func, block, local) {
+                return mirPhiValueNameForBlock(block, local)
+            }
+        }
+    }
+    mirDominatingLocalValueFromPred(func, block.id, local, depth + 1)
+}
+fn mirLocalIncomingValueForPhi(func: MirFunction, block: MirBasicBlock, local: Int, depth: Int) -> String {
+    if depth > 32 {
+        return ""
+    }
+    if mirBlockHasLocalValueAtEnd(block, local) {
+        return mirEmitBlockLocalValueAtEnd(block, local)
+    }
+    mirDominatingLocalValueFromPredNoPhi(func, block.id, local, depth + 1)
+}
+fn mirDominatingLocalValueFromPredNoPhi(func: MirFunction, blockId: Int, local: Int, depth: Int) -> String {
+    if depth > 32 {
+        return ""
+    }
+    let predIdx = mirUniquePredecessorIndex(func, blockId)
+    if predIdx == -2 {
+        return mirCommonDominatingLocalValueFromPredsNoPhi(func, blockId, local, depth + 1)
+    }
+    if predIdx < 0 || predIdx >= func.blocks.len() {
+        return ""
+    }
+    let pred = func.blocks[predIdx]
+    if mirBlockHasLocalValueAtEnd(pred, local) {
+        return mirEmitBlockLocalValueAtEnd(pred, local)
+    }
+    mirDominatingLocalValueFromPredNoPhi(func, pred.id, local, depth + 1)
+}
+fn mirCommonDominatingLocalValueFromPredsNoPhi(func: MirFunction, blockId: Int, local: Int, depth: Int) -> String {
+    if depth > 32 {
+        return ""
+    }
+    let mut found = ""
+    let mut saw = false
+    for pred in func.blocks {
+        if mirBlockTargets(pred, blockId) {
+            let value = mirLocalIncomingValueForPhi(func, pred, local, depth + 1)
+            if value == "" {
+                return ""
+            }
+            if saw == false {
+                found = value
+                saw = true
+            } else if found != value {
+                return ""
+            }
+        }
+    }
+    if saw {
+        return found
+    }
+    ""
+}
+fn mirCommonDominatingLocalValueFromPreds(func: MirFunction, blockId: Int, local: Int, depth: Int) -> String {
+    if depth > 32 {
+        return ""
+    }
+    let mut found = ""
+    let mut saw = false
+    for pred in func.blocks {
+        if mirBlockTargets(pred, blockId) {
+            let value = mirLocalIncomingValueForBlock(func, pred, local, depth + 1)
+            if value == "" {
+                return ""
+            }
+            if saw == false {
+                found = value
+                saw = true
+            } else if found != value {
+                return ""
+            }
+        }
+    }
+    if saw {
+        return found
+    }
+    ""
+}
+fn mirUniquePredecessorIndex(func: MirFunction, blockId: Int) -> Int {
+    if blockId == func.entry {
+        return -1
+    }
+    let mut found = -1
+    let mut idx = 0
+    for block in func.blocks {
+        if mirBlockTargets(block, blockId) {
+            if found >= 0 {
+                return -2
+            }
+            found = idx
+        }
+        idx = idx + 1
+    }
+    found
+}
+fn mirBlockTargets(block: MirBasicBlock, blockId: Int) -> Bool {
+    match block.term.kind {
+        MirTermGoto -> block.termTarget == blockId,
+        MirTermBranch -> block.termThenBlock == blockId || block.termElseBlock == blockId,
+        MirTermSwitchInt -> {
+            if block.termTarget == blockId {
+                return true
+            }
+            for c in block.termCases {
+                if c.target == blockId {
+                    return true
+                }
+            }
+            false
+        },
+        _ -> false,
+    }
+}
+fn mirNormalizeTypedOperandValue(op: MirOperand, llvmTy: String, raw: String) -> String {
+    if llvmTy == "ptr" {
+        if raw == "0" || raw == "null" {
+            return "null"
+        }
+        if op.kind == MirOpInvalid {
+            return "null"
+        }
+        if op.kind == MirOpConst {
+            if op.const.kind == MirConstInvalid || op.const.kind == MirConstNull {
+                return "null"
+            }
+            if op.const.kind == MirConstInt && op.const.intValue == 0 {
+                return "null"
+            }
+        }
+    }
+    if mirStringStartsWith(llvmTy, "%") || mirStringStartsWith(llvmTy, "\{") {
+        if raw == "0" || op.kind == MirOpInvalid {
+            return "zeroinitializer"
+        }
+    }
+    raw
 }
 /// mirEmitRValue dispatches the rvalue arms onto LLVM instruction
 /// lines. The destination register name `dest` is pre-resolved by
@@ -17446,6 +18524,18 @@ fn mirEmitRValueBinary(dest: String, rv: MirRValue) -> String {
         return "  ; TODO unknown binary op\n"
     }
     let argTy = mirEmitOperandLLVMType(rv.arg)
+    if argTy == "ptr" {
+        let left = mirEmitTypedOperandValue(rv.arg, "ptr")
+        let right = mirEmitTypedOperandValue(rv.right, "ptr")
+        if symbol == "+" {
+            return "  " + dest + " = call ptr @osty_rt_strings_Concat(ptr " + left + ", ptr " + right + ")\n"
+        }
+        let ptrOpcode = mirBinaryOpcode(symbol, false)
+        if ptrOpcode == "icmp eq" || ptrOpcode == "icmp ne" {
+            return "  " + dest + " = " + ptrOpcode + " ptr " + left + ", " + right + "\n"
+        }
+        return "  ; TODO pointer binary op " + symbol + "\n"
+    }
     let isFloat = argTy == "double" || argTy == "float"
     let opcode = mirBinaryOpcode(symbol, isFloat)
     if opcode == "" {
@@ -17505,6 +18595,9 @@ fn mirEmitOperandLLVMType(op: MirOperand) -> String {
     if known != "" {
         return known
     }
+    if op.kind == MirOpConst {
+        return mirEmitConstLLVMType(op.const)
+    }
     "i64"
 }
 // ====================================================================
@@ -17535,35 +18628,47 @@ fn mirEmitOperandLLVMType(op: MirOperand) -> String {
 /// Direct calls only (calleeKind == MirCalleeFn). Indirect / unknown
 /// callees stub with TODO. The return type comes from `func.locals`
 /// when `hasDest` so the call signature matches the dest slot.
-fn mirEmitCallInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitCallInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.calleeKind == MirCalleeNone {
         return "  ; TODO unknown call kind (calleeKind=None)\n"
     }
-    let tmpBase = mirEmitFreshTempName(blockId, instrIdx)
-    let (argPre, argList) = mirEmitCallArgListRead(instr.args, tmpBase)
-    let (calleePre, calleeText) = if instr.calleeKind == MirCalleeIndirect {
-        let calleeTmp = tmpBase + ".callee"
-        let (p, val) = mirEmitOperandRead(instr.calleeOperand, calleeTmp)
-        (p, val)
+    if instr.calleeKind == MirCalleeFn && instr.calleeSymbol == "std.fs.readToString" {
+        return mirEmitStdFsReadToStringCall(func, block, instrIdx, instr)
+    }
+    let argPrelude = mirEmitCallArgProjectionPrelude(m, func, block, instrIdx, instr.args)
+    let argList = mirEmitCallArgList(m, func, block, instrIdx, instr.args)
+    let (calleePrelude, calleeText) = if instr.calleeKind == MirCalleeIndirect {
+        mirEmitModuleOperandRead(m, func, block, instrIdx, instr.calleeOperand, "ptr", "%callcallee.b" + mirGenIntToString(block.id) + ".i" + mirGenIntToString(instrIdx))
     } else {
         ("", "@" + instr.calleeSymbol)
     }
-    let pre = calleePre + argPre
+    let prelude = calleePrelude + argPrelude
     if instr.hasDest {
-        let retTy = mirEmitCallReturnType(func, instr)
+        let retTy = mirEmitCallReturnType(m, func, instr)
         if retTy == "void" {
-            return pre + mirEmitCallStmtLine(calleeText, argList)
+            return prelude + mirEmitCallStmtLine(calleeText, argList)
         }
+        let defName = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
         if mirPlaceHasProjections(instr.dest) {
-            let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".calltmp"
-            let mut out = pre + mirEmitCallValueLine(tmpReg, retTy, calleeText, argList)
-            out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, retTy)
-            return out
+            let tmpDest = defName + ".calltmp"
+            return prelude + mirEmitCallValueLine(tmpDest, retTy, calleeText, argList) + mirEmitStoreIntoProjectedPlace(instr.dest, tmpDest, retTy)
         }
-        let dest = mirEmitLocalRegName(instr.dest.local)
-        return pre + mirEmitCallValueLine(dest, retTy, calleeText, argList)
+        return prelude + mirEmitCallValueLine(defName, retTy, calleeText, argList)
     }
-    pre + mirEmitCallStmtLine(calleeText, argList)
+    prelude + mirEmitCallStmtLine(calleeText, argList)
+}
+fn mirEmitStdFsReadToStringCall(func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
+    if !instr.hasDest || instr.args.len() == 0 {
+        return "  ; TODO std.fs.readToString without destination/path\n"
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO std.fs.readToString call-into-projection dest\n"
+    }
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let pathArg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let boxed = dest + ".fsread"
+    "  " + boxed + " = call ptr @std.fs.readToString(ptr " + pathArg + ")\n" +
+    "  " + dest + " = load \{ i64, i64 \}, ptr " + boxed + ", align 8\n"
 }
 /// mirEmitCallStmtLine renders `  call void @<sym>(<args>)` or
 /// `  call void %<reg>(<args>)`. Generalises `mirCallVoidLine` to
@@ -17580,10 +18685,10 @@ fn mirEmitCallValueLine(dest: String, retTy: String, calleeText: String, argList
 /// mirEmitCallReturnType resolves the return type of a call. With
 /// `hasDest` the dest local's typ wins (most reliable); otherwise we
 /// fall back to `void` so the call statement compiles.
-fn mirEmitCallReturnType(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitCallReturnType(m: MirModule, func: MirFunction, instr: MirInstr) -> String {
     if instr.hasDest && instr.dest.local >= 0 && instr.dest.local < func.locals.len() {
         let loc = func.locals[instr.dest.local]
-        let known = mirEmitKnownTypeLLVM(loc.typ)
+        let known = mirEmitModuleTypeLLVM(m, loc.typ)
         if known != "" {
             return known
         }
@@ -17591,18 +18696,37 @@ fn mirEmitCallReturnType(func: MirFunction, instr: MirInstr) -> String {
     }
     "void"
 }
+fn mirCallArgProjectionName(block: MirBasicBlock, instrIdx: Int, argIdx: Int) -> String {
+    "%callarg.b" + mirGenIntToString(block.id) + ".i" + mirGenIntToString(instrIdx) + ".a" + mirGenIntToString(argIdx)
+}
+fn mirEmitCallArgProjectionPrelude(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, args: List<MirOperand>) -> String {
+    let mut out = ""
+    let mut i = 0
+    for op in args {
+        if mirOperandHasProjections(op) {
+            out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, mirCallArgProjectionName(block, instrIdx, i), op.place, op.typ)
+        }
+        i = i + 1
+    }
+    out
+}
 /// mirEmitCallArgList renders `<ty> <op>, <ty> <op>, ...` for the
 /// call's argument list. Each operand's source-level type is
 /// translated through `mirEmitOperandLLVMType`.
-fn mirEmitCallArgList(args: List<MirOperand>) -> String {
+fn mirEmitCallArgList(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, args: List<MirOperand>) -> String {
     let mut out = ""
     let mut i = 0
     for op in args {
         if i > 0 {
             out = out + ", "
         }
-        let ty = mirEmitOperandLLVMType(op)
-        out = out + ty + " " + mirEmitOperand(op)
+        let ty = mirEmitModuleOperandLLVMType(m, func, op)
+        let value = if mirOperandHasProjections(op) {
+            mirCallArgProjectionName(block, instrIdx, i)
+        } else {
+            mirEmitFunctionTypedOperandValue(func, block, instrIdx, op, ty)
+        }
+        out = out + ty + " " + value
         i = i + 1
     }
     out
@@ -17629,66 +18753,67 @@ fn mirEmitCallArgListRead(args: List<MirOperand>, tmpBase: String) -> (String, S
 /// operands route through the runtime IO write helper. Abort routes
 /// through `osty_rt_abort`. Everything else stubs with TODO so the
 /// verifier surfaces the next gap.
-fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitIntrinsicInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
+    let blockId = block.id
     match instr.intrinsic {
-        MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, true, false),
-        MirIntrinsicPrint -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, false, false),
-        MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, true, true),
-        MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, false, true),
+        MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic(m, func, block, blockId, instrIdx, instr, true, false),
+        MirIntrinsicPrint -> mirEmitIoWriteIntrinsic(m, func, block, blockId, instrIdx, instr, false, false),
+        MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(m, func, block, blockId, instrIdx, instr, true, true),
+        MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(m, func, block, blockId, instrIdx, instr, false, true),
         MirIntrinsicAbort -> mirEmitAbortIntrinsic(instr),
-        MirIntrinsicListPush -> mirEmitListPushIntrinsic(instr),
-        MirIntrinsicListGet -> mirEmitListGetIntrinsic(func, instr),
-        MirIntrinsicListLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_list_len"),
-        MirIntrinsicListIsEmpty -> mirEmitListIsEmptyIntrinsic(func, instr),
+        MirIntrinsicListPush -> mirEmitListPushIntrinsic(m, func, block, blockId, instrIdx, instr),
+        MirIntrinsicListGet -> mirEmitListGetIntrinsic(m, func, block, instrIdx, instr),
+        MirIntrinsicListLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_list_len"),
+        MirIntrinsicListIsEmpty -> mirEmitListIsEmptyIntrinsic(m, func, block, blockId, instrIdx, instr),
         MirIntrinsicListReverse -> mirEmitListReverseIntrinsic(instr),
         MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, blockId, instrIdx, instr),
-        MirIntrinsicMapLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_map_len"),
+        MirIntrinsicMapLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_map_len"),
         MirIntrinsicMapClear -> mirEmitMapClearIntrinsic(instr),
         MirIntrinsicMapKeys -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_keys"),
         MirIntrinsicMapValues -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_values"),
         MirIntrinsicMapNew -> mirEmitMapNewIntrinsic(func, instr),
-        MirIntrinsicSetLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_set_len"),
+        MirIntrinsicSetLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_set_len"),
         MirIntrinsicSetNew -> mirEmitSetNewIntrinsic(func, instr),
         MirIntrinsicSetToList -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_set_to_list"),
         MirIntrinsicSetClear -> mirEmitSetClearIntrinsic(instr),
-        MirIntrinsicStringLen -> mirEmitStringLenIntrinsic(func, instr),
-        MirIntrinsicStringIsEmpty -> mirEmitStringIsEmptyIntrinsic(func, instr),
-        MirIntrinsicStringContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_Contains"),
-        MirIntrinsicStringStartsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasPrefix"),
-        MirIntrinsicStringEndsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasSuffix"),
-        MirIntrinsicStringIndexOf -> mirEmitStringIndexOfIntrinsic(func, instr),
-        MirIntrinsicStringTrim -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimSpace"),
-        MirIntrinsicStringToUpper -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_ToUpper"),
-        MirIntrinsicStringToLower -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_ToLower"),
-        MirIntrinsicStringReplace -> mirEmitStringReplaceIntrinsic(func, instr),
-        MirIntrinsicStringSplit -> mirEmitStringSplitIntrinsic(func, instr),
-        MirIntrinsicStringChars -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_Chars"),
-        MirIntrinsicStringBytes -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_Bytes"),
-        MirIntrinsicStringToInt -> mirEmitStringToIntIntrinsic(func, instr),
-        MirIntrinsicStringToFloat -> mirEmitStringToFloatIntrinsic(func, instr),
-        MirIntrinsicStringCount -> mirEmitStringCountIntrinsic(func, instr),
-        MirIntrinsicStringJoin -> mirEmitStringJoinIntrinsic(func, instr),
-        MirIntrinsicStringSubstring -> mirEmitStringSubstringIntrinsic(func, instr),
-        MirIntrinsicStringRepeat -> mirEmitStringRepeatIntrinsic(func, instr),
-        MirIntrinsicStringTrimPrefix -> mirEmitStringBinaryIntrinsic(func, instr, "osty_rt_strings_TrimPrefix"),
-        MirIntrinsicStringTrimSuffix -> mirEmitStringBinaryIntrinsic(func, instr, "osty_rt_strings_TrimSuffix"),
-        MirIntrinsicStringTrimStart -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimStart"),
-        MirIntrinsicStringTrimEnd -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimEnd"),
-        MirIntrinsicStringReplaceAll -> mirEmitStringReplaceAllIntrinsic(func, instr),
-        MirIntrinsicStringSplitN -> mirEmitStringSplitNIntrinsic(func, instr),
-        MirIntrinsicStringFields -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_Fields"),
-        MirIntrinsicStringLastIndexOf -> mirEmitStringLastIndexOfIntrinsic(func, instr),
-        MirIntrinsicStringSplitInto -> mirEmitStringSplitIntoIntrinsic(instr),
-        MirIntrinsicStringNthSegment -> mirEmitStringNthSegmentIntrinsic(func, instr),
-        MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(func, blockId, instrIdx, instr, true),
-        MirIntrinsicListLast -> mirEmitListEdgeIntrinsic(func, blockId, instrIdx, instr, false),
+        MirIntrinsicStringLen -> mirEmitStringLenIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringIsEmpty -> mirEmitStringIsEmptyIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringContains -> mirEmitStringPredicateIntrinsic(m, func, block, instrIdx, instr, "osty_rt_strings_Contains"),
+        MirIntrinsicStringStartsWith -> mirEmitStringPredicateIntrinsic(m, func, block, instrIdx, instr, "osty_rt_strings_HasPrefix"),
+        MirIntrinsicStringEndsWith -> mirEmitStringPredicateIntrinsic(m, func, block, instrIdx, instr, "osty_rt_strings_HasSuffix"),
+        MirIntrinsicStringIndexOf -> mirEmitStringIndexOfIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringTrim -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_TrimSpace"),
+        MirIntrinsicStringToUpper -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_ToUpper"),
+        MirIntrinsicStringToLower -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_ToLower"),
+        MirIntrinsicStringReplace -> mirEmitStringReplaceIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringSplit -> mirEmitStringSplitIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringChars -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_Chars"),
+        MirIntrinsicStringBytes -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_Bytes"),
+        MirIntrinsicStringToInt -> mirEmitStringToIntIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringToFloat -> mirEmitStringToFloatIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringCount -> mirEmitStringCountIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringJoin -> mirEmitStringJoinIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringSubstring -> mirEmitStringSubstringIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringRepeat -> mirEmitStringRepeatIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringTrimPrefix -> mirEmitStringBinaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_TrimPrefix"),
+        MirIntrinsicStringTrimSuffix -> mirEmitStringBinaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_TrimSuffix"),
+        MirIntrinsicStringTrimStart -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_TrimStart"),
+        MirIntrinsicStringTrimEnd -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_TrimEnd"),
+        MirIntrinsicStringReplaceAll -> mirEmitStringReplaceAllIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringSplitN -> mirEmitStringSplitNIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringFields -> mirEmitStringUnaryIntrinsic(block, instrIdx, instr, "osty_rt_strings_Fields"),
+        MirIntrinsicStringLastIndexOf -> mirEmitStringLastIndexOfIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringSplitInto -> mirEmitStringSplitIntoIntrinsic(block, instrIdx, instr),
+        MirIntrinsicStringNthSegment -> mirEmitStringNthSegmentIntrinsic(block, instrIdx, instr),
+        MirIntrinsicListFirst -> mirEmitListEdgeIntrinsic(m, func, block, blockId, instrIdx, instr, true),
+        MirIntrinsicListLast -> mirEmitListEdgeIntrinsic(m, func, block, blockId, instrIdx, instr, false),
         MirIntrinsicListIndexOf -> mirEmitListIndexOfIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicListSorted -> mirEmitListSortedIntrinsic(func, instr),
         MirIntrinsicListToSet -> mirEmitListToSetIntrinsic(func, instr),
         MirIntrinsicListRemoveAt -> mirEmitListRemoveAtIntrinsic(func, instr),
         MirIntrinsicListReversed -> mirEmitListReversedIntrinsic(func, instr),
         MirIntrinsicListToString -> mirEmitListToStringIntrinsic(func, instr),
-        MirIntrinsicListPop -> mirEmitListPopIntrinsic(func, blockId, instrIdx, instr),
+        MirIntrinsicListPop -> mirEmitListPopIntrinsic(m, func, block, blockId, instrIdx, instr),
         MirIntrinsicListSlice -> mirEmitListSliceIntrinsic(func, instr),
         MirIntrinsicListInsert -> mirEmitListInsertIntrinsic(instr),
         MirIntrinsicListClear -> mirEmitListClearIntrinsic(instr),
@@ -17696,7 +18821,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicMapKeysSorted -> mirEmitMapKeysSortedIntrinsic(func, instr),
         MirIntrinsicMapContains -> mirEmitMapContainsIntrinsic(func, instr),
         MirIntrinsicMapRemove -> mirEmitMapRemoveIntrinsic(func, instr),
-        MirIntrinsicMapGetOr -> mirEmitMapGetOrIntrinsic(func, blockId, instrIdx, instr),
+        MirIntrinsicMapGetOr -> mirEmitMapGetOrIntrinsic(m, func, block, instrIdx, instr),
         MirIntrinsicMapIncr -> mirEmitMapIncrIntrinsic(func, instr),
         MirIntrinsicSetInsert -> mirEmitSetInsertIntrinsic(func, instr),
         MirIntrinsicSetContains -> mirEmitSetContainsIntrinsic(func, instr),
@@ -17713,7 +18838,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicSleep -> mirEmitSleepIntrinsic(instr),
         MirIntrinsicIsCancelled -> mirEmitIsCancelledIntrinsic(func, instr),
         MirIntrinsicCheckCancelled -> mirEmitCheckCancelledIntrinsic(),
-        MirIntrinsicStringConcat -> mirEmitStringConcatIntrinsic(func, instr),
+        MirIntrinsicStringConcat -> mirEmitStringConcatIntrinsic(block, instrIdx, instr),
         MirIntrinsicTaskGroup -> mirEmitTaskGroupIntrinsic(func, instr),
         MirIntrinsicGroupCancel -> mirEmitGroupCancelIntrinsic(instr),
         MirIntrinsicGroupIsCancelled -> mirEmitGroupIsCancelledIntrinsic(func, instr),
@@ -17725,9 +18850,9 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(blockId, instrIdx, instr),
         MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
         MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
-        MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(blockId, instrIdx, instr),
-        MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(func, instr),
-        MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_bytes_len"),
+        MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(m, func, block, blockId, instrIdx, instr),
+        MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(m, func, block, instrIdx, instr),
+        MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_bytes_len"),
         MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
         MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, blockId, instrIdx, instr),
         MirIntrinsicBytesContains -> mirEmitBytesContainsIntrinsic(func, instr),
@@ -17753,21 +18878,21 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicBytesFromString -> mirEmitBytesFromStringIntrinsic(func, instr),
         MirIntrinsicBytesToString -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_string"),
         MirIntrinsicBytesFromHex -> mirEmitBytesFromHexIntrinsic(func, instr),
-        MirIntrinsicOptionIsSome -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantSome()),
-        MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantNone()),
-        MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantOk()),
-        MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantErr()),
+        MirIntrinsicOptionIsSome -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantSome()),
+        MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantNone()),
+        MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantOk()),
+        MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantErr()),
         MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantNone(), "osty_rt_option_unwrap_none"),
         MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantErr(), "osty_rt_result_unwrap_err"),
         MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantSome()),
         MirIntrinsicResultUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantOk()),
         MirIntrinsicRawNull -> mirEmitRawNullIntrinsic(func, instr),
-        MirIntrinsicByteToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
-        MirIntrinsicCharToInt -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i64"),
-        MirIntrinsicIntToByte -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i8"),
-        MirIntrinsicIntToChar -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i32"),
-        MirIntrinsicByteToChar -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i32"),
-        MirIntrinsicCharToByte -> mirEmitPrimitiveConversionIntrinsic(func, instr, "i8"),
+        MirIntrinsicByteToInt -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i64"),
+        MirIntrinsicCharToInt -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i64"),
+        MirIntrinsicIntToByte -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i8"),
+        MirIntrinsicIntToChar -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i32"),
+        MirIntrinsicByteToChar -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i32"),
+        MirIntrinsicCharToByte -> mirEmitPrimitiveConversionIntrinsic(m, func, block, instrIdx, instr, "i8"),
         _ -> "  ; TODO MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
@@ -17776,7 +18901,7 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
 /// pretty-printers (Int, Bool, …) are Phase 1e (the Go side dispatches
 /// on operand type via printf format specifiers; mirroring that takes
 /// the per-type table). Non-String args stub with TODO.
-fn mirEmitIoWriteIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr, newline: Bool, stderr: Bool) -> String {
+fn mirEmitIoWriteIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr, newline: Bool, stderr: Bool) -> String {
     if instr.args.len() != 1 {
         return "  ; TODO Phase 1f print-family with " + mirGenIntToString(instr.args.len()) + " args\n"
     }
@@ -17792,17 +18917,17 @@ fn mirEmitIoWriteIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr, newline
         "false"
     }
     if arg.typ == "String" {
-        let (p0, argText) = mirEmitOperandRead(arg, mirEmitFreshTempName(blockId, instrIdx) + ".a0")
-        return p0 + "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+        let (argPrelude, argText) = mirEmitModuleOperandRead(m, func, block, instrIdx, arg, "ptr", "%iowrite.b" + mirGenIntToString(blockId) + ".i" + mirGenIntToString(instrIdx) + ".arg")
+        return argPrelude + "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
     }
     let toStringSym = mirEmitToStringSymbol(arg.typ)
     if toStringSym == "" {
         return "  ; TODO Phase 1f print of " + arg.typ + " (no to_string runtime helper)\n"
     }
-    let llvmTy = mirEmitOperandLLVMType(arg)
-    let (p1, argText) = mirEmitOperandRead(arg, mirEmitFreshTempName(blockId, instrIdx) + ".a1")
+    let llvmTy = mirEmitModuleOperandLLVMType(m, func, arg)
+    let (argPrelude, argText) = mirEmitModuleOperandRead(m, func, block, instrIdx, arg, llvmTy, "%iowrite.b" + mirGenIntToString(blockId) + ".i" + mirGenIntToString(instrIdx) + ".arg")
     let textReg = mirEmitFreshTempName(blockId, instrIdx)
-    let mut out = p1 + "  " + textReg + " = call ptr @" + toStringSym + "(" + llvmTy + " " + argText + ")\n"
+    let mut out = argPrelude + "  " + textReg + " = call ptr @" + toStringSym + "(" + llvmTy + " " + argText + ")\n"
     out = out + "  call void @osty_rt_io_write(ptr " + textReg + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
     out
 }
@@ -17897,8 +19022,7 @@ fn mirEmitTupleAggregate(dest: String, rv: MirRValue) -> String {
     let mut i = 0
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
-        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
-        out = out + pf
+        let fieldOp = mirEmitTypedOperandValue(field, fieldTy)
         let target = if i == n - 1 {
             dest
         } else {
@@ -17950,7 +19074,7 @@ fn mirEmitTupleTypeText(fields: List<MirOperand>) -> String {
 /// local at the start of the entry block. No-op when the function
 /// has no parameters. Mirrors the Phase 1c Use-rvalue idiom so the
 /// emitted shape stays consistent across the emitter.
-fn mirEmitParamBindingPrologue(func: MirFunction) -> String {
+fn mirEmitParamBindingPrologue(m: MirModule, func: MirFunction) -> String {
     let mut out = ""
     let mut i = 0
     for paramLocal in func.params {
@@ -17960,11 +19084,57 @@ fn mirEmitParamBindingPrologue(func: MirFunction) -> String {
         }
         let dest = mirEmitLocalRegName(paramLocal)
         let src = "%p" + mirGenIntToString(i)
-        let ty = mirEmitParamType(func, paramLocal)
+        let ty = mirEmitModuleParamType(m, func, paramLocal)
         out = out + mirEmitParamCopyLine(dest, ty, src)
         i = i + 1
     }
+    let mut localIdx = 0
+    for loc in func.locals {
+        if mirFunctionParamContains(func, localIdx) == false && mirEntryBlockPlainDefinesLocal(func, localIdx) == false {
+            let ty = mirEmitModuleTypeLLVM(m, loc.typ)
+            if ty != "" && ty != "void" {
+                out = out + mirEmitDefaultLocalLine(mirEmitLocalRegName(localIdx), ty)
+            }
+        }
+        localIdx = localIdx + 1
+    }
     out
+}
+fn mirFunctionParamContains(func: MirFunction, local: Int) -> Bool {
+    for p in func.params {
+        if p == local {
+            return true
+        }
+    }
+    false
+}
+fn mirEntryBlockPlainDefinesLocal(func: MirFunction, local: Int) -> Bool {
+    for block in func.blocks {
+        if block.id != func.entry {
+            continue
+        }
+        for instr in block.instrs {
+            if mirInstrDefinesPlainLocal(instr, local) {
+                return true
+            }
+        }
+    }
+    false
+}
+fn mirEmitDefaultLocalLine(dest: String, ty: String) -> String {
+    if mirStringStartsWith(ty, "%") || mirStringStartsWith(ty, "\{") {
+        return "  " + dest + " = freeze " + ty + " zeroinitializer\n"
+    }
+    if ty == "ptr" {
+        return "  " + dest + " = select i1 true, ptr null, ptr null\n"
+    }
+    if ty == "double" || ty == "float" {
+        return "  " + dest + " = fadd " + ty + " 0.0, 0.0\n"
+    }
+    if ty == "i1" {
+        return "  " + dest + " = or i1 false, false\n"
+    }
+    "  " + dest + " = add " + ty + " 0, 0\n"
 }
 /// mirEmitParamCopyLine renders one `<dest> = <opcode> <ty> <zero>, <src>`
 /// (or the equivalent for ptr / float / i1) line. Same idiom as
@@ -17974,6 +19144,9 @@ fn mirEmitParamBindingPrologue(func: MirFunction) -> String {
 /// share the copy emitter without re-duplicating the per-type
 /// branches.
 fn mirEmitParamCopyLine(dest: String, ty: String, src: String) -> String {
+    if mirStringStartsWith(ty, "%") || mirStringStartsWith(ty, "\{") {
+        return "  " + dest + " = freeze " + ty + " " + src + "\n"
+    }
     if ty == "ptr" {
         return "  " + dest + " = select i1 true, ptr " + src + ", ptr " + src + "\n"
     }
@@ -18011,12 +19184,18 @@ fn mirEmitParamCopyLine(dest: String, ty: String, src: String) -> String {
 ///
 /// `term.target` is the default block; `term.cases` are the value→
 /// target arms; operand type comes from the cond operand.
-fn mirEmitSwitchTerminator(func: MirFunction, blockId: Int, term: MirTerm) -> String {
-    let tmpBase = "%b" + mirGenIntToString(blockId) + ".swcond"
-    let (pre, condText) = mirEmitOperandRead(term.cond, tmpBase)
-    let condTy = mirEmitOperandLLVMType(term.cond)
+fn mirEmitSwitchTerminator(m: MirModule, func: MirFunction, block: MirBasicBlock, term: MirTerm) -> String {
+    let instrIdx = block.instrs.len()
+    let condTy = mirEmitModuleOperandLLVMType(m, func, term.cond)
+    let condTmp = "%switchcond.b" + mirGenIntToString(block.id) + ".i" + mirGenIntToString(instrIdx)
+    let (prelude, condText) = if mirOperandHasProjections(term.cond) {
+        let pre = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, condTmp, term.cond.place, term.cond.typ)
+        (pre, condTmp)
+    } else {
+        ("", mirEmitFunctionTypedOperandValue(func, block, instrIdx, term.cond, condTy))
+    }
     let defaultLabel = mirEmitBlockTargetLabel(func, term.target)
-    let mut out = pre + "  switch " + condTy + " " + condText + ", label %" + defaultLabel + " [\n"
+    let mut out = prelude + "  switch " + condTy + " " + condText + ", label %" + defaultLabel + " [\n"
     for c in term.cases {
         let caseLabel = mirEmitBlockTargetLabel(func, c.target)
         out = out + "    " + condTy + " " + mirGenIntToString(c.value) + ", label %" + caseLabel + "\n"
@@ -18174,7 +19353,7 @@ fn mirEmitLenSymbol(typeName: String) -> String {
         return "osty_rt_set_len"
     }
     if typeName == "String" {
-        return "osty_rt_string_byte_len"
+        return "osty_rt_strings_ByteLen"
     }
     if typeName == "Bytes" {
         return "osty_rt_bytes_len"
@@ -18199,6 +19378,9 @@ fn mirEmitKnownTypeLLVM(typeName: String) -> String {
     if typeName == "i64" || typeName == "i32" || typeName == "i16" || typeName == "i8" || typeName == "i1" || typeName == "ptr" || typeName == "double" || typeName == "float" || typeName == "void" {
         return typeName
     }
+    if mirLlvmTypeIsOptionalSurface(typeName) {
+        return "\{ i64, i64 \}"
+    }
     let head = mirLlvmTypeHeadName(typeName)
     if head == "List" || head == "Map" || head == "Set" || head == "Channel" || head == "Handle" || head == "Group" || head == "TaskGroup" || head == "Select" || head == "ClosureEnv" || head == "RawPtr" {
         return "ptr"
@@ -18207,6 +19389,140 @@ fn mirEmitKnownTypeLLVM(typeName: String) -> String {
         return "\{ i64, i64 \}"
     }
     ""
+}
+fn mirEmitBareTypeName(raw: String) -> String {
+    if raw == "" {
+        return ""
+    }
+    if mirStringStartsWith(raw, "%") {
+        return raw[1..raw.len()]
+    }
+    raw
+}
+fn mirEmitTypeDefName(name: String, mangled: String) -> String {
+    if mangled != "" {
+        return mirEmitBareTypeName(mangled)
+    }
+    mirEmitBareTypeName(name)
+}
+fn mirEmitTypeRefName(raw: String) -> String {
+    let bare = mirEmitBareTypeName(raw)
+    if bare == "" {
+        return ""
+    }
+    "%" + bare
+}
+fn mirEmitLayoutTypeRef(name: String, mangled: String) -> String {
+    let bare = mirEmitTypeDefName(name, mangled)
+    if bare == "" {
+        return ""
+    }
+    "%" + bare
+}
+fn mirEmitModuleTypeLLVM(m: MirModule, typeName: String) -> String {
+    if typeName == "" {
+        return ""
+    }
+    let known = mirEmitKnownTypeLLVM(typeName)
+    if known != "" {
+        return known
+    }
+    if mirStringStartsWith(typeName, "%") || mirStringStartsWith(typeName, "\{") {
+        return typeName
+    }
+    let tupleTy = mirEmitModuleTupleSurfaceLLVM(m, typeName)
+    if tupleTy != "" {
+        return tupleTy
+    }
+    for layout in m.layouts.structs {
+        if layout.name == typeName || layout.mangled == typeName {
+            return mirEmitLayoutTypeRef(layout.name, layout.mangled)
+        }
+    }
+    for layout in m.layouts.enums {
+        if layout.name == typeName || layout.mangled == typeName {
+            return mirEmitLayoutTypeRef(layout.name, layout.mangled)
+        }
+    }
+    for layout in m.layouts.tuples {
+        if layout.key == typeName || layout.mangled == typeName {
+            return mirEmitLayoutTypeRef(layout.key, layout.mangled)
+        }
+    }
+    "ptr"
+}
+fn mirEmitLLVMTypeIsAggregate(llvmTy: String) -> Bool {
+    mirStringStartsWith(llvmTy, "%") || mirStringStartsWith(llvmTy, "\{")
+}
+fn mirEmitModuleTupleSurfaceLLVM(m: MirModule, typeName: String) -> String {
+    let n = typeName.len()
+    if n < 2 {
+        return ""
+    }
+    if typeName[0..1] != "(" || typeName[(n - 1)..n] != ")" {
+        return ""
+    }
+    let body = typeName[1..(n - 1)]
+    if body == "" {
+        return "\{\}"
+    }
+    "\{ " + mirEmitModuleTupleBodyLLVM(m, body) + " \}"
+}
+fn mirEmitModuleTupleBodyLLVM(m: MirModule, body: String) -> String {
+    if body == "MirJsonValue, Int" {
+        return "%MirJsonValue, i64"
+    }
+    if body == "String, Int" {
+        return "ptr, i64"
+    }
+    if body == "MirJsonObject, Int" {
+        return "ptr, i64"
+    }
+    if body == "MirJsonArray, Int" {
+        return "ptr, i64"
+    }
+    mirEmitModuleTypeLLVM(m, body)
+}
+fn mirEmitModuleOperandLLVMType(m: MirModule, func: MirFunction, op: MirOperand) -> String {
+    let known = mirEmitModuleTypeLLVM(m, op.typ)
+    if known != "" {
+        return known
+    }
+    if op.kind == MirOpConst {
+        return mirEmitConstLLVMType(op.const)
+    }
+    if (op.kind == MirOpCopy || op.kind == MirOpMove) && op.place.local >= 0 && op.place.local < func.locals.len() {
+        let loc = func.locals[op.place.local]
+        let localTy = mirEmitModuleTypeLLVM(m, loc.typ)
+        if localTy != "" {
+            return localTy
+        }
+    }
+    "i64"
+}
+fn mirEmitModuleRValueLLVMType(m: MirModule, func: MirFunction, rv: MirRValue) -> String {
+    let known = mirEmitModuleTypeLLVM(m, rv.typ)
+    if known != "" {
+        return known
+    }
+    if rv.kind == MirRVUse {
+        return mirEmitModuleOperandLLVMType(m, func, rv.arg)
+    }
+    mirEmitRValueLLVMType(rv)
+}
+fn mirEmitFunctionReturnLLVMType(m: MirModule, func: MirFunction) -> String {
+    let declared = mirEmitModuleTypeLLVM(m, func.returnType)
+    if declared != "" {
+        return declared
+    }
+    if func.returnLocal >= 0 && func.returnLocal < func.locals.len() {
+        let loc = func.locals[func.returnLocal]
+        let localTy = mirEmitModuleTypeLLVM(m, loc.typ)
+        if localTy != "" {
+            return localTy
+        }
+    }
+    "void"
 }
 fn mirEmitSingleTypeArgText(typeName: String) -> String {
     let lt = llvmStrings.indexOf(typeName, "<") ?? -1
@@ -18422,13 +19738,16 @@ fn mirEmitProjectVariantLineFromHelper(target: String, src: String, proj: MirPro
 /// `resultLLVM`; Phase 1g supports i64 / ptr / i1 / double dispatch.
 fn mirEmitProjectIndexLine(dest: String, baseReg: String, proj: MirProjection, resultLLVM: String) -> String {
     let elemSym = mirEmitListGetSymbolForType(proj.typ, resultLLVM)
-    if elemSym == "" {
-        return "  ; TODO Phase 1h list_get for elem type \"" + resultLLVM + "\"\n"
-    }
     let idxOp = if proj.indexLocal >= 0 {
         mirEmitLocalRegName(proj.indexLocal)
     } else {
         mirGenIntToString(proj.indexConst)
+    }
+    if elemSym == "" {
+        if mirEmitListGetUsesBytesV1(resultLLVM) {
+            return mirEmitListGetBytesV1Line(dest, baseReg, idxOp, resultLLVM)
+        }
+        return "  ; TODO Phase 1h list_get for elem type \"" + resultLLVM + "\"\n"
     }
     "  " + dest + " = call " + resultLLVM + " @" + elemSym + "(ptr " + baseReg + ", i64 " + idxOp + ")\n"
 }
@@ -18455,6 +19774,59 @@ fn mirEmitListGetSymbolForType(typeName: String, elemLLVM: String) -> String {
         return "osty_rt_list_get_string"
     }
     mirEmitListGetSymbol(elemLLVM)
+}
+fn mirEmitListGetUsesBytesV1(elemLLVM: String) -> Bool {
+    mirEmitListElementUsesBytesV1(elemLLVM)
+}
+fn mirEmitListElementUsesBytesV1(elemLLVM: String) -> Bool {
+    if elemLLVM == "i8" {
+        return true
+    }
+    if elemLLVM == "i16" {
+        return true
+    }
+    if elemLLVM == "i32" {
+        return true
+    }
+    if mirStringStartsWith(elemLLVM, "%") {
+        return true
+    }
+    if mirStringStartsWith(elemLLVM, "\{") {
+        return true
+    }
+    false
+}
+fn mirEmitListGetBytesV1Line(dest: String, listText: String, idxText: String, elemLLVM: String) -> String {
+    let slot = dest + ".slot"
+    let gep = dest + ".size.gep"
+    let size = dest + ".size"
+    let mut out = "  " + slot + " = alloca " + elemLLVM + "\n"
+    out = out + "  " + gep + " = getelementptr " + elemLLVM + ", ptr null, i32 1\n"
+    out = out + "  " + size + " = ptrtoint ptr " + gep + " to i64\n"
+    out = out + "  call void @osty_rt_list_get_bytes_v1(ptr " + listText + ", i64 " + idxText + ", ptr " + slot + ", i64 " + size + ")\n"
+    out + "  " + dest + " = load " + elemLLVM + ", ptr " + slot + "\n"
+}
+fn mirEmitListPushBytesV1Line(base: String, listText: String, valueText: String, elemLLVM: String) -> String {
+    let slot = base + ".slot"
+    let gep = base + ".size.gep"
+    let size = base + ".size"
+    let align = mirEmitFixedValueSizeBytes(elemLLVM)
+    let mut out = "  " + slot + " = alloca " + elemLLVM + ", align " + align + "\n"
+    out = out + "  store " + elemLLVM + " " + valueText + ", ptr " + slot + ", align " + align + "\n"
+    out = out + "  " + gep + " = getelementptr " + elemLLVM + ", ptr null, i32 1\n"
+    out = out + "  " + size + " = ptrtoint ptr " + gep + " to i64\n"
+    out + "  call void @osty_rt_list_push_bytes_v1(ptr " + listText + ", ptr " + slot + ", i64 " + size + ")\n"
+}
+fn mirEmitListSetBytesV1Line(base: String, listText: String, idxText: String, valueText: String, elemLLVM: String) -> String {
+    let slot = base + ".slot"
+    let gep = base + ".size.gep"
+    let size = base + ".size"
+    let align = mirEmitFixedValueSizeBytes(elemLLVM)
+    let mut out = "  " + slot + " = alloca " + elemLLVM + ", align " + align + "\n"
+    out = out + "  store " + elemLLVM + " " + valueText + ", ptr " + slot + ", align " + align + "\n"
+    out = out + "  " + gep + " = getelementptr " + elemLLVM + ", ptr null, i32 1\n"
+    out = out + "  " + size + " = ptrtoint ptr " + gep + " to i64\n"
+    out + "  call void @osty_rt_list_set_bytes_v1(ptr " + listText + ", i64 " + idxText + ", ptr " + slot + ", i64 " + size + ", ptr null)\n"
 }
 // ====================================================================
 // Phase 1h — Struct + EnumVariant aggregates
@@ -18548,20 +19920,54 @@ fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
 /// `call void @osty_rt_list_push_<elemTy>(ptr <list>, <ty> <val>)`.
 /// Element type is read from the value operand. Unsupported elem
 /// LLVM types (e.g. composite element bytes-v1) stub with TODO.
-fn mirEmitListPushIntrinsic(instr: MirInstr) -> String {
+fn mirEmitListPushIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO list.push expects 2 args\n"
     }
     let listOp = instr.args[0]
     let valueOp = instr.args[1]
-    let elemTy = mirEmitOperandLLVMType(valueOp)
+    let elemTy = mirEmitModuleOperandLLVMType(m, func, valueOp)
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let mut out = ""
+    let listText = if mirOperandHasProjections(listOp) {
+        let tmp = base + ".list"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, listOp.place, listOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, listOp, "ptr")
+    }
+    let valueText = if mirOperandHasProjections(valueOp) {
+        let tmp = base + ".value"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, valueOp.place, valueOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, valueOp, elemTy)
+    }
+    if mirEmitListElementUsesBytesV1(elemTy) {
+        return out + mirEmitListPushBytesV1Line(base, listText, valueText, elemTy)
+    }
     let pushSym = mirEmitListPushSymbolForType(valueOp.typ, elemTy)
     if pushSym == "" {
         return "  ; TODO Phase 1j list_push for elem type \"" + elemTy + "\"\n"
     }
-    let listText = mirEmitOperand(listOp)
-    let valueText = mirEmitOperand(valueOp)
-    "  call void @" + pushSym + "(ptr " + listText + ", " + elemTy + " " + valueText + ")\n"
+    out + "  call void @" + pushSym + "(ptr " + listText + ", " + elemTy + " " + valueText + ")\n"
+}
+fn mirEmitFunctionOperandLLVMType(func: MirFunction, op: MirOperand) -> String {
+    let known = mirEmitOperandLLVMType(op)
+    if known != "i64" || op.typ == "Int" || op.typ == "Int64" || op.typ == "UInt64" || op.typ == "i64" {
+        return known
+    }
+    if (op.kind == MirOpCopy || op.kind == MirOpMove) && op.place.local >= 0 && op.place.local < func.locals.len() {
+        let loc = func.locals[op.place.local]
+        let localKnown = mirEmitKnownTypeLLVM(loc.typ)
+        if localKnown != "" {
+            return localKnown
+        }
+        if loc.typ != "" {
+            return "%" + loc.typ
+        }
+    }
+    known
 }
 /// mirEmitListPushSymbol picks the runtime helper for
 /// `list.push(<elem>)` per LLVM element type. Mirrors the per-elem
@@ -18592,52 +19998,53 @@ fn mirEmitListPushSymbolForType(typeName: String, elemLLVM: String) -> String {
 /// The intrinsic shape carries args = [list, index] and an optional
 /// dest. Phase 1i emits the call only when the dest local's type
 /// resolves to one of the per-elem dispatch shapes.
-fn mirEmitListGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitListGetIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO list.get expects 2 args\n"
     }
     if instr.hasDest == false {
         return "  ; TODO list.get without dest\n"
     }
-    let listText = mirEmitOperand(instr.args[0])
-    let idxText = mirEmitOperand(instr.args[1])
+    let defName = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let (listPrelude, listText) = mirEmitModuleOperandRead(m, func, block, instrIdx, instr.args[0], "ptr", defName + ".a0")
+    let (idxPrelude, idxText) = mirEmitModuleOperandRead(m, func, block, instrIdx, instr.args[1], "i64", defName + ".a1")
     let destType = func.locals[instr.dest.local].typ
-    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    let destLLVM = mirEmitModuleLocalLLVMType(m, func, instr.dest.local)
     let getSym = mirEmitListGetSymbolForType(destType, destLLVM)
     if getSym == "" {
+        if mirEmitListGetUsesBytesV1(destLLVM) {
+            return listPrelude + idxPrelude + mirEmitListGetBytesV1Line(defName, listText, idxText, destLLVM)
+        }
         return "  ; TODO Phase 1j list_get for dest type \"" + destLLVM + "\"\n"
     }
     if mirPlaceHasProjections(instr.dest) {
-        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".gettmp"
-        let mut out = "  " + tmpReg + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
+        let tmpReg = defName + ".gettmp"
+        let mut out = listPrelude + idxPrelude + "  " + tmpReg + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
         out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, destLLVM)
         return out
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    "  " + dest + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
+    listPrelude + idxPrelude + "  " + defName + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
 }
 /// mirEmitStringPredicateIntrinsic lowers `s.<pred>(other)` as
 /// `<dest> = call i1 @<runtime>(ptr <s>, ptr <other>)`. Used for
 /// the String predicate trio (contains, startsWith, endsWith).
 /// The runtime symbol is passed in by the caller so a single
 /// helper covers all three intrinsics.
-fn mirEmitStringPredicateIntrinsic(func: MirFunction, instr: MirInstr, runtimeSym: String) -> String {
+fn mirEmitStringPredicateIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr, runtimeSym: String) -> String {
     if instr.args.len() != 2 {
         return "  ; TODO string predicate expects 2 args\n"
     }
     if instr.hasDest == false {
         return "  ; TODO string predicate without dest\n"
     }
-    let lhs = mirEmitOperand(instr.args[0])
-    let rhs = mirEmitOperand(instr.args[1])
+    let defName = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let (lhsPrelude, lhs) = mirEmitModuleOperandRead(m, func, block, instrIdx, instr.args[0], "ptr", defName + ".a0")
+    let (rhsPrelude, rhs) = mirEmitModuleOperandRead(m, func, block, instrIdx, instr.args[1], "ptr", defName + ".a1")
     if mirPlaceHasProjections(instr.dest) {
-        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".predtmp"
-        let mut out = "  " + tmpReg + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
-        out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, "i1")
-        return out
+        let tmpReg = defName + ".predtmp"
+        return lhsPrelude + rhsPrelude + "  " + tmpReg + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n" + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, "i1")
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    "  " + dest + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
+    lhsPrelude + rhsPrelude + "  " + defName + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
 // ====================================================================
 // Phase 1j — Module-level sections (runtime decls + globals)
@@ -18674,13 +20081,17 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_bool_to_string(i1)\n"
     out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
     out = out + "declare ptr @osty_rt_float_to_string(double)\n"
+    out = out + "declare ptr @std.fs.readToString(ptr)\n"
+    out = out + "declare ptr @std.env.args()\n"
+    out = out + "declare ptr @std.env.get(ptr)\n"
+    out = out + "declare void @std.os.exit(i64)\n"
     out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
     out = out + "declare void @osty_rt_option_unwrap_none()\n"
     out = out + "declare void @osty_rt_result_unwrap_err()\n"
     out = out + "declare i64 @osty_rt_list_len(ptr)\n"
     out = out + "declare i64 @osty_rt_map_len(ptr)\n"
     out = out + "declare i64 @osty_rt_set_len(ptr)\n"
-    out = out + "declare i64 @osty_rt_string_byte_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_strings_ByteLen(ptr)\n"
     out = out + "declare i64 @osty_rt_bytes_len(ptr)\n"
     out = out + "declare ptr @osty_rt_list_new()\n"
     out = out + "declare i64 @osty_rt_list_get_i64(ptr, i64)\n"
@@ -18688,11 +20099,13 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_list_get_ptr(ptr, i64)\n"
     out = out + "declare ptr @osty_rt_list_get_string(ptr, i64)\n"
     out = out + "declare double @osty_rt_list_get_f64(ptr, i64)\n"
+    out = out + "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)\n"
     out = out + "declare void @osty_rt_list_push_i64(ptr, i64)\n"
     out = out + "declare void @osty_rt_list_push_i1(ptr, i1)\n"
     out = out + "declare void @osty_rt_list_push_ptr(ptr, ptr)\n"
     out = out + "declare void @osty_rt_list_push_string(ptr, ptr)\n"
     out = out + "declare void @osty_rt_list_push_f64(ptr, double)\n"
+    out = out + "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)\n"
     out = out + "declare void @osty_rt_list_insert_i64(ptr, i64, i64)\n"
     out = out + "declare void @osty_rt_list_insert_i1(ptr, i64, i1)\n"
     out = out + "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)\n"
@@ -18703,6 +20116,7 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)\n"
     out = out + "declare void @osty_rt_list_set_string(ptr, i64, ptr)\n"
     out = out + "declare void @osty_rt_list_set_f64(ptr, i64, double)\n"
+    out = out + "declare void @osty_rt_list_set_bytes_v1(ptr, i64, ptr, i64, ptr)\n"
     out = out + "declare void @osty_rt_list_clear(ptr)\n"
     out = out + "declare void @osty_rt_list_pop_discard(ptr)\n"
     out = out + "declare void @osty_rt_list_remove_at_discard(ptr, i64)\n"
@@ -18998,13 +20412,16 @@ fn mirEmitProjectVariantLineFrom(target: String, src: String, proj: MirProjectio
 }
 fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection, resultLLVM: String) -> String {
     let elemSym = mirEmitListGetSymbolForType(proj.typ, resultLLVM)
-    if elemSym == "" {
-        return "  ; TODO list_get for elem type \"" + resultLLVM + "\"\n"
-    }
     let idxOp = if proj.indexLocal >= 0 {
         mirEmitLocalRegName(proj.indexLocal)
     } else {
         mirGenIntToString(proj.indexConst)
+    }
+    if elemSym == "" {
+        if mirEmitListGetUsesBytesV1(resultLLVM) {
+            return mirEmitListGetBytesV1Line(target, src, idxOp, resultLLVM)
+        }
+        return "  ; TODO list_get for elem type \"" + resultLLVM + "\"\n"
     }
     "  " + target + " = call " + resultLLVM + " @" + elemSym + "(ptr " + src + ", i64 " + idxOp + ")\n"
 }
@@ -19013,10 +20430,10 @@ fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection,
 /// covers single-step writes only: insertvalue back into the
 /// holder local. Multi-step writes (`s.f.g = x`) and Index/Deref
 /// writes stub at TODO.
-fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitAssignIntoProjection(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     let n = instr.dest.projections.len()
     if n == 1 {
-        return mirEmitAssignIntoSingleProjection(func, instr)
+        return mirEmitAssignIntoSingleProjection(m, func, block, instrIdx, instr)
     }
     let lastIdx = instr.dest.projections.len() - 1
     let mut k = 0
@@ -19036,9 +20453,13 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
     if lastProj.kind != MirProjField && lastProj.kind != MirProjTuple {
         return "  ; TODO multi-step write ending in " + mirProjectionKindName(lastProj.kind) + "\n"
     }
+    if n == 2 {
+        return mirEmitAssignIntoTwoStepProjection(m, func, block, instrIdx, instr)
+    }
     let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
     let mut out = ""
-    let mut prev = baseReg
+    let mut prev = baseValue
     let mut i = 0
     for proj in instr.dest.projections {
         if i == n - 1 {
@@ -19060,12 +20481,12 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
     let mut j = n - 2
     for j >= 0 {
         let outer = if j == 0 {
-            baseReg
+            baseValue
         } else {
             baseReg + ".r" + mirGenIntToString(j - 1)
         }
         let target = if j == 0 {
-            baseReg
+            mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
         } else {
             baseReg + ".w" + mirGenIntToString(j)
         }
@@ -19076,6 +20497,29 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
     }
     out
 }
+fn mirEmitAssignIntoTwoStepProjection(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
+    let firstProj = instr.dest.projections[0]
+    let lastProj = instr.dest.projections[1]
+    if firstProj.kind != MirProjField && firstProj.kind != MirProjTuple {
+        return "  ; TODO two-step write with non-field first projection\n"
+    }
+    if lastProj.kind != MirProjField && lastProj.kind != MirProjTuple {
+        return "  ; TODO two-step write with non-field last projection\n"
+    }
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
+    let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
+    let midTy = mirEmitModuleProjectionResultLLVM(m, "", firstProj)
+    let midRead = baseReg + ".r" + mirGenIntToString(instrIdx) + "_0"
+    let valueDest = baseReg + ".wv" + mirGenIntToString(instrIdx)
+    let innerWrite = baseReg + ".w" + mirGenIntToString(instrIdx) + "_1"
+    let finalTarget = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
+    let mut out = "  " + midRead + " = extractvalue " + baseTy + " " + baseValue + ", " + mirGenIntToString(firstProj.index) + "\n"
+    out = out + mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
+    let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
+    out = out + "  " + innerWrite + " = insertvalue " + midTy + " " + midRead + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastProj.index) + "\n"
+    out + "  " + finalTarget + " = insertvalue " + baseTy + " " + baseValue + ", " + midTy + " " + innerWrite + ", " + mirGenIntToString(firstProj.index) + "\n"
+}
 // Multi-step write: classify the chain ending. Phase 1m covered
 // pure Field/Tuple chains; Phase 1p adds chains whose LAST step
 // is Index or Deref. The intermediate steps still must be
@@ -19085,7 +20529,7 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
 // last step is the write target; stop here.
 // Compute the new value into a fresh register.
 // Pass 2: insertvalue back from deepest to outermost.
-fn mirEmitAssignIntoSingleProjection(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitAssignIntoSingleProjection(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     let proj = instr.dest.projections[0]
     let idOrDeref = mirEmitIndexOrDerefWrite(func, instr)
     if idOrDeref != "" {
@@ -19095,10 +20539,13 @@ fn mirEmitAssignIntoSingleProjection(func: MirFunction, instr: MirInstr) -> Stri
         return "  ; TODO write through 1-step " + mirProjectionKindName(proj.kind) + "\n"
     }
     let baseReg = mirEmitLocalRegName(instr.dest.local)
-    let valueDest = baseReg + ".w" + mirGenIntToString(proj.index)
-    let mut out = mirEmitRValue(valueDest, instr.src)
-    let valueTy = mirEmitRValueLLVMType(instr.src)
-    out + "  " + baseReg + " = insertvalue \{ i64, i64 \} " + baseReg + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(proj.index) + "\n"
+    let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
+    let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
+    let valueDest = baseReg + ".w" + mirGenIntToString(instrIdx) + "_" + mirGenIntToString(proj.index)
+    let mut out = mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
+    let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
+    let target = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
+    out + "  " + target + " = insertvalue " + baseTy + " " + baseValue + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(proj.index) + "\n"
 }
 fn mirProjectionKindName(k: MirProjectionKind) -> String {
     match k {
@@ -19149,7 +20596,7 @@ fn mirEmitWidenPayloadLine(widenedReg: String, payloadTy: String, payloadOp: Str
     if payloadTy == "ptr" {
         return "  " + widenedReg + " = ptrtoint ptr " + payloadOp + " to i64\n"
     }
-    if mirStringStartsWith(payloadTy, "\{") {
+    if mirStringStartsWith(payloadTy, "\{") || mirStringStartsWith(payloadTy, "%") {
         let gep = widenedReg + ".box.gep"
         let size = widenedReg + ".box.size"
         let box = widenedReg + ".box"
@@ -19177,7 +20624,7 @@ fn mirEmitNarrowPayloadLine(dest: String, rawReg: String, toLLVM: String) -> Str
     if toLLVM == "ptr" {
         return "  " + dest + " = inttoptr i64 " + rawReg + " to ptr\n"
     }
-    if mirStringStartsWith(toLLVM, "\{") {
+    if mirStringStartsWith(toLLVM, "\{") || mirStringStartsWith(toLLVM, "%") {
         let box = dest + ".box"
         let mut out = "  " + box + " = inttoptr i64 " + rawReg + " to ptr\n"
         return out + "  " + dest + " = load " + toLLVM + ", ptr " + box + ", align 8\n"
@@ -19236,7 +20683,7 @@ fn mirEmitRValueNullary(dest: String, rv: MirRValue) -> String {
 /// when called as an explicit MirInstrIntrinsic (vs the rvalue
 /// MirRVLen path). Same runtime symbol; this entry is used when
 /// the lowering chose intrinsic-form.
-fn mirEmitContainerLenIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+fn mirEmitContainerLenIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO container len intrinsic without dest\n"
     }
@@ -19247,18 +20694,32 @@ fn mirEmitContainerLenIntrinsic(func: MirFunction, instr: MirInstr, sym: String)
         out = out + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, "i64")
         return out
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let argOp = instr.args[0]
+    if mirOperandHasProjections(argOp) {
+        let arg = mirEmitFreshTempName(blockId, instrIdx) + ".arg0"
+        let mut out = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, arg, argOp.place, argOp.typ)
+        return out + "  " + dest + " = call i64 @" + sym + "(ptr " + arg + ")\n"
+    }
+    let arg = mirEmitBlockTypedOperandValue(block, instrIdx, argOp, "ptr")
     "  " + dest + " = call i64 @" + sym + "(ptr " + arg + ")\n"
 }
-fn mirEmitListIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitListIsEmptyIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO list isEmpty intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let argOp = instr.args[0]
+    let mut out = ""
+    let arg = if mirOperandHasProjections(argOp) {
+        let tmp = mirEmitFreshTempName(blockId, instrIdx) + ".arg0"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, argOp.place, argOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, argOp, "ptr")
+    }
     let lenReg = dest + ".len"
-    let mut out = "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + arg + ")\n"
+    out = out + "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + arg + ")\n"
     out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
 }
 fn mirEmitListReverseIntrinsic(instr: MirInstr) -> String {
@@ -19383,49 +20844,49 @@ fn mirEmitListScanCompareLine(dest: String, elemLLVM: String, elemTypeName: Stri
     ""
 }
 // -------- String intrinsics expansion --------
-fn mirEmitStringLenIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringLenIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO string len intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
-    "  " + dest + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let arg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    "  " + dest + " = call i64 @osty_rt_strings_ByteLen(ptr " + arg + ")\n"
 }
-fn mirEmitStringIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringIsEmptyIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO string isEmpty intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let arg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
     let lenReg = dest + ".sl"
-    let mut out = "  " + lenReg + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+    let mut out = "  " + lenReg + " = call i64 @osty_rt_strings_ByteLen(ptr " + arg + ")\n"
     out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
 }
-fn mirEmitStringIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringIndexOfIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string indexOf intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let lhs = mirEmitOperand(instr.args[0])
-    let rhs = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let lhs = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let rhs = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call i64 @osty_rt_strings_IndexOf(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
-fn mirEmitStringUnaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+fn mirEmitStringUnaryIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO string unary intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let arg = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let arg = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
     "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
 }
-fn mirEmitStringReplaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringReplaceIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO string replace intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let old = mirEmitOperand(instr.args[1])
-    let new_ = mirEmitOperand(instr.args[2])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let old = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
+    let new_ = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "ptr")
     "  " + dest + " = call ptr @osty_rt_strings_Replace(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
 }
 // ====================================================================
@@ -19443,140 +20904,140 @@ fn mirEmitStringReplaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
 // throughout (the channel handle, the boxed message). Spawn / join
 // use the canonical task-handle ptr shape from the runtime ABI.
 // -------- String (continued) --------
-fn mirEmitStringSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringSplitIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string split intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let sep = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let sep = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call ptr @osty_rt_strings_Split(ptr " + s + ", ptr " + sep + ")\n"
 }
-fn mirEmitStringToIntIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringToIntIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO string toInt intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
     "  " + dest + " = call i64 @osty_rt_strings_ToInt(ptr " + s + ")\n"
 }
-fn mirEmitStringToFloatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringToFloatIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO string toFloat intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
     "  " + dest + " = call double @osty_rt_strings_ToFloat(ptr " + s + ")\n"
 }
-fn mirEmitStringCountIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringCountIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string count intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let needle = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let needle = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call i64 @osty_rt_strings_Count(ptr " + s + ", ptr " + needle + ")\n"
 }
-fn mirEmitStringConcatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringConcatIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string concat intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let a = mirEmitOperand(instr.args[0])
-    let b = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let a = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let b = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call ptr @osty_rt_strings_Concat(ptr " + a + ", ptr " + b + ")\n"
 }
-fn mirEmitStringBinaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+fn mirEmitStringBinaryIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr, sym: String) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string binary intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let a = mirEmitOperand(instr.args[0])
-    let b = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let a = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let b = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call ptr @" + sym + "(ptr " + a + ", ptr " + b + ")\n"
 }
-fn mirEmitStringJoinIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringJoinIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string join intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let parts = mirEmitOperand(instr.args[0])
-    let sep = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let parts = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let sep = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call ptr @osty_rt_strings_Join(ptr " + parts + ", ptr " + sep + ")\n"
 }
-fn mirEmitStringSubstringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringSubstringIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO string substring intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let start = mirEmitOperand(instr.args[1])
-    let end = mirEmitOperand(instr.args[2])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let start = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "i64")
+    let end = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "i64")
     "  " + dest + " = call ptr @osty_rt_strings_Slice(ptr " + s + ", i64 " + start + ", i64 " + end + ")\n"
 }
-fn mirEmitStringRepeatIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringRepeatIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string repeat intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let n = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let n = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "i64")
     "  " + dest + " = call ptr @osty_rt_strings_Repeat(ptr " + s + ", i64 " + n + ")\n"
 }
-fn mirEmitStringReplaceAllIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringReplaceAllIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO string replaceAll intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let old = mirEmitOperand(instr.args[1])
-    let new_ = mirEmitOperand(instr.args[2])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let old = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
+    let new_ = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "ptr")
     "  " + dest + " = call ptr @osty_rt_strings_ReplaceAll(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
 }
-fn mirEmitStringSplitNIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringSplitNIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO string splitN intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let sep = mirEmitOperand(instr.args[1])
-    let n = mirEmitOperand(instr.args[2])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let sep = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
+    let n = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "i64")
     "  " + dest + " = call ptr @osty_rt_strings_SplitN(ptr " + s + ", ptr " + sep + ", i64 " + n + ")\n"
 }
-fn mirEmitStringLastIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringLastIndexOfIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO string lastIndexOf intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let needle = mirEmitOperand(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let needle = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
     "  " + dest + " = call i64 @osty_rt_strings_LastIndexOf(ptr " + s + ", ptr " + needle + ")\n"
 }
-fn mirEmitStringSplitIntoIntrinsic(instr: MirInstr) -> String {
+fn mirEmitStringSplitIntoIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 {
         return "  ; TODO string splitInto intrinsic\n"
     }
-    let outList = mirEmitOperand(instr.args[0])
-    let s = mirEmitOperand(instr.args[1])
-    let sep = mirEmitOperand(instr.args[2])
+    let outList = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
+    let sep = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "ptr")
     "  call void @osty_rt_strings_SplitInto(ptr " + outList + ", ptr " + s + ", ptr " + sep + ")\n"
 }
-fn mirEmitStringNthSegmentIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitStringNthSegmentIntrinsic(block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO string nthSegment intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let s = mirEmitOperand(instr.args[0])
-    let sep = mirEmitOperand(instr.args[1])
-    let idx = mirEmitOperand(instr.args[2])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let s = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], "ptr")
+    let sep = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[1], "ptr")
+    let idx = mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[2], "i64")
     "  " + dest + " = call ptr @osty_rt_strings_NthSegment(ptr " + s + ", ptr " + sep + ", i64 " + idx + ")\n"
 }
 // -------- List (continued) --------
-fn mirEmitListEdgeIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool) -> String {
+fn mirEmitListEdgeIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO list first/last intrinsic\n"
     }
-    mirEmitListOptionProbeIntrinsic(func, blockId, instrIdx, instr, isFirst, false)
+    mirEmitListOptionProbeIntrinsic(m, func, block, blockId, instrIdx, instr, isFirst, false)
 }
 fn mirEmitListIndexOfIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
@@ -19649,15 +21110,16 @@ fn mirEmitListIndexOfIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, i
     }
     out + "  " + loadDest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
-fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool, popAfterRead: Bool) -> String {
+fn mirEmitListOptionProbeIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr, isFirst: Bool, popAfterRead: Bool) -> String {
     if instr.hasDest == false {
         return "  ; TODO list option probe without dest\n"
     }
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
     let optLLVM = mirEmitParamType(func, instr.dest.local)
     if mirStringStartsWith(optLLVM, "\{") == false {
         return "  ; TODO list option probe dest type \"" + optLLVM + "\"\n"
     }
-    let list = mirEmitOperand(instr.args[0])
+    let (listPrelude, list) = mirEmitModuleOperandRead(m, func, block, instrIdx, instr.args[0], "ptr", dest + ".a0")
     let elemName = mirEmitListElemTypeName(instr.args[0].typ)
     let elemLLVM = mirEmitKnownTypeLLVM(elemName)
     let getSym = mirEmitListGetSymbolForType(elemName, elemLLVM)
@@ -19673,7 +21135,7 @@ fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     let noneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.none")
     let someLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.some")
     let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, "list.option.done")
-    let mut out = "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
+    let mut out = listPrelude + "  " + resultSlot + " = alloca " + optLLVM + ", align 8\n"
     out = out + "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + list + ")\n"
     out = out + "  " + emptyReg + " = icmp eq i64 " + lenReg + ", 0\n"
     out = out + "  br i1 " + emptyReg + ", label %" + noneLabel + ", label %" + someLabel + "\n"
@@ -19697,11 +21159,11 @@ fn mirEmitListOptionProbeIntrinsic(func: MirFunction, blockId: Int, instrIdx: In
     out = out + "  br label %" + doneLabel + "\n"
     out = out + mirLabelLine(doneLabel)
     let loadDest = if mirPlaceHasProjections(instr.dest) {
-        let tmpReg = mirEmitLocalRegName(instr.dest.local) + ".probetmp"
+        let tmpReg = dest + ".probetmp"
         let loadLine = "  " + tmpReg + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
         return out + loadLine + mirEmitStoreIntoProjectedPlace(instr.dest, tmpReg, optLLVM)
     } else {
-        mirEmitLocalRegName(instr.dest.local)
+        dest
     }
     out + "  " + loadDest + " = load " + optLLVM + ", ptr " + resultSlot + ", align 8\n"
 }
@@ -19775,13 +21237,13 @@ fn mirEmitListToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     }
     "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
 }
-fn mirEmitListPopIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitListPopIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 1 {
         return "  ; TODO list pop intrinsic\n"
     }
     let list = mirEmitOperand(instr.args[0])
     if instr.hasDest {
-        return mirEmitListOptionProbeIntrinsic(func, blockId, instrIdx, instr, false, true)
+        return mirEmitListOptionProbeIntrinsic(m, func, block, blockId, instrIdx, instr, false, true)
     }
     "  call void @osty_rt_list_pop_discard(ptr " + list + ")\n"
 }
@@ -20277,8 +21739,7 @@ fn mirEmitClosureAggregate(dest: String, rv: MirRValue) -> String {
     let mut i = 0
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
-        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
-        out = out + pf
+        let fieldOp = mirEmitTypedOperandValue(field, fieldTy)
         let target = if i == n - 1 {
             dest
         } else {
@@ -20296,16 +21757,24 @@ fn mirEmitClosureAggregate(dest: String, rv: MirRValue) -> String {
 /// Per-elem push routes through `mirEmitListPushSymbol`.
 fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
     let mut out = "  " + dest + " = call ptr @osty_rt_list_new()\n"
+    let mut i = 0
     for field in rv.aggFields {
         let fieldTy = mirEmitOperandLLVMType(field)
+        let fieldOp = mirEmitTypedOperandValue(field, fieldTy)
+        if mirEmitListElementUsesBytesV1(fieldTy) {
+            let base = dest + ".la" + mirGenIntToString(i)
+            out = out + mirEmitListPushBytesV1Line(base, dest, fieldOp, fieldTy)
+            i = i + 1
+            continue
+        }
         let pushSym = mirEmitListPushSymbolForType(field.typ, fieldTy)
         if pushSym == "" {
             out = out + "  ; TODO list aggregate push for elem type \"" + fieldTy + "\"\n"
+            i = i + 1
             continue
         }
-        let (pf, fieldOp) = mirEmitOperandRead(field, dest + ".f" + mirGenIntToString(i))
-        out = out + pf
         out = out + "  call void @" + pushSym + "(ptr " + dest + ", " + fieldTy + " " + fieldOp + ")\n"
+        i = i + 1
     }
     out
 }
@@ -20674,16 +22143,41 @@ fn mirEmitBytesFromHexIntrinsic(func: MirFunction, instr: MirInstr) -> String {
 // ====================================================================
 // Phase 2a — Straight-line intrinsic emission
 // ====================================================================
-fn mirEmitAlgebraicPredicateIntrinsic(func: MirFunction, instr: MirInstr, wantedTag: String) -> String {
+fn mirEmitAlgebraicPredicateIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr, wantedTag: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO algebraic predicate intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let value = mirEmitOperand(instr.args[0])
-    let aggTy = mirEmitOperandLLVMType(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let valueOp = instr.args[0]
+    let mut aggTy = mirEmitModuleOperandLLVMType(m, func, valueOp)
+    if aggTy == "" || aggTy == "i64" || aggTy == "ptr" || aggTy == "void" {
+        aggTy = mirEmitModuleAlgebraicOperandLLVMType(m, func, valueOp)
+    }
+    let mut out = ""
+    let value = if mirOperandHasProjections(valueOp) {
+        let tmp = dest + ".alg"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, valueOp.place, valueOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, valueOp, aggTy)
+    }
     let disc = dest + ".disc"
-    let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
+    out = out + "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
     out + "  " + dest + " = icmp eq i64 " + disc + ", " + wantedTag + "\n"
+}
+fn mirEmitModuleAlgebraicOperandLLVMType(m: MirModule, func: MirFunction, op: MirOperand) -> String {
+    let opTy = mirEmitModuleTypeLLVM(m, op.typ)
+    if opTy != "" && opTy != "i64" && opTy != "ptr" && opTy != "void" {
+        return opTy
+    }
+    if (op.kind == MirOpCopy || op.kind == MirOpMove) && op.place.local >= 0 && op.place.local < func.locals.len() {
+        let loc = func.locals[op.place.local]
+        let locTy = mirEmitModuleTypeLLVM(m, loc.typ)
+        if locTy != "" && locTy != "i64" && locTy != "ptr" && locTy != "void" {
+            return locTy
+        }
+    }
+    "\{ i64, i64 \}"
 }
 fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, absentTag: String, abortSym: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
@@ -20774,28 +22268,35 @@ fn mirEmitRawNullIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let dest = mirEmitLocalRegName(instr.dest.local)
     "  " + dest + " = inttoptr i64 0 to ptr\n"
 }
-fn mirEmitPrimitiveConversionIntrinsic(func: MirFunction, instr: MirInstr, toLLVM: String) -> String {
+fn mirEmitPrimitiveConversionIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr, toLLVM: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO primitive conversion intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let value = mirEmitOperand(instr.args[0])
-    let fromLLVM = mirEmitOperandLLVMType(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let fromLLVM = mirEmitModuleOperandLLVMType(m, func, instr.args[0])
+    let mut out = ""
+    let value = if mirOperandHasProjections(instr.args[0]) {
+        let tmp = dest + ".convarg"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, instr.args[0].place, instr.args[0].typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, instr.args[0], fromLLVM)
+    }
     if fromLLVM == toLLVM {
         if toLLVM == "i1" {
-            return "  " + dest + " = or i1 0, " + value + "\n"
+            return out + "  " + dest + " = or i1 0, " + value + "\n"
         }
-        return "  " + dest + " = add " + toLLVM + " 0, " + value + "\n"
+        return out + "  " + dest + " = add " + toLLVM + " 0, " + value + "\n"
     }
     let fromWidth = mirEmitIntLLVMWidth(fromLLVM)
     let toWidth = mirEmitIntLLVMWidth(toLLVM)
     if fromWidth == 0 || toWidth == 0 {
-        return "  ; TODO primitive conversion from " + fromLLVM + " to " + toLLVM + "\n"
+        return out + "  ; TODO primitive conversion from " + fromLLVM + " to " + toLLVM + "\n"
     }
     if fromWidth < toWidth {
-        return "  " + dest + " = zext " + fromLLVM + " " + value + " to " + toLLVM + "\n"
+        return out + "  " + dest + " = zext " + fromLLVM + " " + value + " to " + toLLVM + "\n"
     }
-    "  " + dest + " = trunc " + fromLLVM + " " + value + " to " + toLLVM + "\n"
+    out + "  " + dest + " = trunc " + fromLLVM + " " + value + " to " + toLLVM + "\n"
 }
 fn mirEmitIntLLVMWidth(llvmTy: String) -> Int {
     if llvmTy == "i1" {
@@ -20834,24 +22335,51 @@ fn mirEmitIntLLVMWidth(llvmTy: String) -> Int {
 /// mirEmitMapSetIntrinsic lowers `m.insert(k, v)`. The runtime value
 /// ABI takes an out-pointer, so the value is first spilled to a stack
 /// slot regardless of its scalar lane.
-fn mirEmitMapSetIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitMapSetIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 {
         return "  ; TODO map insert/set intrinsic (args=" + mirGenIntToString(instr.args.len()) + ")\n"
     }
-    let m = mirEmitOperand(instr.args[0])
-    let k = mirEmitOperand(instr.args[1])
-    let kTy = mirEmitOperandLLVMType(instr.args[1])
-    let v = mirEmitOperand(instr.args[2])
-    let vTy = mirEmitOperandLLVMType(instr.args[2])
-    let sym = mirMapInsertSymbolForType(instr.args[1].typ, kTy)
+    let mapOp = instr.args[0]
+    let keyOp = instr.args[1]
+    let valueOp = instr.args[2]
+    let base = mirEmitFreshTempName(blockId, instrIdx)
+    let mut out = ""
+    let mapText = if mirOperandHasProjections(mapOp) {
+        let tmp = base + ".map"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, mapOp.place, mapOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, mapOp, "ptr")
+    }
+    let kTy = mirEmitModuleOperandLLVMType(m, func, keyOp)
+    let k = if mirOperandHasProjections(keyOp) {
+        let tmp = base + ".key"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, keyOp.place, keyOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, keyOp, kTy)
+    }
+    let valueName = mirEmitMapValueTypeName(mapOp.typ)
+    let mut vTy = mirEmitModuleTypeLLVM(m, valueName)
+    if vTy == "" || vTy == "void" {
+        vTy = mirEmitModuleOperandLLVMType(m, func, valueOp)
+    }
+    let v = if mirOperandHasProjections(valueOp) {
+        let tmp = base + ".value"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, valueOp.place, vTy)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, valueOp, vTy)
+    }
+    let sym = mirMapInsertSymbolForType(keyOp.typ, kTy)
     if sym == "" {
         return "  ; TODO map insert for key type \"" + kTy + "\"\n"
     }
-    let slot = mirEmitFreshTempName(blockId, instrIdx) + ".mapv"
+    let slot = base + ".mapv"
     let align = mirEmitFixedValueSizeBytes(vTy)
-    let mut out = "  " + slot + " = alloca " + vTy + ", align " + align + "\n"
+    out = out + "  " + slot + " = alloca " + vTy + ", align " + align + "\n"
     out = out + "  store " + vTy + " " + v + ", ptr " + slot + ", align " + align + "\n"
-    out + "  call void @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    out + "  call void @" + sym + "(ptr " + mapText + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
 }
 /// mirEmitMapGetIntrinsic lowers `m.get(k) -> V?`. The runtime
 /// returns a present flag plus an out-pointer via osty_rt_map_get_*.
@@ -20859,30 +22387,40 @@ fn mirEmitMapSetIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr) -> Strin
 /// store the result (an i1 present flag) into the dest register.
 /// The Option<V> wrap of the value lives in the lowering layer
 /// upstream; this entry just lowers the predicate.
-fn mirEmitMapGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitMapGetIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO map get intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let m = mirEmitOperand(instr.args[0])
-    let k = mirEmitOperand(instr.args[1])
-    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let mapOp = instr.args[0]
+    let keyOp = instr.args[1]
+    let base = dest + ".mapget"
+    let mut out = ""
+    let mapText = if mirOperandHasProjections(mapOp) {
+        let tmp = base + ".map"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, mapOp.place, mapOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, mapOp, "ptr")
+    }
+    let kTy = mirEmitModuleOperandLLVMType(m, func, keyOp)
+    let k = mirEmitBlockTypedOperandValue(block, instrIdx, keyOp, kTy)
     let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
     if sym == "" {
         return "  ; TODO map get for key type \"" + kTy + "\"\n"
     }
     let valueName = mirEmitMapValueTypeName(instr.args[0].typ)
-    let valueLLVM = mirEmitKnownTypeLLVM(valueName)
-    if valueLLVM == "" || valueLLVM == "void" || mirStringStartsWith(valueLLVM, "\{") {
+    let valueLLVM = mirEmitModuleTypeLLVM(m, valueName)
+    if valueLLVM == "" || valueLLVM == "void" {
         return "  ; TODO map get for value type \"" + valueName + "\"\n"
     }
     let slot = dest + ".slot"
     let align = mirEmitFixedValueSizeBytes(valueLLVM)
-    let mut out = "  " + slot + " = alloca " + valueLLVM + ", align " + align + "\n"
+    out = out + "  " + slot + " = alloca " + valueLLVM + ", align " + align + "\n"
     let present = dest + ".present"
-    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
-    let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if mirStringStartsWith(destLLVM, "\{") {
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + mapText + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    let destLLVM = mirEmitModuleParamType(m, func, instr.dest.local)
+    if mirStringStartsWith(destLLVM, "\{") || mirStringStartsWith(destLLVM, "%") {
         let loaded = dest + ".val"
         let raw = dest + ".raw"
         let disc = dest + ".disc"
@@ -20952,29 +22490,46 @@ fn mirMapRemoveSymbolForType(typeName: String, kTy: String) -> String {
     }
     "osty_rt_map_remove_" + suffix
 }
-fn mirEmitMapGetOrIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitMapGetOrIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO map getOr intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let m = mirEmitOperand(instr.args[0])
-    let k = mirEmitOperand(instr.args[1])
-    let kTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
-    if sym == "" {
-        return "  ; TODO map getOr for key type \"" + instr.args[1].typ + "\"\n"
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let mapOp = instr.args[0]
+    let keyOp = instr.args[1]
+    let fallbackOp = instr.args[2]
+    let base = dest + ".getor"
+    let mut out = ""
+    let mapText = if mirOperandHasProjections(mapOp) {
+        let tmp = base + ".map"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, mapOp.place, mapOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, mapOp, "ptr")
     }
-    let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+    let kTy = mirEmitModuleOperandLLVMType(m, func, keyOp)
+    let k = mirEmitBlockTypedOperandValue(block, instrIdx, keyOp, kTy)
+    let sym = mirMapGetSymbolForType(keyOp.typ, kTy)
+    if sym == "" {
+        return "  ; TODO map getOr for key type \"" + keyOp.typ + "\"\n"
+    }
+    let destLLVM = mirEmitModuleParamType(m, func, instr.dest.local)
+    if destLLVM == "void" {
         return "  ; TODO map getOr for dest type \"" + destLLVM + "\"\n"
     }
-    let fallback = mirEmitOperand(instr.args[2])
-    let slot = mirEmitFreshTempName(blockId, instrIdx) + ".getor"
+    let fallback = if mirOperandHasProjections(fallbackOp) {
+        let tmp = base + ".fallback"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, fallbackOp.place, fallbackOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, fallbackOp, destLLVM)
+    }
+    let slot = base + ".slot"
     let align = mirEmitFixedValueSizeBytes(destLLVM)
     let present = dest + ".present"
     let loaded = dest + ".hit"
-    let mut out = "  " + slot + " = alloca " + destLLVM + ", align " + align + "\n"
-    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    out = out + "  " + slot + " = alloca " + destLLVM + ", align " + align + "\n"
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + mapText + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
     out = out + "  " + loaded + " = load " + destLLVM + ", ptr " + slot + ", align " + align + "\n"
     out + "  " + dest + " = select i1 " + present + ", " + destLLVM + " " + loaded + ", " + destLLVM + " " + fallback + "\n"
 }
@@ -21032,7 +22587,7 @@ pub fn mirEmitModuleInitDispatcher(m: MirModule) -> String {
 // Phase 1o — String pool + type defs section + I/D write
 // ====================================================================
 //
-// String pool: walk the module collecting MirConstString operands.
+// String pool: walk the module collecting string-backed constants.
 // Emit `@.str.<i> = constant [N x i8] c"...\\00"` per literal in
 // the module's string section, then operand emit references via
 // `getelementptr`. The collection pass runs before the per-fn
@@ -21086,16 +22641,61 @@ fn mirHexDigit(value: Int) -> String {
 /// monomorphizer's struct/enum registry in.
 pub fn mirEmitTypeDefsSection(m: MirModule) -> String {
     let shapes = mirCollectAggregateShapes(m)
-    if shapes.len() == 0 {
+    if shapes.len() == 0 && m.layouts.structs.len() == 0 && m.layouts.enums.len() == 0 && m.layouts.tuples.len() == 0 {
         return ""
     }
     let mut out = mirModuleSectionDirective("type defs")
+    let mut emitted: List<String> = []
+    for layout in m.layouts.structs {
+        let name = mirEmitTypeDefName(layout.name, layout.mangled)
+        if name != "" && emitted.contains(name) == false {
+            out = out + mirEmitStructLayoutTypeDefLine(m, name, layout.fields)
+            emitted.push(name)
+        }
+    }
+    for layout in m.layouts.enums {
+        let name = mirEmitTypeDefName(layout.name, layout.mangled)
+        if name != "" && emitted.contains(name) == false {
+            out = out + mirLlvmEnumLayoutTypeDefLine(name)
+            emitted.push(name)
+        }
+    }
+    for layout in m.layouts.tuples {
+        let name = mirEmitTypeDefName(layout.key, layout.mangled)
+        if name != "" && emitted.contains(name) == false {
+            out = out + mirEmitStructLayoutTypeDefLine(m, name, layout.fields)
+            emitted.push(name)
+        }
+    }
     let mut i = 0
     for shape in shapes {
         out = out + "%agg." + mirGenIntToString(i) + " = type " + shape + "\n"
         i = i + 1
     }
     out + "\n"
+}
+fn mirEmitStructLayoutTypeDefLine(m: MirModule, name: String, fields: List<MirFieldLayout>) -> String {
+    let bare = mirEmitBareTypeName(name)
+    if fields.len() == 0 {
+        return "%" + bare + " = type \{\}\n"
+    }
+    mirLlvmStructTypeDefLine(bare, mirEmitLayoutFieldsJoined(m, fields))
+}
+fn mirEmitLayoutFieldsJoined(m: MirModule, fields: List<MirFieldLayout>) -> String {
+    let mut out = ""
+    let mut i = 0
+    for field in fields {
+        if i > 0 {
+            out = out + ", "
+        }
+        let mut ty = mirEmitModuleTypeLLVM(m, field.typ)
+        if ty == "" || ty == "void" {
+            ty = "i8"
+        }
+        out = out + ty
+        i = i + 1
+    }
+    out
 }
 // -------- Multi-step Index / Deref WRITE projection --------
 // Address-taking writes (`arr[i] = v`, `*p = v`) lower to
@@ -21132,6 +22732,9 @@ fn mirEmitIndexWriteLine(instr: MirInstr, proj: MirProjection) -> String {
     }
     let setSym = mirEmitListSetSymbolForType(instr.src.typ, valueTy)
     if setSym == "" {
+        if mirEmitListElementUsesBytesV1(valueTy) {
+            return out + mirEmitListSetBytesV1Line(baseReg + ".iw", baseReg, idxOp, valueDest, valueTy)
+        }
         out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
         return out
     }
@@ -21215,44 +22818,72 @@ pub fn mirCollectStringPool(m: MirModule) -> MirStringPool {
         }
         for block in func.blocks {
             for instr in block.instrs {
-                mirCollectStringPoolFromInstr(pool, instr)
+                pool = mirCollectStringPoolFromInstr(pool, instr)
             }
         }
     }
     pool
 }
-fn mirCollectStringPoolFromInstr(pool: MirStringPool, instr: MirInstr) {
+fn mirCollectStringPoolFromSource(pool: MirStringPool, source: String) -> MirStringPool {
+    if source == "" {
+        return pool
+    }
+    let mut next = pool
+    let lexed = ostyLexSource(source)
+    let facts = ostyLexFactsFromStream(lexed.source, lexed.stream)
+    for part in facts.stringParts {
+        if part.kindCode == 0 {
+            mirStringPoolIntern(next, part.text)
+        }
+    }
+    next
+}
+fn mirCollectStringPoolFromInstr(pool: MirStringPool, instr: MirInstr) -> MirStringPool {
+    let mut next = pool
     if instr.kind == MirInstrAssign {
-        mirCollectStringPoolFromOperand(pool, instr.src.arg)
-        mirCollectStringPoolFromOperand(pool, instr.src.right)
+        next = mirCollectStringPoolFromOperand(next, instr.src.arg)
+        next = mirCollectStringPoolFromOperand(next, instr.src.right)
         for f in instr.src.aggFields {
-            mirCollectStringPoolFromOperand(pool, f)
+            next = mirCollectStringPoolFromOperand(next, f)
         }
     }
     for arg in instr.args {
-        mirCollectStringPoolFromOperand(pool, arg)
+        next = mirCollectStringPoolFromOperand(next, arg)
     }
-    mirCollectStringPoolFromOperand(pool, instr.calleeOperand)
+    mirCollectStringPoolFromOperand(next, instr.calleeOperand)
 }
-fn mirCollectStringPoolFromOperand(pool: MirStringPool, op: MirOperand) {
+fn mirCollectStringPoolFromOperand(pool: MirStringPool, op: MirOperand) -> MirStringPool {
     if op.kind != MirOpConst {
-        return
+        return pool
     }
-    if op.const.kind != MirConstString {
-        return
+    let mut next = pool
+    if op.const.kind == MirConstString || op.const.kind == MirConstBytes {
+        mirStringPoolIntern(next, op.const.strValue)
+        return next
     }
-    pool.intern(op.const.strValue)
+    if op.const.strValue != "" {
+        mirStringPoolIntern(next, op.const.strValue)
+        return next
+    }
+    if op.typ == "String" || op.typ == "Bytes" {
+        mirStringPoolIntern(next, op.const.strValue)
+    }
+    next
 }
 pub fn mirEmitStringPoolSection(pool: MirStringPool) -> String {
-    if pool.isEmpty() {
+    if mirStringPoolIsEmpty(pool) {
         return ""
     }
     let mut out = mirModuleSectionDirective("string pool")
-    for literal in pool.orderedKeys() {
+    let mut emitted: Map<String, Bool> = {:}
+    for literal in mirStringPoolOrderedKeys(pool) {
         let sym = mirStringRefSymbol(literal)
-        let encoded = mirEncodeStringLiteral(literal)
-        let lengthDigits = mirGenIntToString(literal.len() + 1)
-        out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
+        if emitted.containsKey(sym) == false {
+            emitted.insert(sym, true)
+            let encoded = mirEncodeStringLiteral(literal)
+            let lengthDigits = mirGenIntToString(literal.len() + 1)
+            out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
+        }
     }
     out + "\n"
 }
@@ -21319,6 +22950,9 @@ fn mirEmitMultiStepIndexWrite(instr: MirInstr) -> String {
     }
     let setSym = mirEmitListSetSymbolForType(instr.src.typ, valueTy)
     if setSym == "" {
+        if mirEmitListElementUsesBytesV1(valueTy) {
+            return out + mirEmitListSetBytesV1Line(baseReg + ".iw", prev, idxOp, valueDest, valueTy)
+        }
         out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
         return out
     }

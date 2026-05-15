@@ -1,6 +1,7 @@
 package toolchain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,8 @@ var (
 	managedProjectRootFunc = defaultManagedProjectRoot
 	sourceRepoRootFunc     = defaultSourceRepoRoot
 	installNativeChecker   = buildNativeChecker
+	renameManagedFile      = os.Rename
+	removeManagedFile      = os.Remove
 )
 
 // Version returns the toolchain version stamp used to scope managed artifacts.
@@ -119,16 +122,35 @@ func buildNativeChecker(dest string) error {
 			return fmt.Errorf("chmod managed osty-native-checker: %w", err)
 		}
 	}
-	if err := os.Rename(tmpPath, dest); err != nil {
-		if fileExists(dest) {
-			return nil
-		}
-		return fmt.Errorf("install managed osty-native-checker: %w", err)
-	}
-	return nil
+	return installManagedBinary(tmpPath, dest, "osty-native-checker")
 }
 
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func installManagedBinary(tmpPath, dest, label string) error {
+	if err := renameManagedFile(tmpPath, dest); err == nil {
+		return nil
+	} else {
+		firstErr := err
+		if !shouldRetryManagedReplace(tmpPath, dest, firstErr) {
+			return fmt.Errorf("install managed %s: %w", label, firstErr)
+		}
+		if err := removeManagedFile(dest); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("replace managed %s: remove stale artifact: %w (initial rename failed: %v)", label, err, firstErr)
+		}
+		if err := renameManagedFile(tmpPath, dest); err != nil {
+			return fmt.Errorf("install managed %s: %w (initial rename failed: %v)", label, err, firstErr)
+		}
+	}
+	return nil
+}
+
+func shouldRetryManagedReplace(tmpPath, dest string, err error) bool {
+	if !errors.Is(err, os.ErrExist) {
+		return false
+	}
+	return fileExists(tmpPath) && fileExists(dest)
 }

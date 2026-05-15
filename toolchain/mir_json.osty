@@ -1,0 +1,1259 @@
+// mir_json.osty - MIR JSON wire decoder for the self-host LIR Proto path.
+//
+// The Go bridge ships MIR as JSON using internal/mirjson. This decoder
+// rebuilds the self-host MirModule shape without re-running the frontend.
+use std.strings
+
+pub type MirJsonObject = Map<String, MirJsonValue>
+pub type MirJsonArray = List<MirJsonValue>
+
+fn mirJsonObjectGet(obj: Map<String, MirJsonValue>, key: String) -> Option<MirJsonValue> {
+    obj.get(key)
+}
+
+pub enum MirJsonValue {
+    MJObject(MirJsonObject),
+    MJArray(MirJsonArray),
+    MJString(String),
+    MJNumber(String),
+    MJBool(Bool),
+    MJNull,
+}
+
+fn mirJsonParseValue(text: String) -> Result<MirJsonValue, String> {
+    let bs = text.bytes()
+    let len = bs.len()
+    let start = mirJsonSkipWs(bs, 0, len)
+    if start >= len {
+        return Err("json: unexpected end of input")
+    }
+    let (value, pos) = mirJsonParseVal(bs, start, len)?
+    let end = mirJsonSkipWs(bs, pos, len)
+    if end != len {
+        return Err("json: unexpected trailing content")
+    }
+    Ok(value)
+}
+
+fn mirJsonParseVal(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
+    if pos >= len {
+        return Err("json: unexpected end of input")
+    }
+    let c = bs[pos].toInt()
+    if c == 0x22 {
+        let (s, next) = mirJsonParseStr(bs, pos, len)?
+        return Ok((MJString(s), next))
+    }
+    if c == 0x7B {
+        return mirJsonParseObj(bs, pos, len)
+    }
+    if c == 0x5B {
+        return mirJsonParseArr(bs, pos, len)
+    }
+    if c == 0x74 {
+        return mirJsonParseLiteral(bs, pos, len, "true", MJBool(true))
+    }
+    if c == 0x66 {
+        return mirJsonParseLiteral(bs, pos, len, "false", MJBool(false))
+    }
+    if c == 0x6E {
+        return mirJsonParseLiteral(bs, pos, len, "null", MJNull)
+    }
+    if c == 0x2D || (c >= 0x30 && c <= 0x39) {
+        return mirJsonParseNum(bs, pos, len)
+    }
+    Err("json: unexpected character")
+}
+
+fn mirJsonParseLiteral(bs: List<Byte>, pos: Int, len: Int, word: String, value: MirJsonValue) -> Result<(MirJsonValue, Int), String> {
+    let wb = word.bytes()
+    let wlen = wb.len()
+    if pos + wlen > len {
+        return Err("json: unexpected end of input")
+    }
+    let mut i = 0
+    for i < wlen {
+        if bs[pos + i] != wb[i] {
+            return Err("json: unexpected character")
+        }
+        i = i + 1
+    }
+    Ok((value, pos + wlen))
+}
+
+fn mirJsonParseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), String> {
+    let mut i = pos + 1
+    let mut out = ""
+    for i < len {
+        let b = bs[i].toInt()
+        if b == 0x22 {
+            return Ok((out, i + 1))
+        }
+        if b == 0x5C {
+            i = i + 1
+            if i >= len {
+                return Err("json: unterminated string escape")
+            }
+            let esc = bs[i].toInt()
+            if esc == 0x22 {
+                out = out + "\""
+            } else if esc == 0x5C {
+                out = out + "\\"
+            } else if esc == 0x2F {
+                out = out + "/"
+            } else if esc == 0x62 {
+                out = mirJsonAppendCodepoint(out, 0x08)
+            } else if esc == 0x66 {
+                out = mirJsonAppendCodepoint(out, 0x0C)
+            } else if esc == 0x6E {
+                out = out + "\n"
+            } else if esc == 0x72 {
+                out = out + "\r"
+            } else if esc == 0x74 {
+                out = out + "\t"
+            } else if esc == 0x75 {
+                if i + 4 >= len {
+                    return Err("json: incomplete unicode escape")
+                }
+                let cp = mirJsonParseHex4(bs, i + 1)?
+                i = i + 4
+                if cp >= 0xD800 && cp <= 0xDBFF {
+                    if i + 1 >= len || bs[i + 1].toInt() != 0x5C {
+                        return Err("json: lone high surrogate")
+                    }
+                    if i + 2 >= len || bs[i + 2].toInt() != 0x75 {
+                        return Err("json: lone high surrogate")
+                    }
+                    if i + 6 >= len {
+                        return Err("json: incomplete surrogate pair")
+                    }
+                    let low = mirJsonParseHex4(bs, i + 3)?
+                    if low < 0xDC00 || low > 0xDFFF {
+                        return Err("json: invalid low surrogate")
+                    }
+                    let combined = ((cp - 0xD800) << 10) + (low - 0xDC00) + 0x10000
+                    out = mirJsonAppendCodepoint(out, combined)
+                    i = i + 6
+                } else if cp >= 0xDC00 && cp <= 0xDFFF {
+                    return Err("json: lone low surrogate")
+                } else {
+                    out = mirJsonAppendCodepoint(out, cp)
+                }
+            } else {
+                return Err("json: invalid escape character")
+            }
+            i = i + 1
+        } else if b < 0x20 {
+            return Err("json: control character in string")
+        } else {
+            out = mirJsonAppendCodepoint(out, b)
+            i = i + 1
+        }
+    }
+    Err("json: unterminated string")
+}
+
+fn mirJsonParseHex4(bs: List<Byte>, pos: Int) -> Result<Int, String> {
+    let mut result = 0
+    let mut i = 0
+    for i < 4 {
+        let b = bs[pos + i].toInt()
+        let mut v = 0
+        if b >= 0x30 && b <= 0x39 {
+            v = b - 0x30
+        } else if b >= 0x41 && b <= 0x46 {
+            v = b - 0x41 + 10
+        } else if b >= 0x61 && b <= 0x66 {
+            v = b - 0x61 + 10
+        } else {
+            return Err("json: invalid hex digit in unicode escape")
+        }
+        result = result * 16 + v
+        i = i + 1
+    }
+    Ok(result)
+}
+
+fn mirJsonAppendCodepoint(out: String, cp: Int) -> String {
+    if cp == 0x09 {
+        return out + "\t"
+    }
+    if cp == 0x0A {
+        return out + "\n"
+    }
+    if cp == 0x0D {
+        return out + "\r"
+    }
+    if cp >= 0x20 && cp <= 0x7A {
+        let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz"
+        let idx = cp - 0x20
+        return out + strings.slice(ascii, idx, idx + 1)
+    }
+    if cp == 0x7B {
+        return out + "\{"
+    }
+    if cp == 0x7C {
+        return out + "|"
+    }
+    if cp == 0x7D {
+        return out + "\}"
+    }
+    if cp == 0x7E {
+        return out + "~"
+    }
+    if cp == 0x2014 {
+        return out + "—"
+    }
+    if cp == 0x2192 {
+        return out + "→"
+    }
+    if cp == 0x2264 {
+        return out + "≤"
+    }
+    if cp == 0x2265 {
+        return out + "≥"
+    }
+    out
+}
+
+fn mirJsonAsciiSlice(bs: List<Byte>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    for i < end {
+        out = mirJsonAppendCodepoint(out, bs[i].toInt())
+        i = i + 1
+    }
+    out
+}
+
+fn mirJsonParseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
+    let mut i = pos
+    if i < len && bs[i].toInt() == 0x2D {
+        i = i + 1
+    }
+    if i >= len {
+        return Err("json: unexpected end of number")
+    }
+    if bs[i].toInt() == 0x30 {
+        i = i + 1
+    } else if bs[i].toInt() >= 0x31 && bs[i].toInt() <= 0x39 {
+        for i < len && bs[i].toInt() >= 0x30 && bs[i].toInt() <= 0x39 {
+            i = i + 1
+        }
+    } else {
+        return Err("json: invalid number")
+    }
+    if i < len && bs[i].toInt() == 0x2E {
+        i = i + 1
+        if i >= len || bs[i].toInt() < 0x30 || bs[i].toInt() > 0x39 {
+            return Err("json: invalid number: expected digit after decimal point")
+        }
+        for i < len && bs[i].toInt() >= 0x30 && bs[i].toInt() <= 0x39 {
+            i = i + 1
+        }
+    }
+    if i < len && (bs[i].toInt() == 0x45 || bs[i].toInt() == 0x65) {
+        i = i + 1
+        if i < len && (bs[i].toInt() == 0x2B || bs[i].toInt() == 0x2D) {
+            i = i + 1
+        }
+        if i >= len || bs[i].toInt() < 0x30 || bs[i].toInt() > 0x39 {
+            return Err("json: invalid number: expected digit in exponent")
+        }
+        for i < len && bs[i].toInt() >= 0x30 && bs[i].toInt() <= 0x39 {
+            i = i + 1
+        }
+    }
+    Ok((MJNumber(mirJsonAsciiSlice(bs, pos, i)), i))
+}
+
+fn mirJsonParseArr(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
+    let mut i = mirJsonSkipWs(bs, pos + 1, len)
+    let mut items: List<MirJsonValue> = []
+    if i < len && bs[i].toInt() == 0x5D {
+        return Ok((MJArray(items), i + 1))
+    }
+    for i < len {
+        let (val, next) = mirJsonParseVal(bs, i, len)?
+        items.push(val)
+        i = mirJsonSkipWs(bs, next, len)
+        if i >= len {
+            return Err("json: unterminated array")
+        }
+        if bs[i].toInt() == 0x5D {
+            return Ok((MJArray(items), i + 1))
+        }
+        if bs[i].toInt() != 0x2C {
+            return Err("json: expected ',' or ']' in array")
+        }
+        i = mirJsonSkipWs(bs, i + 1, len)
+    }
+    Err("json: unterminated array")
+}
+
+fn mirJsonParseObj(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
+    let mut i = mirJsonSkipWs(bs, pos + 1, len)
+    let mut entries: Map<String, MirJsonValue> = {:}
+    if i < len && bs[i].toInt() == 0x7D {
+        return Ok((MJObject(entries), i + 1))
+    }
+    for i < len {
+        if bs[i].toInt() != 0x22 {
+            return Err("json: expected string key in object")
+        }
+        let (key, afterKey) = mirJsonParseStr(bs, i, len)?
+        i = mirJsonSkipWs(bs, afterKey, len)
+        if i >= len || bs[i].toInt() != 0x3A {
+            return Err("json: expected ':' after object key")
+        }
+        i = mirJsonSkipWs(bs, i + 1, len)
+        let (val, afterVal) = mirJsonParseVal(bs, i, len)?
+        entries.insert(key, val)
+        i = mirJsonSkipWs(bs, afterVal, len)
+        if i >= len {
+            return Err("json: unterminated object")
+        }
+        if bs[i].toInt() == 0x7D {
+            return Ok((MJObject(entries), i + 1))
+        }
+        if bs[i].toInt() != 0x2C {
+            return Err("json: expected ',' or '}' in object")
+        }
+        i = mirJsonSkipWs(bs, i + 1, len)
+    }
+    Err("json: unterminated object")
+}
+
+fn mirJsonSkipWs(bs: List<Byte>, pos: Int, len: Int) -> Int {
+    let mut i = pos
+    for i < len {
+        let c = bs[i].toInt()
+        if c != 0x20 && c != 0x09 && c != 0x0A && c != 0x0D {
+            return i
+        }
+        i = i + 1
+    }
+    i
+}
+
+fn mirJsonIsNull(value: MirJsonValue) -> Bool {
+    match value {
+        MJNull -> true,
+        _ -> false,
+    }
+}
+
+fn mirJsonEmptyObject() -> MirJsonValue {
+    MJObject({:})
+}
+
+fn mirJsonAsObject(value: MirJsonValue) -> Result<MirJsonObject, String> {
+    match value {
+        MJObject(o) -> Ok(o),
+        _ -> Err("json: expected object"),
+    }
+}
+
+fn mirJsonAsArray(value: MirJsonValue) -> Result<MirJsonArray, String> {
+    match value {
+        MJArray(a) -> Ok(a),
+        _ -> Err("json: expected array"),
+    }
+}
+
+fn mirJsonAsString(value: MirJsonValue) -> Result<String, String> {
+    match value {
+        MJString(s) -> Ok(s),
+        _ -> Err("json: expected string"),
+    }
+}
+
+fn mirJsonAsNumber(value: MirJsonValue) -> Result<String, String> {
+    match value {
+        MJNumber(n) -> Ok(n),
+        _ -> Err("json: expected number"),
+    }
+}
+
+fn mirJsonAsBool(value: MirJsonValue) -> Result<Bool, String> {
+    match value {
+        MJBool(b) -> Ok(b),
+        _ -> Err("json: expected bool"),
+    }
+}
+
+fn mirJsonParseIntText(text: String, ctx: String) -> Result<Int, String> {
+    let bs = text.bytes()
+    let len = bs.len()
+    if len == 0 {
+        return Err(mirJsonErr(ctx, "expected integer"))
+    }
+    let mut i = 0
+    let mut sign = 1
+    if bs[0].toInt() == 0x2D {
+        sign = -1
+        i = 1
+    }
+    if i >= len {
+        return Err(mirJsonErr(ctx, "expected integer"))
+    }
+    let mut n = 0
+    for i < len {
+        let c = bs[i].toInt()
+        if c < 0x30 || c > 0x39 {
+            return Err(mirJsonErr(ctx, "expected integer"))
+        }
+        n = n * 10 + (c - 0x30)
+        i = i + 1
+    }
+    Ok(n * sign)
+}
+
+fn mirJsonErr(ctx: String, msg: String) -> String {
+    if ctx == "" {
+        return "mir-json: " + msg
+    }
+    "mir-json: " + ctx + ": " + msg
+}
+
+fn mirJsonObject(value: MirJsonValue, ctx: String) -> Result<MirJsonObject, String> {
+    match mirJsonAsObject(value) {
+        Ok(o) -> Ok(o),
+        Err(_) -> Err(mirJsonErr(ctx, "expected object")),
+    }
+}
+
+fn mirJsonArray(value: MirJsonValue, ctx: String) -> Result<List<MirJsonValue>, String> {
+    match mirJsonAsArray(value) {
+        Ok(a) -> Ok(a),
+        Err(_) -> Err(mirJsonErr(ctx, "expected array")),
+    }
+}
+
+fn mirJsonString(value: MirJsonValue, ctx: String) -> Result<String, String> {
+    match mirJsonAsString(value) {
+        Ok(s) -> Ok(s),
+        Err(_) -> Err(mirJsonErr(ctx, "expected string")),
+    }
+}
+
+fn mirJsonNumber(value: MirJsonValue, ctx: String) -> Result<Int, String> {
+    match mirJsonAsNumber(value) {
+        Ok(n) -> mirJsonParseIntText(n, ctx),
+        Err(_) -> Err(mirJsonErr(ctx, "expected number")),
+    }
+}
+
+fn mirJsonBool(value: MirJsonValue, ctx: String) -> Result<Bool, String> {
+    match mirJsonAsBool(value) {
+        Ok(b) -> Ok(b),
+        Err(_) -> Err(mirJsonErr(ctx, "expected bool")),
+    }
+}
+
+fn mirJsonStringField(obj: MirJsonObject, key: String, fallback: String) -> Result<String, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonString(v, key),
+        None -> Ok(fallback),
+    }
+}
+
+fn mirJsonIntField(obj: MirJsonObject, key: String, fallback: Int) -> Result<Int, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonNumber(v, key),
+        None -> Ok(fallback),
+    }
+}
+
+fn mirJsonBoolField(obj: MirJsonObject, key: String, fallback: Bool) -> Result<Bool, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonBool(v, key),
+        None -> Ok(fallback),
+    }
+}
+
+fn mirJsonNumberTextField(obj: MirJsonObject, key: String, fallback: String) -> Result<String, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> match mirJsonAsNumber(v) {
+            Ok(n) -> Ok(n),
+            Err(_) -> Err(mirJsonErr(key, "expected number")),
+        },
+        None -> Ok(fallback),
+    }
+}
+
+fn mirJsonArrayField(obj: MirJsonObject, key: String) -> Result<List<MirJsonValue>, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonArray(v, key),
+        None -> Ok([]),
+    }
+}
+
+fn mirJsonTypeField(obj: MirJsonObject, key: String) -> Result<String, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonTypeText(v),
+        None -> Ok(""),
+    }
+}
+
+fn mirJsonSpanField(obj: MirJsonObject, key: String) -> Result<MirSpan, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonSpan(v),
+        None -> Ok(mirNoSpan()),
+    }
+}
+
+fn mirJsonTypeList(items: List<MirJsonValue>) -> Result<List<String>, String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(mirJsonTypeText(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonJoinTypeArgs(args: List<String>) -> String {
+    if args.len() == 0 {
+        return ""
+    }
+    "<" + strings.join(args, ", ") + ">"
+}
+
+fn mirJsonTypeText(value: MirJsonValue) -> Result<String, String> {
+    if mirJsonIsNull(value) {
+        return Ok("")
+    }
+    let obj = mirJsonObject(value, "type")?
+    let display = mirJsonStringField(obj, "display", "")?
+    if display != "" {
+        return Ok(display)
+    }
+    let kind = mirJsonStringField(obj, "kind", "")?
+    if kind == "prim" {
+        return mirJsonStringField(obj, "prim", "")
+    }
+    if kind == "named" {
+        let name = mirJsonStringField(obj, "name", "")?
+        let args = mirJsonTypeList(mirJsonArrayField(obj, "args")?)?
+        return Ok(name + mirJsonJoinTypeArgs(args))
+    }
+    if kind == "optional" {
+        let innerText = match mirJsonObjectGet(obj, "inner") {
+            Some(inner) -> mirJsonTypeText(inner)?,
+            None -> "",
+        }
+        if innerText == "" {
+            return Ok("?")
+        }
+        return Ok(innerText + "?")
+    }
+    if kind == "tuple" {
+        let elems = mirJsonTypeList(mirJsonArrayField(obj, "elems")?)?
+        return Ok("(" + strings.join(elems, ", ") + ")")
+    }
+    if kind == "fn" {
+        let params = mirJsonTypeList(mirJsonArrayField(obj, "params")?)?
+        let ret = match mirJsonObjectGet(obj, "return") {
+            Some(v) -> mirJsonTypeText(v)?,
+            None -> "()",
+        }
+        return Ok("fn(" + strings.join(params, ", ") + ") -> " + ret)
+    }
+    if kind == "error" {
+        return Ok("Error")
+    }
+    if kind == "typevar" {
+        return mirJsonStringField(obj, "name", "")
+    }
+    Ok(mirJsonStringField(obj, "display", "")?)
+}
+
+fn mirJsonSpan(value: MirJsonValue) -> Result<MirSpan, String> {
+    if mirJsonIsNull(value) {
+        return Ok(mirNoSpan())
+    }
+    let obj = mirJsonObject(value, "span")?
+    Ok(mirSpan(mirJsonIntField(obj, "start", 0)?, mirJsonIntField(obj, "end", 0)?))
+}
+
+pub fn mirJsonParseModule(text: String) -> Result<MirModule, String> {
+    match mirJsonParseValue(text) {
+        Ok(v) -> mirJsonModule(v),
+        Err(_) -> Err("mir-json: invalid JSON"),
+    }
+}
+
+fn mirJsonModule(value: MirJsonValue) -> Result<MirModule, String> {
+    let obj = mirJsonObject(value, "module")?
+    let version = mirJsonIntField(obj, "version", 1)?
+    if version != 0 && version != 1 {
+        return Err("mir-json: unsupported version")
+    }
+    let mut m = mirModule(mirJsonStringField(obj, "packageName", "main")?)
+    m.span = mirJsonSpanField(obj, "span")?
+    m.layouts = mirJsonLayouts(match mirJsonObjectGet(obj, "layouts") {
+        Some(v) -> v,
+        None -> mirJsonEmptyObject(),
+    })?
+    for useJson in mirJsonArrayField(obj, "uses")? {
+        m.uses.push(mirJsonUse(useJson)?)
+    }
+    for fnJson in mirJsonArrayField(obj, "functions")? {
+        m.functions.push(mirJsonFunction(fnJson)?)
+    }
+    for globalJson in mirJsonArrayField(obj, "globals")? {
+        m.globals.push(mirJsonGlobal(globalJson)?)
+    }
+    Ok(m)
+}
+
+fn mirJsonUse(value: MirJsonValue) -> Result<MirUse, String> {
+    let obj = mirJsonObject(value, "use")?
+    let mut u = mirUse(mirJsonStringField(obj, "rawPath", "")?, mirJsonStringField(obj, "alias", "")?, mirJsonSpanField(obj, "span")?)
+    u.isGoFFI = mirJsonBoolField(obj, "isGoFFI", false)?
+    u.isRuntimeFFI = mirJsonBoolField(obj, "isRuntimeFFI", false)?
+    u.goPath = mirJsonStringField(obj, "goPath", "")?
+    u.runtimePath = mirJsonStringField(obj, "runtimePath", "")?
+    Ok(u)
+}
+
+fn mirJsonGlobal(value: MirJsonValue) -> Result<MirGlobal, String> {
+    let obj = mirJsonObject(value, "global")?
+    let mut g = mirGlobal(mirJsonStringField(obj, "name", "")?, mirJsonTypeField(obj, "type")?, mirJsonBoolField(obj, "mut", false)?, mirJsonSpanField(obj, "span")?)
+    g.hasInit = mirJsonBoolField(obj, "hasInit", false)?
+    g.initSymbol = mirJsonStringField(obj, "initSymbol", "")?
+    Ok(g)
+}
+
+fn mirJsonFunction(value: MirJsonValue) -> Result<MirFunction, String> {
+    let obj = mirJsonObject(value, "function")?
+    let mut fn_ = mirFunction(mirJsonStringField(obj, "name", "")?, mirJsonTypeField(obj, "returnType")?, mirJsonSpanField(obj, "span")?)
+    fn_.returnLocal = mirJsonIntField(obj, "returnLocal", 0)?
+    fn_.entry = mirJsonIntField(obj, "entry", 0)?
+    fn_.isExternal = mirJsonBoolField(obj, "isExternal", false)?
+    fn_.isIntrinsic = mirJsonBoolField(obj, "isIntrinsic", false)?
+    fn_.exported = mirJsonBoolField(obj, "exported", false)?
+    fn_.exportSymbol = mirJsonStringField(obj, "exportSymbol", "")?
+    fn_.cAbi = mirJsonBoolField(obj, "cAbi", false)?
+    fn_.vectorize = mirJsonBoolField(obj, "vectorize", false)?
+    fn_.noVectorize = mirJsonBoolField(obj, "noVectorize", false)?
+    fn_.vectorizeWidth = mirJsonIntField(obj, "vectorizeWidth", 0)?
+    fn_.vectorizeScalable = mirJsonBoolField(obj, "vectorizeScalable", false)?
+    fn_.vectorizePredicate = mirJsonBoolField(obj, "vectorizePredicate", false)?
+    fn_.parallel = mirJsonBoolField(obj, "parallel", false)?
+    fn_.unroll = mirJsonBoolField(obj, "unroll", false)?
+    fn_.unrollCount = mirJsonIntField(obj, "unrollCount", 0)?
+    fn_.inlineMode = mirJsonInlineMode(mirJsonIntField(obj, "inlineMode", 0)?)
+    fn_.hot = mirJsonBoolField(obj, "hot", false)?
+    fn_.cold = mirJsonBoolField(obj, "cold", false)?
+    fn_.targetFeatures = mirJsonStringList(mirJsonArrayField(obj, "targetFeatures")?)?
+    fn_.noaliasAll = mirJsonBoolField(obj, "noaliasAll", false)?
+    fn_.noaliasParams = mirJsonStringList(mirJsonArrayField(obj, "noaliasParams")?)?
+    fn_.pure = mirJsonBoolField(obj, "pure", false)?
+    for p in mirJsonArrayField(obj, "params")? {
+        fn_.params.push(mirJsonNumber(p, "params")?)
+    }
+    for localJson in mirJsonArrayField(obj, "locals")? {
+        fn_.locals.push(mirJsonLocal(localJson)?)
+    }
+    for blockJson in mirJsonArrayField(obj, "blocks")? {
+        fn_.blocks.push(mirJsonBlock(blockJson)?)
+    }
+    Ok(fn_)
+}
+
+fn mirJsonStringList(items: List<MirJsonValue>) -> Result<List<String>, String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(mirJsonString(item, "string-list")?)
+    }
+    Ok(out)
+}
+
+fn mirJsonInlineMode(value: Int) -> MirInlineMode {
+    if value == 1 {
+        return MirInlineSoft
+    }
+    if value == 2 {
+        return MirInlineAlways
+    }
+    if value == 3 {
+        return MirInlineNever
+    }
+    MirInlineNone
+}
+
+fn mirJsonLocal(value: MirJsonValue) -> Result<MirLocal, String> {
+    let obj = mirJsonObject(value, "local")?
+    let mut l = mirLocal(mirJsonIntField(obj, "id", 0)?, mirJsonStringField(obj, "name", "")?, mirJsonTypeField(obj, "type")?, mirJsonBoolField(obj, "mut", false)?, mirJsonSpanField(obj, "span")?)
+    l.isParam = mirJsonBoolField(obj, "isParam", false)?
+    l.isReturn = mirJsonBoolField(obj, "isReturn", false)?
+    Ok(l)
+}
+
+fn mirJsonBlock(value: MirJsonValue) -> Result<MirBasicBlock, String> {
+    let obj = mirJsonObject(value, "block")?
+    let mut b = mirBasicBlock(mirJsonIntField(obj, "id", 0)?, mirJsonSpanField(obj, "span")?)
+    for instrJson in mirJsonArrayField(obj, "instrs")? {
+        b.instrs.push(mirJsonInstr(instrJson)?)
+    }
+    match mirJsonObjectGet(obj, "term") {
+        Some(termJson) -> {
+            if !mirJsonIsNull(termJson) {
+                mirBlockSetTerminator(b, mirJsonTerm(termJson)?)
+            }
+        },
+        None -> {
+        },
+    }
+    Ok(b)
+}
+
+fn mirJsonInstr(value: MirJsonValue) -> Result<MirInstr, String> {
+    let obj = mirJsonObject(value, "instr")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    let span = mirJsonSpanField(obj, "span")?
+    if kind == "assign" {
+        return Ok(mirAssignInstr(mirJsonPlaceRequired(obj, "dest")?, mirJsonRValueRequired(obj, "src")?, span))
+    }
+    if kind == "call" {
+        let hasDest = mirJsonObjectGet(obj, "dest").isSome()
+        let dest = if hasDest { mirJsonPlaceRequired(obj, "dest")? } else { mirPlace(-1) }
+        let callee = mirJsonCalleeRequired(obj, "callee")?
+        return Ok(mirCallInstr(hasDest, dest, callee.symbol, callee.typ, mirJsonOperands(mirJsonArrayField(obj, "args")?)?, span))
+    }
+    if kind == "intrinsic" {
+        let hasDest = mirJsonObjectGet(obj, "dest").isSome()
+        let dest = if hasDest { mirJsonPlaceRequired(obj, "dest")? } else { mirPlace(-1) }
+        return Ok(mirIntrinsicInstr(hasDest, dest, mirJsonIntrinsic(mirJsonIntField(obj, "intrinsic", 0)?), mirJsonOperands(mirJsonArrayField(obj, "args")?)?, span))
+    }
+    if kind == "storage_live" {
+        return Ok(mirStorageLiveInstr(mirJsonIntField(obj, "storageLocal", -1)?, span))
+    }
+    if kind == "storage_dead" {
+        return Ok(mirStorageDeadInstr(mirJsonIntField(obj, "storageLocal", -1)?, span))
+    }
+    Err(mirJsonErr("instr", "unknown kind " + kind))
+}
+
+struct MirJsonCallee {
+    pub kind: String,
+    pub symbol: String,
+    pub typ: String,
+    pub operand: MirOperand,
+}
+
+fn mirJsonCalleeRequired(obj: MirJsonObject, key: String) -> Result<MirJsonCallee, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonCallee(v),
+        None -> Err(mirJsonErr(key, "missing callee")),
+    }
+}
+
+fn mirJsonCallee(value: MirJsonValue) -> Result<MirJsonCallee, String> {
+    let obj = mirJsonObject(value, "callee")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    if kind == "fn" {
+        return Ok(MirJsonCallee {kind, symbol: mirJsonStringField(obj, "symbol", "")?, typ: mirJsonTypeField(obj, "type")?, operand: mirOperandInvalid()})
+    }
+    if kind == "indirect" {
+        return Ok(MirJsonCallee {kind, symbol: "", typ: "", operand: mirJsonOperandRequired(obj, "operand")?})
+    }
+    Err(mirJsonErr("callee", "unknown kind " + kind))
+}
+
+fn mirJsonTerm(value: MirJsonValue) -> Result<MirTerm, String> {
+    let obj = mirJsonObject(value, "term")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    let span = mirJsonSpanField(obj, "span")?
+    if kind == "goto" {
+        return Ok(mirGotoTerm(mirJsonIntField(obj, "target", -1)?, span))
+    }
+    if kind == "branch" {
+        return Ok(mirBranchTerm(mirJsonOperandRequired(obj, "cond")?, mirJsonIntField(obj, "then", -1)?, mirJsonIntField(obj, "else", -1)?, span))
+    }
+    if kind == "switch_int" {
+        let mut cases: List<MirSwitchCase> = []
+        for caseJson in mirJsonArrayField(obj, "cases")? {
+            cases.push(mirJsonSwitchCase(caseJson)?)
+        }
+        return Ok(mirSwitchIntTerm(mirJsonOperandRequired(obj, "cond")?, cases, mirJsonIntField(obj, "default", -1)?, span))
+    }
+    if kind == "return" {
+        return Ok(mirReturnTerm(span))
+    }
+    if kind == "unreachable" {
+        return Ok(mirUnreachableTerm(span))
+    }
+    Err(mirJsonErr("term", "unknown kind " + kind))
+}
+
+fn mirJsonSwitchCase(value: MirJsonValue) -> Result<MirSwitchCase, String> {
+    let obj = mirJsonObject(value, "switch-case")?
+    Ok(mirSwitchCase(mirJsonIntField(obj, "value", 0)?, mirJsonIntField(obj, "target", -1)?, mirJsonStringField(obj, "label", "")?))
+}
+
+fn mirJsonPlaceRequired(obj: MirJsonObject, key: String) -> Result<MirPlace, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonPlace(v),
+        None -> Err(mirJsonErr(key, "missing place")),
+    }
+}
+
+fn mirJsonPlace(value: MirJsonValue) -> Result<MirPlace, String> {
+    let obj = mirJsonObject(value, "place")?
+    let mut p = mirPlace(mirJsonIntField(obj, "local", -1)?)
+    for projJson in mirJsonArrayField(obj, "projections")? {
+        p.projections.push(mirJsonProjection(projJson)?)
+    }
+    Ok(p)
+}
+
+fn mirJsonProjection(value: MirJsonValue) -> Result<MirProjection, String> {
+    let obj = mirJsonObject(value, "projection")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    let typ = mirJsonTypeField(obj, "type")?
+    if kind == "field" {
+        return Ok(mirFieldProj(mirJsonIntField(obj, "index", 0)?, mirJsonStringField(obj, "name", "")?, typ))
+    }
+    if kind == "tuple" {
+        return Ok(mirTupleProj(mirJsonIntField(obj, "index", 0)?, typ))
+    }
+    if kind == "variant" {
+        return Ok(mirVariantProj(mirJsonIntField(obj, "index", 0)?, mirJsonStringField(obj, "name", "")?, mirJsonIntField(obj, "fieldIdx", -1)?, typ))
+    }
+    if kind == "index" {
+        match mirJsonObjectGet(obj, "indexOp") {
+            Some(indexJson) -> {
+                let op = mirJsonOperand(indexJson)?
+                if op.kind == MirOpConst && op.const.kind == MirConstInt {
+                    return Ok(mirIndexProjConst(op.const.intValue, typ))
+                }
+                if op.place.projections.len() == 0 {
+                    return Ok(mirIndexProjLocal(op.place.local, typ))
+                }
+            },
+            None -> {
+            },
+        }
+        return Ok(mirIndexProjConst(mirJsonIntField(obj, "index", 0)?, typ))
+    }
+    if kind == "deref" {
+        return Ok(mirDerefProj(typ))
+    }
+    Err(mirJsonErr("projection", "unknown kind " + kind))
+}
+
+fn mirJsonOperandRequired(obj: MirJsonObject, key: String) -> Result<MirOperand, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonOperand(v),
+        None -> Err(mirJsonErr(key, "missing operand")),
+    }
+}
+
+fn mirJsonOperands(items: List<MirJsonValue>) -> Result<List<MirOperand>, String> {
+    let mut out: List<MirOperand> = []
+    for item in items {
+        out.push(mirJsonOperand(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonOperand(value: MirJsonValue) -> Result<MirOperand, String> {
+    let obj = mirJsonObject(value, "operand")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    let typ = mirJsonTypeField(obj, "type")?
+    if kind == "copy" {
+        return Ok(mirOperandCopy(mirJsonPlaceRequired(obj, "place")?, typ))
+    }
+    if kind == "move" {
+        return Ok(mirOperandMove(mirJsonPlaceRequired(obj, "place")?, typ))
+    }
+    if kind == "const" {
+        return Ok(mirOperandConst(mirJsonConstRequired(obj, "const")?))
+    }
+    Err(mirJsonErr("operand", "unknown kind " + kind))
+}
+
+fn mirJsonConstRequired(obj: MirJsonObject, key: String) -> Result<MirConst, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonConst(v),
+        None -> Err(mirJsonErr(key, "missing const")),
+    }
+}
+
+fn mirJsonConst(value: MirJsonValue) -> Result<MirConst, String> {
+    let obj = mirJsonObject(value, "const")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    let typ = mirJsonTypeField(obj, "type")?
+    if kind == "int" {
+        return Ok(mirConstInt(mirJsonIntField(obj, "int", 0)?, typ))
+    }
+    if kind == "bool" {
+        return Ok(mirConstBool(mirJsonBoolField(obj, "bool", false)?))
+    }
+    if kind == "float" {
+        return Ok(mirConstFloat(mirJsonNumberTextField(obj, "float", "0")?, typ))
+    }
+    if kind == "string" {
+        return Ok(mirConstString(mirJsonStringField(obj, "string", "")?))
+    }
+    if kind == "char" {
+        return Ok(mirConstChar(mirJsonIntField(obj, "char", 0)?))
+    }
+    if kind == "byte" {
+        return Ok(mirConstByte(mirJsonIntField(obj, "byte", 0)?))
+    }
+    if kind == "unit" {
+        return Ok(mirConstUnit())
+    }
+    if kind == "null" {
+        return Ok(mirConstNull(typ))
+    }
+    if kind == "fn" {
+        return Ok(mirConstFn(mirJsonStringField(obj, "symbol", "")?, typ))
+    }
+    Err(mirJsonErr("const", "unknown kind " + kind))
+}
+
+fn mirJsonRValueRequired(obj: MirJsonObject, key: String) -> Result<MirRValue, String> {
+    match mirJsonObjectGet(obj, key) {
+        Some(v) -> mirJsonRValue(v),
+        None -> Err(mirJsonErr(key, "missing rvalue")),
+    }
+}
+
+fn mirJsonRValue(value: MirJsonValue) -> Result<MirRValue, String> {
+    let obj = mirJsonObject(value, "rvalue")?
+    let kind = mirJsonStringField(obj, "kind", "")?
+    if kind == "use" {
+        return Ok(mirRVUse(mirJsonOperandRequired(obj, "op")?))
+    }
+    if kind == "unary" {
+        return Ok(mirRVUnary(mirJsonUnary(mirJsonIntField(obj, "unary", 0)?), mirJsonOperandRequired(obj, "arg")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "binary" {
+        return Ok(mirRVBinary(mirJsonBinary(mirJsonIntField(obj, "binary", 0)?), mirJsonOperandRequired(obj, "left")?, mirJsonOperandRequired(obj, "right")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "aggregate" {
+        let fields = mirJsonOperands(mirJsonArrayField(obj, "fields")?)?
+        let aggKind = mirJsonAggregate(mirJsonIntField(obj, "aggregateKind", 0)?)
+        let variantTag = mirJsonStringField(obj, "variantTag", "")?
+        if aggKind == MirAggEnumVariant {
+            return Ok(mirRVVariant(mirJsonIntField(obj, "variantIdx", 0)?, variantTag, fields, mirJsonTypeField(obj, "type")?))
+        }
+        return Ok(mirRVAggregate(aggKind, fields, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "discriminant" {
+        return Ok(mirRVDiscriminant(mirJsonPlaceRequired(obj, "place")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "len" {
+        return Ok(mirRVLen(mirJsonPlaceRequired(obj, "place")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "cast" {
+        return Ok(mirRVCast(mirJsonCast(mirJsonIntField(obj, "castKind", 0)?), mirJsonOperandRequired(obj, "arg")?, mirJsonTypeField(obj, "from")?, mirJsonTypeField(obj, "to")?))
+    }
+    if kind == "address_of" {
+        return Ok(mirRVAddressOf(mirJsonPlaceRequired(obj, "place")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "ref" {
+        return Ok(mirRVRef(mirJsonPlaceRequired(obj, "place")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "global_ref" {
+        return Ok(mirRVGlobalRef(mirJsonStringField(obj, "name", "")?, mirJsonTypeField(obj, "type")?))
+    }
+    if kind == "nullary" {
+        return Ok(mirRVNullary(mirJsonNullary(mirJsonIntField(obj, "nullary", 0)?), mirJsonTypeField(obj, "type")?))
+    }
+    Err(mirJsonErr("rvalue", "unknown kind " + kind))
+}
+
+fn mirJsonLayouts(value: MirJsonValue) -> Result<MirLayoutTable, String> {
+    if mirJsonIsNull(value) {
+        return Ok(mirLayoutTable())
+    }
+    let obj = mirJsonObject(value, "layouts")?
+    let mut out = mirLayoutTable()
+    for item in mirJsonArrayField(obj, "structs")? {
+        out.structs.push(mirJsonStructLayout(item)?)
+    }
+    for item in mirJsonArrayField(obj, "enums")? {
+        out.enums.push(mirJsonEnumLayout(item)?)
+    }
+    for item in mirJsonArrayField(obj, "tuples")? {
+        out.tuples.push(mirJsonTupleLayout(item)?)
+    }
+    for item in mirJsonArrayField(obj, "interfaces")? {
+        out.interfaces.push(mirJsonInterfaceLayout(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonFieldLayout(value: MirJsonValue) -> Result<MirFieldLayout, String> {
+    let obj = mirJsonObject(value, "layout-field")?
+    Ok(MirFieldLayout {index: mirJsonIntField(obj, "index", 0)?, name: mirJsonStringField(obj, "name", "")?, typ: mirJsonTypeField(obj, "type")?})
+}
+
+fn mirJsonFieldLayouts(items: List<MirJsonValue>) -> Result<List<MirFieldLayout>, String> {
+    let mut out: List<MirFieldLayout> = []
+    for item in items {
+        out.push(mirJsonFieldLayout(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonStructLayout(value: MirJsonValue) -> Result<MirStructLayout, String> {
+    let obj = mirJsonObject(value, "struct-layout")?
+    Ok(MirStructLayout {name: mirJsonStringField(obj, "name", "")?, mangled: mirJsonStringField(obj, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, "fields")?)?, size: mirJsonIntField(obj, "size", 0)?, align: mirJsonIntField(obj, "align", 0)?})
+}
+
+fn mirJsonVariantLayout(value: MirJsonValue) -> Result<MirVariantLayout, String> {
+    let obj = mirJsonObject(value, "variant-layout")?
+    Ok(MirVariantLayout {index: mirJsonIntField(obj, "index", 0)?, name: mirJsonStringField(obj, "name", "")?, payload: mirJsonFieldLayouts(mirJsonArrayField(obj, "payload")?)?})
+}
+
+fn mirJsonVariantLayouts(items: List<MirJsonValue>) -> Result<List<MirVariantLayout>, String> {
+    let mut out: List<MirVariantLayout> = []
+    for item in items {
+        out.push(mirJsonVariantLayout(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonEnumLayout(value: MirJsonValue) -> Result<MirEnumLayout, String> {
+    let obj = mirJsonObject(value, "enum-layout")?
+    Ok(MirEnumLayout {name: mirJsonStringField(obj, "name", "")?, mangled: mirJsonStringField(obj, "mangled", "")?, discriminant: mirJsonTypeField(obj, "discriminant")?, variants: mirJsonVariantLayouts(mirJsonArrayField(obj, "variants")?)?})
+}
+
+fn mirJsonTupleLayout(value: MirJsonValue) -> Result<MirTupleLayout, String> {
+    let obj = mirJsonObject(value, "tuple-layout")?
+    Ok(MirTupleLayout {key: mirJsonStringField(obj, "key", "")?, mangled: mirJsonStringField(obj, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, "fields")?)?})
+}
+
+fn mirJsonInterfaceMethod(value: MirJsonValue) -> Result<MirInterfaceMethod, String> {
+    let obj = mirJsonObject(value, "interface-method")?
+    Ok(MirInterfaceMethod {name: mirJsonStringField(obj, "name", "")?, slot: mirJsonIntField(obj, "slot", 0)?})
+}
+
+fn mirJsonInterfaceMethods(items: List<MirJsonValue>) -> Result<List<MirInterfaceMethod>, String> {
+    let mut out: List<MirInterfaceMethod> = []
+    for item in items {
+        out.push(mirJsonInterfaceMethod(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonInterfaceImpl(value: MirJsonValue) -> Result<MirInterfaceImpl, String> {
+    let obj = mirJsonObject(value, "interface-impl")?
+    Ok(MirInterfaceImpl {implName: mirJsonStringField(obj, "implName", "")?, vtableSym: mirJsonStringField(obj, "vtableSym", "")?})
+}
+
+fn mirJsonInterfaceImpls(items: List<MirJsonValue>) -> Result<List<MirInterfaceImpl>, String> {
+    let mut out: List<MirInterfaceImpl> = []
+    for item in items {
+        out.push(mirJsonInterfaceImpl(item)?)
+    }
+    Ok(out)
+}
+
+fn mirJsonInterfaceLayout(value: MirJsonValue) -> Result<MirInterfaceLayout, String> {
+    let obj = mirJsonObject(value, "interface-layout")?
+    Ok(MirInterfaceLayout {name: mirJsonStringField(obj, "name", "")?, methods: mirJsonInterfaceMethods(mirJsonArrayField(obj, "methods")?)?, impls: mirJsonInterfaceImpls(mirJsonArrayField(obj, "impls")?)?})
+}
+
+fn mirJsonUnary(value: Int) -> MirUnaryOp {
+    if value == 1 { return MirUnNeg }
+    if value == 2 { return MirUnPlus }
+    if value == 3 { return MirUnNot }
+    if value == 4 { return MirUnBitNot }
+    MirUnInvalid
+}
+
+fn mirJsonBinary(value: Int) -> MirBinaryOp {
+    if value == 1 { return MirBinAdd }
+    if value == 2 { return MirBinSub }
+    if value == 3 { return MirBinMul }
+    if value == 4 { return MirBinDiv }
+    if value == 5 { return MirBinMod }
+    if value == 6 { return MirBinEq }
+    if value == 7 { return MirBinNeq }
+    if value == 8 { return MirBinLt }
+    if value == 9 { return MirBinLeq }
+    if value == 10 { return MirBinGt }
+    if value == 11 { return MirBinGeq }
+    if value == 12 { return MirBinAnd }
+    if value == 13 { return MirBinOr }
+    if value == 14 { return MirBinBitAnd }
+    if value == 15 { return MirBinBitOr }
+    if value == 16 { return MirBinBitXor }
+    if value == 17 { return MirBinShl }
+    if value == 18 { return MirBinShr }
+    MirBinInvalid
+}
+
+fn mirJsonAggregate(value: Int) -> MirAggregateKind {
+    if value == 1 { return MirAggTuple }
+    if value == 2 { return MirAggStruct }
+    if value == 3 { return MirAggEnumVariant }
+    if value == 4 { return MirAggList }
+    if value == 5 { return MirAggMap }
+    if value == 6 { return MirAggClosure }
+    MirAggInvalid
+}
+
+fn mirJsonCast(value: Int) -> MirCastKind {
+    if value == 1 { return MirCastIntResize }
+    if value == 2 { return MirCastIntToFloat }
+    if value == 3 { return MirCastFloatToInt }
+    if value == 4 { return MirCastFloatResize }
+    if value == 5 { return MirCastOptionalWrap }
+    if value == 6 { return MirCastOptionalUnwrap }
+    if value == 7 { return MirCastBitcast }
+    MirCastInvalid
+}
+
+fn mirJsonNullary(value: Int) -> MirNullaryRVKind {
+    if value == 1 { return MirNullaryNone }
+    MirNullaryInvalid
+}
+
+fn mirJsonIntrinsic(value: Int) -> MirIntrinsicKind {
+    if value == 0 { return MirIntrinsicInvalid }
+    if value == 1 { return MirIntrinsicPrint }
+    if value == 2 { return MirIntrinsicPrintln }
+    if value == 3 { return MirIntrinsicEprint }
+    if value == 4 { return MirIntrinsicEprintln }
+    if value == 5 { return MirIntrinsicAbort }
+    if value == 6 { return MirIntrinsicStringConcat }
+    if value == 7 { return MirIntrinsicBytesConcat }
+    if value == 8 { return MirIntrinsicChanMake }
+    if value == 9 { return MirIntrinsicChanSend }
+    if value == 10 { return MirIntrinsicChanRecv }
+    if value == 11 { return MirIntrinsicChanClose }
+    if value == 12 { return MirIntrinsicChanIsClosed }
+    if value == 13 { return MirIntrinsicTaskGroup }
+    if value == 14 { return MirIntrinsicSpawn }
+    if value == 15 { return MirIntrinsicHandleJoin }
+    if value == 16 { return MirIntrinsicGroupCancel }
+    if value == 17 { return MirIntrinsicGroupIsCancelled }
+    if value == 18 { return MirIntrinsicParallel }
+    if value == 19 { return MirIntrinsicRace }
+    if value == 20 { return MirIntrinsicCollectAll }
+    if value == 21 { return MirIntrinsicSelect }
+    if value == 22 { return MirIntrinsicSelectRecv }
+    if value == 23 { return MirIntrinsicSelectSend }
+    if value == 24 { return MirIntrinsicSelectTimeout }
+    if value == 25 { return MirIntrinsicSelectDefault }
+    if value == 26 { return MirIntrinsicIsCancelled }
+    if value == 27 { return MirIntrinsicCheckCancelled }
+    if value == 28 { return MirIntrinsicYield }
+    if value == 29 { return MirIntrinsicSleep }
+    if value == 30 { return MirIntrinsicListPush }
+    if value == 31 { return MirIntrinsicListLen }
+    if value == 32 { return MirIntrinsicListGet }
+    if value == 33 { return MirIntrinsicListIsEmpty }
+    if value == 34 { return MirIntrinsicListFirst }
+    if value == 35 { return MirIntrinsicListLast }
+    if value == 36 { return MirIntrinsicListSorted }
+    if value == 37 { return MirIntrinsicListContains }
+    if value == 38 { return MirIntrinsicListIndexOf }
+    if value == 39 { return MirIntrinsicListToSet }
+    if value == 40 { return MirIntrinsicListRemoveAt }
+    if value == 41 { return MirIntrinsicListReverse }
+    if value == 42 { return MirIntrinsicListReversed }
+    if value == 43 { return MirIntrinsicListToString }
+    if value == 44 { return MirIntrinsicMapNew }
+    if value == 45 { return MirIntrinsicMapGet }
+    if value == 46 { return MirIntrinsicMapSet }
+    if value == 47 { return MirIntrinsicMapContains }
+    if value == 48 { return MirIntrinsicMapLen }
+    if value == 49 { return MirIntrinsicMapKeys }
+    if value == 50 { return MirIntrinsicMapValues }
+    if value == 51 { return MirIntrinsicMapRemove }
+    if value == 52 { return MirIntrinsicMapKeysSorted }
+    if value == 53 { return MirIntrinsicMapToString }
+    if value == 54 { return MirIntrinsicSetNew }
+    if value == 55 { return MirIntrinsicSetInsert }
+    if value == 56 { return MirIntrinsicSetContains }
+    if value == 57 { return MirIntrinsicSetLen }
+    if value == 58 { return MirIntrinsicSetToList }
+    if value == 59 { return MirIntrinsicSetRemove }
+    if value == 60 { return MirIntrinsicSetToString }
+    if value == 61 { return MirIntrinsicStringLen }
+    if value == 62 { return MirIntrinsicStringIsEmpty }
+    if value == 63 { return MirIntrinsicStringContains }
+    if value == 64 { return MirIntrinsicStringCount }
+    if value == 65 { return MirIntrinsicStringStartsWith }
+    if value == 66 { return MirIntrinsicStringEndsWith }
+    if value == 67 { return MirIntrinsicStringIndexOf }
+    if value == 68 { return MirIntrinsicStringSplit }
+    if value == 69 { return MirIntrinsicStringTrim }
+    if value == 70 { return MirIntrinsicStringToUpper }
+    if value == 71 { return MirIntrinsicStringToLower }
+    if value == 72 { return MirIntrinsicStringToInt }
+    if value == 73 { return MirIntrinsicStringToFloat }
+    if value == 74 { return MirIntrinsicStringReplace }
+    if value == 75 { return MirIntrinsicStringChars }
+    if value == 76 { return MirIntrinsicStringBytes }
+    if value == 77 { return MirIntrinsicBytesLen }
+    if value == 78 { return MirIntrinsicBytesIsEmpty }
+    if value == 79 { return MirIntrinsicBytesGet }
+    if value == 80 { return MirIntrinsicBytesContains }
+    if value == 81 { return MirIntrinsicBytesStartsWith }
+    if value == 82 { return MirIntrinsicBytesEndsWith }
+    if value == 83 { return MirIntrinsicBytesIndexOf }
+    if value == 84 { return MirIntrinsicBytesLastIndexOf }
+    if value == 85 { return MirIntrinsicBytesSplit }
+    if value == 86 { return MirIntrinsicBytesJoin }
+    if value == 87 { return MirIntrinsicBytesRepeat }
+    if value == 88 { return MirIntrinsicBytesReplace }
+    if value == 89 { return MirIntrinsicBytesReplaceAll }
+    if value == 90 { return MirIntrinsicBytesTrimLeft }
+    if value == 91 { return MirIntrinsicBytesTrimRight }
+    if value == 92 { return MirIntrinsicBytesTrim }
+    if value == 93 { return MirIntrinsicBytesTrimSpace }
+    if value == 94 { return MirIntrinsicBytesToUpper }
+    if value == 95 { return MirIntrinsicBytesToLower }
+    if value == 96 { return MirIntrinsicBytesToHex }
+    if value == 97 { return MirIntrinsicBytesSlice }
+    if value == 98 { return MirIntrinsicOptionIsSome }
+    if value == 99 { return MirIntrinsicOptionIsNone }
+    if value == 100 { return MirIntrinsicOptionUnwrap }
+    if value == 101 { return MirIntrinsicOptionUnwrapOr }
+    if value == 102 { return MirIntrinsicResultIsOk }
+    if value == 103 { return MirIntrinsicResultIsErr }
+    if value == 104 { return MirIntrinsicResultUnwrap }
+    if value == 105 { return MirIntrinsicResultUnwrapOr }
+    if value == 106 { return MirIntrinsicRawNull }
+    if value == 107 { return MirIntrinsicStringJoin }
+    if value == 108 { return MirIntrinsicListPop }
+    if value == 109 { return MirIntrinsicStringSubstring }
+    if value == 110 { return MirIntrinsicByteToInt }
+    if value == 111 { return MirIntrinsicCharToInt }
+    if value == 112 { return MirIntrinsicListSlice }
+    if value == 113 { return MirIntrinsicMapGetOr }
+    if value == 114 { return MirIntrinsicStringSplitInto }
+    if value == 115 { return MirIntrinsicStringNthSegment }
+    if value == 116 { return MirIntrinsicMapIncr }
+    if value == 117 { return MirIntrinsicStringRepeat }
+    if value == 118 { return MirIntrinsicStringTrimPrefix }
+    if value == 119 { return MirIntrinsicStringTrimSuffix }
+    if value == 120 { return MirIntrinsicStringTrimStart }
+    if value == 121 { return MirIntrinsicStringTrimEnd }
+    if value == 122 { return MirIntrinsicStringReplaceAll }
+    if value == 123 { return MirIntrinsicStringSplitN }
+    if value == 124 { return MirIntrinsicStringFields }
+    if value == 125 { return MirIntrinsicStringLastIndexOf }
+    if value == 126 { return MirIntrinsicBytesFromList }
+    if value == 127 { return MirIntrinsicBytesFromString }
+    if value == 128 { return MirIntrinsicBytesToString }
+    if value == 129 { return MirIntrinsicBytesFromHex }
+    if value == 130 { return MirIntrinsicIntToByte }
+    if value == 131 { return MirIntrinsicIntToChar }
+    if value == 132 { return MirIntrinsicByteToChar }
+    if value == 133 { return MirIntrinsicCharToByte }
+    if value == 134 { return MirIntrinsicListInsert }
+    if value == 135 { return MirIntrinsicListClear }
+    if value == 136 { return MirIntrinsicMapClear }
+    if value == 137 { return MirIntrinsicSetClear }
+    MirIntrinsicInvalid
+}

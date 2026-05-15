@@ -22,7 +22,13 @@ var (
 // is the managed wrapper around the Osty-owned LIR Proto subprocess boundary.
 var nativeLIRProtoSourceInputs = []string{
 	"cmd/osty-native-lirproto",
+	"internal/backend",
+	"internal/ir",
+	"internal/llvmabi",
+	"internal/mir",
+	"internal/mirjson",
 	"internal/nativelirproto",
+	"internal/toolchain/selfhostcache",
 	"go.mod",
 	"go.sum",
 }
@@ -162,11 +168,5 @@ func buildNativeLIRProto(dest string) error {
 			return fmt.Errorf("chmod managed osty-native-lirproto: %w", err)
 		}
 	}
-	if err := os.Rename(tmpPath, dest); err != nil {
-		if fileExists(dest) {
-			return nil
-		}
-		return fmt.Errorf("install managed osty-native-lirproto: %w", err)
-	}
-	return nil
+	return installManagedBinary(tmpPath, dest, "osty-native-lirproto")
 }

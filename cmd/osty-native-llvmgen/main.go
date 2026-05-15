@@ -83,6 +83,7 @@ func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
 	resp, err := nativelirproto.Run(req.MIR.SourcePath, nativelirproto.Request{
 		PackageName: req.MIR.PackageName,
 		SourcePath:  req.MIR.SourcePath,
+		Source:      req.MIR.Source,
 		Target:      req.MIR.Target,
 		MIR:         req.MIR.Module,
 	})

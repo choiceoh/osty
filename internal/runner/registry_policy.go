@@ -5,6 +5,7 @@ package runner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -77,4 +78,154 @@ func RegistrySearchScoreOf(name, description string, keywords []string, q string
 		}
 	}
 	return RegistrySearchScore{Score: 0, Ok: false}
+}
+
+// RegistryStatusErrorMessage builds the error string emitted
+// when an HTTP response from the registry has an unexpected
+// status code. Format: `registry <url>: HTTP <code>: <msg>`.
+// When the trimmed body is empty, statusText (typically
+// `resp.Status`) is used as the message.
+//
+// Osty: toolchain/registry_policy.osty:137
+func RegistryStatusErrorMessage(url string, statusCode int, body, statusText string) string {
+	trimmed := strings.TrimSpace(body)
+	msg := trimmed
+	if msg == "" {
+		msg = statusText
+	}
+	return "registry " + url + ": HTTP " + strconv.Itoa(statusCode) + ": " + msg
+}
+
+// ValidateRegistryPackageName checks `name` against the registry's
+// accepted name alphabet. Returns the empty string on success;
+// otherwise an error message the host wraps in badRequest:
+//
+//   - empty input → `package name is empty`
+//   - any other rejection → `invalid package name <quoted>` where
+//     <quoted> is TomlBasicString(name) — Go `%q`-style escapes
+//     keep embedded quotes / backslashes / control characters from
+//     breaking log lines or HTTP error responses.
+//
+// Rules: [A-Za-z_] everywhere, [0-9-] for non-first positions.
+//
+// Osty: toolchain/registry_policy.osty:158
+func ValidateRegistryPackageName(name string) string {
+	if name == "" {
+		return "package name is empty"
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		isUpper := b >= 'A' && b <= 'Z'
+		isLower := b >= 'a' && b <= 'z'
+		isUnderscore := b == '_'
+		isDigit := b >= '0' && b <= '9'
+		isDash := b == '-'
+		always := isUpper || isLower || isUnderscore
+		nonFirst := i > 0 && (isDigit || isDash)
+		if !(always || nonFirst) {
+			return "invalid package name " + TomlBasicString(name)
+		}
+	}
+	return ""
+}
+
+// RegistrySearchRequest is the normalised inputs the registry's
+// search handler operates on. ErrorMessage == "" signals
+// "proceed"; any non-empty value is the user-facing error
+// string to wrap in badRequest.
+//
+// Osty: toolchain/registry_policy.osty:191
+type RegistrySearchRequest struct {
+	Query        string
+	Limit        int
+	ErrorMessage string
+}
+
+// RegistrySearchRequestNormalize handles the per-request policy:
+// query trim+lowercase, default page size 20, and the
+// empty-query rejection message. The effective limit is
+// populated even on the rejection path so callers can echo it
+// without a second lookup.
+//
+// Osty: toolchain/registry_policy.osty:207
+func RegistrySearchRequestNormalize(rawQuery string, rawLimit int) RegistrySearchRequest {
+	limit := rawLimit
+	if limit <= 0 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(rawQuery))
+	if q == "" {
+		return RegistrySearchRequest{Limit: limit, ErrorMessage: "registry search query is empty"}
+	}
+	return RegistrySearchRequest{Query: q, Limit: limit}
+}
+
+// PublishDepSpec is the host-side dependency shape the publish
+// filter operates on.
+//
+// Osty: toolchain/registry_policy.osty:246
+type PublishDepSpec struct {
+	Name        string
+	PackageName string
+	VersionReq  string
+	Path        string
+	IsGit       bool
+}
+
+// PublishVersionDep is the structured output the registry's
+// store records on each published version. Kind is "normal" or
+// "dev".
+//
+// Osty: toolchain/registry_policy.osty:256
+type PublishVersionDep struct {
+	Name string
+	Req  string
+	Kind string
+}
+
+// PublishDepsResult bundles the filtered dep list + an optional
+// rejection message.
+//
+// Osty: toolchain/registry_policy.osty:265
+type PublishDepsResult struct {
+	Deps         []PublishVersionDep
+	ErrorMessage string
+}
+
+// ClassifyPublishDeps applies per-publish dep policy:
+//   - path dep → reject the publish
+//   - git dep → silently skip
+//   - else → record with effective name + version req
+//
+// Osty: toolchain/registry_policy.osty:280
+func ClassifyPublishDeps(normal, dev []PublishDepSpec) PublishDepsResult {
+	var out []PublishVersionDep
+	if msg := appendPublishDeps(&out, normal, "normal"); msg != "" {
+		return PublishDepsResult{ErrorMessage: msg}
+	}
+	if msg := appendPublishDeps(&out, dev, "dev"); msg != "" {
+		return PublishDepsResult{ErrorMessage: msg}
+	}
+	return PublishDepsResult{Deps: out}
+}
+
+func appendPublishDeps(out *[]PublishVersionDep, section []PublishDepSpec, kind string) string {
+	for _, d := range section {
+		if d.Path != "" {
+			return "dependency " + TomlBasicString(d.Name) + " uses path=" + TomlBasicString(d.Path) + "; path dependencies cannot be published"
+		}
+		if d.IsGit {
+			continue
+		}
+		name := d.PackageName
+		if name == "" {
+			name = d.Name
+		}
+		req := d.VersionReq
+		if req == "" {
+			req = "*"
+		}
+		*out = append(*out, PublishVersionDep{Name: name, Req: req, Kind: kind})
+	}
+	return ""
 }

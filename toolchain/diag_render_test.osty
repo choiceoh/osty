@@ -120,3 +120,83 @@ fn testDiagRenderReplacementFallbackWithTemplate() {
         "wrap(<expr>)",
     )
 }
+fn testDiagSeverityStringError() {
+    testing.assertEq(diagSeverityString(diagSeverityError), "error")
+}
+fn testDiagSeverityStringWarning() {
+    testing.assertEq(diagSeverityString(diagSeverityWarning), "warning")
+}
+fn testDiagSeverityStringNote() {
+    testing.assertEq(diagSeverityString(diagSeverityNote), "note")
+}
+fn testDiagSeverityStringUnknown() {
+    testing.assertEq(diagSeverityString(99), "unknown")
+    testing.assertEq(diagSeverityString(-1), "unknown")
+}
+fn testDiagShortErrorWithCode() {
+    testing.assertEq(
+        diagShortError("E0500", diagSeverityError, 12, 3, "name not found"),
+        "E0500: error at 12:3: name not found",
+    )
+}
+fn testDiagShortErrorWithoutCode() {
+    testing.assertEq(
+        diagShortError("", diagSeverityWarning, 1, 5, "unused let"),
+        "warning at 1:5: unused let",
+    )
+}
+fn testDiagShortErrorNoteSeverity() {
+    testing.assertEq(
+        diagShortError("E0703", diagSeverityNote, 42, 1, "see also"),
+        "E0703: note at 42:1: see also",
+    )
+}
+fn testDiagSeverityAnsiColorError() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityError), "\u{1b}[31m")
+}
+fn testDiagSeverityAnsiColorWarning() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityWarning), "\u{1b}[33m")
+}
+fn testDiagSeverityAnsiColorNote() {
+    testing.assertEq(diagSeverityAnsiColor(diagSeverityNote), "\u{1b}[36m")
+}
+fn testDiagSeverityAnsiColorUnknown() {
+    testing.assertEq(diagSeverityAnsiColor(99), "")
+    testing.assertEq(diagSeverityAnsiColor(-1), "")
+}
+fn testDiagSuggestionDisplayFixApplicable() {
+    let r = diagSuggestionDisplayOf("rename to foo", true, "let foo = 1")
+    testing.assertEq(r.tag, "fix")
+    testing.assertEq(r.label, "rename to foo")
+    testing.assertEq(r.replacement, "let foo = 1")
+}
+fn testDiagSuggestionDisplaySuggestOnly() {
+    // Non-machine-applicable: only the tag flips to "suggest";
+    // label + replacement still pass-through unchanged.
+    let r = diagSuggestionDisplayOf("rename to foo", false, "let foo = 1")
+    testing.assertEq(r.tag, "suggest")
+    testing.assertEq(r.label, "rename to foo")
+    testing.assertEq(r.replacement, "let foo = 1")
+}
+fn testDiagSuggestionDisplayEmptyLabel() {
+    let r = diagSuggestionDisplayOf("", true, "x")
+    testing.assertEq(r.tag, "fix")
+    testing.assertEq(r.label, "suggested fix")
+    testing.assertEq(r.replacement, "x")
+}
+fn testDiagSuggestionDisplayEmptyReplacement() {
+    let r = diagSuggestionDisplayOf("rm unused", true, "")
+    testing.assertEq(r.replacement, "(delete)")
+}
+fn testDiagSuggestionDisplayAllDefaults() {
+    let r = diagSuggestionDisplayOf("", false, "")
+    testing.assertEq(r.tag, "suggest")
+    testing.assertEq(r.label, "suggested fix")
+    testing.assertEq(r.replacement, "(delete)")
+}
+fn testDiagNoteLabel() {
+    testing.assertEq(diagNoteLabel(), "note")
+}
+fn testDiagHelpLabel() {
+    testing.assertEq(diagHelpLabel(), "help")
+}

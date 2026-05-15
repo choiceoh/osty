@@ -12,6 +12,7 @@
 package diag
 
 import (
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
@@ -31,16 +32,17 @@ const (
 	Note
 )
 
+// Compile-time guard: the Severity iota MUST match the int
+// constants the runner snapshot (toolchain/diag_render.osty)
+// uses. A future reorder of the iota declaration above would
+// silently desync the two sources of truth without this; the
+// array length check forces a build failure instead.
+var _ = [1]struct{}{}[int(Error)-runner.DiagSeverityError]
+var _ = [1]struct{}{}[int(Warning)-runner.DiagSeverityWarning]
+var _ = [1]struct{}{}[int(Note)-runner.DiagSeverityNote]
+
 func (s Severity) String() string {
-	switch s {
-	case Error:
-		return "error"
-	case Warning:
-		return "warning"
-	case Note:
-		return "note"
-	}
-	return "unknown"
+	return runner.DiagSeverityString(int(s))
 }
 
 // Span is a half-open range [Start, End) within a single source file.
@@ -155,10 +157,7 @@ func (d *Diagnostic) PrimarySpan() (Span, bool) {
 // from functions that conventionally return error.
 func (d *Diagnostic) Error() string {
 	pos := d.PrimaryPos()
-	if d.Code != "" {
-		return d.Code + ": " + d.Severity.String() + " at " + pos.String() + ": " + d.Message
-	}
-	return d.Severity.String() + " at " + pos.String() + ": " + d.Message
+	return runner.DiagShortError(d.Code, int(d.Severity), pos.Line, pos.Column, d.Message)
 }
 
 // Builder offers a fluent API for assembling a Diagnostic.

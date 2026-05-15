@@ -135,3 +135,111 @@ pub fn diagRenderReplacement(replacement: String, excerpt: String, haveExcerpt: 
         None -> body,
     }
 }
+/// Severity enum constants. Encoded as Int (not a dedicated
+/// enum type) so the host mirrors them as their `iota` analogue
+/// without a wire-format translation step. Order MUST match
+/// `internal/diag.Severity` 's iota declaration.
+pub let diagSeverityError: Int = 0
+pub let diagSeverityWarning: Int = 1
+pub let diagSeverityNote: Int = 2
+/// diagSeverityString maps a `Severity` int back to its
+/// human-readable label. Unknown / out-of-range values collapse
+/// to `"unknown"` so log lines never surface a bare number.
+pub fn diagSeverityString(sev: Int) -> String {
+    if sev == diagSeverityError {
+        return "error"
+    }
+    if sev == diagSeverityWarning {
+        return "warning"
+    }
+    if sev == diagSeverityNote {
+        return "note"
+    }
+    "unknown"
+}
+/// diagShortError renders the compact `(*Diagnostic).Error()`
+/// form: `<code>: <severity> at <line>:<col>: <message>` when
+/// `code` is set, otherwise the prefix is dropped. Line/col come
+/// from the host (`PrimaryPos()`).
+pub fn diagShortError(code: String, severity: Int, line: Int, column: Int, message: String) -> String {
+    let head = diagSeverityString(severity) + " at " + "{line}" + ":" + "{column}" + ": " + message
+    if code == "" {
+        return head
+    }
+    code + ": " + head
+}
+/// diagSeverityAnsiColor maps a Severity int to its terminal
+/// ANSI escape sequence — the lead-in code only; callers append
+/// `\x1b[0m` (ansiReset) themselves around the colored text.
+/// Returns the empty string for unknown severities so a stray
+/// value doesn't accidentally tint the rest of the line.
+pub fn diagSeverityAnsiColor(sev: Int) -> String {
+    if sev == diagSeverityError {
+        return "\u{1b}[31m"
+    }
+    if sev == diagSeverityWarning {
+        return "\u{1b}[33m"
+    }
+    if sev == diagSeverityNote {
+        return "\u{1b}[36m"
+    }
+    ""
+}
+/// DiagSuggestionDisplay packages the three labels the formatter
+/// emits per Suggestion: the inline tag (`suggest` vs `fix`),
+/// the human label (Suggestion.Label or its default), and the
+/// rendered replacement (with the empty-string → "(delete)"
+/// fallback applied).
+pub struct DiagSuggestionDisplay {
+    pub tag: String,
+    pub label: String,
+    pub replacement: String,
+}
+/// diagSuggestionDisplayOf resolves a Suggestion's display
+/// strings:
+///
+///   - `tag`         = "fix" when `machineApplicable` else "suggest"
+///   - `label`       = `userLabel` when non-empty else "suggested fix"
+///   - `replacement` = `rendered` when non-empty else "(delete)"
+///
+/// `rendered` is the post-CopyFrom-template expansion (already
+/// produced by `diagRenderReplacement`); the empty-string check
+/// catches the "literal Replacement was the empty string and no
+/// CopyFrom excerpt was substituted" case so the user sees an
+/// explicit "(delete)" hint instead of a bare blank line.
+///
+/// Named `-Of` so the default Go-export capitalization rule
+/// (`DiagSuggestionDisplayOf`) doesn't collide with the
+/// `DiagSuggestionDisplay` struct in the drift parity table.
+pub fn diagSuggestionDisplayOf(userLabel: String, machineApplicable: Bool, rendered: String) -> DiagSuggestionDisplay {
+    let displayTag = if machineApplicable {
+        "fix"
+    } else {
+        "suggest"
+    }
+    let displayLabel = if userLabel == "" {
+        "suggested fix"
+    } else {
+        userLabel
+    }
+    let displayReplacement = if rendered == "" {
+        "(delete)"
+    } else {
+        rendered
+    }
+    DiagSuggestionDisplay {
+        tag: displayTag,
+        label: displayLabel,
+        replacement: displayReplacement,
+    }
+}
+/// diagNoteLabel returns the literal `"note"` used in the
+/// formatter's `= note: <text>` line.
+pub fn diagNoteLabel() -> String {
+    "note"
+}
+/// diagHelpLabel returns the literal `"help"` used in the
+/// formatter's `= help: <hint>` line.
+pub fn diagHelpLabel() -> String {
+    "help"
+}

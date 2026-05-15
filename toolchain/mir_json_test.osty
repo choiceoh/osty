@@ -1,0 +1,63 @@
+use std.strings
+use std.testing
+
+fn mjDecodeModule(text: String) -> MirModule {
+    match mirJsonParseModule(text) {
+        Ok(m) -> m,
+        Err(e) -> {
+            testing.fail(e)
+            mirModule("broken")
+        },
+    }
+}
+
+fn testMirJsonDecodeConstReturnModule() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 42}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ]
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.packageName, "main")
+    testing.assertEq(m.functions.len(), 1)
+    testing.assertEq(m.functions[0].locals[0].typ, "Int")
+    testing.assert(m.functions[0].blocks[0].hasTerm)
+    let errors = mirValidateModule(m)
+    testing.assertEq(errors.len(), 0)
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_test.mir.json", ""), m)
+    testing.assert(lirLowerOK(result))
+    let ir = lirRenderModule(result.module)
+    testing.assert(strings.contains(ir, "define i64 @main()"))
+    testing.assert(strings.contains(ir, "ret i64"))
+}

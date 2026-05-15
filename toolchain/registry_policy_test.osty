@@ -85,3 +85,195 @@ fn testRegistrySearchScoreKeywordCaseInsensitive() {
     testing.assertEq(r.ok, true)
     testing.assertEq(r.score, 4)
 }
+fn testRegistryStatusErrorMessageWithBody() {
+    testing.assertEq(
+        registryStatusErrorMessage(
+            "https://r.dev/v1/crates/serde", 500, "internal error", "500 Internal Server Error",
+        ),
+        "registry https://r.dev/v1/crates/serde: HTTP 500: internal error",
+    )
+}
+fn testRegistryStatusErrorMessageEmptyBodyUsesStatus() {
+    testing.assertEq(
+        registryStatusErrorMessage("https://r.dev/x", 404, "", "404 Not Found"),
+        "registry https://r.dev/x: HTTP 404: 404 Not Found",
+    )
+}
+fn testRegistryStatusErrorMessageWhitespaceBodyUsesStatus() {
+    testing.assertEq(
+        registryStatusErrorMessage("https://r.dev/x", 404, "   \n\t  ", "404 Not Found"),
+        "registry https://r.dev/x: HTTP 404: 404 Not Found",
+    )
+}
+fn testRegistryStatusErrorMessageTrimsBody() {
+    testing.assertEq(
+        registryStatusErrorMessage(
+            "https://r.dev/x", 403, "  not allowed  ", "403 Forbidden",
+        ),
+        "registry https://r.dev/x: HTTP 403: not allowed",
+    )
+}
+fn testValidateRegistryPackageNameValid() {
+    testing.assertEq(validateRegistryPackageName("serde"), "")
+    testing.assertEq(validateRegistryPackageName("my_lib"), "")
+    testing.assertEq(validateRegistryPackageName("json-ext"), "")
+    testing.assertEq(validateRegistryPackageName("abc123"), "")
+    testing.assertEq(validateRegistryPackageName("CamelCase"), "")
+}
+fn testValidateRegistryPackageNameEmpty() {
+    testing.assertEq(validateRegistryPackageName(""), "package name is empty")
+}
+fn testValidateRegistryPackageNameLeadingDigit() {
+    testing.assertEq(validateRegistryPackageName("1abc"), "invalid package name \"1abc\"")
+}
+fn testValidateRegistryPackageNameLeadingDash() {
+    testing.assertEq(validateRegistryPackageName("-abc"), "invalid package name \"-abc\"")
+}
+fn testValidateRegistryPackageNameDot() {
+    // Dot is not in the registry's accepted alphabet (only in cache sanitizer's).
+    testing.assertEq(validateRegistryPackageName("serde.json"), "invalid package name \"serde.json\"")
+}
+fn testValidateRegistryPackageNameSpace() {
+    testing.assertEq(validateRegistryPackageName("hello world"), "invalid package name \"hello world\"")
+}
+fn testValidateRegistryPackageNameUnicode() {
+    testing.assertEq(validateRegistryPackageName("한글"), "invalid package name \"한글\"")
+}
+fn testValidateRegistryPackageNameUnderscoreFirst() {
+    testing.assertEq(validateRegistryPackageName("_foo"), "")
+}
+fn testValidateRegistryPackageNameEmbeddedQuote() {
+    // `a"b` echoes with the embedded quote escaped — `tomlBasicString`
+    // adds outer quotes and `\"` for the embedded one.
+    testing.assertEq(
+        validateRegistryPackageName("a\"b"),
+        "invalid package name \"a\\\"b\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedBackslash() {
+    testing.assertEq(
+        validateRegistryPackageName("a\\b"),
+        "invalid package name \"a\\\\b\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedNewline() {
+    testing.assertEq(
+        validateRegistryPackageName("a\nb"),
+        "invalid package name \"a\\nb\"",
+    )
+}
+fn testValidateRegistryPackageNameEmbeddedTab() {
+    testing.assertEq(
+        validateRegistryPackageName("a\tb"),
+        "invalid package name \"a\\tb\"",
+    )
+}
+fn testRegistrySearchRequestNormalizeBasic() {
+    let r = registrySearchRequestNormalize("Serde", 50)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.query, "serde")
+    testing.assertEq(r.limit, 50)
+}
+fn testRegistrySearchRequestNormalizeTrim() {
+    let r = registrySearchRequestNormalize("  JSON  ", 10)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.query, "json")
+    testing.assertEq(r.limit, 10)
+}
+fn testRegistrySearchRequestNormalizeEmpty() {
+    let r = registrySearchRequestNormalize("", 50)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.query, "")
+    // limit still carries the effective value even on rejection,
+    // so callers can echo it without a re-lookup.
+    testing.assertEq(r.limit, 50)
+}
+fn testRegistrySearchRequestNormalizeWhitespaceOnly() {
+    let r = registrySearchRequestNormalize("   \t\n  ", 5)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 5)
+}
+fn testRegistrySearchRequestNormalizeEmptyDefaultLimit() {
+    // Rejection path also collapses limit <= 0 to the default.
+    let r = registrySearchRequestNormalize("", 0)
+    testing.assertEq(r.errorMessage, "registry search query is empty")
+    testing.assertEq(r.limit, 20)
+}
+fn testRegistrySearchRequestNormalizeDefaultLimit() {
+    let r = registrySearchRequestNormalize("foo", 0)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.limit, 20)
+}
+fn testRegistrySearchRequestNormalizeNegativeLimit() {
+    let r = registrySearchRequestNormalize("foo", -5)
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.limit, 20)
+}
+fn pubDep(name: String) -> PublishDepSpec {
+    PublishDepSpec {name: name, packageName: "", versionReq: "", path: "", isGit: false}
+}
+fn testClassifyPublishDepsBasic() {
+    let normal = [
+        PublishDepSpec {..pubDep("serde"), versionReq: "1.0"},
+        PublishDepSpec {..pubDep("log"), versionReq: "0.4"},
+    ]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 2)
+    testing.assertEq(r.deps[0].name, "serde")
+    testing.assertEq(r.deps[0].req, "1.0")
+    testing.assertEq(r.deps[0].kind, "normal")
+    testing.assertEq(r.deps[1].name, "log")
+}
+fn testClassifyPublishDepsDevKind() {
+    let dev = [PublishDepSpec {..pubDep("testing"), versionReq: "0.1"}]
+    let r = classifyPublishDeps([], dev)
+    testing.assertEq(r.deps.len(), 1)
+    testing.assertEq(r.deps[0].kind, "dev")
+}
+fn testClassifyPublishDepsPackageRename() {
+    // packageName overrides name for the published manifest.
+    let normal = [PublishDepSpec {..pubDep("alias"), packageName: "real-name", versionReq: "1.0"}]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.deps[0].name, "real-name")
+}
+fn testClassifyPublishDepsDefaultReq() {
+    // Empty versionReq defaults to `"*"`.
+    let normal = [pubDep("anything")]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.deps[0].req, "*")
+}
+fn testClassifyPublishDepsSkipsGit() {
+    let normal = [
+        PublishDepSpec {..pubDep("serde"), versionReq: "1.0"},
+        PublishDepSpec {..pubDep("git-dep"), isGit: true},
+    ]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 1)
+    testing.assertEq(r.deps[0].name, "serde")
+}
+fn testClassifyPublishDepsRejectsPath() {
+    let normal = [PublishDepSpec {..pubDep("local"), path: "../local"}]
+    let r = classifyPublishDeps(normal, [])
+    testing.assertEq(r.errorMessage, "dependency \"local\" uses path=\"../local\"; path dependencies cannot be published")
+    testing.assertEq(r.deps.len(), 0)
+}
+fn testClassifyPublishDepsRejectsPathInDev() {
+    let dev = [PublishDepSpec {..pubDep("local"), path: "../local"}]
+    let r = classifyPublishDeps([], dev)
+    testing.assertEq(r.errorMessage, "dependency \"local\" uses path=\"../local\"; path dependencies cannot be published")
+}
+fn testClassifyPublishDepsBothSections() {
+    let normal = [PublishDepSpec {..pubDep("a"), versionReq: "1.0"}]
+    let dev = [PublishDepSpec {..pubDep("b"), versionReq: "2.0"}]
+    let r = classifyPublishDeps(normal, dev)
+    testing.assertEq(r.deps.len(), 2)
+    testing.assertEq(r.deps[0].kind, "normal")
+    testing.assertEq(r.deps[1].kind, "dev")
+}
+fn testClassifyPublishDepsEmpty() {
+    let r = classifyPublishDeps([], [])
+    testing.assertEq(r.errorMessage, "")
+    testing.assertEq(r.deps.len(), 0)
+}

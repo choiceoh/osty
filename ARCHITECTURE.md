@@ -115,7 +115,8 @@ Osty-native resolver + checker in one pass, emitting structured records
 that `selfhost.CheckDiagnosticsAsDiag` lifts into the CLI's `diag.Diagnostic`
 shape. The old Go-hosted `--legacy` check/typecheck escape hatch and
 `check.File` entrypoint have been removed; `--native` remains accepted only as
-a backwards-compatible no-op. `osty resolve` is also self-host-first. Package
+a backwards-compatible no-op (the global `-native` flag defaults to `true`, and
+`cliFlags.native` is no longer consulted to pick a checker backend). `osty resolve` is also self-host-first. Package
 and workspace loaders for `pipeline`, `build`, `run`, `doc`, `lsp`, and
 `cihost` use arena-first `FrontendRun` parsing. Some compatibility wrappers
 still call `EnsureFiles` / `MaterializeCanonicalSources` to hand downstream
@@ -363,7 +364,7 @@ per spec §13.3. Wired as `osty fmt` with `--check` / `--write`.
 ### `internal/lint`
 Style and correctness warnings over a resolved tree. Every diagnostic
 is `diag.Warning` severity with an `Lxxxx` code; nothing blocks
-compilation. Rules implemented today (28 codes, grouped by category):
+compilation. Rules implemented today (34 rules in `allRules`, grouped by category):
 
 | Code | Rule |
 |---|---|
@@ -392,10 +393,15 @@ compilation. Rules implemented today (28 codes, grouped by category):
 | L0043 | double negation (`!!x`) |
 | L0044 | comparison against boolean literal |
 | L0045 | negated boolean literal |
+| L0046 | unnecessary `Result` / `Option` wrapper (body never errors) |
+| L0047 | useless `let` binding before tail return |
+| L0048 | needless parentheses on `if` / `for` / `match` condition |
+| L0049 | redundant `true` on infinite `for` loop |
 | L0050 | function takes too many parameters |
 | L0052 | function body too long |
 | L0053 | nesting too deep |
 | L0070 | missing doc comment on `pub` declaration |
+| L0080 | `test_*` / test discovery entry with no `testing.*` assertion |
 
 Policy (allow / deny / exclude per code, rule alias, category alias,
 or wildcard) is sourced from `[lint]` in `osty.toml`; `deny` always

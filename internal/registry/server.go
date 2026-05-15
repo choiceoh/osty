@@ -501,14 +501,17 @@ func (fs *FileStore) SetYanked(name, version string, yanked bool) error {
 
 // Search performs a small case-insensitive name/metadata search.
 // limit <= 0 selects the server default page size.
+//
+// Request-validation errors (e.g. empty query) are returned as a
+// `statusError`/`badRequest` so writeRegistryError surfaces them
+// as HTTP 400 instead of falling through to the 500 default.
 func (fs *FileStore) Search(query string, limit int) (*SearchResults, error) {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return nil, fmt.Errorf("registry search query is empty")
+	req := runner.RegistrySearchRequestNormalize(query, limit)
+	if req.ErrorMessage != "" {
+		return nil, badRequest("%s", req.ErrorMessage)
 	}
-	if limit <= 0 {
-		limit = 20
-	}
+	q := req.Query
+	limit = req.Limit
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -720,35 +723,35 @@ func manifestFromTarball(tarPath string) (*manifest.Manifest, error) {
 	}
 }
 
+// versionDependencies bridges to runner.ClassifyPublishDeps
+// (mirror of toolchain/registry_policy.osty). The host turns
+// manifest.Dependency lists into the runner spec; the policy
+// decides which deps are recorded and which trigger publish
+// rejection (path deps).
 func versionDependencies(m *manifest.Manifest) ([]VersionDependency, error) {
-	var out []VersionDependency
-	add := func(kind string, deps []manifest.Dependency) error {
-		for _, d := range deps {
-			if d.Path != "" {
-				return fmt.Errorf("dependency %q uses path=%q; path dependencies cannot be published", d.Name, d.Path)
-			}
-			if d.Git != nil {
-				continue
-			}
-			name := d.PackageName
-			if name == "" {
-				name = d.Name
-			}
-			req := d.VersionReq
-			if req == "" {
-				req = "*"
-			}
-			out = append(out, VersionDependency{Name: name, Req: req, Kind: kind})
-		}
-		return nil
+	r := runner.ClassifyPublishDeps(publishDepSpecs(m.Dependencies), publishDepSpecs(m.DevDependencies))
+	if r.ErrorMessage != "" {
+		return nil, errors.New(r.ErrorMessage)
 	}
-	if err := add("normal", m.Dependencies); err != nil {
-		return nil, err
-	}
-	if err := add("dev", m.DevDependencies); err != nil {
-		return nil, err
+	out := make([]VersionDependency, 0, len(r.Deps))
+	for _, d := range r.Deps {
+		out = append(out, VersionDependency{Name: d.Name, Req: d.Req, Kind: d.Kind})
 	}
 	return out, nil
+}
+
+func publishDepSpecs(deps []manifest.Dependency) []runner.PublishDepSpec {
+	specs := make([]runner.PublishDepSpec, 0, len(deps))
+	for _, d := range deps {
+		specs = append(specs, runner.PublishDepSpec{
+			Name:        d.Name,
+			PackageName: d.PackageName,
+			VersionReq:  d.VersionReq,
+			Path:        d.Path,
+			IsGit:       d.Git != nil,
+		})
+	}
+	return specs
 }
 
 func copyFeatures(m *manifest.Manifest) map[string][]string {
@@ -775,22 +778,13 @@ func copyStringSliceMap(in map[string][]string) map[string][]string {
 	return out
 }
 
+// validatePackageName bridges to runner.ValidateRegistryPackageName
+// (mirror of toolchain/registry_policy.osty). Returns nil on
+// success; otherwise an error whose message matches the policy's
+// rejection text.
 func validatePackageName(name string) error {
-	if name == "" {
-		return fmt.Errorf("package name is empty")
-	}
-	for i, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r == '_':
-			continue
-		case i > 0 && r >= '0' && r <= '9',
-			i > 0 && r == '-':
-			continue
-		default:
-			return fmt.Errorf("invalid package name %q", name)
-		}
+	if msg := runner.ValidateRegistryPackageName(name); msg != "" {
+		return errors.New(msg)
 	}
 	return nil
 }

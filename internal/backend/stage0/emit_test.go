@@ -124,6 +124,27 @@ func moduleWith(fns ...*mir.Function) *mir.Module {
 	}
 }
 
+func testingCall(symbol string, params []mir.Type, args ...mir.Operand) *mir.CallInstr {
+	return &mir.CallInstr{
+		Callee: &mir.FnRef{
+			Symbol: symbol,
+			Type: &ir.FnType{
+				Params: params,
+				Return: ir.TUnit,
+			},
+		},
+		Args: args,
+	}
+}
+
+func intMethodCall(symbol string, dest mir.LocalID, args ...mir.Operand) *mir.CallInstr {
+	return &mir.CallInstr{
+		Callee: &mir.FnRef{Symbol: symbol, Type: ir.TInt},
+		Dest:   &mir.Place{Local: dest},
+		Args:   args,
+	}
+}
+
 func emit(t *testing.T, fns ...*mir.Function) string {
 	t.Helper()
 	got, err := EmitMIR(moduleWith(fns...), llvmabi.Options{PackageName: "main"})
@@ -177,6 +198,194 @@ func TestStage0RejectsModuleWithoutMain(t *testing.T) {
 	err := mustReject(t, intLit)
 	if !strings.Contains(err.Error(), "module has no `main` function") {
 		t.Fatalf("err = %q, want missing-main reason", err.Error())
+	}
+}
+
+func TestStage0AllowNoMainEmitsObjectModule(t *testing.T) {
+	t.Parallel()
+	intLit := makeFn(fnSpec{name: "zero", retT: ir.TInt, src: useRV(intConst(0))})
+	got, err := EmitMIRAllowNoMain(moduleWith(intLit), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIRAllowNoMain: %v", err)
+	}
+	if !strings.Contains(string(got), "define i64 @zero()") {
+		t.Fatalf("emitted IR missing zero function:\n%s", got)
+	}
+	if strings.Contains(string(got), "define i32 @main()") {
+		t.Fatalf("allow-no-main emitted synthetic main:\n%s", got)
+	}
+}
+
+func TestStage0LowersTestingAssertionsInline(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "testAssertions",
+		ReturnType:  ir.TUnit,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					testingCall("std.testing.assertTrue", []mir.Type{ir.TBool}, boolConst(true)),
+					testingCall("std.testing.assertFalse", []mir.Type{ir.TBool}, boolConst(false)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, intConst(7), intConst(7)),
+					testingCall("std.testing.assertNe", []mir.Type{ir.TInt, ir.TInt}, intConst(7), intConst(8)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TString, ir.TString}, stringConst("same"), stringConst("same")),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	gotBytes, err := EmitMIRAllowNoMain(moduleWith(fn), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIRAllowNoMain: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"define void @testAssertions()",
+		"declare void @osty_rt_panic(ptr)",
+		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
+		"icmp eq i64 7, 7",
+		"icmp ne i64 7, 8",
+		"call i64 @osty_rt_strings_Compare",
+		"br i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "@std.testing.assert") {
+		t.Fatalf("testing assertions should be lowered inline, got external std.testing call:\n%s", got)
+	}
+}
+
+func TestStage0LowersKnownIntMethodsInline(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "testIntMethods",
+		ReturnType:  ir.TUnit,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
+			{ID: 1, Name: "abs", Type: ir.TInt},
+			{ID: 2, Name: "min", Type: ir.TInt},
+			{ID: 3, Name: "max", Type: ir.TInt},
+			{ID: 4, Name: "clamp", Type: ir.TInt},
+			{ID: 5, Name: "signum", Type: ir.ErrTypeVal},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					intMethodCall("Int__abs", 1, intConst(-7)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(1, ir.TInt), intConst(7)),
+					intMethodCall("Int__min", 2, intConst(9), intConst(3)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(2, ir.TInt), intConst(3)),
+					intMethodCall("Int__max", 3, intConst(3), intConst(9)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(3, ir.TInt), intConst(9)),
+					intMethodCall("Int__clamp", 4, intConst(99), intConst(0), intConst(10)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(4, ir.TInt), intConst(10)),
+					intMethodCall("Int__signum", 5, intConst(-7)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(5, ir.ErrTypeVal), intConst(-1)),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	gotBytes, err := EmitMIRAllowNoMain(moduleWith(fn), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIRAllowNoMain: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"define void @testIntMethods()",
+		"sub i64 0, -7",
+		"icmp slt i64 9, 3",
+		"icmp sgt i64 3, 9",
+		"icmp slt i64 99, 0",
+		"icmp sgt i64 -7, 0",
+		"select i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "@Int__") {
+		t.Fatalf("known Int methods should be lowered inline, got external Int method call:\n%s", got)
+	}
+}
+
+func TestStage0InfersKnownIntMethodResultInGenericStructFlow(t *testing.T) {
+	t.Parallel()
+	pointTy := &ir.NamedType{Name: "Point"}
+	field := func(index int, name string) mir.Projection {
+		return &mir.FieldProj{Index: index, Name: name, Type: ir.TInt}
+	}
+	fn := &mir.Function{
+		Name:        "testStructFieldSignum",
+		ReturnType:  ir.TUnit,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
+			{ID: 1, Name: "p", Type: pointTy},
+			{ID: 2, Name: "sum", Type: ir.TInt},
+			{ID: 3, Name: "", Type: ir.ErrTypeVal},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(1, &mir.AggregateRV{
+						Kind:   mir.AggStruct,
+						T:      pointTy,
+						Fields: []mir.Operand{intConst(-9), intConst(4)},
+					}),
+					assign(2, binaryRV(mir.BinAdd,
+						&mir.CopyOp{Place: mir.Place{Local: 1, Projections: []mir.Projection{field(0, "x")}}, T: ir.TInt},
+						&mir.CopyOp{Place: mir.Place{Local: 1, Projections: []mir.Projection{field(1, "y")}}, T: ir.TInt},
+						ir.TInt,
+					)),
+					intMethodCall("Int__signum", 3, localCopy(2, ir.TInt)),
+					testingCall("std.testing.assertEq", []mir.Type{ir.TInt, ir.TInt}, localCopy(3, ir.ErrTypeVal), intConst(-1)),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	module := moduleWith(fn)
+	module.Layouts.Structs["Point"] = &mir.StructLayout{
+		Name: "Point",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "x", Type: ir.TInt},
+			{Index: 1, Name: "y", Type: ir.TInt},
+		},
+	}
+	gotBytes, err := EmitMIRAllowNoMain(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIRAllowNoMain: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"define void @testStructFieldSignum()",
+		"%Point = type { i64, i64 }",
+		"getelementptr inbounds %Point",
+		"add i64",
+		"icmp slt i64",
+		"select i1",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "@Int__") {
+		t.Fatalf("known Int methods should be inferred and lowered inline, got external Int method call:\n%s", got)
 	}
 }
 
