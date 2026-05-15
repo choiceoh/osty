@@ -34,7 +34,7 @@ native-only through the LLVM backend.
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
 | Type checker (`internal/check`) | done for the shipped v0.5 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
-| Linter (`internal/lint`, 28 codes across L0001–L0070 spanning unused / dead-code / naming / simplify / complexity / docs, `--fix` / `--fix-dry-run`, policy via `[lint]` in `osty.toml`) | done |
+| Linter (`internal/lint`, 34 registered rules with stable `Lxxxx` codes from L0001 through L0080 — unused / shadowing / dead-code / naming / simplify / complexity / docs / tests, `--fix` / `--fix-dry-run`, policy via `[lint]` in `osty.toml`; source of truth is `internal/lint/registry.go`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
