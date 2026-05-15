@@ -463,11 +463,7 @@ pub fn lirRuntimeDeclsDeclare(decls: LirRuntimeDecls, decl: LirRuntimeDecl) -> B
     true
 }
 pub fn lirRuntimeDeclsOrdered(decls: LirRuntimeDecls) -> List<LirRuntimeDecl> {
-    let mut out: List<LirRuntimeDecl> = []
-    for decl in decls.decls {
-        out.push(decl)
-    }
-    out
+    decls.decls
 }
 pub fn lirRuntimeDeclsIsEmpty(decls: LirRuntimeDecls) -> Bool {
     decls.decls.len() == 0
@@ -512,11 +508,7 @@ pub fn lirStringPoolSymbol(pool: LirStringPool, content: String) -> String {
     ""
 }
 pub fn lirStringPoolOrdered(pool: LirStringPool) -> List<LirStringGlobal> {
-    let mut out: List<LirStringGlobal> = []
-    for entry in pool.entries {
-        out.push(entry)
-    }
-    out
+    pool.entries
 }
 pub fn lirStringPoolIsEmpty(pool: LirStringPool) -> Bool {
     pool.entries.len() == 0
@@ -5452,6 +5444,27 @@ fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym
     l.instrs.push(lirLoad(merged, resultType, slot, 0))
     lirStoreMirResult(l, instr.dest, lirOperand(resultType, merged), loc.typ, label + " result")
 }
+fn lirMirOperandStorageTypeName(l: LirMirFunctionLowerer, op: MirOperand) -> String {
+    if !(op.kind == MirOpCopy || op.kind == MirOpMove) {
+        return op.typ
+    }
+    let mut projected = ""
+    for proj in op.place.projections {
+        if proj.typ != "" {
+            projected = proj.typ
+        }
+    }
+    if projected != "" {
+        return projected
+    }
+    if op.place.local >= 0 {
+        let loc = mirFunctionLocal(l.fn_, op.place.local)
+        if loc.id >= 0 && loc.typ != "" {
+            return loc.typ
+        }
+    }
+    op.typ
+}
 // `lirLowerMirAlgebraicTagCheck` lowers Option / Result discriminator
 // inspection (`is_some` / `is_none` / `is_ok` / `is_err`). The four
 // intrinsics share the same shape: extract the i64 disc field at index
@@ -5465,12 +5478,13 @@ fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, wante
         lirLowerError(l, LirDiagInvalidInput, label + " expects (option|result)", label)
         return
     }
-    let aggType = lirLowerMirType(l, instr.args[0].typ)
+    let aggName = lirMirOperandStorageTypeName(l, instr.args[0])
+    let aggType = lirLowerMirType(l, aggName)
     if lirTypeIsZero(aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
+        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + aggName + "` is not implemented", label)
         return
     }
-    let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
+    let aggValue = lirLowerMirOperand(l, instr.args[0], aggName, aggType)
     if aggValue.value == "" {
         return
     }
@@ -5587,16 +5601,17 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentT
         lirLowerError(l, LirDiagInvalidInput, label + " requires a destination", label)
         return
     }
-    let aggType = lirLowerMirType(l, instr.args[0].typ)
+    let aggName = lirMirOperandStorageTypeName(l, instr.args[0])
+    let aggType = lirLowerMirType(l, aggName)
     if lirTypeIsZero(aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
+        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + aggName + "` is not implemented", label)
         return
     }
     if lirAggregateHasWidenedPayload(l.out, aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
+        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + aggName + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
         return
     }
-    let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
+    let aggValue = lirLowerMirOperand(l, instr.args[0], aggName, aggType)
     if aggValue.value == "" {
         return
     }
@@ -5649,16 +5664,17 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, prese
         lirLowerError(l, LirDiagInvalidInput, label + " requires a destination", label)
         return
     }
-    let aggType = lirLowerMirType(l, instr.args[0].typ)
+    let aggName = lirMirOperandStorageTypeName(l, instr.args[0])
+    let aggType = lirLowerMirType(l, aggName)
     if lirTypeIsZero(aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
+        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + aggName + "` is not implemented", label)
         return
     }
     if lirAggregateHasWidenedPayload(l.out, aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
+        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + aggName + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
         return
     }
-    let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
+    let aggValue = lirLowerMirOperand(l, instr.args[0], aggName, aggType)
     if aggValue.value == "" {
         return
     }

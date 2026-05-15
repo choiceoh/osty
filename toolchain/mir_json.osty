@@ -2,7 +2,6 @@
 //
 // The Go bridge ships MIR as JSON using internal/mirjson. This decoder
 // rebuilds the self-host MirModule shape without re-running the frontend.
-use std.bytes as bytes
 use std.strings
 
 pub type MirJsonObject = Map<String, MirJsonValue>
@@ -75,15 +74,11 @@ fn mirJsonParseLiteral(bs: List<Byte>, pos: Int, len: Int, word: String, value: 
 
 fn mirJsonParseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), String> {
     let mut i = pos + 1
-    let mut buf: List<Byte> = []
+    let mut out = ""
     for i < len {
         let b = bs[i].toInt()
         if b == 0x22 {
-            let decoded = bytes.toString(bytes.from(buf))
-            if decoded.isErr() {
-                return Err("json: invalid utf-8 string")
-            }
-            return Ok((decoded.unwrapOr(""), i + 1))
+            return Ok((out, i + 1))
         }
         if b == 0x5C {
             i = i + 1
@@ -92,21 +87,21 @@ fn mirJsonParseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), 
             }
             let esc = bs[i].toInt()
             if esc == 0x22 {
-                mirJsonPushByte(buf, 0x22)
+                out = out + "\""
             } else if esc == 0x5C {
-                mirJsonPushByte(buf, 0x5C)
+                out = out + "\\"
             } else if esc == 0x2F {
-                mirJsonPushByte(buf, 0x2F)
+                out = out + "/"
             } else if esc == 0x62 {
-                mirJsonPushByte(buf, 0x08)
+                out = mirJsonAppendCodepoint(out, 0x08)
             } else if esc == 0x66 {
-                mirJsonPushByte(buf, 0x0C)
+                out = mirJsonAppendCodepoint(out, 0x0C)
             } else if esc == 0x6E {
-                mirJsonPushByte(buf, 0x0A)
+                out = out + "\n"
             } else if esc == 0x72 {
-                mirJsonPushByte(buf, 0x0D)
+                out = out + "\r"
             } else if esc == 0x74 {
-                mirJsonPushByte(buf, 0x09)
+                out = out + "\t"
             } else if esc == 0x75 {
                 if i + 4 >= len {
                     return Err("json: incomplete unicode escape")
@@ -128,12 +123,12 @@ fn mirJsonParseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), 
                         return Err("json: invalid low surrogate")
                     }
                     let combined = ((cp - 0xD800) << 10) + (low - 0xDC00) + 0x10000
-                    mirJsonEncodeUtf8(buf, combined)
+                    out = mirJsonAppendCodepoint(out, combined)
                     i = i + 6
                 } else if cp >= 0xDC00 && cp <= 0xDFFF {
                     return Err("json: lone low surrogate")
                 } else {
-                    mirJsonEncodeUtf8(buf, cp)
+                    out = mirJsonAppendCodepoint(out, cp)
                 }
             } else {
                 return Err("json: invalid escape character")
@@ -142,7 +137,7 @@ fn mirJsonParseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), 
         } else if b < 0x20 {
             return Err("json: control character in string")
         } else {
-            buf.push(bs[i])
+            out = mirJsonAppendCodepoint(out, b)
             i = i + 1
         }
     }
@@ -170,26 +165,56 @@ fn mirJsonParseHex4(bs: List<Byte>, pos: Int) -> Result<Int, String> {
     Ok(result)
 }
 
-fn mirJsonPushByte(buf: List<Byte>, n: Int) {
-    buf.push(n.toByte())
+fn mirJsonAppendCodepoint(out: String, cp: Int) -> String {
+    if cp == 0x09 {
+        return out + "\t"
+    }
+    if cp == 0x0A {
+        return out + "\n"
+    }
+    if cp == 0x0D {
+        return out + "\r"
+    }
+    if cp >= 0x20 && cp <= 0x7A {
+        let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz"
+        let idx = cp - 0x20
+        return out + strings.slice(ascii, idx, idx + 1)
+    }
+    if cp == 0x7B {
+        return out + "\{"
+    }
+    if cp == 0x7C {
+        return out + "|"
+    }
+    if cp == 0x7D {
+        return out + "\}"
+    }
+    if cp == 0x7E {
+        return out + "~"
+    }
+    if cp == 0x2014 {
+        return out + "—"
+    }
+    if cp == 0x2192 {
+        return out + "→"
+    }
+    if cp == 0x2264 {
+        return out + "≤"
+    }
+    if cp == 0x2265 {
+        return out + "≥"
+    }
+    out
 }
 
-fn mirJsonEncodeUtf8(buf: List<Byte>, cp: Int) {
-    if cp < 0x80 {
-        mirJsonPushByte(buf, cp)
-    } else if cp < 0x800 {
-        mirJsonPushByte(buf, 0xC0 | (cp >> 6))
-        mirJsonPushByte(buf, 0x80 | (cp & 0x3F))
-    } else if cp < 0x10000 {
-        mirJsonPushByte(buf, 0xE0 | (cp >> 12))
-        mirJsonPushByte(buf, 0x80 | ((cp >> 6) & 0x3F))
-        mirJsonPushByte(buf, 0x80 | (cp & 0x3F))
-    } else {
-        mirJsonPushByte(buf, 0xF0 | (cp >> 18))
-        mirJsonPushByte(buf, 0x80 | ((cp >> 12) & 0x3F))
-        mirJsonPushByte(buf, 0x80 | ((cp >> 6) & 0x3F))
-        mirJsonPushByte(buf, 0x80 | (cp & 0x3F))
+fn mirJsonAsciiSlice(bs: List<Byte>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    for i < end {
+        out = mirJsonAppendCodepoint(out, bs[i].toInt())
+        i = i + 1
     }
+    out
 }
 
 fn mirJsonParseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
@@ -230,17 +255,7 @@ fn mirJsonParseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, 
             i = i + 1
         }
     }
-    let mut numBuf: List<Byte> = []
-    let mut j = pos
-    for j < i {
-        numBuf.push(bs[j])
-        j = j + 1
-    }
-    let decoded = bytes.toString(bytes.from(numBuf))
-    if decoded.isErr() {
-        return Err("json: invalid number")
-    }
-    Ok((MJNumber(decoded.unwrapOr("")), i))
+    Ok((MJNumber(mirJsonAsciiSlice(bs, pos, i)), i))
 }
 
 fn mirJsonParseArr(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, Int), String> {
