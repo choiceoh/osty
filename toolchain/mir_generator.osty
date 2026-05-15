@@ -17508,7 +17508,8 @@ fn mirEmitModuleRValue(m: MirModule, func: MirFunction, block: MirBasicBlock, in
 }
 fn mirEmitModuleRValueUse(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, destLocal: Int) -> String {
     if mirOperandHasProjections(rv.arg) {
-        return mirEmitModuleProjectedReadChain(m, func, block, instrIdx, dest, rv.arg.place, rv.typ)
+        let expected = mirEmitModuleRValueDestLLVMType(m, func, rv, destLocal)
+        return mirEmitModuleProjectedReadChain(m, func, block, instrIdx, dest, rv.arg.place, expected)
     }
     let mut ty = mirEmitModuleRValueDestLLVMType(m, func, rv, destLocal)
     if ty == "" {
@@ -17528,6 +17529,34 @@ fn mirEmitModuleRValueUse(m: MirModule, func: MirFunction, block: MirBasicBlock,
         return "  " + dest + " = or i1 0, " + op + "\n"
     }
     "  " + dest + " = add " + ty + " 0, " + op + "\n"
+}
+fn mirEmitModuleRValueAsLLVMType(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, expectedLLVM: String) -> String {
+    if expectedLLVM == "" || expectedLLVM == "void" {
+        return mirEmitModuleRValue(m, func, block, instrIdx, dest, rv, -1)
+    }
+    if rv.kind == MirRVUse {
+        return mirEmitModuleRValueUseAsLLVMType(m, func, block, instrIdx, dest, rv, expectedLLVM)
+    }
+    mirEmitModuleRValue(m, func, block, instrIdx, dest, rv, -1)
+}
+fn mirEmitModuleRValueUseAsLLVMType(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue, expectedLLVM: String) -> String {
+    if mirOperandHasProjections(rv.arg) {
+        return mirEmitModuleProjectedReadChain(m, func, block, instrIdx, dest, rv.arg.place, expectedLLVM)
+    }
+    let op = mirEmitFunctionTypedOperandValue(func, block, instrIdx, rv.arg, expectedLLVM)
+    if mirStringStartsWith(expectedLLVM, "%") || mirStringStartsWith(expectedLLVM, "\{") {
+        return "  " + dest + " = freeze " + expectedLLVM + " " + op + "\n"
+    }
+    if expectedLLVM == "ptr" {
+        return "  " + dest + " = select i1 true, ptr " + op + ", ptr " + op + "\n"
+    }
+    if expectedLLVM == "double" || expectedLLVM == "float" {
+        return "  " + dest + " = fadd " + expectedLLVM + " 0.0, " + op + "\n"
+    }
+    if expectedLLVM == "i1" {
+        return "  " + dest + " = or i1 0, " + op + "\n"
+    }
+    "  " + dest + " = add " + expectedLLVM + " 0, " + op + "\n"
 }
 fn mirEmitModuleRValueDestLLVMType(m: MirModule, func: MirFunction, rv: MirRValue, destLocal: Int) -> String {
     if destLocal >= 0 && destLocal < func.locals.len() {
@@ -17658,7 +17687,7 @@ fn mirEmitModuleRValueAggregate(m: MirModule, func: MirFunction, block: MirBasic
         return mirEmitModuleListAggregate(m, func, block, instrIdx, dest, rv)
     }
     if head == "Map" {
-        return mirEmitMapAggregate(dest, rv)
+        return mirEmitModuleMapAggregate(m, func, block, instrIdx, dest, rv)
     }
     if rv.aggKind == MirAggEnumVariant {
         return mirEmitModuleEnumVariantAggregate(m, func, block, instrIdx, dest, rv, rv.typ)
@@ -17668,7 +17697,7 @@ fn mirEmitModuleRValueAggregate(m: MirModule, func: MirFunction, block: MirBasic
         MirAggStruct -> mirEmitModuleTupleAggregate(m, func, block, instrIdx, dest, rv),
         MirAggClosure -> mirEmitModuleTupleAggregate(m, func, block, instrIdx, dest, rv),
         MirAggList -> mirEmitModuleListAggregate(m, func, block, instrIdx, dest, rv),
-        MirAggMap -> mirEmitMapAggregate(dest, rv),
+        MirAggMap -> mirEmitModuleMapAggregate(m, func, block, instrIdx, dest, rv),
         _ -> mirEmitRValueAggregate(dest, rv),
     }
 }
@@ -18252,7 +18281,7 @@ fn mirEmitIntrinsicInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, 
         MirIntrinsicMapClear -> mirEmitMapClearIntrinsic(instr),
         MirIntrinsicMapKeys -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_keys"),
         MirIntrinsicMapValues -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_values"),
-        MirIntrinsicMapNew -> mirEmitMapNewIntrinsic(func, instr),
+        MirIntrinsicMapNew -> mirEmitModuleMapNewIntrinsic(m, func, block, instrIdx, instr),
         MirIntrinsicSetLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_set_len"),
         MirIntrinsicSetNew -> mirEmitSetNewIntrinsic(func, instr),
         MirIntrinsicSetToList -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_set_to_list"),
@@ -18302,7 +18331,7 @@ fn mirEmitIntrinsicInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, 
         MirIntrinsicMapKeysSorted -> mirEmitMapKeysSortedIntrinsic(func, instr),
         MirIntrinsicMapContains -> mirEmitMapContainsIntrinsic(func, instr),
         MirIntrinsicMapRemove -> mirEmitMapRemoveIntrinsic(func, instr),
-        MirIntrinsicMapGetOr -> mirEmitMapGetOrIntrinsic(func, blockId, instrIdx, instr),
+        MirIntrinsicMapGetOr -> mirEmitMapGetOrIntrinsic(m, func, block, instrIdx, instr),
         MirIntrinsicMapIncr -> mirEmitMapIncrIntrinsic(func, instr),
         MirIntrinsicSetInsert -> mirEmitSetInsertIntrinsic(func, instr),
         MirIntrinsicSetContains -> mirEmitSetContainsIntrinsic(func, instr),
@@ -18332,7 +18361,7 @@ fn mirEmitIntrinsicInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, 
         MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
         MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
         MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(blockId, instrIdx, instr),
-        MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(func, instr),
+        MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(m, func, block, instrIdx, instr),
         MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_bytes_len"),
         MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
         MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, blockId, instrIdx, instr),
@@ -18357,12 +18386,12 @@ fn mirEmitIntrinsicInstr(m: MirModule, func: MirFunction, block: MirBasicBlock, 
         MirIntrinsicBytesSlice -> mirEmitBytesSliceIntrinsic(func, instr),
         MirIntrinsicBytesFromList -> mirEmitBytesFromListIntrinsic(func, instr),
         MirIntrinsicBytesFromString -> mirEmitBytesFromStringIntrinsic(func, instr),
-        MirIntrinsicBytesToString -> mirEmitBytesUnaryIntrinsic(func, instr, "osty_rt_bytes_to_string"),
-        MirIntrinsicBytesFromHex -> mirEmitBytesFromHexIntrinsic(func, instr),
-        MirIntrinsicOptionIsSome -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantSome()),
-        MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantNone()),
-        MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantOk()),
-        MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(func, instr, mirDiscriminantErr()),
+        MirIntrinsicBytesToString -> mirEmitBytesValidatedResultIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_bytes_is_valid_utf8", "osty_rt_bytes_to_string", "bytes.toString"),
+        MirIntrinsicBytesFromHex -> mirEmitBytesValidatedResultIntrinsic(m, func, block, blockId, instrIdx, instr, "osty_rt_bytes_is_valid_hex", "osty_rt_bytes_from_hex", "bytes.fromHex"),
+        MirIntrinsicOptionIsSome -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantSome()),
+        MirIntrinsicOptionIsNone -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantNone()),
+        MirIntrinsicResultIsOk -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantOk()),
+        MirIntrinsicResultIsErr -> mirEmitAlgebraicPredicateIntrinsic(m, func, block, instrIdx, instr, mirDiscriminantErr()),
         MirIntrinsicOptionUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantNone(), "osty_rt_option_unwrap_none"),
         MirIntrinsicResultUnwrap -> mirEmitAlgebraicUnwrapIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantErr(), "osty_rt_result_unwrap_err"),
         MirIntrinsicOptionUnwrapOr -> mirEmitAlgebraicUnwrapOrIntrinsic(func, blockId, instrIdx, instr, mirDiscriminantSome()),
@@ -19715,6 +19744,8 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_bytes_to_hex(ptr)\n"
     out = out + "declare ptr @osty_rt_bytes_slice(ptr, i64, i64)\n"
     out = out + "declare ptr @osty_rt_bytes_from_list(ptr)\n"
+    out = out + "declare i1 @osty_rt_bytes_is_valid_utf8(ptr)\n"
+    out = out + "declare i1 @osty_rt_bytes_is_valid_hex(ptr)\n"
     out = out + "declare ptr @osty_rt_bytes_from_hex(ptr)\n"
     out = out + "declare ptr @osty_rt_bytes_to_string(ptr)\n"
     out = out + "declare void @llvm.lifetime.start.p0(i64, ptr)\n"
@@ -19956,8 +19987,8 @@ fn mirEmitAssignIntoTwoStepProjection(m: MirModule, func: MirFunction, block: Mi
     let innerWrite = baseReg + ".w" + mirGenIntToString(instrIdx) + "_1"
     let finalTarget = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
     let mut out = "  " + midRead + " = extractvalue " + baseTy + " " + baseValue + ", " + mirGenIntToString(firstProj.index) + "\n"
-    out = out + mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, instr.dest.local)
-    let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
+    let valueTy = mirEmitProjectionWriteValueLLVMType(m, func, instr.src, lastProj)
+    out = out + mirEmitModuleRValueAsLLVMType(m, func, block, instrIdx, valueDest, instr.src, valueTy)
     out = out + "  " + innerWrite + " = insertvalue " + midTy + " " + midRead + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastProj.index) + "\n"
     out + "  " + finalTarget + " = insertvalue " + baseTy + " " + baseValue + ", " + midTy + " " + innerWrite + ", " + mirGenIntToString(firstProj.index) + "\n"
 }
@@ -19983,10 +20014,21 @@ fn mirEmitAssignIntoSingleProjection(m: MirModule, func: MirFunction, block: Mir
     let baseValue = mirProjectionBaseValueName(block, instrIdx, instr.dest.local)
     let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
     let valueDest = baseReg + ".w" + mirGenIntToString(instrIdx) + "_" + mirGenIntToString(proj.index)
-    let mut out = mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, instr.dest.local)
-    let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
+    let valueTy = mirEmitProjectionWriteValueLLVMType(m, func, instr.src, proj)
+    let mut out = mirEmitModuleRValueAsLLVMType(m, func, block, instrIdx, valueDest, instr.src, valueTy)
     let target = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
     out + "  " + target + " = insertvalue " + baseTy + " " + baseValue + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(proj.index) + "\n"
+}
+fn mirEmitProjectionWriteValueLLVMType(m: MirModule, func: MirFunction, rv: MirRValue, proj: MirProjection) -> String {
+    let projTy = mirEmitModuleTypeLLVM(m, proj.typ)
+    if projTy != "" && projTy != "void" {
+        return projTy
+    }
+    let srcTy = mirEmitModuleRValueLLVMType(m, func, rv)
+    if srcTy != "" && srcTy != "void" {
+        return srcTy
+    }
+    mirEmitProjectionResultLLVM("", proj)
 }
 fn mirProjectionKindName(k: MirProjectionKind) -> String {
     match k {
@@ -20786,12 +20828,35 @@ fn mirEmitMapNewIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let loc = func.locals[instr.dest.local]
     mirEmitMapNewCallLine(dest, loc.typ)
 }
+fn mirEmitModuleMapNewIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
+    if instr.args.len() != 0 || instr.hasDest == false {
+        return "  ; TODO map new intrinsic\n"
+    }
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let loc = func.locals[instr.dest.local]
+    mirEmitModuleMapNewCallLines(m, dest, loc.typ)
+}
 fn mirEmitMapNewCallLine(dest: String, mapType: String) -> String {
     let keyName = mirEmitMapKeyTypeName(mapType)
     let valueName = mirEmitMapValueTypeName(mapType)
     let keyKind = mirEmitContainerABIKind(keyName)
     let valueKind = mirEmitContainerABIKind(valueName)
     let valueLLVM = mirEmitKnownTypeLLVM(valueName)
+    let valueSize = mirEmitFixedValueSizeBytes(valueLLVM)
+    "  " + dest + " = call ptr @osty_rt_map_new(i64 " + keyKind + ", i64 " + valueKind + ", i64 " + valueSize + ", ptr null)\n"
+}
+fn mirEmitModuleMapNewCallLines(m: MirModule, dest: String, mapType: String) -> String {
+    let keyName = mirEmitMapKeyTypeName(mapType)
+    let valueName = mirEmitMapValueTypeName(mapType)
+    let keyKind = mirEmitContainerABIKind(keyName)
+    let valueKind = mirEmitContainerABIKind(valueName)
+    let valueLLVM = mirEmitModuleTypeLLVM(m, valueName)
+    if mirStringStartsWith(valueLLVM, "%") || mirStringStartsWith(valueLLVM, "\{") {
+        let gep = dest + ".mapnew.gep"
+        let size = dest + ".mapnew.size"
+        let mut out = mirSizeOfLines(gep, size, valueLLVM)
+        return out + "  " + dest + " = call ptr @osty_rt_map_new(i64 " + keyKind + ", i64 " + valueKind + ", i64 " + size + ", ptr null)\n"
+    }
     let valueSize = mirEmitFixedValueSizeBytes(valueLLVM)
     "  " + dest + " = call ptr @osty_rt_map_new(i64 " + keyKind + ", i64 " + valueKind + ", i64 " + valueSize + ", ptr null)\n"
 }
@@ -21244,6 +21309,51 @@ fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
     }
     out
 }
+fn mirEmitModuleMapAggregate(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
+    let mut out = mirEmitModuleMapNewCallLines(m, dest, rv.typ)
+    let n = rv.aggFields.len()
+    if n == 0 {
+        return out
+    }
+    if n % 2 != 0 {
+        out = out + "  ; ICE: map aggregate has odd field count " + mirGenIntToString(n) + "\n"
+        return out
+    }
+    let mut i = 0
+    for i + 1 < n {
+        let kOp = rv.aggFields[i]
+        let vOp = rv.aggFields[i + 1]
+        let kTy = mirEmitModuleOperandLLVMType(m, func, kOp)
+        let vTy = mirEmitModuleOperandLLVMType(m, func, vOp)
+        let pairBase = dest + ".m" + mirGenIntToString(i)
+        let kText = if mirOperandHasProjections(kOp) {
+            let tmp = pairBase + ".key"
+            out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, kOp.place, kOp.typ)
+            tmp
+        } else {
+            mirEmitFunctionTypedOperandValue(func, block, instrIdx, kOp, kTy)
+        }
+        let vText = if mirOperandHasProjections(vOp) {
+            let tmp = pairBase + ".value"
+            out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, vOp.place, vOp.typ)
+            tmp
+        } else {
+            mirEmitFunctionTypedOperandValue(func, block, instrIdx, vOp, vTy)
+        }
+        let sym = mirMapInsertSymbolForType(kOp.typ, kTy)
+        if sym == "" {
+            out = out + "  ; TODO map aggregate insert for key type \"" + kTy + "\"\n"
+        } else {
+            let slot = pairBase + ".slot"
+            let align = mirEmitFixedValueSizeBytes(vTy)
+            out = out + "  " + slot + " = alloca " + vTy + ", align " + align + "\n"
+            out = out + "  store " + vTy + " " + vText + ", ptr " + slot + ", align " + align + "\n"
+            out = out + "  call void @" + sym + "(ptr " + dest + ", " + kTy + " " + kText + ", ptr " + slot + ")\n"
+        }
+        i = i + 2
+    }
+    out
+}
 // -------- Task / cancellation / collective --------
 fn mirEmitTaskGroupIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 1 {
@@ -21563,18 +21673,77 @@ fn mirEmitBytesFromHexIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     "  " + dest + " = call ptr @osty_rt_bytes_from_hex(ptr " + s + ")\n"
 }
+fn mirEmitBytesValidatedResultIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, blockId: Int, instrIdx: Int, instr: MirInstr, validateSym: String, successSym: String, label: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO " + label + " intrinsic\n"
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO " + label + " into projected dest\n"
+    }
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let inputOp = instr.args[0]
+    let base = dest + ".bytesResult"
+    let mut out = ""
+    let input = if mirOperandHasProjections(inputOp) {
+        let tmp = base + ".input"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, inputOp.place, inputOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, inputOp, "ptr")
+    }
+    let resultLLVM = mirEmitModuleParamType(m, func, instr.dest.local)
+    if resultLLVM == "void" {
+        return "  ; TODO " + label + " result type \"" + resultLLVM + "\"\n"
+    }
+    let valid = base + ".valid"
+    let slot = base + ".slot"
+    let okLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, label + ".ok")
+    let errLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, label + ".err")
+    let doneLabel = mirEmitIntrinsicAuxLabel(blockId, instrIdx, label + ".done")
+    out = out + "  " + valid + " = call i1 @" + validateSym + "(ptr " + input + ")\n"
+    out = out + "  " + slot + " = alloca " + resultLLVM + ", align 8\n"
+    out = out + "  br i1 " + valid + ", label %" + okLabel + ", label %" + errLabel + "\n"
+    out = out + mirLabelLine(okLabel)
+    let success = base + ".ok.ptr"
+    let payload = base + ".ok.payload"
+    let okDisc = base + ".ok.disc"
+    let okValue = base + ".ok.value"
+    out = out + "  " + success + " = call ptr @" + successSym + "(ptr " + input + ")\n"
+    out = out + "  " + payload + " = ptrtoint ptr " + success + " to i64\n"
+    out = out + "  " + okDisc + " = insertvalue " + resultLLVM + " undef, i64 " + mirDiscriminantOk() + ", 0\n"
+    out = out + "  " + okValue + " = insertvalue " + resultLLVM + " " + okDisc + ", i64 " + payload + ", 1\n"
+    out = out + "  store " + resultLLVM + " " + okValue + ", ptr " + slot + ", align 8\n"
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(errLabel)
+    let errDisc = base + ".err.disc"
+    let errValue = base + ".err.value"
+    out = out + "  " + errDisc + " = insertvalue " + resultLLVM + " undef, i64 " + mirDiscriminantErr() + ", 0\n"
+    out = out + "  " + errValue + " = insertvalue " + resultLLVM + " " + errDisc + ", i64 0, 1\n"
+    out = out + "  store " + resultLLVM + " " + errValue + ", ptr " + slot + ", align 8\n"
+    out = out + "  br label %" + doneLabel + "\n"
+    out = out + mirLabelLine(doneLabel)
+    out + "  " + dest + " = load " + resultLLVM + ", ptr " + slot + ", align 8\n"
+}
 // ====================================================================
 // Phase 2a — Straight-line intrinsic emission
 // ====================================================================
-fn mirEmitAlgebraicPredicateIntrinsic(func: MirFunction, instr: MirInstr, wantedTag: String) -> String {
+fn mirEmitAlgebraicPredicateIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr, wantedTag: String) -> String {
     if instr.args.len() != 1 || instr.hasDest == false {
         return "  ; TODO algebraic predicate intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let value = mirEmitOperand(instr.args[0])
-    let aggTy = mirEmitOperandLLVMType(instr.args[0])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let valueOp = instr.args[0]
+    let aggTy = mirEmitModuleOperandLLVMType(m, func, valueOp)
+    let mut out = ""
+    let value = if mirOperandHasProjections(valueOp) {
+        let tmp = dest + ".alg"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, valueOp.place, valueOp.typ)
+        tmp
+    } else {
+        mirEmitFunctionTypedOperandValue(func, block, instrIdx, valueOp, aggTy)
+    }
     let disc = dest + ".disc"
-    let mut out = "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
+    out = out + "  " + disc + " = extractvalue " + aggTy + " " + value + ", 0\n"
     out + "  " + dest + " = icmp eq i64 " + disc + ", " + wantedTag + "\n"
 }
 fn mirEmitAlgebraicUnwrapIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr, absentTag: String, abortSym: String) -> String {
@@ -21752,30 +21921,40 @@ fn mirEmitMapSetIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr) -> Strin
 /// store the result (an i1 present flag) into the dest register.
 /// The Option<V> wrap of the value lives in the lowering layer
 /// upstream; this entry just lowers the predicate.
-fn mirEmitMapGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitMapGetIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO map get intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let m = mirEmitOperand(instr.args[0])
-    let k = mirEmitOperand(instr.args[1])
-    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let mapOp = instr.args[0]
+    let keyOp = instr.args[1]
+    let base = dest + ".mapget"
+    let mut out = ""
+    let mapText = if mirOperandHasProjections(mapOp) {
+        let tmp = base + ".map"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, mapOp.place, mapOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, mapOp, "ptr")
+    }
+    let kTy = mirEmitModuleOperandLLVMType(m, func, keyOp)
+    let k = mirEmitBlockTypedOperandValue(block, instrIdx, keyOp, kTy)
     let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
     if sym == "" {
         return "  ; TODO map get for key type \"" + kTy + "\"\n"
     }
     let valueName = mirEmitMapValueTypeName(instr.args[0].typ)
-    let valueLLVM = mirEmitKnownTypeLLVM(valueName)
-    if valueLLVM == "" || valueLLVM == "void" || mirStringStartsWith(valueLLVM, "\{") {
+    let valueLLVM = mirEmitModuleTypeLLVM(m, valueName)
+    if valueLLVM == "" || valueLLVM == "void" {
         return "  ; TODO map get for value type \"" + valueName + "\"\n"
     }
     let slot = dest + ".slot"
     let align = mirEmitFixedValueSizeBytes(valueLLVM)
-    let mut out = "  " + slot + " = alloca " + valueLLVM + ", align " + align + "\n"
+    out = out + "  " + slot + " = alloca " + valueLLVM + ", align " + align + "\n"
     let present = dest + ".present"
-    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
-    let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if mirStringStartsWith(destLLVM, "\{") {
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + mapText + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    let destLLVM = mirEmitModuleParamType(m, func, instr.dest.local)
+    if mirStringStartsWith(destLLVM, "\{") || mirStringStartsWith(destLLVM, "%") {
         let loaded = dest + ".val"
         let raw = dest + ".raw"
         let disc = dest + ".disc"
@@ -21845,29 +22024,46 @@ fn mirMapRemoveSymbolForType(typeName: String, kTy: String) -> String {
     }
     "osty_rt_map_remove_" + suffix
 }
-fn mirEmitMapGetOrIntrinsic(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
+fn mirEmitMapGetOrIntrinsic(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, instr: MirInstr) -> String {
     if instr.args.len() != 3 || instr.hasDest == false {
         return "  ; TODO map getOr intrinsic\n"
     }
-    let dest = mirEmitLocalRegName(instr.dest.local)
-    let m = mirEmitOperand(instr.args[0])
-    let k = mirEmitOperand(instr.args[1])
-    let kTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = mirMapGetSymbolForType(instr.args[1].typ, kTy)
-    if sym == "" {
-        return "  ; TODO map getOr for key type \"" + instr.args[1].typ + "\"\n"
+    let dest = mirEmitDefinitionLocalName(block, instrIdx, instr.dest.local)
+    let mapOp = instr.args[0]
+    let keyOp = instr.args[1]
+    let fallbackOp = instr.args[2]
+    let base = dest + ".getor"
+    let mut out = ""
+    let mapText = if mirOperandHasProjections(mapOp) {
+        let tmp = base + ".map"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, mapOp.place, mapOp.typ)
+        tmp
+    } else {
+        mirEmitBlockTypedOperandValue(block, instrIdx, mapOp, "ptr")
     }
-    let destLLVM = mirEmitParamType(func, instr.dest.local)
-    if destLLVM == "void" || mirStringStartsWith(destLLVM, "\{") {
+    let kTy = mirEmitModuleOperandLLVMType(m, func, keyOp)
+    let k = mirEmitBlockTypedOperandValue(block, instrIdx, keyOp, kTy)
+    let sym = mirMapGetSymbolForType(keyOp.typ, kTy)
+    if sym == "" {
+        return "  ; TODO map getOr for key type \"" + keyOp.typ + "\"\n"
+    }
+    let destLLVM = mirEmitModuleParamType(m, func, instr.dest.local)
+    if destLLVM == "void" {
         return "  ; TODO map getOr for dest type \"" + destLLVM + "\"\n"
     }
-    let fallback = mirEmitOperand(instr.args[2])
-    let slot = mirEmitFreshTempName(blockId, instrIdx) + ".getor"
+    let fallback = if mirOperandHasProjections(fallbackOp) {
+        let tmp = base + ".fallback"
+        out = out + mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, fallbackOp.place, fallbackOp.typ)
+        tmp
+    } else {
+        mirEmitFunctionTypedOperandValue(func, block, instrIdx, fallbackOp, destLLVM)
+    }
+    let slot = base + ".slot"
     let align = mirEmitFixedValueSizeBytes(destLLVM)
     let present = dest + ".present"
     let loaded = dest + ".hit"
-    let mut out = "  " + slot + " = alloca " + destLLVM + ", align " + align + "\n"
-    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    out = out + "  " + slot + " = alloca " + destLLVM + ", align " + align + "\n"
+    out = out + "  " + present + " = call i1 @" + sym + "(ptr " + mapText + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
     out = out + "  " + loaded + " = load " + destLLVM + ", ptr " + slot + ", align " + align + "\n"
     out + "  " + dest + " = select i1 " + present + ", " + destLLVM + " " + loaded + ", " + destLLVM + " " + fallback + "\n"
 }
