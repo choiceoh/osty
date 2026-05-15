@@ -30,20 +30,55 @@ fn selfhostMirDriverCommandOffset(args: List<String>, name: String) -> Int {
     0
 }
 
+fn selfhostMirDriverOptionValueAt(args: List<String>, idx: Int, name: String, prefix: String) -> String {
+    if args.len() <= idx {
+        return ""
+    }
+    let arg = args[idx]
+    if strings.hasPrefix(arg, prefix) {
+        return strings.trimPrefix(arg, prefix)
+    }
+    if selfhostMirDriverStringEq(arg, name) {
+        if args.len() > idx + 1 {
+            return args[idx + 1]
+        }
+    }
+    ""
+}
+
 fn selfhostMirDriverOptionValue(args: List<String>, name: String) -> String {
     let prefix = name + "="
-    let mut i = 0
-    for i < args.len() {
-        let arg = args[i]
-        if strings.hasPrefix(arg, prefix) {
-            return strings.trimPrefix(arg, prefix)
-        }
-        if selfhostMirDriverStringEq(arg, name) {
-            if i + 1 < args.len() {
-                return args[i + 1]
-            }
-        }
-        i = i + 1
+    let at0 = selfhostMirDriverOptionValueAt(args, 0, name, prefix)
+    if at0.len() != 0 {
+        return at0
+    }
+    let at1 = selfhostMirDriverOptionValueAt(args, 1, name, prefix)
+    if at1.len() != 0 {
+        return at1
+    }
+    let at2 = selfhostMirDriverOptionValueAt(args, 2, name, prefix)
+    if at2.len() != 0 {
+        return at2
+    }
+    let at3 = selfhostMirDriverOptionValueAt(args, 3, name, prefix)
+    if at3.len() != 0 {
+        return at3
+    }
+    let at4 = selfhostMirDriverOptionValueAt(args, 4, name, prefix)
+    if at4.len() != 0 {
+        return at4
+    }
+    let at5 = selfhostMirDriverOptionValueAt(args, 5, name, prefix)
+    if at5.len() != 0 {
+        return at5
+    }
+    let at6 = selfhostMirDriverOptionValueAt(args, 6, name, prefix)
+    if at6.len() != 0 {
+        return at6
+    }
+    let at7 = selfhostMirDriverOptionValueAt(args, 7, name, prefix)
+    if at7.len() != 0 {
+        return at7
     }
     ""
 }
@@ -94,7 +129,7 @@ fn selfhostMirDriverProbeError() -> String {
             return e
         },
     }
-    if mir.packageName == "" {
+    if mir.packageName.len() == 0 {
         mir.packageName = "main"
     }
     let mirErrs = mirValidateModule(mir)
@@ -115,7 +150,7 @@ fn selfhostMirDriverProbeError() -> String {
         return strings.join(rendered, "; ")
     }
     let irText = lirRenderModule(result.module)
-    if irText == "" {
+    if irText.len() == 0 {
         return "LLVM IR renderer returned empty output"
     }
     if !strings.contains(irText, "define") {
@@ -131,7 +166,7 @@ fn selfhostMirDriverRunDoctor() -> Int {
     println("osty-self mode: self-rebuild")
     println("osty-self host compiler: disabled")
     let probeError = selfhostMirDriverProbeError()
-    if probeError != "" {
+    if probeError.len() != 0 {
         println("osty-self MIR JSON backend: disabled")
         eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
         return 1
@@ -160,7 +195,7 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
             return 2
         },
     }
-    let resolvedPackageName = if packageName == "" { "main" } else { packageName }
+    let resolvedPackageName = if packageName.len() == 0 { "main" } else { packageName }
     let mut mir = match mirJsonParseModule(raw) {
         Ok(m) -> m,
         Err(e) -> {
@@ -168,7 +203,7 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
             return 1
         },
     }
-    if mir.packageName == "" {
+    if mir.packageName.len() == 0 {
         mir.packageName = resolvedPackageName
     }
     let mirErrs = mirValidateModule(mir)
@@ -180,8 +215,9 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
         return 1
     }
     let result = lirLowerMirModule(lirLowerConfig(resolvedPackageName, path, target), mir)
-    if !lirLowerOK(result) {
-        for d in result.diagnostics {
+    let lowerDiagnostics = result.diagnostics
+    if lowerDiagnostics.len() != 0 {
+        for d in lowerDiagnostics {
             if d.severity == LirSeverityError {
                 eprint("osty-self lir-proto-lower-mir-json: " + lirDiagnosticRender(d) + "\n")
             }

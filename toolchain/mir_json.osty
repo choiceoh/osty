@@ -42,22 +42,27 @@ fn mirJsonParseVal(bs: List<Byte>, pos: Int, len: Int) -> Result<(MirJsonValue, 
     let c = bs[pos].toInt()
     if c == 0x22 {
         let (s, next) = mirJsonParseStr(bs, pos, len)?
-        Ok((MJString(s), next))
-    } else if c == 0x7B {
-        mirJsonParseObj(bs, pos, len)
-    } else if c == 0x5B {
-        mirJsonParseArr(bs, pos, len)
-    } else if c == 0x74 {
-        mirJsonParseLiteral(bs, pos, len, "true", MJBool(true))
-    } else if c == 0x66 {
-        mirJsonParseLiteral(bs, pos, len, "false", MJBool(false))
-    } else if c == 0x6E {
-        mirJsonParseLiteral(bs, pos, len, "null", MJNull)
-    } else if c == 0x2D || (c >= 0x30 && c <= 0x39) {
-        mirJsonParseNum(bs, pos, len)
-    } else {
-        Err("json: unexpected character")
+        return Ok((MJString(s), next))
     }
+    if c == 0x7B {
+        return mirJsonParseObj(bs, pos, len)
+    }
+    if c == 0x5B {
+        return mirJsonParseArr(bs, pos, len)
+    }
+    if c == 0x74 {
+        return mirJsonParseLiteral(bs, pos, len, "true", MJBool(true))
+    }
+    if c == 0x66 {
+        return mirJsonParseLiteral(bs, pos, len, "false", MJBool(false))
+    }
+    if c == 0x6E {
+        return mirJsonParseLiteral(bs, pos, len, "null", MJNull)
+    }
+    if c == 0x2D || (c >= 0x30 && c <= 0x39) {
+        return mirJsonParseNum(bs, pos, len)
+    }
+    Err("json: unexpected character")
 }
 
 fn mirJsonParseLiteral(bs: List<Byte>, pos: Int, len: Int, word: String, value: MirJsonValue) -> Result<(MirJsonValue, Int), String> {
