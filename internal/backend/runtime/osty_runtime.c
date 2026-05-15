@@ -31026,6 +31026,84 @@ void *osty_rt_audit_i64_placeholder(void) {
   return osty_rt_string_dup_site("", 0, "stage0.audit.i64_placeholder");
 }
 
+static void osty_rt_audit_testing_fail_message(const char *name) {
+    fputs("std.testing.", stderr);
+    fputs(name != NULL ? name : "assert", stderr);
+    fputs(" failed\n", stderr);
+    abort();
+}
+
+static void osty_rt_audit_testing_fail_eq(const char *name, int64_t actual, int64_t expected) {
+    fprintf(stderr, "std.testing.%s failed: actual=%lld expected=%lld\n",
+        name != NULL ? name : "assertEq", (long long)actual, (long long)expected);
+    abort();
+}
+
+/* std.testing assertion aliases used by stage0 object/library output.
+ * The ordinary LLVM backend lowers these directly into the test harness;
+ * stage0 leaves declaration-only stdlib helpers as external calls, so
+ * the runtime provides the same process-failing contract at link time. */
+void osty_rt_audit_testing_assert(bool cond) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.assert")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_assert(bool cond) {
+    if (!cond) {
+        osty_rt_audit_testing_fail_message("assert");
+    }
+}
+
+void osty_rt_audit_testing_assertTrue(bool cond) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.assertTrue")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_assertTrue(bool cond) {
+    if (!cond) {
+        osty_rt_audit_testing_fail_message("assertTrue");
+    }
+}
+
+void osty_rt_audit_testing_assertFalse(bool cond) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.assertFalse")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_assertFalse(bool cond) {
+    if (cond) {
+        osty_rt_audit_testing_fail_message("assertFalse");
+    }
+}
+
+void osty_rt_audit_testing_assertEq(int64_t actual, int64_t expected) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.assertEq")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_assertEq(int64_t actual, int64_t expected) {
+    if (actual != expected) {
+        osty_rt_audit_testing_fail_eq("assertEq", actual, expected);
+    }
+}
+
+void osty_rt_audit_testing_assertNe(int64_t actual, int64_t expected) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.assertNe")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_assertNe(int64_t actual, int64_t expected) {
+    if (actual == expected) {
+        osty_rt_audit_testing_fail_eq("assertNe", actual, expected);
+    }
+}
+
+void osty_rt_audit_testing_fail(const char *msg) __asm__(OSTY_RT_AUDIT_SYMBOL("std.testing.fail")) OSTY_RT_AUDIT_USED;
+void osty_rt_audit_testing_fail(const char *msg) {
+    if (msg != NULL) {
+        char msg_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+        const char *msg_ptr = msg;
+        osty_rt_string_decode_to_buf_if_inline(&msg_ptr, msg_buf);
+        fputs(msg_ptr, stderr);
+        fputc('\n', stderr);
+    }
+    osty_rt_audit_testing_fail_message("fail");
+}
+
+static void *osty_rt_audit_result_box(int64_t tag, void *payload, const char *site) {
+    int64_t *box = (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
+    if (box == NULL) {
+        return NULL;
+    }
+    box[0] = tag;
+    box[1] = 0;
+    if (payload != NULL) {
+        memcpy(&box[1], &payload, sizeof(payload));
+    }
+    (void)site;
+    return box;
+}
+
 /* std.fs.readToString(path) — read the entire file at `path` as a
  * UTF-8 String. Returns a heap-allocated `%stage0.Result.ptr`
  * ({ i64 tag, ptr value }): tag=0 (Ok) with the contents on success,
@@ -31042,13 +31120,11 @@ void *osty_rt_audit_i64_placeholder(void) {
 void *osty_rt_audit_fs_readToString(const char *path) __asm__(
     OSTY_RT_AUDIT_SYMBOL("std.fs.readToString")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_fs_readToString(const char *path) {
-  int64_t *box =
-      (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
+  int64_t *box = (int64_t *)osty_rt_audit_result_box(
+      1, NULL, "stage0.audit.fs.readToString.result");
   if (box == NULL) {
     return NULL;
   }
-  box[0] = 1; /* Err */
-  box[1] = 0;
   if (path == NULL) {
     return box;
   }
@@ -31090,74 +31166,35 @@ void *osty_rt_audit_fs_readToString(const char *path) {
   return box;
 }
 
-/* std.fs.writeString(path, contents) — write `contents` to `path` as UTF-8
- * text. Returns a heap-allocated `%stage0.Result.ptr`: tag=0 (Ok) on success,
- * tag=1 (Err) with an error pointer on failure. */
-void *
-osty_rt_audit_fs_writeString(const char *path, const char *contents) __asm__(
-    OSTY_RT_AUDIT_SYMBOL("std.fs.writeString")) OSTY_RT_AUDIT_USED;
-void *osty_rt_audit_fs_writeString(const char *path, const char *contents) {
-  int64_t *box =
-      (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
-  if (box == NULL) {
-    return NULL;
-  }
-  box[0] = 1; /* Err */
-  box[1] = 0;
-  void *err = osty_rt_fs_write_string(path, contents);
-  if (err != NULL) {
-    memcpy(&box[1], &err, sizeof(err));
-    return box;
-  }
-  box[0] = 0; /* Ok */
-  return box;
-}
-
-/* std.fs.mkdirAll(path) — create directory and all parents.
- * Returns a heap-allocated `%stage0.Result.ptr`: tag=0 (Ok) on success,
- * tag=1 (Err) with an error pointer on failure. */
-void *osty_rt_audit_fs_mkdirAll(const char *path) __asm__(
-    OSTY_RT_AUDIT_SYMBOL("std.fs.mkdirAll")) OSTY_RT_AUDIT_USED;
-void *osty_rt_audit_fs_mkdirAll(const char *path) {
-  int64_t *box =
-      (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
-  if (box == NULL) {
-    return NULL;
-  }
-  box[0] = 1; /* Err */
-  box[1] = 0;
-  void *err = osty_rt_fs_mkdir_all(path);
-  if (err != NULL) {
-    memcpy(&box[1], &err, sizeof(err));
-    return box;
-  }
-  box[0] = 0; /* Ok */
-  return box;
-}
-
-/* std.fs.walk(root) — recursively list all descendants under `root`.
- * Returns a heap-allocated `%stage0.Result.ptr`: tag=0 (Ok) with a
- * `List<String>` on success, tag=1 (Err) with an error pointer on failure. */
-void *osty_rt_audit_fs_walk(const char *root) __asm__(
-    OSTY_RT_AUDIT_SYMBOL("std.fs.walk")) OSTY_RT_AUDIT_USED;
+/* std.fs.walk(path) — forward to the runtime walker and wrap the
+ * List<String> / Error result in the Result box shape stage0 expects. */
+void *osty_rt_audit_fs_walk(const char *root) __asm__(OSTY_RT_AUDIT_SYMBOL("std.fs.walk")) OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_fs_walk(const char *root) {
-  int64_t *box =
-      (int64_t *)osty_rt_stage0_alloc((int64_t)(sizeof(int64_t) * 2));
-  if (box == NULL) {
-    return NULL;
-  }
-  box[0] = 1; /* Err */
-  box[1] = 0;
-  void *list = osty_rt_fs_walk(root);
-  if (list == NULL) {
-    void *err =
-        osty_rt_fs_error_message("walk failed", "runtime.fs.walk.error");
-    memcpy(&box[1], &err, sizeof(err));
-    return box;
-  }
-  box[0] = 0; /* Ok */
-  memcpy(&box[1], &list, sizeof(list));
-  return box;
+    void *paths = osty_rt_fs_walk(root);
+    if (paths == NULL) {
+        return osty_rt_audit_result_box(1, osty_rt_fs_error(), "stage0.audit.fs.walk.err");
+    }
+    return osty_rt_audit_result_box(0, paths, "stage0.audit.fs.walk.ok");
+}
+
+/* std.fs.mkdirAll(path) — Result<(), Error>. */
+void *osty_rt_audit_fs_mkdirAll(const char *path) __asm__(OSTY_RT_AUDIT_SYMBOL("std.fs.mkdirAll")) OSTY_RT_AUDIT_USED;
+void *osty_rt_audit_fs_mkdirAll(const char *path) {
+    void *err = osty_rt_fs_mkdir_all(path);
+    if (err != NULL) {
+        return osty_rt_audit_result_box(1, err, "stage0.audit.fs.mkdirAll.err");
+    }
+    return osty_rt_audit_result_box(0, NULL, "stage0.audit.fs.mkdirAll.ok");
+}
+
+/* std.fs.writeString(path, contents) — Result<(), Error>. */
+void *osty_rt_audit_fs_writeString(const char *path, const char *contents) __asm__(OSTY_RT_AUDIT_SYMBOL("std.fs.writeString")) OSTY_RT_AUDIT_USED;
+void *osty_rt_audit_fs_writeString(const char *path, const char *contents) {
+    void *err = osty_rt_fs_write_string(path, contents);
+    if (err != NULL) {
+        return osty_rt_audit_result_box(1, err, "stage0.audit.fs.writeString.err");
+    }
+    return osty_rt_audit_result_box(0, NULL, "stage0.audit.fs.writeString.ok");
 }
 
 #undef OSTY_RT_AUDIT_USED

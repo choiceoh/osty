@@ -355,22 +355,22 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
 	req.Features = []string{"mir-backend"}
 
 	got, _, directErr := EmitLLVMIRText(req.Entry, "", req.Features)
-	if directErr == nil {
-		t.Fatal("EmitLLVMIRText should return error with Go MIR emitter removed")
+	if directErr != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", directErr)
 	}
 	result, err := backend.Emit(context.Background(), req)
-	if err == nil {
-		t.Fatal("backend.Emit should return error with Go MIR emitter removed")
+	if err != nil {
+		t.Fatalf("backend.Emit returned error: %v", err)
 	}
 	want, readErr := os.ReadFile(result.Artifacts.LLVMIR)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	if !strings.Contains(string(got), "LLVM000") || !strings.Contains(string(got), "source_filename") {
-		t.Fatalf("direct skeleton should contain diagnostic header:\n%s", got)
+	if string(got) != string(want) {
+		t.Fatalf("direct IR and artifact IR differ\ndirect:\n%s\nartifact:\n%s", got, want)
 	}
-	if !strings.Contains(string(want), "LLVM000") || !strings.Contains(string(want), "source_filename") {
-		t.Fatalf("artifact skeleton should contain diagnostic header:\n%s", want)
+	if !strings.Contains(string(got), "define i32 @main()") || !strings.Contains(string(got), "@printf") {
+		t.Fatalf("emitted IR missing expected main/printf body:\n%s", got)
 	}
 }
 
@@ -804,12 +804,23 @@ func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
 `)
 	req.Features = []string{"mir-backend"}
 
-	_, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
-	if emitErr == nil {
-		t.Fatal("Emit should return an error; Go MIR emitter fallback has been removed")
+	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
+	if emitErr != nil {
+		t.Fatalf("Emit returned error: %v", emitErr)
 	}
-	if !strings.Contains(trace, "mir-direct unsupported") {
-		t.Fatalf("dispatch trace should show unsupported route, got:\n%s", trace)
+	if result == nil {
+		t.Fatal("Emit returned nil result")
+	}
+	for _, want := range []string{
+		"backend trace: llvm mir-direct emit",
+		"backend trace: llvm mir-direct succeeded",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("dispatch trace missing %q:\n%s", want, trace)
+		}
+	}
+	if strings.Contains(trace, "mir-direct unsupported") {
+		t.Fatalf("dispatch trace unexpectedly reported unsupported route:\n%s", trace)
 	}
 }
 

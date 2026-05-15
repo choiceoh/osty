@@ -23,6 +23,7 @@ var nativeLLVMGenSourceInputs = []string{
 	"internal/mirjson",
 	"internal/nativelirproto",
 	"internal/nativellvmgen",
+	"internal/toolchain",
 	"go.mod",
 	"go.sum",
 }
@@ -160,11 +161,5 @@ func buildNativeLLVMGen(dest string) error {
 			return fmt.Errorf("chmod managed osty-native-llvmgen: %w", err)
 		}
 	}
-	if err := os.Rename(tmpPath, dest); err != nil {
-		if fileExists(dest) {
-			return nil
-		}
-		return fmt.Errorf("install managed osty-native-llvmgen: %w", err)
-	}
-	return nil
+	return installManagedBinary(tmpPath, dest, "osty-native-llvmgen")
 }
