@@ -92,13 +92,6 @@ type cliFlags struct {
 	// `internal/check.Result`; self-host native CLI paths read the same
 	// counters directly from `selfhost.CheckSummary`. Off by default.
 	dumpNativeDiags bool
-	// native is accepted as a backwards-compat no-op: the self-host
-	// arena pipeline (selfhost.CheckFromSource) has been the
-	// `check` / `typecheck` default since Phase 1c.1 and is now the
-	// only path after 1c.5 retired the Go-hosted escape hatch. The
-	// flag is still recognised by parseFlags so old scripts keep
-	// working, but it no longer selects between code paths.
-	native bool
 	// suppressSummary silences the `N error(s), M warning(s)` trailer
 	// inside a single printDiags call. The package-diagnostic walker sets
 	// this per-file bucket and then prints one consolidated summary
@@ -366,13 +359,11 @@ func main() {
 		// file-required check and subcommand dispatch see positional-
 		// only input.
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
-			flags.native = true
 			args = append([]string{"check"}, rest...)
 		}
 	}
 	if cmd == "typecheck" {
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
-			flags.native = true
 			args = append([]string{"typecheck"}, rest...)
 		}
 	}
@@ -597,7 +588,6 @@ func convertFlags(cf clicmd.CliFlags) cliFlags {
 		f.aiMode = airepair.Mode(cf.AiMode)
 	}
 	f.dumpNativeDiags = cf.DumpNativeDiags
-	f.native = cf.Native
 	return f
 }
 
@@ -618,7 +608,6 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check/typecheck: after the run, print the native checker's per-context error histogram to stderr")
-	flag.BoolVar(&f.native, "native", true, "check/typecheck: backwards-compat no-op since Phase 1c.5. The self-host arena pipeline is the only path; this flag is accepted so old scripts keep working")
 	flag.Usage = usage
 	flag.Parse()
 	return f
