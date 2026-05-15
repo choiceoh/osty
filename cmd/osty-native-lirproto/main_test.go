@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/nativelirproto"
 )
 
@@ -196,6 +199,146 @@ func TestRunMIRPayloadInvokesMirJSONLower(t *testing.T) {
 	}
 }
 
+func TestRunMIRPayloadRetriesSourceWhenMirJSONUnsupported(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+	captureSource := filepath.Join(captureDir, "source.osty")
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureSource)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; compat source IR\ndefine i64 @main() {\n  ret i64 7\n}\n")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		Source:      "fn main() -> Int { 7 }\n",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want false: %+v", resp)
+	}
+	if !strings.Contains(resp.LLVMIR, "compat source IR") {
+		t.Fatalf("LLVMIR missing compat output:\n%s", resp.LLVMIR)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower" {
+		t.Fatalf("compat args = %v, want source lir-proto-lower retry", args)
+	}
+	if staged := readFile(t, captureSource); !strings.Contains(staged, "fn main() -> Int { 7 }") {
+		t.Fatalf("compat retry staged %q, want original source", staged)
+	}
+}
+
+func TestRunMIRPayloadUsesStage0CompatWhenMirJSONUnsupported(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+
+	payload, err := mirjson.FromModule(&mir.Module{
+		Package: "main",
+		Functions: []*mir.Function{
+			{
+				Name:        "zero",
+				ReturnType:  ir.TInt,
+				ReturnLocal: 0,
+				Locals: []*mir.Local{
+					{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+				},
+				Entry: 0,
+				Blocks: []*mir.BasicBlock{
+					{
+						ID: 0,
+						Instrs: []mir.Instr{
+							&mir.AssignInstr{
+								Dest: mir.Place{Local: 0},
+								Src: &mir.UseRV{Op: &mir.ConstOp{
+									Const: &mir.IntConst{Value: 7, T: ir.TInt},
+									T:     ir.TInt,
+								}},
+							},
+						},
+						Term: &mir.ReturnTerm{},
+					},
+				},
+			},
+		},
+		Layouts: mir.NewLayoutTable(),
+	})
+	if err != nil {
+		t.Fatalf("build MIR JSON payload: %v", err)
+	}
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; source fallback should not run\n")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/zero.osty",
+		MIR:         payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want false: %+v", resp)
+	}
+	if !strings.Contains(resp.LLVMIR, "define i64 @zero()") || !strings.Contains(resp.LLVMIR, "ret i64 7") {
+		t.Fatalf("LLVMIR missing stage0 compat function:\n%s", resp.LLVMIR)
+	}
+	if strings.Contains(resp.LLVMIR, "source fallback should not run") {
+		t.Fatalf("stage0 compat unexpectedly used source fallback:\n%s", resp.LLVMIR)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("first args = %v, want MIR JSON attempt before compat", args)
+	}
+}
+
+func TestUnsupportedSelfCommandDetection(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{msg: "osty-self: unsupported command; host compiler forwarding is disabled", want: true},
+		{msg: "unsupported command: lir-proto-lower-mir-json", want: true},
+		{msg: "unsupported command: compile", want: false},
+		{msg: "parse error", want: false},
+	}
+	for _, tc := range cases {
+		if got := isUnsupportedSelfCommand(tc.msg); got != tc.want {
+			t.Fatalf("isUnsupportedSelfCommand(%q) = %t, want %t", tc.msg, got, tc.want)
+		}
+	}
+}
+
 // TestRunDeclinesWhenOstySelfExitsNonZero pins the second
 // fall-back: a non-zero exit from osty-self (parse failure,
 // unsupported MIR shape, etc.) lands as a `declined: true`
@@ -331,6 +474,10 @@ func main() {
 				_, _ = io.Copy(dst, src)
 			}
 		}
+	}
+	if os.Getenv("FAKE_OSTY_SELF_REJECT_MIR_JSON") != "" && len(os.Args) > 1 && os.Args[1] == "lir-proto-lower-mir-json" {
+		_, _ = os.Stderr.WriteString("osty-self: unsupported command; host compiler forwarding is disabled\n")
+		os.Exit(1)
 	}
 	if msg := os.Getenv("FAKE_OSTY_SELF_STDERR"); msg != "" {
 		_, _ = os.Stderr.WriteString(msg)

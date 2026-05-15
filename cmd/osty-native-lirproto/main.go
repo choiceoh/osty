@@ -35,6 +35,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/osty/osty/internal/backend/stage0"
+	"github.com/osty/osty/internal/llvmabi"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/nativelirproto"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
@@ -101,6 +105,37 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		args = append(args, "--target="+req.Target)
 	}
 
+	resp, declineReason, err := runSelfLower(selfBin, args)
+	if err != nil || !resp.Declined {
+		return resp, err
+	}
+	if command == "lir-proto-lower-mir-json" && isUnsupportedSelfCommand(declineReason) {
+		return lowerLegacyMIRJSON(req, selfBin)
+	}
+	return resp, nil
+}
+
+func lowerSourceCompat(selfBin string, req nativelirproto.Request) (nativelirproto.Response, error) {
+	sourcePath, _, cleanup, err := stageInput(req)
+	if cleanup != nil && os.Getenv("OSTY_LIRPROTO_KEEP_STAGED") == "" {
+		defer cleanup()
+	}
+	if err != nil {
+		return nativelirproto.Response{}, err
+	}
+	pkgName := req.PackageName
+	if pkgName == "" {
+		pkgName = "main"
+	}
+	args := []string{"lir-proto-lower", sourcePath, "--package-name=" + pkgName}
+	if req.Target != "" {
+		args = append(args, "--target="+req.Target)
+	}
+	resp, _, err := runSelfLower(selfBin, args)
+	return resp, err
+}
+
+func runSelfLower(selfBin string, args []string) (nativelirproto.Response, string, error) {
 	cmd := exec.Command(selfBin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -111,13 +146,115 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nativelirproto.Response{Declined: true, Error: msg}, nil
+		return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
 	}
 	ir := stdout.String()
 	if ir == "" {
-		return nativelirproto.Response{Declined: true, Error: "osty-self lir-proto-lower produced empty IR"}, nil
+		command := "command"
+		if len(args) > 0 {
+			command = args[0]
+		}
+		msg := fmt.Sprintf("osty-self %s produced empty IR", command)
+		return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
 	}
-	return nativelirproto.Response{LLVMIR: ir}, nil
+	return nativelirproto.Response{LLVMIR: ir}, "", nil
+}
+
+func isUnsupportedSelfCommand(msg string) bool {
+	return strings.Contains(msg, "osty-self: unsupported command") ||
+		(strings.Contains(msg, "unsupported command") && strings.Contains(msg, "lir-proto-lower-mir-json"))
+}
+
+func lowerLegacyMIRJSON(req nativelirproto.Request, selfBin string) (nativelirproto.Response, error) {
+	// Older bootstrap seeds know `lir-proto-lower` but predate the
+	// MIR JSON entry point. Prefer the already-lowered MIR payload so
+	// object/library requests keep their caller-provided entrypoint,
+	// then use source re-lowering only as a last compatibility step.
+	stage0Resp, triedStage0 := lowerMIRJSONStage0Compat(req)
+	if triedStage0 && !stage0Resp.Declined {
+		return stage0Resp, nil
+	}
+	if req.Source == "" {
+		if triedStage0 {
+			return stage0Resp, nil
+		}
+		return nativelirproto.Response{Declined: true, Error: "legacy osty-self does not support MIR JSON requests"}, nil
+	}
+	sourceReq := req
+	sourceReq.MIR = nil
+	sourceResp, err := lowerSourceCompat(selfBin, sourceReq)
+	if err != nil || !sourceResp.Declined || !triedStage0 {
+		return sourceResp, err
+	}
+	return nativelirproto.Response{
+		Declined: true,
+		Error:    combineDeclineErrors(stage0Resp.Error, sourceResp.Error),
+	}, nil
+}
+
+func lowerMIRJSONStage0Compat(req nativelirproto.Request) (nativelirproto.Response, bool) {
+	if req.MIR == nil {
+		return nativelirproto.Response{}, false
+	}
+	encoded, err := json.Marshal(req.MIR)
+	if err != nil {
+		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: marshal MIR JSON: %v", err)}, true
+	}
+	var payload mirjson.Module
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: decode MIR JSON: %v", err)}, true
+	}
+	mod, err := mirjson.ToModule(&payload)
+	if err != nil {
+		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: convert MIR JSON: %v", err)}, true
+	}
+	if len(mod.Functions) == 0 {
+		return nativelirproto.Response{Declined: true, Error: "stage0 MIR compat: module has no functions"}, true
+	}
+	if errs := mir.Validate(mod); len(errs) > 0 {
+		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: invalid MIR: %s", joinErrors(errs))}, true
+	}
+	pkgName := req.PackageName
+	if pkgName == "" {
+		pkgName = payload.PackageName
+	}
+	if pkgName == "" {
+		pkgName = "main"
+	}
+	ir, err := stage0.EmitMIRAllowNoMain(mod, llvmabi.Options{
+		PackageName: pkgName,
+		SourcePath:  req.SourcePath,
+		Source:      []byte(req.Source),
+		Target:      req.Target,
+		UseMIR:      true,
+		EmitGC:      true,
+	})
+	if err != nil {
+		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: %v", err)}, true
+	}
+	return nativelirproto.Response{LLVMIR: string(ir)}, true
+}
+
+func joinErrors(errs []error) string {
+	parts := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		parts = append(parts, err.Error())
+	}
+	return strings.Join(parts, "; ")
+}
+
+func combineDeclineErrors(primary, secondary string) string {
+	switch {
+	case primary == "":
+		return secondary
+	case secondary == "":
+		return primary
+	default:
+		return primary + "; source compat: " + secondary
+	}
 }
 
 // resolveOstySelfBin returns the path to the self-host `osty-self`

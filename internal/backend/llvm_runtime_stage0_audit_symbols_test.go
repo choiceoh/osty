@@ -24,16 +24,26 @@ func TestBundledRuntimeStage0AuditAliasesLinkWithThinLTO(t *testing.T) {
 	}
 
 	ir := `@.path = private unnamed_addr constant [2 x i8] c".\00"
+@.missing = private unnamed_addr constant [26 x i8] c"stage0-alias-missing-path\00"
 @.fmt = private unnamed_addr constant [6 x i8] c"%lld\0A\00"
 @stderr = external global ptr
-@llvm.used = appending global [14 x ptr] [
+@llvm.used = appending global [23 x ptr] [
   ptr @Char__toString,
   ptr @Char__len,
   ptr @std.strings.fromChar,
   ptr @std.strings.compare,
   ptr @std.env.args,
   ptr @std.env.get,
+  ptr @std.testing.assert,
+  ptr @std.testing.assertTrue,
+  ptr @std.testing.assertFalse,
+  ptr @std.testing.assertEq,
+  ptr @std.testing.assertNe,
+  ptr @std.testing.fail,
   ptr @std.fs.readToString,
+  ptr @std.fs.walk,
+  ptr @std.fs.mkdirAll,
+  ptr @std.fs.writeString,
   ptr @std.os.exit,
   ptr @std.process.abort,
   ptr @runtime.path.filepath.Base,
@@ -49,7 +59,16 @@ declare ptr @std.strings.fromChar(i32)
 declare i64 @std.strings.compare(ptr, ptr)
 declare ptr @std.env.args()
 declare ptr @std.env.get(ptr)
+declare void @std.testing.assert(i1)
+declare void @std.testing.assertTrue(i1)
+declare void @std.testing.assertFalse(i1)
+declare void @std.testing.assertEq(i64, i64)
+declare void @std.testing.assertNe(i64, i64)
+declare void @std.testing.fail(ptr)
 declare ptr @std.fs.readToString(ptr)
+declare ptr @std.fs.walk(ptr)
+declare ptr @std.fs.mkdirAll(ptr)
+declare ptr @std.fs.writeString(ptr, ptr)
 declare void @std.os.exit(i64)
 declare void @std.process.abort(ptr)
 declare ptr @runtime.path.filepath.Base(ptr)
@@ -66,7 +85,15 @@ entry:
   %cmp = call i64 @std.strings.compare(ptr %from_char, ptr %to_string)
   %args = call ptr @std.env.args()
   %env = call ptr @std.env.get(ptr %from_char)
+  call void @std.testing.assert(i1 true)
+  call void @std.testing.assertTrue(i1 true)
+  call void @std.testing.assertFalse(i1 false)
+  call void @std.testing.assertEq(i64 7, i64 7)
+  call void @std.testing.assertNe(i64 7, i64 8)
   %file = call ptr @std.fs.readToString(ptr @.path)
+  %walk = call ptr @std.fs.walk(ptr @.missing)
+  %mkdir = call ptr @std.fs.mkdirAll(ptr @.path)
+  %write = call ptr @std.fs.writeString(ptr @.path, ptr %from_char)
   %base = call ptr @runtime.path.filepath.Base(ptr @.path)
   %ext = call ptr @runtime.path.filepath.Ext(ptr @.path)
   %interp = call ptr @__interp()

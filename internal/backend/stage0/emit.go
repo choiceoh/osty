@@ -109,6 +109,16 @@ func declineReason(err error) string {
 //     tuple (classifyAggregateReturnType). All params scalar. The callee
 //     prototype is declared if it is not a locally-defined symbol.
 func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
+	return emitMIR(module, opts, true)
+}
+
+// EmitMIRAllowNoMain emits a stage0 module for object/library style
+// consumers that provide their own entry point at link time.
+func EmitMIRAllowNoMain(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
+	return emitMIR(module, opts, false)
+}
+
+func emitMIR(module *mir.Module, opts llvmabi.Options, requireMain bool) ([]byte, error) {
 	if module == nil {
 		return nil, fmt.Errorf("stage0: nil MIR module")
 	}
@@ -172,7 +182,7 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 				emittedMain = true
 			}
 		}
-		if !emittedMain {
+		if requireMain && !emittedMain {
 			return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 		}
 		if mctx.extraDecls.Len() > 0 {
@@ -327,7 +337,7 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	// audit harness's module-level clang verify) can do so. Pre-existing
 	// callers that ignore bytes on err == non-nil are unaffected.
 	aggregated := listAll && len(declines) > 0
-	if !emittedMain {
+	if requireMain && !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
 
@@ -877,6 +887,15 @@ func (m *moduleCtx) freshTempName(label string) string {
 		return "%stage0.tmp"
 	}
 	name := fmt.Sprintf("%%stage0.%s.%d", sanitizeLLVMName(label, "tmp"), m.nextTempID)
+	m.nextTempID++
+	return name
+}
+
+func (m *moduleCtx) freshLabelName(label string) string {
+	if m == nil {
+		return "stage0.tmp"
+	}
+	name := fmt.Sprintf("stage0.%s.%d", sanitizeLLVMName(label, "tmp"), m.nextTempID)
 	m.nextTempID++
 	return name
 }
@@ -1437,6 +1456,11 @@ type pendingInstr struct {
 type callArg struct {
 	expr string
 	ty   string // LLVM type ("i64" / "i1")
+}
+
+type testingArg struct {
+	expr string
+	ty   scalarType
 }
 
 type resolvedCallArgs struct {
@@ -2332,6 +2356,9 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 	if ref.Symbol == "" {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
+	if pending, destID, destType, ok := classifyKnownIntMethodCallStep(fn, ci, bindings, mctx, ref.Symbol); ok {
+		return pending, destID, destType, true
+	}
 	allowOpaqueUserNamed := true
 	destID := ci.Dest.Local
 	destLocal := lookupLocal(fn, destID)
@@ -2388,6 +2415,111 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 		callSymbol: ref.Symbol,
 		callArgs:   args,
 	}, destID, destType, true
+}
+
+func classifyKnownIntMethodCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, symbol string) (pendingInstr, mir.LocalID, scalarType, bool) {
+	arity, ok := knownIntMethodArity(symbol)
+	if !ok || ci == nil || ci.Dest == nil || ci.Dest.HasProjections() || len(ci.Args) != arity {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if lookupLocal(fn, ci.Dest.Local) == nil {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	exprs := make([]string, 0, len(ci.Args))
+	var prelude strings.Builder
+	for _, op := range ci.Args {
+		argPrelude, argExpr, argTy, ok := resolveOperandWithPrelude(fn, op, bindings, mctx)
+		if !ok || argTy != scalarInt {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		prelude.WriteString(argPrelude)
+		exprs = append(exprs, argExpr)
+	}
+	body, result, ok := renderKnownIntMethodCall(symbol, exprs, func(label string) string {
+		return mctx.freshTempName(label)
+	})
+	if !ok {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	return pendingInstr{
+		kind:          instrIntrinsic,
+		binDestReg:    result,
+		intrinsicLine: prelude.String() + body,
+	}, ci.Dest.Local, scalarInt, true
+}
+
+func knownIntMethodArity(symbol string) (int, bool) {
+	switch symbol {
+	case "Int__abs", "Int__signum":
+		return 1, true
+	case "Int__min", "Int__max":
+		return 2, true
+	case "Int__clamp":
+		return 3, true
+	}
+	return 0, false
+}
+
+func renderKnownIntMethodCall(symbol string, args []string, fresh func(string) string) (string, string, bool) {
+	if fresh == nil {
+		return "", "", false
+	}
+	var out strings.Builder
+	switch symbol {
+	case "Int__abs":
+		if len(args) != 1 {
+			return "", "", false
+		}
+		neg := fresh("int.abs.neg")
+		isNeg := fresh("int.abs.isneg")
+		result := fresh("int.abs")
+		fmt.Fprintf(&out, "  %s = sub i64 0, %s\n", neg, args[0])
+		fmt.Fprintf(&out, "  %s = icmp slt i64 %s, 0\n", isNeg, args[0])
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 %s, i64 %s\n", result, isNeg, neg, args[0])
+		return out.String(), result, true
+	case "Int__min", "Int__max":
+		if len(args) != 2 {
+			return "", "", false
+		}
+		pred := "slt"
+		label := "int.min"
+		if symbol == "Int__max" {
+			pred = "sgt"
+			label = "int.max"
+		}
+		cmp := fresh(label + ".cmp")
+		result := fresh(label)
+		fmt.Fprintf(&out, "  %s = icmp %s i64 %s, %s\n", cmp, pred, args[0], args[1])
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 %s, i64 %s\n", result, cmp, args[0], args[1])
+		return out.String(), result, true
+	case "Int__clamp":
+		if len(args) != 3 {
+			return "", "", false
+		}
+		ltLo := fresh("int.clamp.ltlo")
+		lower := fresh("int.clamp.lower")
+		gtHi := fresh("int.clamp.gthi")
+		result := fresh("int.clamp")
+		fmt.Fprintf(&out, "  %s = icmp slt i64 %s, %s\n", ltLo, args[0], args[1])
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 %s, i64 %s\n", lower, ltLo, args[1], args[0])
+		fmt.Fprintf(&out, "  %s = icmp sgt i64 %s, %s\n", gtHi, lower, args[2])
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 %s, i64 %s\n", result, gtHi, args[2], lower)
+		return out.String(), result, true
+	case "Int__signum":
+		if len(args) != 1 {
+			return "", "", false
+		}
+		ltZero := fresh("int.signum.ltzero")
+		gtZero := fresh("int.signum.gtzero")
+		nonNeg := fresh("int.signum.nonneg")
+		result := fresh("int.signum")
+		fmt.Fprintf(&out, "  %s = icmp slt i64 %s, 0\n", ltZero, args[0])
+		fmt.Fprintf(&out, "  %s = icmp sgt i64 %s, 0\n", gtZero, args[0])
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 1, i64 0\n", nonNeg, gtZero)
+		fmt.Fprintf(&out, "  %s = select i1 %s, i64 -1, i64 %s\n", result, ltZero, nonNeg)
+		return out.String(), result, true
+	}
+	return "", "", false
 }
 
 func classifyProjectedCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
@@ -2509,6 +2641,9 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 	if !ok || ref.Symbol == "" {
 		return "", false
 	}
+	if line, ok := classifyTestingVoidCallLine(fn, ci, bindings, mctx, ref.Symbol); ok {
+		return line, true
+	}
 	allowOpaqueUserNamed := true
 	var args []callArg
 	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
@@ -2552,6 +2687,118 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 		declareVoidFunctionPrototype(mctx, ref.Symbol, args)
 		return resolved.prelude + renderVoidCallLine(ref.Symbol, args), true
 	}
+}
+
+func classifyTestingVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, symbol string) (string, bool) {
+	if !isStage0TestingSymbol(symbol) {
+		return "", false
+	}
+	args := make([]testingArg, 0, len(ci.Args))
+	var prelude strings.Builder
+	for _, op := range ci.Args {
+		argPrelude, argExpr, argTy, ok := resolveOperandWithPrelude(fn, op, bindings, mctx)
+		if !ok || argTy == scalarUnknown {
+			return "", false
+		}
+		prelude.WriteString(argPrelude)
+		args = append(args, testingArg{expr: argExpr, ty: argTy})
+	}
+	body, ok := renderTestingVoidCall(mctx, symbol, args)
+	if !ok {
+		return "", false
+	}
+	return prelude.String() + body, true
+}
+
+func isStage0TestingSymbol(symbol string) bool {
+	switch symbol {
+	case "std.testing.assert", "std.testing.assertTrue", "std.testing.assertFalse",
+		"std.testing.assertEq", "std.testing.assertNe", "std.testing.fail":
+		return true
+	}
+	return false
+}
+
+func renderTestingVoidCall(mctx *moduleCtx, symbol string, args []testingArg) (string, bool) {
+	name := strings.TrimPrefix(symbol, "std.testing.")
+	switch name {
+	case "assert", "assertTrue":
+		if len(args) != 1 || args[0].ty != scalarBool {
+			return "", false
+		}
+		return renderTestingAssert(mctx, name, args[0].expr), true
+	case "assertFalse":
+		if len(args) != 1 || args[0].ty != scalarBool {
+			return "", false
+		}
+		okReg := mctx.freshTempName("testing.assertFalse")
+		return fmt.Sprintf("  %s = xor i1 %s, true\n", okReg, args[0].expr) +
+			renderTestingAssert(mctx, name, okReg), true
+	case "assertEq", "assertNe":
+		if len(args) != 2 {
+			return "", false
+		}
+		compare, cond, ok := renderTestingCompare(mctx, args[0], args[1], name == "assertEq")
+		if !ok {
+			return "", false
+		}
+		return compare + renderTestingAssert(mctx, name, cond), true
+	case "fail":
+		if len(args) != 1 || args[0].ty != scalarString {
+			return "", false
+		}
+		return renderTestingFail(mctx, args[0].expr), true
+	}
+	return "", false
+}
+
+func renderTestingCompare(mctx *moduleCtx, left, right testingArg, wantEqual bool) (string, string, bool) {
+	if left.ty != right.ty || left.ty == scalarUnknown {
+		return "", "", false
+	}
+	pred := "eq"
+	if !wantEqual {
+		pred = "ne"
+	}
+	condReg := mctx.freshTempName("testing.cmp")
+	switch left.ty {
+	case scalarString:
+		declareStringCompareRuntime(mctx)
+		cmpReg := mctx.freshTempName("testing.strcmp")
+		return fmt.Sprintf("  %s = call i64 @osty_rt_strings_Compare(ptr %s, ptr %s)\n", cmpReg, left.expr, right.expr) +
+			fmt.Sprintf("  %s = icmp %s i64 %s, 0\n", condReg, pred, cmpReg), condReg, true
+	case scalarFloat:
+		fpred := "oeq"
+		if !wantEqual {
+			fpred = "one"
+		}
+		return fmt.Sprintf("  %s = fcmp %s double %s, %s\n", condReg, fpred, left.expr, right.expr), condReg, true
+	case scalarOpaquePtr:
+		return fmt.Sprintf("  %s = icmp %s ptr %s, %s\n", condReg, pred, left.expr, right.expr), condReg, true
+	case scalarInt, scalarBool, scalarByte, scalarChar:
+		return fmt.Sprintf("  %s = icmp %s %s %s, %s\n", condReg, pred, left.ty.llvm(), left.expr, right.expr), condReg, true
+	}
+	return "", "", false
+}
+
+func renderTestingAssert(mctx *moduleCtx, name, okExpr string) string {
+	declareVoidFunctionPrototype(mctx, "osty_rt_panic", []callArg{{ty: "ptr"}})
+	failLabel := mctx.freshLabelName("testing.fail")
+	okLabel := mctx.freshLabelName("testing.ok")
+	msg := mctx.internStringConst("std.testing." + name + " failed")
+	return fmt.Sprintf("  br i1 %s, label %%%s, label %%%s\n", okExpr, okLabel, failLabel) +
+		fmt.Sprintf("%s:\n", failLabel) +
+		fmt.Sprintf("  call void @osty_rt_panic(ptr %s)\n", msg) +
+		"  unreachable\n" +
+		fmt.Sprintf("%s:\n", okLabel)
+}
+
+func renderTestingFail(mctx *moduleCtx, msgExpr string) string {
+	declareVoidFunctionPrototype(mctx, "osty_rt_panic", []callArg{{ty: "ptr"}})
+	contLabel := mctx.freshLabelName("testing.fail.cont")
+	return fmt.Sprintf("  call void @osty_rt_panic(ptr %s)\n", msgExpr) +
+		"  unreachable\n" +
+		fmt.Sprintf("%s:\n", contLabel)
 }
 
 func isErrType(t mir.Type) bool {
@@ -10668,6 +10915,9 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		return false
 	}
 	recordWhileCallStructResult(ctx, ci, ref)
+	if emitWhileKnownIntMethodCall(ctx, out, ci, ref.Symbol) {
+		return true
+	}
 	allowOpaqueUserNamed := true
 	fnTy, ok := ref.Type.(*ir.FnType)
 	if !ok || fnTy == nil {
@@ -10708,6 +10958,29 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 	}
 	declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 	return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
+}
+
+func emitWhileKnownIntMethodCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr, symbol string) bool {
+	arity, ok := knownIntMethodArity(symbol)
+	if !ok || ctx == nil || ctx.mctx == nil || ci == nil || ci.Dest == nil || ci.Dest.HasProjections() || len(ci.Args) != arity {
+		return false
+	}
+	exprs := make([]string, 0, len(ci.Args))
+	for _, op := range ci.Args {
+		expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok || argTy != scalarInt {
+			return false
+		}
+		exprs = append(exprs, expr)
+	}
+	body, result, ok := renderKnownIntMethodCall(symbol, exprs, func(string) string {
+		return freshReg(ctx)
+	})
+	if !ok {
+		return false
+	}
+	out.WriteString(body)
+	return bindWhileResult(ctx, out, ci.Dest.Local, scalarInt, result)
 }
 
 func placeHasErrProjection(place mir.Place) bool {
@@ -10774,6 +11047,9 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 	if !ok || ref.Symbol == "" {
 		return false
 	}
+	if emitWhileTestingVoidCall(ctx, out, ci, ref.Symbol) {
+		return true
+	}
 	args := make([]callArg, 0, len(ci.Args))
 	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
 		if len(fnTy.Params) != len(ci.Args) {
@@ -10819,6 +11095,26 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 	}
 	declareVoidFunctionPrototype(ctx.mctx, ref.Symbol, args)
 	out.WriteString(renderVoidCallLine(ref.Symbol, args))
+	return true
+}
+
+func emitWhileTestingVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr, symbol string) bool {
+	if ctx == nil || ctx.mctx == nil || !isStage0TestingSymbol(symbol) {
+		return false
+	}
+	args := make([]testingArg, 0, len(ci.Args))
+	for _, op := range ci.Args {
+		expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok || argTy == scalarUnknown {
+			return false
+		}
+		args = append(args, testingArg{expr: expr, ty: argTy})
+	}
+	line, ok := renderTestingVoidCall(ctx.mctx, symbol, args)
+	if !ok {
+		return false
+	}
+	out.WriteString(line)
 	return true
 }
 
@@ -14707,6 +15003,9 @@ func stage0KnownCallScalarResult(symbol string) scalarType {
 		return scalarUnknown
 	}
 	if strings.HasSuffix(symbol, "__len") {
+		return scalarInt
+	}
+	if _, ok := knownIntMethodArity(symbol); ok {
 		return scalarInt
 	}
 	return scalarUnknown
