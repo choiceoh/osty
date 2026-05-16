@@ -69,8 +69,14 @@ end-to-end, but the front-end CLI path is ahead of several older documents.
 `osty check`, `osty typecheck`, and `osty resolve` now run the self-host arena
 path by default, and the Go-hosted `--legacy` check/typecheck escape hatch has
 been removed. `--native` is still accepted only as a backwards-compatible no-op.
-`internal/check` defaults to the embedded selfhost checker in-process; setting
-`OSTY_NATIVE_CHECKER_BIN` opts into the external JSON checker boundary.
+`internal/check` routes package checks through the native checker subprocess:
+the CLI installs `check.UseManagedSubprocessChecker` at startup, which lazily
+builds or reuses `.osty/toolchain/<ver>/osty-native-checker` via
+`toolchain.EnsureNativeChecker`. Setting `OSTY_NATIVE_CHECKER_BIN` to an
+executable path overrides that managed binary (debug / CI prebuild). If
+neither a managed build nor an override resolves, callers get a clear
+checker-unavailable diagnostic — production no longer silently falls back to
+the frozen in-process seed (`SUBPROCESS_SWITCHOVER.md`, gate b-hard).
 
 The front-end astbridge-free guards currently pass for the CLI and the
 selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,
@@ -327,12 +333,14 @@ delete the just-built artifact. Documented in
 
 ## Native Checker
 
-`internal/check` prefers an external checker executable boundary when one is
-available. By default the CLI manages a versioned checker artifact under
-`.osty/toolchain/<tool-version>/osty-native-checker` and builds it on demand,
-but falls back to the embedded selfhost checker when that binary is unavailable.
-`OSTY_NATIVE_CHECKER_BIN` is still supported as a strict override/debug escape
-hatch.
+`internal/check` speaks the JSON `api.CheckRequest` / `api.CheckResult`
+boundary to a native `osty-native-checker` binary only (no in-process
+embedded checker on production paths). On startup the CLI calls
+`check.UseManagedSubprocessChecker`, which prepares the managed artifact under
+`.osty/toolchain/<tool-version>/osty-native-checker` on first use. A managed
+build failure surfaces as an explicit error instead of falling back to the
+frozen seed. `OSTY_NATIVE_CHECKER_BIN` still wins when set (override, wrapper
+script, or prebuilt binary from `just build-checker`).
 
 This repository also ships a repo-local wrapper at
 [`scripts/osty-native-checker`](./scripts/osty-native-checker), backed by

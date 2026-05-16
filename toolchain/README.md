@@ -19,8 +19,9 @@ native-selfhost checker input set.
 
 Mainstream Go packages should call `internal/lexer`, `internal/parser`, and
 `internal/check`. `internal/lexer` and `internal/parser` are thin facades over
-`internal/selfhost`; `internal/check` prefers the external native-checker
-boundary and falls back to the embedded selfhost bridge when needed.
+`internal/selfhost`; `internal/check` routes through the native checker
+subprocess in production (managed binary or `OSTY_NATIVE_CHECKER_BIN`), not an
+embedded in-process fallback (`SUBPROCESS_SWITCHOVER.md`).
 
 `internal/selfhost/generated.go` is a committed seed — the Osty→Go bootstrap
 transpiler that produced it has been removed. Changes to `toolchain/*.osty`
