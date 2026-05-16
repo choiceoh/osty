@@ -73,7 +73,7 @@ var negativeWaivers = map[string][]string{
 	// the speccorpus pipeline.Run path has no native checker
 	// installed, so check-level diags surface as the generic
 	// "type checking unavailable" `error:-` instead.
-	"E0752/closure param lacks annotation in unconstrained context":            {"error:-", "warning:L0031"},
+	"E0752/closure param lacks annotation in unconstrained context":               {"error:-", "warning:L0031"},
 	"E0752/closure param mixed annotation — un-annotated param still requires it": {"error:-", "warning:L0031"},
 
 	// E0757/E0758: as? downcast checking lives in the
