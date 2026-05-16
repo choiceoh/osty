@@ -3048,6 +3048,18 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
         let declaredTy = astTypeToTy(cx, paramNode.right)
         let paramTy = if declaredTy >= 0 {
+            // Explicit annotation: validate against the expected fn
+            // parameter type when one is available. Mismatch emits a
+            // per-param diagnostic at the annotation site so the user
+            // sees the conflict at the parameter (in addition to the
+            // outer closure-type mismatch that the surrounding context
+            // already reports against the whole `fn(...) -> R` shape).
+            if expectedIsFn && i < checkIntListLenHelper(expectedParams) {
+                let expectedParam = checkIntListAt(expectedParams, i)
+                if !(tyIsBad(tys, expectedParam)) {
+                    let _ = checkExpectAssignable(cx.env, expectedParam, declaredTy, paramNode.start, paramNode.end)
+                }
+            }
             declaredTy
         } else if expectedIsFn && i < checkIntListLenHelper(expectedParams) {
             checkIntListAt(expectedParams, i)
