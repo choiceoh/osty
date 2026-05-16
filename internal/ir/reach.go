@@ -96,19 +96,52 @@ func (r methodReachVisitor) Visit(n Node) Visitor {
 	if !ok || call == nil || call.Receiver == nil || call.Name == "" {
 		return r
 	}
-	named, ok := call.Receiver.Type().(*NamedType)
-	if !ok || named == nil || named.Name == "" {
+	module, typeName, ok := stdlibReceiverOwner(call.Receiver.Type())
+	if !ok {
 		return r
 	}
-	module := named.Package
-	if module == "" && named.Builtin {
-		module = BuiltinTypeOwningModule(named.Name)
-	}
-	if module == "" {
-		return r
-	}
-	r[MethodRef{Module: module, Type: named.Name, Method: call.Name}] = struct{}{}
+	r[MethodRef{Module: module, Type: typeName, Method: call.Name}] = struct{}{}
 	return r
+}
+
+// stdlibReceiverOwner normalises a method-call receiver type into the
+// (module, type-name) pair the body-injector uses to look up the
+// method declaration. Handles:
+//
+//   - `NamedType{Package: "encoding", Name: "Hex"}` — module-qualified
+//     stdlib type, the canonical shape.
+//   - `NamedType{Builtin: true, Name: "List"|"Iter"|"Option"|"Result"}`
+//     — prelude-bound generic types whose owning module comes from
+//     `BuiltinTypeOwningModule`.
+//   - `OptionalType{Inner: ...}` — surface form of `Option<T>`. The
+//     IR keeps `T?` and `Option<T>` as separate constructors but
+//     they share the same method declarations, so a chained
+//     combinator (`opt.map(...).filter(...)`) typed as `Int?` on
+//     the second hop still needs to reach `option.Option.filter`.
+//
+// Returns `("", "", false)` when no stdlib owner applies — user
+// methods on user types must not pollute the reach set.
+func stdlibReceiverOwner(t Type) (module string, name string, ok bool) {
+	switch x := t.(type) {
+	case *NamedType:
+		if x == nil || x.Name == "" {
+			return "", "", false
+		}
+		module = x.Package
+		if module == "" && x.Builtin {
+			module = BuiltinTypeOwningModule(x.Name)
+		}
+		if module == "" {
+			return "", "", false
+		}
+		return module, x.Name, true
+	case *OptionalType:
+		if x == nil {
+			return "", "", false
+		}
+		return "option", "Option", true
+	}
+	return "", "", false
 }
 
 // BuiltinTypeOwningModule returns the stdlib module that owns the
@@ -116,23 +149,40 @@ func (r methodReachVisitor) Visit(n Node) Visitor {
 // in this table fall through and contribute no method references —
 // the body-injector treats them like user-defined types.
 //
-// Today only `List<T>` is whitelisted: its higher-order methods
-// (`map`, `filter`, `fold`, `reduce`, etc.) are bodied helpers that
-// the LLVM backend can lower end-to-end through the standard
-// injection path. `Map<K,V>` / `Set<T>` are intentionally left out
-// because their primitive operations (`get`, `insert`, `remove`,
-// `len`) route through dedicated runtime intrinsics
-// (`osty_rt_map_*`, `osty_rt_set_*`); pulling their bodied helpers
-// (`containsKey` calls `get(...).isSome()`, etc.) into injection
-// double-lowers the same call site and trips the monomorph
-// substitution. `Option`/`Result` already have working
-// per-intrinsic dispatch in `mir_generator.go`.
+// `List<T>` and `Iter<T>` route their higher-order methods
+// (`map`, `filter`, `fold`, `reduce`, etc.) through the standard
+// injection path so the LLVM backend lowers them end-to-end.
+//
+// `Option<T>` / `Result<T, E>` route their combinator methods
+// (`map`, `andThen`, `filter`, `mapOr`, `unwrapOrElse`, …) through
+// the same path. The combinators carry method-local generics
+// (`map<U>`, `andThen<U>`) and closure parameters, so MIR's
+// per-method intrinsic dispatch in `toolchain/mir_generator.osty`
+// cannot lower them in isolation; they need the same
+// methodToFreeFn → monomorphize-method-clone pipeline that List
+// uses. The simpler probes (`isSome`, `isNone`, `unwrap`, …) had
+// a parallel MIR intrinsic dispatch but the IR-level rewrite
+// turns each `recv.method(...)` into a free `CallExpr` against the
+// mangled body, so MIR sees no MethodCall to short-circuit —
+// match-on-Option in the injected body produces the same MIR
+// shape the old intrinsic generated.
+//
+// `Map<K,V>` / `Set<T>` are intentionally left out because their
+// primitive operations (`get`, `insert`, `remove`, `len`) route
+// through dedicated runtime intrinsics (`osty_rt_map_*`,
+// `osty_rt_set_*`); pulling their bodied helpers (`containsKey`
+// calls `get(...).isSome()`, etc.) into injection double-lowers
+// the same call site and trips the monomorph substitution.
 func BuiltinTypeOwningModule(name string) string {
-	if name == "List" {
+	switch name {
+	case "List":
 		return "collections"
-	}
-	if name == "Iter" {
+	case "Iter":
 		return "iter"
+	case "Option":
+		return "option"
+	case "Result":
+		return "result"
 	}
 	return ""
 }
