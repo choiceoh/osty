@@ -29828,6 +29828,30 @@ osty_rt_os_exec_result *osty_rt_os_exec_input(const char *cmd, void *args,
                                        stdin_text);
 }
 
+/* std.os.execWith(cmd, args, cwd, env, timeoutMillis) — `shell=false`
+ * variant of osty_rt_os_exec_options. Wired through MIR symbol rewrite for
+ * the LLVM self-host source-bootstrap path (cf. SPEC_GAPS::cross-pkg-module-
+ * resolution path #5; PR3-C trajectory). */
+osty_rt_os_exec_result *osty_rt_os_exec_with(const char *cmd, void *args,
+                                             const char *cwd,
+                                             void *env_overrides,
+                                             int64_t timeout_ms) {
+  return osty_rt_os_exec_options(cmd, args, /*shell=*/false, cwd,
+                                 env_overrides, timeout_ms);
+}
+
+/* std.os.execInputWith(cmd, args, stdin, cwd, env, timeoutMillis) —
+ * `shell=false` variant with stdin pipe. */
+osty_rt_os_exec_result *osty_rt_os_exec_input_with(const char *cmd,
+                                                   void *args,
+                                                   const char *stdin_text,
+                                                   const char *cwd,
+                                                   void *env_overrides,
+                                                   int64_t timeout_ms) {
+  return osty_rt_os_exec_input_options(cmd, args, /*shell=*/false, cwd,
+                                       env_overrides, timeout_ms, stdin_text);
+}
+
 osty_rt_os_string_result *osty_rt_os_hostname(void) {
 #if defined(_WIN32)
   char buf[MAX_COMPUTERNAME_LENGTH + 1];

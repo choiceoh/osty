@@ -5826,6 +5826,10 @@ func rewriteStdlibSymbolToRuntime(sym string) string {
 	switch sym {
 	case "std.io.readLine":
 		return "osty_rt_io_read_line"
+	case "std.os.execWith":
+		return "osty_rt_os_exec_with"
+	case "std.os.execInputWith":
+		return "osty_rt_os_exec_input_with"
 	}
 	return sym
 }
