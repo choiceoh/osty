@@ -4,8 +4,10 @@
 - **Type**: Decision log
   `LANG_SPEC_v0.5/` + `OSTY_GRAMMAR_v0.5.md` 기준.
 
-**현재 open gap: 없음.** v0.4 사용 코퍼스에서 관찰된 15 개
-개선점(G20-G34) 을 v0.5 에서 일괄 결정했고, vectorize-hint 트랙의
+**현재 open gap: 1.** `cross-pkg-module-resolution` (이 PR 에서 등록) —
+LLVM self-host trajectory 의 PR3 (`cmd/osty-native-checker` 가 toolchain
+crate dep 의 함수를 호출) 진입 시 발견. v0.4 사용 코퍼스에서 관찰된 15
+개 개선점(G20-G34) 을 v0.5 에서 일괄 결정했고, vectorize-hint 트랙의
 마지막 gap (iterator-protocol 루프) 도 PR #1632/#1642 로 해소됐다.
 
 스펙은 v0.2 부터 폴더 구조이다. §X (X = 1..19) 는 `LANG_SPEC_v0.5/NN-*.md`
@@ -219,6 +221,29 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 의 struct 정의에서 그대로 흡수.
 
 **관련 PR**: TBD (이번 작업).
+
+### `cross-pkg-module-resolution` — `use <dep>.<module>` 가 module 이 아니라 type 으로 해석됨
+
+**Scope**: LANG_SPEC §5.2 ([modules-and-packages](LANG_SPEC_v0.5/05-modules-and-packages.md)) + 컴파일러 구현.
+
+**관찰**: `osty.toml` 의 `[dependencies]` 로 path-dep 가 resolve 되고 `use toolchain` alone 은 통과하나, `use toolchain.check` 또는 `use toolchain.check as tc` + `tc.frontInvalidTypeRepr()` 호출 시 native checker 가 `E0703: no method 'frontInvalidTypeRepr' on type 'check'` 발화. 즉 `check` (module binding) 가 type 으로 잘못 해석됨.
+
+**진단**: `examples/` 와 `toolchain/` 의 모든 `.osty` 가 `use std.*` 만 사용 — `std` 가 prelude-special-cased 라 일반 cross-package use path 와 다른 경로로 resolve 되는 듯. 사용자-level cross-package import 의 정통 예시가 코퍼스에 0건이라 실제 동작이 검증된 적 없음.
+
+**spec 의 의미**: LANG_SPEC §5.2 의 module access path resolution 단락 (2026-05-16 추가) 이 "module bindings 와 type bindings 의 구분 필요" 를 명시. 본 gap 은 구현이 그 spec 을 따르지 않는 상태.
+
+**영향**: LLVM self-host plan ([docs/llvm-selfhost-plan.md](docs/llvm-selfhost-plan.md)) 의 PR3 ([docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md)) 가 이 gap 의 해결을 선행 조건으로 함. `cmd/osty-native-checker/main.osty` 가 `toolchain.elab.elabFile` 등을 호출하려면 native checker 가 module path 를 인식해야.
+
+**해결 path**:
+1. `toolchain/resolve.osty` + `toolchain/elab.osty` 의 cross-package use 처리 — 현재 prelude-special-case 만 cover, 일반 path 추가
+2. `[lib]` crate 가 dep 로 import 될 때 module file → `Module` symbol 등록 (현재 type 등록으로 fallback)
+3. `<module>.<symbol>` access 가 method-lookup 가 아니라 module-scoped symbol lookup 으로 dispatch
+4. `cmd/osty/build.go::emitViaQuery` 가 `m.Lib != nil` 인 manifest 를 library object + export meta 산출 path 로 route. **현재 manifest.go 가 `[lib]` parse + render 하나 cmd/osty 의 build 가 활용 0건** — 2026-05-16 PR 에서 explicit decline 진단으로 surface.
+5. **`toolchain/resolve.osty:499` — use-decl 처리 시 alias 만 `"package"` kind 의 symbol 로 등록, full import path 미저장**. 즉 `use toolchain.check as tc` 시 `tc` 는 알려지지만 어떤 module 인지 추적 없음 → `tc.frontInvalidTypeRepr()` 호출 시 method-on-package 인지 못 하고 method-on-type 으로 fallback → E0703. 진짜 fix = `SelfSymbol` 에 import-path 필드 추가 + module-scoped lookup arm (`elab.osty` 의 method-call dispatch 에 새 분기). 추정 ~150 LOC + 다수 사이트 회귀 검증.
+
+**관련 PR**: TBD (다음 세션 PR3-B/C).
+
+**관련 doc**: [docs/llvm-selfhost-plan-pr3-attempt.md](docs/llvm-selfhost-plan-pr3-attempt.md), [docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md).
 
 ### ~~`default-arg-resolve`~~ — defaulted parameter 가 함수 scope 에 등록 안 됨 — **해소됨 (2026-05-05)**
 

@@ -42,6 +42,20 @@ use go "net/http" {
 re-export cycles are `E0552`. `use go "<path>" { ... }` imports a Go
 package via FFI (see §12).
 
+**Module access path resolution.** Given `use dep_or_pkg`, the imported
+name binds the *package itself*. To access a top-level item from a
+sub-module file within that package, write `dep_or_pkg.module.item`
+(e.g., `use toolchain; toolchain.elab.elabFile(cx)`). Equivalently, the
+shorter form `use dep_or_pkg.module` binds the *module file*, and items
+are accessed as `module.item` (e.g., `use toolchain.elab; elab.elabFile(cx)`).
+`use dep_or_pkg.module as alias` binds the alias to the module. A
+single-segment alias to a *package* (`use toolchain as tc`) is permitted
+and accesses items as `tc.module.item`; the alias never collapses module
+boundaries. Implementations must distinguish module bindings from type
+bindings — applying `<module>.<item>` to a non-module produces `E0703`
+(method-on-type) which currently leaks for cross-package `use` and is
+tracked in `SPEC_GAPS.md` under `cross-pkg-module-resolution`.
+
 ### 5.3 Visibility
 
 Declarations are package-private by default. `pub` exports:

@@ -141,10 +141,10 @@ func TestScaffoldWorkspaceManifest(t *testing.T) {
 
 func TestScaffoldRelativePaths(t *testing.T) {
 	cases := []struct {
-		name    string
-		kind    string
-		member  string
-		want    []string
+		name   string
+		kind   string
+		member string
+		want   []string
 	}{
 		{
 			"bin", "bin", "",

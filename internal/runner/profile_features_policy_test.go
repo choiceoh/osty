@@ -83,10 +83,10 @@ func TestGoFlags(t *testing.T) {
 
 func TestFileNeedsFeatures(t *testing.T) {
 	cases := []struct {
-		name       string
-		src        string
-		active     map[string]bool
-		wantOk     bool
+		name        string
+		src         string
+		active      map[string]bool
+		wantOk      bool
 		wantMissing string
 	}{
 		{"no-pragma", "let x = 1\n", map[string]bool{}, true, ""},
@@ -163,8 +163,8 @@ func TestExpandFeatures(t *testing.T) {
 		{
 			// Top-level cross-package tokens DO land in the output —
 			// resolver layer interprets them separately.
-			name:     "top-level-cross-package-kept",
-			features: map[string][]string{},
+			name:      "top-level-cross-package-kept",
+			features:  map[string][]string{},
 			requested: []string{"dep/feat"}, useDefaults: false,
 			want: []string{"dep/feat"},
 		},

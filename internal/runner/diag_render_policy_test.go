@@ -96,11 +96,11 @@ func TestLineBounds(t *testing.T) {
 
 func TestDiagRenderReplacement(t *testing.T) {
 	cases := []struct {
-		name         string
-		replacement  string
-		excerpt      string
-		haveExcerpt  bool
-		want         string
+		name        string
+		replacement string
+		excerpt     string
+		haveExcerpt bool
+		want        string
 	}{
 		{"empty-replacement-uses-excerpt", "", "foo()", true, "foo()"},
 		{"empty-replacement-fallback", "", "", false, "<expr>"},

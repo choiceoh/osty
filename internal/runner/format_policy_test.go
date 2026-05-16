@@ -4,10 +4,10 @@ import "testing"
 
 func TestUseGroupOrder(t *testing.T) {
 	cases := []struct {
-		name      string
-		isFFI     bool
-		firstSeg  string
-		want      int
+		name     string
+		isFFI    bool
+		firstSeg string
+		want     int
 	}{
 		{"stdlib", false, "std", 0},
 		{"external-github", false, "github.com", 1},
@@ -27,12 +27,12 @@ func TestUseGroupOrder(t *testing.T) {
 
 func TestUseSortKey(t *testing.T) {
 	cases := []struct {
-		name      string
-		isFFI     bool
-		ffi       string
-		raw       string
-		dotted    string
-		want      string
+		name   string
+		isFFI  bool
+		ffi    string
+		raw    string
+		dotted string
+		want   string
 	}{
 		{"ffi-precedence", true, "net/http", "ignored", "ignored.too", "net/http"},
 		{"raw-path", false, "", "github.com/x/y", "x.y", "github.com/x/y"},
@@ -49,10 +49,10 @@ func TestUseSortKey(t *testing.T) {
 
 func TestUseCSurfaceLibName(t *testing.T) {
 	cases := []struct {
-		name  string
-		path  string
-		ok    bool
-		lib   string
+		name string
+		path string
+		ok   bool
+		lib  string
 	}{
 		{"simple", "runtime.cabi.libc", true, "libc"},
 		{"reject-no-prefix", "runtime.go.libc", false, ""},

@@ -1,0 +1,37 @@
+// PR2: stdin → manual naive JSON parse → stub CheckResult JSON echo.
+//
+// std.json.* 호출이 stage0 fallback 에서 막힘 (cf. docs/llvm-selfhost-plan-
+// pr2-attempt.md). 우회로: primitive strings.indexOf / strings.slice 만 사용
+// 한 naive "source" field 추출. L1 corpus 의 escape-free fixture (예:
+// `{"source":"fn main(){}"}`) 가정.
+//
+// 정확성 한계:
+// - "source" key 의 `\"` escape, value 안 `\"` escape 미처리
+// - newline / unicode 미처리
+// - 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
+// PR3 의 진짜 checker 호출 + L2/L3 corpus 진행 시 std.json 으로 교체.
+use std.io
+use std.strings
+
+fn naiveExtractSource(text: String) -> String {
+    let openMarker = "\"source\":\""
+    if let Some(i) = strings.indexOf(text, openMarker) {
+        let startIdx = i + strings.len(openMarker)
+        let rest = strings.slice(text, startIdx, strings.len(text))
+        if let Some(endRel) = strings.indexOf(rest, "\"") {
+            return strings.slice(rest, 0, endRel)
+        }
+    }
+    ""
+}
+
+fn emptyCheckResultJson() -> String {
+    "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}"
+}
+
+fn main() {
+    let input = io.readLine()
+    let _source = naiveExtractSource(input)
+    // 진짜 checker 호출은 PR3 — 현재는 모든 source 입력에 empty CheckResult.
+    println(emptyCheckResultJson())
+}

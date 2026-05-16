@@ -73,4 +73,3 @@ func rewriteForeignLoopHeaders(src []byte) ([]byte, []repair.Change, bool) {
 	}
 	return []byte(out.String()), changes, true
 }
-

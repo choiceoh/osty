@@ -1187,9 +1187,9 @@ func (bs *bodyState) bindPattern(pat ir.Pattern, scrutinee Place, scrutineeT Typ
 		// after a decision-tree branch).
 		layout := bs.l.variantLayout(p.Enum, p.Variant)
 		for i, arg := range p.Args {
-			pt := variantPayloadType(layout, i)
+			pt := resolveVariantPayloadType(layout, scrutineeT, p.Variant, i)
 			proj := &VariantProj{
-				Variant:  variantIndex(layout),
+				Variant:  resolveVariantIndex(layout, scrutineeT, p.Variant),
 				Name:     p.Variant,
 				FieldIdx: i,
 				Type:     pt,
@@ -4650,8 +4650,8 @@ func (bs *bodyState) lowerIfLetVariant(ife *ir.IfLetExpr, dest Place, destT Type
 	// Bind payload elements.
 	layout := bs.l.variantLayout(vp.Enum, vp.Variant)
 	for i, arg := range vp.Args {
-		pt := variantPayloadType(layout, i)
-		proj := &VariantProj{Variant: variantIndex(layout), Name: vp.Variant, FieldIdx: i, Type: pt}
+		pt := resolveVariantPayloadType(layout, scrutT, vp.Variant, i)
+		proj := &VariantProj{Variant: resolveVariantIndex(layout, scrutT, vp.Variant), Name: vp.Variant, FieldIdx: i, Type: pt}
 		child := Place{Local: scrutLocal}.Project(proj)
 		bs.bindPattern(arg, child, pt, ife.SpanV)
 	}
@@ -5796,7 +5796,7 @@ func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, 
 // on top.
 func qualifiedSymbol(use *ir.UseDecl, name string) string {
 	if use == nil {
-		return name
+		return rewriteStdlibSymbolToRuntime(name)
 	}
 	switch {
 	case use.IsRuntimeFFI && use.RuntimePath != "":
@@ -5805,12 +5805,29 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 		return use.GoPath + "." + name
 	}
 	if use.RawPath != "" {
-		return use.RawPath + "." + name
+		return rewriteStdlibSymbolToRuntime(use.RawPath + "." + name)
 	}
 	if use.Alias != "" {
-		return use.Alias + "." + name
+		return rewriteStdlibSymbolToRuntime(use.Alias + "." + name)
 	}
-	return name
+	return rewriteStdlibSymbolToRuntime(name)
+}
+
+// rewriteStdlibSymbolToRuntime rewrites well-known stdlib symbols that
+// have a direct C-runtime equivalent (osty_runtime.c) but no Osty body.
+// This lets stage0 fallback emit calls to runtime symbols without needing
+// per-symbol mir.IntrinsicKind cases or stage0/emit.go dispatch arms.
+//
+// Currently covered: std.io.readLine → osty_rt_io_read_line. Production
+// path (lir_proto) sees the same rewritten symbol; if it had a separate
+// mapping for the original symbol that arm is now bypassed (rewrites are
+// monotonic so no double-rewrite issue).
+func rewriteStdlibSymbolToRuntime(sym string) string {
+	switch sym {
+	case "std.io.readLine":
+		return "osty_rt_io_read_line"
+	}
+	return sym
 }
 
 // useAliasFor returns the use decl whose alias matches the ident, or
@@ -7939,6 +7956,97 @@ func variantPayloadType(info *variantInfo, i int) Type {
 		return ir.ErrTypeVal
 	}
 	return info.variant.Payload[i]
+}
+
+// builtinVariantPayloadType derives the i-th payload type for a
+// prelude Option<T> / Result<T, E> variant when `variantLayout`
+// returns nil (builtin path: the enum declaration lives in stdlib
+// rather than the user module, so the IR's variantInfo map can't
+// find it).
+//
+// Without this, `if let Some(box) = b: Box?` lowers the bound
+// `box` with `<error>` type — the pattern position knows the
+// payload structurally (Some has one payload of type Box) but the
+// fallback in `variantPayloadType` just returned ErrTypeVal.
+// Downstream consumers (struct field projection, ToString
+// dispatch, …) then poison the local.
+//
+// Returns ir.ErrTypeVal if the scrutinee is not a recognised
+// prelude shape or the variant / index doesn't match.
+func builtinVariantPayloadType(scrutT Type, variantName string, idx int) Type {
+	if scrutT == nil {
+		return ir.ErrTypeVal
+	}
+	if ot, ok := scrutT.(*ir.OptionalType); ok && ot != nil {
+		switch variantName {
+		case "Some":
+			if idx == 0 && ot.Inner != nil {
+				return ot.Inner
+			}
+		case "None":
+			// No payload.
+		}
+		return ir.ErrTypeVal
+	}
+	nt, ok := scrutT.(*ir.NamedType)
+	if !ok || nt == nil || !nt.Builtin {
+		return ir.ErrTypeVal
+	}
+	switch nt.Name {
+	case "Option", "Maybe":
+		if variantName == "Some" && idx == 0 && len(nt.Args) >= 1 {
+			return nt.Args[0]
+		}
+	case "Result":
+		switch variantName {
+		case "Ok":
+			if idx == 0 && len(nt.Args) >= 1 {
+				return nt.Args[0]
+			}
+		case "Err":
+			if idx == 0 && len(nt.Args) >= 2 {
+				return nt.Args[1]
+			}
+		}
+	}
+	return ir.ErrTypeVal
+}
+
+// builtinVariantIndex returns the canonical tag index for a
+// prelude Option / Result variant — matches the layout
+// `Some/Ok = 0`, `None/Err = 1` documented in the LIR Proto
+// fixtures (`source_optional_field_chain` etc.). Used when
+// `variantLayout` returns nil for the builtin shapes so the
+// projection's tag index is meaningful rather than the default 0.
+func builtinVariantIndex(scrutT Type, variantName string) int {
+	switch variantName {
+	case "Some", "Ok":
+		return 0
+	case "None", "Err":
+		return 1
+	}
+	return 0
+}
+
+// resolveVariantPayloadType returns the variant's i-th payload
+// type, falling back to the builtin Option / Result synthesis when
+// the user-side `variantInfo` lookup didn't find a matching enum.
+// scrutT supplies the receiver type for the builtin fallback.
+func resolveVariantPayloadType(info *variantInfo, scrutT Type, variantName string, idx int) Type {
+	if info != nil && info.variant != nil {
+		return variantPayloadType(info, idx)
+	}
+	return builtinVariantPayloadType(scrutT, variantName, idx)
+}
+
+// resolveVariantIndex returns the variant tag index, falling back
+// to the builtin Option / Result canonical mapping when the
+// user-side lookup is nil.
+func resolveVariantIndex(info *variantInfo, scrutT Type, variantName string) int {
+	if info != nil {
+		return info.index
+	}
+	return builtinVariantIndex(scrutT, variantName)
 }
 
 // projectionToPlace turns a HIR decision-tree projection chain into a

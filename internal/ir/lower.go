@@ -257,7 +257,45 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	if fn.Body != nil {
 		out.Body = l.lowerBlock(fn.Body)
 	}
+	// Return-position closure inference: `fn f() -> fn(Int) -> Int { |x| x + 1 }`
+	// — the trailing-expression closure inherits its expected
+	// signature from the declared return type. Without this,
+	// the closure's `Params[i].Type` stays nil and the body's
+	// Idents reading those params lower with ErrTypeVal.
+	// `lowerClosure` already handles the equivalent let-with-
+	// annotation case via `out.T = l.exprType(c)` when the
+	// checker captures it, but the return-position case is
+	// usually missing because the checker doesn't run on the
+	// builtin-routed Closure node.
+	if fnT, ok := out.Return.(*FnType); ok && fnT != nil {
+		backfillTrailingClosure(out.Body, fnT)
+	}
 	return out
+}
+
+// backfillTrailingClosure refines a function body's trailing
+// closure expression with an expected fn signature. The trailing
+// closure can live in either `Block.Result` (when the body's
+// final expression is captured as the block's implicit result)
+// or the last `ExprStmt` of `Block.Stmts` (when the parser
+// preserved it as a statement-position trailing expression — the
+// common case for single-expr `fn` bodies). Both shapes lower to
+// the same closure value; both need the backfill.
+func backfillTrailingClosure(body *Block, expected *FnType) {
+	if body == nil || expected == nil {
+		return
+	}
+	if cl, ok := body.Result.(*Closure); ok && cl != nil {
+		backfillClosure(cl, expected)
+		return
+	}
+	if n := len(body.Stmts); n > 0 {
+		if es, ok := body.Stmts[n-1].(*ExprStmt); ok && es != nil {
+			if cl, ok := es.X.(*Closure); ok && cl != nil {
+				backfillClosure(cl, expected)
+			}
+		}
+	}
 }
 
 // extractInlineMode reads the v0.6 A8 `#[inline]` family off the
@@ -1787,6 +1825,20 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 		out.Value = l.lowerExpr(s.Value)
 		if out.Type == nil {
 			out.Type = out.Value.Type()
+		}
+		// Closure-from-annotation backfill: `let f: fn(Int) ->
+		// Int = |x| x + 1` carries the closure's expected
+		// signature in the LetStmt's type annotation. Propagate
+		// it back into the Closure value so its un-annotated
+		// param/Return slots resolve before the body's Idents
+		// poison downstream lowering.
+		if cl, ok := out.Value.(*Closure); ok && cl != nil {
+			if fnT, ok := out.Type.(*FnType); ok && fnT != nil {
+				backfillClosure(cl, fnT)
+				if out.Value.Type() == nil || out.Value.Type() == ErrTypeVal {
+					out.Type = cl.T
+				}
+			}
 		}
 	}
 	if !usableRecoveredType(out.Type) {
@@ -3757,7 +3809,903 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
+	// Closure-arg backfill: the checker doesn't always thread the
+	// expected closure signature (`fn(T) -> R`) down into a
+	// closure literal passed to a stdlib higher-order method
+	// (`xs.filter(|n| ...)` / `opt.map(|x| ...)` / `r.map(|n|
+	// ...)`). The closure arrives at IR with `Params[i].Type =
+	// nil` and `Return = ()`, which poisons every expression in
+	// its body — `n > 0` becomes `<error>` because `n`'s type
+	// can't be resolved.
+	//
+	// Recover the expected fn type from the receiver type +
+	// method name and backfill the closure's param/return slots
+	// in place. The synthesis itself is shared with the free-fn
+	// CallExpr path.
+	l.backfillClosureArgsFromMethodCall(out)
 	return out
+}
+
+// backfillClosureArgsFromMethodCall walks the args of a stdlib
+// higher-order method call and fills missing closure param /
+// return types from the canonical signature derived off the
+// receiver. No-op if the receiver isn't a recognised generic
+// builtin (List/Option/Result/Iter) or the method isn't one of
+// the recognised higher-order shapes.
+func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
+	if mc == nil || mc.Receiver == nil {
+		return
+	}
+	recvT := mc.Receiver.Type()
+	if recvT == nil || recvT == ErrTypeVal {
+		return
+	}
+	// Iterate args; only Closure args need backfill.
+	for i := range mc.Args {
+		cl, ok := mc.Args[i].Value.(*Closure)
+		if !ok || cl == nil {
+			continue
+		}
+		expected := expectedClosureFnTypeForBuiltin(recvT, mc.Name, i, len(mc.Args))
+		if expected == nil {
+			continue
+		}
+		// Some methods have closure params whose types are
+		// inferable from *other* args at the call site —
+		// `fold<A>(init: A, |acc: A, n: T| ...)` is the
+		// canonical example, where A comes from the init arg's
+		// type. Patch missing param/return slots in `expected`
+		// using the surrounding arg shape before backfilling.
+		refineExpectedFromOtherArgs(expected, recvT, mc.Name, mc.Args, i)
+		backfillClosure(cl, expected)
+	}
+	// Recover the MethodCall's own T from the receiver type +
+	// method name + (now-resolved) closure return types. Without
+	// this, `name.map(|s| s).filter(...)` leaves
+	// `Option__map(...)` typed `<error>` even though both args
+	// resolved, and the next chained `.filter(...)` reads a
+	// poisoned receiver. The recovery is bounded to the same
+	// stdlib higher-order method table the closure backfill
+	// uses, so chained `map/filter/andThen/...` chains lower
+	// without their middle nodes being marked as ErrType.
+	if mc.T == nil || mc.T == ErrTypeVal {
+		if recovered := recoverHigherOrderMethodReturnType(recvT, mc.Name, mc.Args); recovered != nil {
+			mc.T = recovered
+		}
+	}
+}
+
+// recoverHigherOrderMethodReturnType derives the return type of
+// `recv.method(args...)` for stdlib higher-order methods on
+// List / Option / Result whose checker-side return-type inference
+// often fails when the call's first arg is an inferred closure.
+// Mirrors the dispatch in `expectedClosureFnTypeForBuiltin` so a
+// matching method here implies the call's return shape is
+// well-defined by the type table:
+//
+//   - List<T>.map<R>(fn(T) -> R) -> List<R>
+//   - List<T>.filter(fn(T) -> Bool) -> List<T>
+//   - Option<T>.map<U>(fn(T) -> U) -> U?
+//   - Option<T>.andThen<U>(fn(T) -> U?) -> U?
+//   - Option<T>.filter(fn(T) -> Bool) -> T?
+//   - Result<T,E>.map<U>(fn(T) -> U) -> Result<U, E>
+//   - etc.
+//
+// Returns nil for shapes outside the table — callers leave the
+// MethodCall's T as ErrType so downstream recovery doesn't paper
+// over a real type-checker gap.
+func recoverHigherOrderMethodReturnType(recvT Type, method string, args []Arg) Type {
+	if recvT == nil {
+		return nil
+	}
+	switch r := recvT.(type) {
+	case *OptionalType:
+		if r == nil || r.Inner == nil {
+			return nil
+		}
+		return recoverOptionHigherOrderReturn(r.Inner, method, args)
+	case *NamedType:
+		if r == nil || !r.Builtin {
+			return nil
+		}
+		switch r.Name {
+		case "List", "Iter":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return recoverListHigherOrderReturn(r.Name, r.Args[0], method, args)
+		case "Option", "Maybe":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return recoverOptionHigherOrderReturn(r.Args[0], method, args)
+		case "Result":
+			if len(r.Args) < 2 {
+				return nil
+			}
+			return recoverResultHigherOrderReturn(r.Args[0], r.Args[1], method, args)
+		}
+	}
+	return nil
+}
+
+func recoverListHigherOrderReturn(listName string, elem Type, method string, args []Arg) Type {
+	if elem == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = elem
+			}
+			return &NamedType{Name: listName, Args: []Type{r}, Builtin: true}
+		}
+	case "filter":
+		if len(args) == 1 {
+			return &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+		}
+	case "any", "all":
+		if len(args) == 1 {
+			return TBool
+		}
+	case "forEach":
+		if len(args) == 1 {
+			return TUnit
+		}
+	case "fold":
+		if len(args) == 2 {
+			// fold returns the accumulator type — pull from the
+			// init arg.
+			if t := safeExprType(args[0].Value); t != ErrTypeVal {
+				return t
+			}
+		}
+	case "reduce":
+		if len(args) == 1 {
+			return &OptionalType{Inner: elem}
+		}
+	case "enumerate":
+		if len(args) == 0 {
+			pair := &TupleType{Elems: []Type{TInt, elem}}
+			return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+		}
+	case "chunked", "windowed":
+		// Both return `List<List<T>>`. windowed takes 2 args
+		// (size, step); chunked takes 1 (size). The intermediate
+		// `List<T>` keeps the source list's elem.
+		inner := &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+		return &NamedType{Name: listName, Args: []Type{inner}, Builtin: true}
+	case "partition":
+		if len(args) == 1 {
+			lst := &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+			return &TupleType{Elems: []Type{lst, lst}}
+		}
+	case "zip":
+		if len(args) == 1 {
+			// `zip(other: List<U>) -> List<(T, U)>` — derive U
+			// from the other-arg's receiver-arg shape.
+			otherT := safeExprType(args[0].Value)
+			if otherT != ErrTypeVal {
+				if nt, ok := otherT.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") && len(nt.Args) >= 1 {
+					pair := &TupleType{Elems: []Type{elem, nt.Args[0]}}
+					return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+				}
+			}
+			pair := &TupleType{Elems: []Type{elem, elem}}
+			return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+		}
+	case "len":
+		return TInt
+	case "isEmpty":
+		return TBool
+	}
+	return nil
+}
+
+func recoverOptionHigherOrderReturn(inner Type, method string, args []Arg) Type {
+	if inner == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = inner
+			}
+			return &OptionalType{Inner: r}
+		}
+	case "andThen":
+		if len(args) == 1 {
+			// closure returns `U?`; the method threads that
+			// through. Pull the inner U from the closure's
+			// Return if it's an Option.
+			if r := closureReturnType(args[0].Value); r != nil {
+				if ot, ok := r.(*OptionalType); ok && ot != nil {
+					return ot
+				}
+				return &OptionalType{Inner: r}
+			}
+			return &OptionalType{Inner: inner}
+		}
+	case "filter":
+		if len(args) == 1 {
+			return &OptionalType{Inner: inner}
+		}
+	case "inspect":
+		if len(args) == 1 {
+			return &OptionalType{Inner: inner}
+		}
+	case "forEach":
+		if len(args) == 1 {
+			return TUnit
+		}
+	case "mapOr":
+		if len(args) == 2 {
+			if t := safeExprType(args[0].Value); t != ErrTypeVal {
+				return t
+			}
+			if r := closureReturnType(args[1].Value); r != nil {
+				return r
+			}
+		}
+	case "mapOrElse":
+		if len(args) == 2 {
+			if r := closureReturnType(args[1].Value); r != nil {
+				return r
+			}
+			if r := closureReturnType(args[0].Value); r != nil {
+				return r
+			}
+		}
+	case "unwrapOr", "unwrapOrElse":
+		return inner
+	case "orElse", "or":
+		return &OptionalType{Inner: inner}
+	case "isSomeAnd", "isNoneOr":
+		return TBool
+	}
+	return nil
+}
+
+func recoverResultHigherOrderReturn(ok, errT Type, method string, args []Arg) Type {
+	if ok == nil || errT == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = ok
+			}
+			return &NamedType{Name: "Result", Args: []Type{r, errT}, Builtin: true}
+		}
+	case "andThen":
+		if len(args) == 1 {
+			if r := closureReturnType(args[0].Value); r != nil {
+				return r
+			}
+			return &NamedType{Name: "Result", Args: []Type{ok, errT}, Builtin: true}
+		}
+	case "mapErr":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = errT
+			}
+			return &NamedType{Name: "Result", Args: []Type{ok, r}, Builtin: true}
+		}
+	case "unwrapOr", "unwrapOrElse":
+		return ok
+	}
+	return nil
+}
+
+// refineExpectedFromOtherArgs patches `expected` in place using
+// arg types the table function couldn't see when building the
+// initial signature. Currently handles:
+//
+//   - `List<T>.fold<A>(init: A, |acc: A, n: T| ...) -> A` —
+//     the closure's `acc` slot (Params[0]) and Return both come
+//     from the init arg (`args[0].Value.Type()`). Without this
+//     `xs.fold(0, |acc, n| acc + n)` lowers with `acc` as
+//     ErrTypeVal and the body's `acc + n` collapses to `<error>`.
+//
+// All other shapes are pass-through.
+func refineExpectedFromOtherArgs(expected *FnType, recvT Type, method string, args []Arg, closureIdx int) {
+	if expected == nil {
+		return
+	}
+	if nt, ok := recvT.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") {
+		if method == "fold" && closureIdx == 1 && len(args) == 2 && len(expected.Params) >= 1 {
+			if expected.Params[0] == nil {
+				if initT := safeExprType(args[0].Value); initT != ErrTypeVal {
+					expected.Params[0] = initT
+				}
+			}
+			if expected.Return == nil || expected.Return == ErrTypeVal {
+				if initT := safeExprType(args[0].Value); initT != ErrTypeVal {
+					expected.Return = initT
+				}
+			}
+		}
+	}
+}
+
+func closureReturnType(e Expr) Type {
+	if e == nil {
+		return nil
+	}
+	cl, ok := e.(*Closure)
+	if !ok || cl == nil {
+		return nil
+	}
+	if cl.Return != nil && cl.Return != ErrTypeVal && cl.Return != TUnit {
+		return cl.Return
+	}
+	if cl.Body != nil && cl.Body.Result != nil {
+		if t := cl.Body.Result.Type(); t != nil && t != ErrTypeVal {
+			return t
+		}
+	}
+	return nil
+}
+
+// expectedClosureFnTypeForBuiltin returns the canonical closure
+// signature for a known stdlib higher-order method call on a
+// recognised builtin generic receiver. Arg index `argIdx` lets a
+// method with multiple closure-typed params (e.g. `mapOrElse(d,
+// f)`) pick the right slot; `argCount` distinguishes overload
+// shapes when only argument count carries the information.
+// Returns nil for unrecognised shapes.
+func expectedClosureFnTypeForBuiltin(recvT Type, method string, argIdx, argCount int) *FnType {
+	if recvT == nil {
+		return nil
+	}
+	// Normalise `T?` to `Option<T>` for the lookup so the chained
+	// `?.filter(...).map(...)` shape works the same as
+	// `Some(x).filter(...)`.
+	switch r := recvT.(type) {
+	case *OptionalType:
+		if r == nil || r.Inner == nil {
+			return nil
+		}
+		return expectedClosureFnTypeForOption(r.Inner, method, argIdx, argCount)
+	case *NamedType:
+		if r == nil || !r.Builtin {
+			return nil
+		}
+		switch r.Name {
+		case "List", "Iter":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return expectedClosureFnTypeForList(r.Args[0], method, argIdx, argCount)
+		case "Option", "Maybe":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return expectedClosureFnTypeForOption(r.Args[0], method, argIdx, argCount)
+		case "Result":
+			if len(r.Args) < 2 {
+				return nil
+			}
+			return expectedClosureFnTypeForResult(r.Args[0], r.Args[1], method, argIdx, argCount)
+		}
+	}
+	return nil
+}
+
+func expectedClosureFnTypeForList(elem Type, method string, argIdx, argCount int) *FnType {
+	if elem == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		// `map<R>(fn(T) -> R) -> List<R>` — R isn't known here so
+		// we leave Return nil; backfillClosure only fills the
+		// param slots when Return is unconstrained.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}}
+		}
+	case "filter", "any", "all", "forEach":
+		// `filter(fn(T) -> Bool) -> List<T>`, similar shape for
+		// the others.
+		if argIdx == 0 && argCount == 1 {
+			ret := TBool
+			if method == "forEach" {
+				ret = TUnit
+			}
+			return &FnType{Params: []Type{elem}, Return: ret}
+		}
+	case "fold":
+		// `fold<A>(init: A, f: fn(A, T) -> A) -> A` — closure is
+		// the second arg. A is derivable from the init arg —
+		// callers thread it via `expectedClosureFnTypeForBuiltinAtArg`
+		// which has access to the full MethodCall arg list.
+		if argIdx == 1 && argCount == 2 {
+			return &FnType{Params: []Type{nil, elem}}
+		}
+	case "reduce":
+		// `reduce(fn(T, T) -> T) -> T?`.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem, elem}, Return: elem}
+		}
+	}
+	return nil
+}
+
+func expectedClosureFnTypeForOption(inner Type, method string, argIdx, argCount int) *FnType {
+	if inner == nil {
+		return nil
+	}
+	switch method {
+	case "map", "andThen":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{inner}}
+		}
+	case "filter", "isSomeAnd", "isNoneOr":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{inner}, Return: TBool}
+		}
+	case "inspect", "forEach":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{inner}, Return: TUnit}
+		}
+	case "mapOr":
+		// `mapOr<U>(fallback: U, f: fn(T) -> U) -> U` — closure
+		// is second arg.
+		if argIdx == 1 && argCount == 2 {
+			return &FnType{Params: []Type{inner}}
+		}
+	case "mapOrElse":
+		// `mapOrElse<U>(fallback: fn() -> U, f: fn(T) -> U) -> U`.
+		switch argIdx {
+		case 0:
+			if argCount == 2 {
+				return &FnType{Params: nil}
+			}
+		case 1:
+			if argCount == 2 {
+				return &FnType{Params: []Type{inner}}
+			}
+		}
+	case "unwrapOrElse":
+		// `unwrapOrElse(fallback: fn() -> T) -> T`.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: nil, Return: inner}
+		}
+	case "orElse":
+		// `orElse(fallback: fn() -> T?) -> T?`.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: nil, Return: &OptionalType{Inner: inner}}
+		}
+	}
+	return nil
+}
+
+func expectedClosureFnTypeForResult(ok, errT Type, method string, argIdx, argCount int) *FnType {
+	if ok == nil || errT == nil {
+		return nil
+	}
+	switch method {
+	case "map", "andThen":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{ok}}
+		}
+	case "mapErr":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{errT}}
+		}
+	case "unwrapOr":
+		// non-closure overload — no backfill needed.
+	case "unwrapOrElse":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{errT}, Return: ok}
+		}
+	}
+	return nil
+}
+
+// backfillClosure fills nil-typed param slots and an unset return
+// slot from the expected fn type. Params already typed (explicit
+// annotation) are left alone — the user might intentionally pick
+// a wider type. Return is only filled when the closure's own
+// Return is the default TUnit AND the body's result type doesn't
+// already carry a concrete inferable type.
+//
+// After param-type recovery, the closure body's Ident references
+// (`n`, `x`, …) still carry the ErrTypeVal they picked up during
+// the initial lowering pass (the resolver could not look up the
+// param type because it was nil). Re-walk the body and replace
+// the typed-by-symbol Idents whose name matches a backfilled
+// param, then re-propagate the resulting concrete types through
+// the trivially-typed parent expressions (BinaryExpr, FieldExpr,
+// MethodCall, CoalesceExpr). This catches the `n > 0` /
+// `x * 2` / `box.n` shapes that drive the canonical
+// stdlib-higher-order closure patterns without re-running the
+// full checker.
+func backfillClosure(cl *Closure, expected *FnType) {
+	if cl == nil || expected == nil {
+		return
+	}
+	updates := map[string]Type{}
+	for i, p := range cl.Params {
+		if p == nil || p.Type != nil {
+			continue
+		}
+		if i >= len(expected.Params) {
+			break
+		}
+		exp := expected.Params[i]
+		if exp == nil || exp == ErrTypeVal {
+			continue
+		}
+		p.Type = exp
+		if p.Name != "" {
+			updates[p.Name] = exp
+		}
+	}
+	if len(updates) > 0 && cl.Body != nil {
+		repropagateClosureBodyTypes(cl.Body, updates)
+	}
+	if expected.Return != nil && expected.Return != ErrTypeVal {
+		// Only force the return slot when the closure didn't
+		// resolve one for itself — `mapOr(0, |x| x)` should pick
+		// up the U from the fallback arg's checker context, not
+		// from the closure's body which we haven't seen yet.
+		if cl.Return == nil || cl.Return == TUnit || cl.Return == ErrTypeVal {
+			cl.Return = expected.Return
+		}
+	}
+	// If the body now has a concrete result type, use it to
+	// refine an otherwise-empty Return slot (e.g. `map(|x|
+	// x.toString())` produces String regardless of expected.Return
+	// being nil for the map-without-known-output case).
+	if (cl.Return == nil || cl.Return == TUnit || cl.Return == ErrTypeVal) && cl.Body != nil && cl.Body.Result != nil {
+		if rt := cl.Body.Result.Type(); rt != nil && rt != ErrTypeVal {
+			cl.Return = rt
+		}
+	}
+	if cl.T == nil || cl.T == ErrTypeVal {
+		// Avoid storing a typed-nil `*FnType` in the Type
+		// interface slot — `synthesiseClosureFnType` returns
+		// `*FnType(nil)` when params/return aren't fully
+		// resolved, which would still satisfy `cl.T != nil`
+		// but panic on any subsequent `t.Return` access.
+		if fnT := synthesiseClosureFnType(cl); fnT != nil {
+			cl.T = fnT
+		}
+	}
+}
+
+// repropagateClosureBodyTypes walks `body` and updates Ident
+// references that name a backfilled closure parameter. Scope-aware:
+// a LetStmt / ForStmt / pattern binding that rebinds one of the
+// param names shadows the update within its scope, so a body
+// like `|x| { let x = 0; x + 1 }` only retypes the outer `x` use.
+//
+// After Idents are re-typed, common trivially-typed parents
+// (BinaryExpr.T, CallExpr.T, MethodCall.T, CoalesceExpr.T) are
+// refreshed in a second pass so the closure's body Result picks
+// up the propagated type — without this the surrounding `n > 0`
+// keeps its ErrTypeVal.
+func repropagateClosureBodyTypes(body *Block, updates map[string]Type) {
+	if body == nil || len(updates) == 0 {
+		return
+	}
+	retypeIdentsScoped(body, updates)
+	Walk(VisitorFunc(func(n Node) bool {
+		switch e := n.(type) {
+		case *BinaryExpr:
+			if e.T == nil || e.T == ErrTypeVal {
+				e.T = inferBinaryResultType(e)
+			}
+		case *CallExpr:
+			if e.T == nil || e.T == ErrTypeVal {
+				if fnT, ok := e.Callee.Type().(*FnType); ok && fnT != nil {
+					e.T = fnT.Return
+				}
+			}
+		case *MethodCall:
+			if e.T == nil || e.T == ErrTypeVal {
+				if t := recoverMethodCallType(e.Name, e.TypeArgs); t != ErrTypeVal {
+					e.T = t
+				}
+			}
+		case *CoalesceExpr:
+			if e.T == nil || e.T == ErrTypeVal {
+				if recovered := recoverCoalesceType(e.Left, e.Right); recovered != ErrTypeVal {
+					e.T = recovered
+				}
+			}
+		}
+		return true
+	}), body)
+}
+
+// retypeIdentsScoped recursively walks any IR subtree, updating
+// Ident.T for references that name an entry in `live` and removing
+// names from `live` for the duration of any shadowing
+// LetStmt/ForStmt/pattern-bound scope. Only Idents whose existing
+// T is nil or ErrTypeVal are touched — already-typed references
+// (including any visible-but-shadowed binding the lowerer typed
+// from the value side) are left alone.
+func retypeIdentsScoped(n Node, live map[string]Type) {
+	if n == nil || len(live) == 0 {
+		return
+	}
+	switch x := n.(type) {
+	case *Ident:
+		if x == nil {
+			return
+		}
+		if newT, hit := live[x.Name]; hit {
+			if x.T == nil || x.T == ErrTypeVal {
+				x.T = CloneType(newT)
+			}
+		}
+	case *Block:
+		if x == nil {
+			return
+		}
+		// LetStmts inside the block introduce shadowing for the
+		// rest of the block. Walk statements in order, popping
+		// names off `live` when shadowed.
+		shadowed := map[string]Type{}
+		for _, s := range x.Stmts {
+			if ls, ok := s.(*LetStmt); ok && ls != nil {
+				// LetStmt.Value is in the outer scope — walk it
+				// before the name is shadowed.
+				if ls.Value != nil {
+					retypeIdentsScoped(ls.Value, live)
+				}
+				// Walk the LetStmt's pattern bindings (irrefutable
+				// patterns destructure into multiple names).
+				if ls.Pattern != nil {
+					retypeIdentsScoped(ls.Pattern, live)
+				}
+				for _, name := range bindingNames(ls) {
+					if _, hit := live[name]; hit {
+						shadowed[name] = live[name]
+						delete(live, name)
+					}
+				}
+				continue
+			}
+			retypeIdentsScoped(s, live)
+		}
+		if x.Result != nil {
+			retypeIdentsScoped(x.Result, live)
+		}
+		// Restore shadowed names for sibling scopes.
+		for k, v := range shadowed {
+			live[k] = v
+		}
+	case *ForStmt:
+		if x == nil {
+			return
+		}
+		if x.Iter != nil {
+			retypeIdentsScoped(x.Iter, live)
+		}
+		if x.Cond != nil {
+			retypeIdentsScoped(x.Cond, live)
+		}
+		if x.Start != nil {
+			retypeIdentsScoped(x.Start, live)
+		}
+		if x.End != nil {
+			retypeIdentsScoped(x.End, live)
+		}
+		shadowedNames := patternBindingNames(x.Pattern)
+		shadowed := withShadow(live, shadowedNames)
+		if x.Body != nil {
+			retypeIdentsScoped(x.Body, live)
+		}
+		restoreShadow(live, shadowed)
+	case *Closure:
+		if x == nil {
+			return
+		}
+		// Nested closure introduces its own param scope; remove
+		// any shadowed names while walking its body.
+		var paramNames []string
+		for _, p := range x.Params {
+			if p != nil && p.Name != "" {
+				paramNames = append(paramNames, p.Name)
+			}
+		}
+		shadowed := withShadow(live, paramNames)
+		if x.Body != nil {
+			retypeIdentsScoped(x.Body, live)
+		}
+		restoreShadow(live, shadowed)
+	case *MatchExpr:
+		if x == nil {
+			return
+		}
+		if x.Scrutinee != nil {
+			retypeIdentsScoped(x.Scrutinee, live)
+		}
+		for _, arm := range x.Arms {
+			if arm == nil {
+				continue
+			}
+			shadowedNames := patternBindingNames(arm.Pattern)
+			shadowed := withShadow(live, shadowedNames)
+			if arm.Guard != nil {
+				retypeIdentsScoped(arm.Guard, live)
+			}
+			if arm.Body != nil {
+				retypeIdentsScoped(arm.Body, live)
+			}
+			restoreShadow(live, shadowed)
+		}
+	case *IfLetExpr:
+		if x == nil {
+			return
+		}
+		if x.Scrutinee != nil {
+			retypeIdentsScoped(x.Scrutinee, live)
+		}
+		shadowedNames := patternBindingNames(x.Pattern)
+		shadowed := withShadow(live, shadowedNames)
+		if x.Then != nil {
+			retypeIdentsScoped(x.Then, live)
+		}
+		restoreShadow(live, shadowed)
+		if x.Else != nil {
+			retypeIdentsScoped(x.Else, live)
+		}
+	default:
+		// Fall back to a generic walk that visits every child
+		// node — covers the common Expr / Stmt shapes (BinaryExpr,
+		// UnaryExpr, CallExpr, FieldExpr, etc.) without enumerating
+		// each case here. Re-uses ir.Walk's traversal, applying
+		// the scope-aware logic recursively to children we
+		// recognise.
+		Walk(VisitorFunc(func(child Node) bool {
+			switch child.(type) {
+			case *Block, *ForStmt, *Closure, *MatchExpr, *IfLetExpr:
+				retypeIdentsScoped(child, live)
+				return false
+			case *Ident:
+				retypeIdentsScoped(child, live)
+				return false
+			}
+			return true
+		}), n)
+	}
+}
+
+// bindingNames returns the names a LetStmt introduces — typically a
+// single `Name`, but a destructuring `let (a, b) = ...` or a
+// struct/variant pattern can yield several.
+func bindingNames(ls *LetStmt) []string {
+	if ls == nil {
+		return nil
+	}
+	if ls.Name != "" {
+		return []string{ls.Name}
+	}
+	return patternBindingNames(ls.Pattern)
+}
+
+// patternBindingNames returns every fresh name a pattern
+// introduces. Wildcards and literals contribute nothing; binding
+// patterns contribute both the outer name and any inner names.
+func patternBindingNames(p Pattern) []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	var walk func(p Pattern)
+	walk = func(p Pattern) {
+		switch x := p.(type) {
+		case *IdentPat:
+			if x != nil && x.Name != "" {
+				out = append(out, x.Name)
+			}
+		case *BindingPat:
+			if x == nil {
+				return
+			}
+			if x.Name != "" {
+				out = append(out, x.Name)
+			}
+			walk(x.Pattern)
+		case *TuplePat:
+			for _, e := range x.Elems {
+				walk(e)
+			}
+		case *StructPat:
+			for _, f := range x.Fields {
+				if f.Pattern != nil {
+					walk(f.Pattern)
+				} else if f.Name != "" {
+					out = append(out, f.Name)
+				}
+			}
+		case *VariantPat:
+			for _, a := range x.Args {
+				walk(a)
+			}
+		case *OrPat:
+			for _, alt := range x.Alts {
+				walk(alt)
+			}
+		}
+	}
+	walk(p)
+	return out
+}
+
+// withShadow removes `names` from `live`, returning the prior
+// values so a matching restoreShadow can reinstate them after the
+// scoped subtree is walked. Names not in live are skipped.
+func withShadow(live map[string]Type, names []string) map[string]Type {
+	if len(names) == 0 {
+		return nil
+	}
+	saved := map[string]Type{}
+	for _, n := range names {
+		if t, hit := live[n]; hit {
+			saved[n] = t
+			delete(live, n)
+		}
+	}
+	return saved
+}
+
+func restoreShadow(live map[string]Type, saved map[string]Type) {
+	for k, v := range saved {
+		live[k] = v
+	}
+}
+
+// inferBinaryResultType derives a result type for a BinaryExpr
+// whose checker-recorded type is ErrTypeVal. Used as a fallback
+// during closure-body re-typing where the operands have just been
+// refreshed but the parent expression's T slot still carries the
+// stale ErrType.
+//
+// Returns Bool for comparison / logical ops. For arithmetic and
+// bitwise ops the operand types are unified via `numericResult`
+// (Float promotion + Int default lane) — if unification fails
+// (mixed non-numeric or incompatible types), ErrTypeVal is
+// preserved rather than guessing.
+func inferBinaryResultType(e *BinaryExpr) Type {
+	if e == nil {
+		return ErrTypeVal
+	}
+	switch e.Op {
+	case BinEq, BinNeq, BinLt, BinLeq, BinGt, BinGeq, BinAnd, BinOr:
+		return TBool
+	case BinAdd, BinSub, BinMul, BinDiv, BinMod,
+		BinBitAnd, BinBitOr, BinBitXor, BinShl, BinShr:
+		lt := safeExprType(e.Left)
+		rt := safeExprType(e.Right)
+		if lt == ErrTypeVal || rt == ErrTypeVal {
+			return ErrTypeVal
+		}
+		return numericResult(lt, rt)
+	}
+	return ErrTypeVal
+}
+
+func safeExprType(e Expr) Type {
+	if e == nil {
+		return ErrTypeVal
+	}
+	t := e.Type()
+	if t == nil {
+		return ErrTypeVal
+	}
+	return t
 }
 
 // recoverUserMethodReturnType walks the receiver's struct/enum AST
@@ -4599,6 +5547,29 @@ func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
 	if receiverType == nil || receiverType == ErrTypeVal {
 		return nil
 	}
+	// Optional chaining: `b?.n` where `b: Box?` lowers as a single
+	// FieldExpr{Optional:true} whose receiver type is `Box?`. The
+	// checker often doesn't record a type for it, and the canonical
+	// struct-field lookup expects a NamedType. Unwrap the option,
+	// look up the field on the inner nominal, and propagate the
+	// None-short-circuit semantics: the result is Option<fieldType>
+	// unless the field is *already* optional (`Outer.inner: Inner?`),
+	// in which case `?.` flattens — chained `outer?.inner?.value`
+	// must produce `Int?`, not `Int??`. Without the flatten, MIR
+	// builds an extra Option wrapper whose None branch falls back
+	// to `none <error>` because the synthesised type can't be
+	// inferred two levels down.
+	if ot, ok := receiverType.(*OptionalType); ok && ot != nil {
+		if innerNT, ok := ot.Inner.(*NamedType); ok && innerNT != nil && !innerNT.Builtin {
+			if t := l.lookupStructFieldType(innerNT.Name, fieldName); t != nil {
+				if _, alreadyOpt := t.(*OptionalType); alreadyOpt {
+					return t
+				}
+				return &OptionalType{Inner: t}
+			}
+		}
+		return nil
+	}
 	nt, ok := receiverType.(*NamedType)
 	if !ok || nt.Builtin {
 		return nil
@@ -4843,9 +5814,60 @@ func (l *lowerer) lowerClosure(c *ast.ClosureExpr) Expr {
 		lowered := l.lowerExpr(c.Body)
 		out.Body = &Block{Result: lowered, SpanV: lowered.At()}
 	}
+	// Recover return type from the lowered body when no explicit
+	// annotation was given AND the checker also didn't supply a
+	// FnType (out.T stayed ErrType / nil). Without this fallback,
+	// `let inc = |x: Int| x + 1` ends up with Return=TUnit even
+	// though the body trivially returns Int — downstream lowering
+	// then reads the binding as `<error>` because the let's
+	// inferred type is built from the closure's `Return` slot.
+	if c.ReturnType == nil && out.Return == TUnit {
+		if bodyT := closureBodyResultType(out.Body); bodyT != nil && bodyT != ErrTypeVal {
+			out.Return = bodyT
+		}
+	}
+	// Synthesise a FnType for the closure value when the checker
+	// left out.T as ErrType / nil. Param + return slots are now
+	// concretely typed (annotations + body recovery), so the
+	// surface fn(...) -> R is recoverable and downstream LetStmt
+	// binding type recovery picks it up.
+	if out.T == nil || out.T == ErrTypeVal {
+		if fnT := synthesiseClosureFnType(out); fnT != nil {
+			out.T = fnT
+		}
+	}
 	// Compute free-variable captures.
 	out.Captures = ComputeCaptures(out.Body, out.Params)
 	return out
+}
+
+// closureBodyResultType reads the trailing-expression type of a
+// closure body block. Returns nil for void closures (no Result) or
+// for bodies whose Result has no usable type.
+func closureBodyResultType(body *Block) Type {
+	if body == nil || body.Result == nil {
+		return nil
+	}
+	return body.Result.Type()
+}
+
+// synthesiseClosureFnType builds a `fn(P0, P1, …) -> R` for a
+// closure whose param/return slots are already resolved. Returns
+// nil when any slot is still unset — leaving out.T as ErrType so
+// downstream validators can flag the missing piece instead of
+// pretending the closure is well-typed.
+func synthesiseClosureFnType(cl *Closure) *FnType {
+	if cl == nil || cl.Return == nil || cl.Return == ErrTypeVal {
+		return nil
+	}
+	params := make([]Type, 0, len(cl.Params))
+	for _, p := range cl.Params {
+		if p == nil || p.Type == nil || p.Type == ErrTypeVal {
+			return nil
+		}
+		params = append(params, p.Type)
+	}
+	return &FnType{Params: params, Return: cl.Return}
 }
 
 func (l *lowerer) lowerTurbofish(tf *ast.TurbofishExpr) Expr {
