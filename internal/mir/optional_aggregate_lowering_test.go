@@ -32,11 +32,10 @@ import (
 //     chaining return type through.
 func TestLowerOptionalStructPayloadProjectsThroughVariant(t *testing.T) {
 	cases := []struct {
-		name           string
-		src            string
-		wantMIR        []string
-		dontWant       []string
-		allowErrorType bool
+		name     string
+		src      string
+		wantMIR  []string
+		dontWant []string
 	}{
 		{
 			name: "question_field_chain_with_default",
@@ -127,19 +126,19 @@ fn print(b: Box?) -> Int {
 				// `if let Some(box) = b` lowers to a discriminant
 				// probe + Some-arm payload bind, same shape as a
 				// 2-arm match. The bound `box` reaches the body as
-				// a payload projection (`_<x>@Some.0`).
+				// a payload projection (`_<x>@Some.0`) typed as the
+				// inner payload (`Box`), derived from the receiver
+				// `Box?` via `builtinVariantPayloadType` for prelude
+				// Option whose enum decl doesn't live in the user
+				// module.
 				"@Some.0",
 				"discriminant",
 				".n",
+				// Locking the recovered payload type — without the
+				// builtin variant lookup fallback this slot would
+				// read `<error>  // box`.
+				"Box  // box",
 			},
-			// The if-let payload binding's declared type currently
-			// still reaches MIR as `<error>` because the checker
-			// doesn't always thread the pattern position type
-			// down to the binding — tracked separately from this
-			// PR's `?.field` fix. The structural projection is
-			// correct (`_x@Some.0` + `.n`) and downstream lowering
-			// reads the field from the payload directly.
-			allowErrorType: true,
 		},
 	}
 	for _, c := range cases {
@@ -158,7 +157,7 @@ fn print(b: Box?) -> Int {
 					t.Errorf("GAP-INSTR-006 marker %q in MIR:\n%s", b, mirText)
 				}
 			}
-			if !c.allowErrorType && strings.Contains(mirText, "<error>") {
+			if strings.Contains(mirText, "<error>") {
 				t.Errorf("ErrTypeVal leaked into MIR for %s:\n%s", c.name, mirText)
 			}
 			for _, dw := range c.dontWant {
