@@ -3798,8 +3798,308 @@ func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
 		if expected == nil {
 			continue
 		}
+		// Some methods have closure params whose types are
+		// inferable from *other* args at the call site —
+		// `fold<A>(init: A, |acc: A, n: T| ...)` is the
+		// canonical example, where A comes from the init arg's
+		// type. Patch missing param/return slots in `expected`
+		// using the surrounding arg shape before backfilling.
+		refineExpectedFromOtherArgs(expected, recvT, mc.Name, mc.Args, i)
 		backfillClosure(cl, expected)
 	}
+	// Recover the MethodCall's own T from the receiver type +
+	// method name + (now-resolved) closure return types. Without
+	// this, `name.map(|s| s).filter(...)` leaves
+	// `Option__map(...)` typed `<error>` even though both args
+	// resolved, and the next chained `.filter(...)` reads a
+	// poisoned receiver. The recovery is bounded to the same
+	// stdlib higher-order method table the closure backfill
+	// uses, so chained `map/filter/andThen/...` chains lower
+	// without their middle nodes being marked as ErrType.
+	if mc.T == nil || mc.T == ErrTypeVal {
+		if recovered := recoverHigherOrderMethodReturnType(recvT, mc.Name, mc.Args); recovered != nil {
+			mc.T = recovered
+		}
+	}
+}
+
+// recoverHigherOrderMethodReturnType derives the return type of
+// `recv.method(args...)` for stdlib higher-order methods on
+// List / Option / Result whose checker-side return-type inference
+// often fails when the call's first arg is an inferred closure.
+// Mirrors the dispatch in `expectedClosureFnTypeForBuiltin` so a
+// matching method here implies the call's return shape is
+// well-defined by the type table:
+//
+//   - List<T>.map<R>(fn(T) -> R) -> List<R>
+//   - List<T>.filter(fn(T) -> Bool) -> List<T>
+//   - Option<T>.map<U>(fn(T) -> U) -> U?
+//   - Option<T>.andThen<U>(fn(T) -> U?) -> U?
+//   - Option<T>.filter(fn(T) -> Bool) -> T?
+//   - Result<T,E>.map<U>(fn(T) -> U) -> Result<U, E>
+//   - etc.
+//
+// Returns nil for shapes outside the table — callers leave the
+// MethodCall's T as ErrType so downstream recovery doesn't paper
+// over a real type-checker gap.
+func recoverHigherOrderMethodReturnType(recvT Type, method string, args []Arg) Type {
+	if recvT == nil {
+		return nil
+	}
+	switch r := recvT.(type) {
+	case *OptionalType:
+		if r == nil || r.Inner == nil {
+			return nil
+		}
+		return recoverOptionHigherOrderReturn(r.Inner, method, args)
+	case *NamedType:
+		if r == nil || !r.Builtin {
+			return nil
+		}
+		switch r.Name {
+		case "List", "Iter":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return recoverListHigherOrderReturn(r.Name, r.Args[0], method, args)
+		case "Option", "Maybe":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return recoverOptionHigherOrderReturn(r.Args[0], method, args)
+		case "Result":
+			if len(r.Args) < 2 {
+				return nil
+			}
+			return recoverResultHigherOrderReturn(r.Args[0], r.Args[1], method, args)
+		}
+	}
+	return nil
+}
+
+func recoverListHigherOrderReturn(listName string, elem Type, method string, args []Arg) Type {
+	if elem == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = elem
+			}
+			return &NamedType{Name: listName, Args: []Type{r}, Builtin: true}
+		}
+	case "filter":
+		if len(args) == 1 {
+			return &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+		}
+	case "any", "all":
+		if len(args) == 1 {
+			return TBool
+		}
+	case "forEach":
+		if len(args) == 1 {
+			return TUnit
+		}
+	case "fold":
+		if len(args) == 2 {
+			// fold returns the accumulator type — pull from the
+			// init arg.
+			if t := safeExprType(args[0].Value); t != ErrTypeVal {
+				return t
+			}
+		}
+	case "reduce":
+		if len(args) == 1 {
+			return &OptionalType{Inner: elem}
+		}
+	case "enumerate":
+		if len(args) == 0 {
+			pair := &TupleType{Elems: []Type{TInt, elem}}
+			return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+		}
+	case "chunked", "windowed":
+		// Both return `List<List<T>>`. windowed takes 2 args
+		// (size, step); chunked takes 1 (size). The intermediate
+		// `List<T>` keeps the source list's elem.
+		inner := &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+		return &NamedType{Name: listName, Args: []Type{inner}, Builtin: true}
+	case "partition":
+		if len(args) == 1 {
+			lst := &NamedType{Name: listName, Args: []Type{elem}, Builtin: true}
+			return &TupleType{Elems: []Type{lst, lst}}
+		}
+	case "zip":
+		if len(args) == 1 {
+			// `zip(other: List<U>) -> List<(T, U)>` — derive U
+			// from the other-arg's receiver-arg shape.
+			otherT := safeExprType(args[0].Value)
+			if otherT != ErrTypeVal {
+				if nt, ok := otherT.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") && len(nt.Args) >= 1 {
+					pair := &TupleType{Elems: []Type{elem, nt.Args[0]}}
+					return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+				}
+			}
+			pair := &TupleType{Elems: []Type{elem, elem}}
+			return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
+		}
+	case "len":
+		return TInt
+	case "isEmpty":
+		return TBool
+	}
+	return nil
+}
+
+func recoverOptionHigherOrderReturn(inner Type, method string, args []Arg) Type {
+	if inner == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = inner
+			}
+			return &OptionalType{Inner: r}
+		}
+	case "andThen":
+		if len(args) == 1 {
+			// closure returns `U?`; the method threads that
+			// through. Pull the inner U from the closure's
+			// Return if it's an Option.
+			if r := closureReturnType(args[0].Value); r != nil {
+				if ot, ok := r.(*OptionalType); ok && ot != nil {
+					return ot
+				}
+				return &OptionalType{Inner: r}
+			}
+			return &OptionalType{Inner: inner}
+		}
+	case "filter":
+		if len(args) == 1 {
+			return &OptionalType{Inner: inner}
+		}
+	case "inspect":
+		if len(args) == 1 {
+			return &OptionalType{Inner: inner}
+		}
+	case "forEach":
+		if len(args) == 1 {
+			return TUnit
+		}
+	case "mapOr":
+		if len(args) == 2 {
+			if t := safeExprType(args[0].Value); t != ErrTypeVal {
+				return t
+			}
+			if r := closureReturnType(args[1].Value); r != nil {
+				return r
+			}
+		}
+	case "mapOrElse":
+		if len(args) == 2 {
+			if r := closureReturnType(args[1].Value); r != nil {
+				return r
+			}
+			if r := closureReturnType(args[0].Value); r != nil {
+				return r
+			}
+		}
+	case "unwrapOr", "unwrapOrElse":
+		return inner
+	case "orElse", "or":
+		return &OptionalType{Inner: inner}
+	case "isSomeAnd", "isNoneOr":
+		return TBool
+	}
+	return nil
+}
+
+func recoverResultHigherOrderReturn(ok, errT Type, method string, args []Arg) Type {
+	if ok == nil || errT == nil {
+		return nil
+	}
+	switch method {
+	case "map":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = ok
+			}
+			return &NamedType{Name: "Result", Args: []Type{r, errT}, Builtin: true}
+		}
+	case "andThen":
+		if len(args) == 1 {
+			if r := closureReturnType(args[0].Value); r != nil {
+				return r
+			}
+			return &NamedType{Name: "Result", Args: []Type{ok, errT}, Builtin: true}
+		}
+	case "mapErr":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = errT
+			}
+			return &NamedType{Name: "Result", Args: []Type{ok, r}, Builtin: true}
+		}
+	case "unwrapOr", "unwrapOrElse":
+		return ok
+	}
+	return nil
+}
+
+// refineExpectedFromOtherArgs patches `expected` in place using
+// arg types the table function couldn't see when building the
+// initial signature. Currently handles:
+//
+//   - `List<T>.fold<A>(init: A, |acc: A, n: T| ...) -> A` —
+//     the closure's `acc` slot (Params[0]) and Return both come
+//     from the init arg (`args[0].Value.Type()`). Without this
+//     `xs.fold(0, |acc, n| acc + n)` lowers with `acc` as
+//     ErrTypeVal and the body's `acc + n` collapses to `<error>`.
+//
+// All other shapes are pass-through.
+func refineExpectedFromOtherArgs(expected *FnType, recvT Type, method string, args []Arg, closureIdx int) {
+	if expected == nil {
+		return
+	}
+	if nt, ok := recvT.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") {
+		if method == "fold" && closureIdx == 1 && len(args) == 2 && len(expected.Params) >= 1 {
+			if expected.Params[0] == nil {
+				if initT := safeExprType(args[0].Value); initT != ErrTypeVal {
+					expected.Params[0] = initT
+				}
+			}
+			if expected.Return == nil || expected.Return == ErrTypeVal {
+				if initT := safeExprType(args[0].Value); initT != ErrTypeVal {
+					expected.Return = initT
+				}
+			}
+		}
+	}
+}
+
+func closureReturnType(e Expr) Type {
+	if e == nil {
+		return nil
+	}
+	cl, ok := e.(*Closure)
+	if !ok || cl == nil {
+		return nil
+	}
+	if cl.Return != nil && cl.Return != ErrTypeVal && cl.Return != TUnit {
+		return cl.Return
+	}
+	if cl.Body != nil && cl.Body.Result != nil {
+		if t := cl.Body.Result.Type(); t != nil && t != ErrTypeVal {
+			return t
+		}
+	}
+	return nil
 }
 
 // expectedClosureFnTypeForBuiltin returns the canonical closure
@@ -3871,8 +4171,9 @@ func expectedClosureFnTypeForList(elem Type, method string, argIdx, argCount int
 		}
 	case "fold":
 		// `fold<A>(init: A, f: fn(A, T) -> A) -> A` — closure is
-		// the second arg. Without A inferred we leave Return nil
-		// and only fill the second param slot.
+		// the second arg. A is derivable from the init arg —
+		// callers thread it via `expectedClosureFnTypeForBuiltinAtArg`
+		// which has access to the full MethodCall arg list.
 		if argIdx == 1 && argCount == 2 {
 			return &FnType{Params: []Type{nil, elem}}
 		}
@@ -4018,7 +4319,14 @@ func backfillClosure(cl *Closure, expected *FnType) {
 		}
 	}
 	if cl.T == nil || cl.T == ErrTypeVal {
-		cl.T = synthesiseClosureFnType(cl)
+		// Avoid storing a typed-nil `*FnType` in the Type
+		// interface slot — `synthesiseClosureFnType` returns
+		// `*FnType(nil)` when params/return aren't fully
+		// resolved, which would still satisfy `cl.T != nil`
+		// but panic on any subsequent `t.Return` access.
+		if fnT := synthesiseClosureFnType(cl); fnT != nil {
+			cl.T = fnT
+		}
 	}
 }
 
