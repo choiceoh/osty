@@ -231,6 +231,20 @@ D)  PR3 자체 보류 — M2 partial 로 만족. source bootstrap UNLOCK 이 핵
 
 본 plan scope 외 — mir_generator owner trajectory. PR #1858 의 stage0 cascade 패턴 (PR1/PR2/PR3 wave) 으로 cover 추가도 같은 layer 의 별개 작업.
 
+**2026-05-17 옵션 γ 추가 측정 — mirEmitModule entry 확인**:
+- `toolchain/main.osty:524` 의 `osty-self lir-proto-lower` 명령이 `mirEmitModule(mir, opts) -> irText` 호출. 즉 LIR Proto pipeline 의 진짜 entry.
+- `mirEmitIntrinsicInstr` (line 18906+) 의 cover 가 매우 깊음 — 수십 intrinsic family (Print/Println/Eprint, List*, Map*, Set*, String*, Channel/Spawn/...) match arm.
+- `mirEmitCallInstr` (line 18746+) 도 calleeKind 분기 + projection prelude + indirect call 처리.
+
+즉 Phase 1c 가 실제로 매우 진척된 상태. **`mirJsonObjectGetNamed` build 시 "stage0 declined" 의 진짜 원인 = mirEmitModule 거치고도 mirEmitFunctionStub 내부의 일부 rvalue/instruction 이 `; TODO Phase 1d` comment 또는 `unreachable` stub 으로 emit → 후속 LLVM verifier 또는 clang link 단계에서 silent fail → osty-self 가 fallback path 로 throw**. 즉 LIR Proto pipeline 활성이지만 cover gap.
+
+진짜 fix path 의 구체:
+1. `mirEmitInstruction` 의 dispatch 에 missing rvalue/intrinsic kind 추가 — case-by-case (수십 LOC per case)
+2. `; TODO Phase 1d` comment 마다 진짜 emit code 추가
+3. unreachable stub 의 진짜 LLVM IR 대체
+
+이 작업이 mir_generator owner 의 본격 trajectory. 외부 작업자 (PR #1858 author 등) 의 후속 wave 가능성.
+
 ## 10. 2026-05-17 최종 측정 (PR #1865/#1868)
 
 **audit scope 의 한계 발견** + **backend audit-out 함수 수**:
