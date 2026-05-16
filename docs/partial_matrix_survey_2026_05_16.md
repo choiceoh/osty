@@ -12,7 +12,7 @@
 | 2 | Annotation LLVM emit (A5/A8/A9/A10/A11/A13) | 100–250 (split) | Osty | 없음 | ✅ × 6 PR | 아래 §3 상세 |
 | 3 | Defer lifecycle (runtime) | 500+ | Osty + Go + spec | SPEC_GAPS entry | ✗ | Cross-cutting backend; spec decision 선행 |
 | 4 | 숫자 리터럴 다형성 | 50–100 | Osty | 없음 | ✅ 1차 착륙 2026-05-16 (arith 전파) | `elabCheckBinary` 추가로 `let x: T = a op b` 의 양 피연산자에 T 전파. 비-arith 는 infer→subtype 유지 |
-| 5 | Closure annotation requirement (E0752) | 80–150 | Osty | 없음 | ✅ | param seeding 만 구현 — closure elab 범위 확장 |
+| 5 | Closure annotation requirement (E0752) | 80–150 | Osty | 없음 | ✅ 1차 착륙 2026-05-16 (test coverage) | "partial" 은 실제로 test 갭이었음 — production 에서 E0752 정상 emit, spec corpus 는 native checker 미설치라 waiver, internal/check 에 4 케이스 Go 테스트로 잠금 |
 | 6 | Raw-ptr handling (privilege+POD) | 200–400 | Osty | 없음 | ⚠️ | 3-gate 통합 권장; 분할 시 conflict 위험 |
 | 7 | File/Package/Workspace 진입점 정리 | 100–200 | Osty | 없음 | ✅ | Go exec wrapper 완료, Osty phase 정리만 |
 | 8 | Diagnostic file-path stamping | 50–100 | Osty + Go | 없음 | ✅ | Go `stampPackageDiags` 의 Osty 측 이관 |

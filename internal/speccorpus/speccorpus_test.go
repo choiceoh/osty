@@ -68,6 +68,14 @@ var negativeWaivers = map[string][]string{
 	"E0504/import name conflicts with top-level decl": {"error:E0501", "error:-", "warning:L0003"},
 	"E0503/import name conflicts with local":          {"error:-", "warning:L0003", "warning:L0001"},
 
+	// E0752: closure annotation requirement is emitted by the
+	// self-host elab.osty (verified via `.bin/osty check`) but
+	// the speccorpus pipeline.Run path has no native checker
+	// installed, so check-level diags surface as the generic
+	// "type checking unavailable" `error:-` instead.
+	"E0752/closure param lacks annotation in unconstrained context":            {"error:-", "warning:L0031"},
+	"E0752/closure param mixed annotation — un-annotated param still requires it": {"error:-", "warning:L0031"},
+
 	// E0757/E0758: as? downcast checking lives in the
 	// self-host elab.osty path but the single-file pipeline
 	// doesn't route through elabInferMethodCall's flag check.
