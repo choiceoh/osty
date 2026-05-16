@@ -3461,6 +3461,29 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 		}
 	}
 	if pt, ok := recvT.(*ir.PrimType); ok {
+		// `__IntMethods` (internal/stdlib/primitives/int.osty) fan-out:
+		// abs / min / max / clamp / signum / pow + the wrapping / saturating
+		// arithmetic families all return `Self` and apply to every integer
+		// kind. `checked*` returns `Self?`. Recovering the return type via
+		// the receiver primitive un-poisons MIR temps that would otherwise
+		// reach lir_proto as `<error>`.
+		switch pt.Kind {
+		case ir.PrimInt, ir.PrimByte:
+			switch method {
+			case "abs", "min", "max", "clamp", "signum", "pow",
+				"wrappingAdd", "wrappingSub", "wrappingMul", "wrappingDiv",
+				"wrappingMod", "wrappingShl", "wrappingShr",
+				"wrappingAbs", "wrappingNeg",
+				"saturatingAdd", "saturatingSub", "saturatingMul", "saturatingDiv":
+				return recvT
+			case "checkedAdd", "checkedSub", "checkedMul", "checkedDiv",
+				"checkedMod", "checkedShl", "checkedShr",
+				"checkedAbs", "checkedNeg":
+				return &ir.OptionalType{Inner: recvT}
+			case "toString":
+				return ir.TString
+			}
+		}
 		switch pt.Kind {
 		case ir.PrimInt:
 			switch method {
