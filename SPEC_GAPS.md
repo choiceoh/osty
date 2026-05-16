@@ -239,6 +239,7 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 2. `[lib]` crate 가 dep 로 import 될 때 module file → `Module` symbol 등록 (현재 type 등록으로 fallback)
 3. `<module>.<symbol>` access 가 method-lookup 가 아니라 module-scoped symbol lookup 으로 dispatch
 4. `cmd/osty/build.go::emitViaQuery` 가 `m.Lib != nil` 인 manifest 를 library object + export meta 산출 path 로 route. **현재 manifest.go 가 `[lib]` parse + render 하나 cmd/osty 의 build 가 활용 0건** — 2026-05-16 PR 에서 explicit decline 진단으로 surface.
+5. **`toolchain/resolve.osty:499` — use-decl 처리 시 alias 만 `"package"` kind 의 symbol 로 등록, full import path 미저장**. 즉 `use toolchain.check as tc` 시 `tc` 는 알려지지만 어떤 module 인지 추적 없음 → `tc.frontInvalidTypeRepr()` 호출 시 method-on-package 인지 못 하고 method-on-type 으로 fallback → E0703. 진짜 fix = `SelfSymbol` 에 import-path 필드 추가 + module-scoped lookup arm (`elab.osty` 의 method-call dispatch 에 새 분기). 추정 ~150 LOC + 다수 사이트 회귀 검증.
 
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 
