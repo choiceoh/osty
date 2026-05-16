@@ -19,7 +19,7 @@ import (
 //
 //     ```osty
 //     fn makeAdder(n: Int) -> fn(Int) -> Int {
-//         |x| x + n
+//     |x| x + n
 //     }
 //     ```
 //

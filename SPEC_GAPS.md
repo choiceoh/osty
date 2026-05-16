@@ -241,6 +241,8 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 4. `cmd/osty/build.go::emitViaQuery` 가 `m.Lib != nil` 인 manifest 를 library object + export meta 산출 path 로 route. **현재 manifest.go 가 `[lib]` parse + render 하나 cmd/osty 의 build 가 활용 0건** — 2026-05-16 PR 에서 explicit decline 진단으로 surface.
 5. **`toolchain/resolve.osty:499` — use-decl 처리 시 alias 만 `"package"` kind 의 symbol 로 등록, full import path 미저장**. 즉 `use toolchain.check as tc` 시 `tc` 는 알려지지만 어떤 module 인지 추적 없음 → `tc.frontInvalidTypeRepr()` 호출 시 method-on-package 인지 못 하고 method-on-type 으로 fallback → E0703. 진짜 fix = `SelfSymbol` 에 import-path 필드 추가 + module-scoped lookup arm (`elab.osty` 의 method-call dispatch 에 새 분기). 추정 ~150 LOC + 다수 사이트 회귀 검증.
 
+   **2026-05-17 시도 결과 (PR3-C-impl)**: `toolchain/resolve.osty:499` 의 `selfSymbolAtNode(alias, "package", "", ...)` 를 `selfSymbolAtNode(alias, "package", node.text, ...)` (typeName 필드 재사용으로 import path 저장) 만 변경 시도. `just front` 모든 회귀 0건. **그러나 `internal/selfhost/generated.go` (frozen seed, PR #854 에서 regen retire) 가 production resolver 로 사용되므로 `toolchain/resolve.osty` 변경은 dead code**. 진짜 fix path = Go-side: (i) `internal/selfhost/api/types.go::ResolvedSymbol` 에 `ImportPath string` 필드 추가, (ii) `internal/selfhost/resolve_adapter.go` 의 use-decl 처리 site 에서 use-decl path 추출 + 저장, (iii) checker (`internal/check` 또는 `toolchain/elab.osty` 의 transpiled portion) 의 method-call dispatch 에 module-scoped lookup 분기. **5-7 파일 cross-cutting** 으로 단일 세션 무리 — PR3-C-impl-go 별도 trajectory.
+
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 
 **관련 doc**: [docs/llvm-selfhost-plan-pr3-attempt.md](docs/llvm-selfhost-plan-pr3-attempt.md), [docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md).
