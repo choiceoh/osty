@@ -1798,31 +1798,20 @@ func (s *monoState) scanExpr(e Expr) {
 	if e == nil {
 		return
 	}
-	// Phase 2: rewrite every generic NamedType reference buried in the
-	// expression's own type fields (e.g. StructLit.T, CallExpr.T,
-	// Ident.T). Safe to run before the case dispatch — idempotent on
-	// already-mangled references.
-	s.rewriteExprType(e)
-	switch e := e.(type) {
-	case *CallExpr:
-		// Rewrite generic call to mangled specialization.
-		//
-		// CallExpr.TypeArgs is sourced from the checker's instantiation
-		// table. For most user-side generic calls it carries the full
-		// list. For stdlib method-body calls rewritten via
-		// `RewriteStdlibMethodCallsites` (`opt.map(|x| ...)` →
-		// `osty_std_option__Option__map(opt, |x| ...)`), the receiver's
-		// concrete owner args are already prepended, but the closure-
-		// returning combinators commonly leave method-local generics
-		// (e.g. `map<U>`'s `U`) implicit — the checker records no
-		// turbofish for them and we have to derive them from the
-		// concrete arg types at rewrite time. Without that fallback,
-		// the call site silently leaves `osty_std_option__Option__map`
-		// unspecialized, the generic template gets dropped from the
-		// output module, and downstream lowering walls on the
-		// unresolved symbol.
-		if len(e.TypeArgs) > 0 || s.callCalleeIsGenericFn(e) {
-			s.rewriteGenericCall(e)
+	// For generic free-fn calls, do the call-site rewrite (which
+	// substitutes the call's return type via the resolved env)
+	// BEFORE rewriteExprType walks the type. Otherwise rewriteType
+	// sees the unsubstituted return type (e.g. enumerate's
+	// `List<(Int, T)>` with bare T) and tries to queue a struct
+	// spec for `List<(Int, T)>` — the containsTypeVar guard rejects
+	// it as "still contains a type variable" and the call site
+	// stays unspecialized. Once `rewriteGenericCall` has plugged
+	// the concrete args (`T → Int`), the call's `T` is
+	// `List<(Int, Int)>` and the subsequent rewriteExprType queues
+	// the spec cleanly.
+	if c, ok := e.(*CallExpr); ok {
+		if len(c.TypeArgs) > 0 || s.callCalleeIsGenericFn(c) {
+			s.rewriteGenericCall(c)
 			// After monomorphization the backend contract is fully
 			// concrete: any remaining CallExpr.TypeArgs are just
 			// checker-side instantiation metadata on a call shape the
@@ -1832,8 +1821,16 @@ func (s *monoState) scanExpr(e Expr) {
 			// callee in a TurbofishExpr, which downstream LLVM testing /
 			// stdlib dispatch does not expect. Retain the concrete
 			// result/arg types, but strip the stale type-arg wrapper.
-			e.TypeArgs = nil
+			c.TypeArgs = nil
 		}
+	}
+	// Phase 2: rewrite every generic NamedType reference buried in the
+	// expression's own type fields (e.g. StructLit.T, CallExpr.T,
+	// Ident.T). Safe to run before the case dispatch — idempotent on
+	// already-mangled references.
+	s.rewriteExprType(e)
+	switch e := e.(type) {
+	case *CallExpr:
 		s.scanExpr(e.Callee)
 		for i := range e.Args {
 			s.scanExpr(e.Args[i].Value)
