@@ -68,9 +68,9 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
-| GAP-TYP-001 | 1855 | `unsupported param type \`T\`` | Interface 타입, Closure type, Tuple, 미등록 generic struct |
-| GAP-TYP-002 | 1974 | `unsupported local type \`T\`` | 위와 동일 + 임시 closure local |
-| GAP-TYP-003 | 2081 | `unsupported assign destination type \`T\`` | 위와 같은 사유 |
+| GAP-TYP-001 | lir_proto.osty:2719,2740 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `unsupported param type \`T\`` + primitive/ref/option-result/layout-count root-cause hint |
+| GAP-TYP-002 | lir_proto.osty:2993 | ✅ 2026-05-17 trace 추가 | `unsupported local type \`T\`` + 동일 trace |
+| GAP-TYP-003 | lir_proto.osty:3105 | ✅ 2026-05-17 trace 추가 | `unsupported assign destination type \`T\`` + 동일 trace |
 | GAP-TYP-004 | lir_proto.osty | ✅ Phase A에서 명시 진단 | `lirLowerMirType_module` 폴스루가 `unsupported module type`으로 보고됨 |
 
 #### 2.2.3 Instruction-level fallthrough
@@ -150,11 +150,11 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 ### Phase A — 기반 인프라 강화 (선행)
 
-**A1 — Type lowering invalid path 진단 강화** (GAP-TYP-004)
-- `lirLowerMirType_module` 폴스루를 silent invalid → 명시적 `lirLowerError`로 격상.
-- 현재 발생하는 "unsupported param type"의 root cause를 trace로 노출 가능하게.
-- 예상 변경: lir_proto.osty 한 함수, ~30 LOC.
-- 회귀: 새 진단 스냅샷 1건.
+**A1 — Type lowering invalid path 진단 강화** (GAP-TYP-001/002/003/004) ✅ **완료 2026-05-17**
+- `lirLowerMirType_module` 폴스루를 silent invalid → 명시적 `lirLowerError`로 격상. (이전 phase)
+- `lirTypeLowerTraceMessage(mir, name) -> String` helper 추가. 4 fallthrough 사이트 (param x2 / local / assign-dest) 가 같은 trace 메시지 emit. (2026-05-17)
+- 결과 메시지 예: `unsupported param type \`Foo\` (primitive miss; ref-builtin miss; option/result miss; 0 interface layout(s); 5 struct layout(s); 0 tuple layout(s); 3 enum layout(s))` — root cause 즉시 가시화.
+- 변경: lir_proto.osty +35 LOC (helper 추가) / -1 LOC (trace inline 제거) — 합계 ~+30 LOC.
 
 **A2 — MIR uses/imports lowering** (GAP-MOD-001)
 - 다중 파일 패키지가 native-owned 경로 진입 가능하게.

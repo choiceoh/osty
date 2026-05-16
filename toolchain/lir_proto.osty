@@ -2242,12 +2242,38 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
             return LirType {llvm: typeName, className: LirTypeAggregate}
         }
     }
-    let layoutCount = mir.layouts.structs.len()
-    let interfaceCount = mir.layouts.interfaces.len()
-    let enumCount = mir.layouts.enums.len()
-    let trace = "primitive miss; ref-builtin miss; option/result miss; " + lirIntToString(interfaceCount) + " interface layout(s) checked, no match; " + lirIntToString(layoutCount) + " struct layout(s) checked, no match; " + lirIntToString(enumCount) + " enum layout(s) checked, no match"
-    diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "` (" + trace + ")", path))
+    diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "` (" + lirTypeLowerTraceMessage(mir, name) + ")", path))
     LirType {llvm: "", className: LirTypeUnknown}
+}
+
+/// lirTypeLowerTraceMessage builds the "primitive miss; ref-builtin miss;
+/// option/result miss; N interface layout(s); ..." trace string that
+/// surfaces in `unsupported {module/param/local/assign-dest} type` errors.
+/// Single source of truth so every fallthrough site reports the same root-
+/// cause hint without re-implementing the check sequence.
+///
+/// The "miss" vs "match" tags reflect each predicate check on `name`;
+/// `layout(s)` counts surface how many candidate layouts were available to
+/// match against. Callers reach this from a fail site (lowering already
+/// returned LirTypeUnknown), so by construction no layout matched.
+fn lirTypeLowerTraceMessage(mir: MirModule, rawName: String) -> String {
+    let name = lirCanonicalizeOptionalSugar(rawName)
+    let primMatch = if lirTypeIsZero(lirLowerPrimitiveTypeName(name)) {
+        "miss"
+    } else {
+        "match"
+    }
+    let refMatch = if lirIsRefBuiltinTypeName(name) {
+        "match"
+    } else {
+        "miss"
+    }
+    let optResMatch = if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
+        "match"
+    } else {
+        "miss"
+    }
+    "primitive " + primMatch + "; ref-builtin " + refMatch + "; option/result " + optResMatch + "; " + lirIntToString(mir.layouts.interfaces.len()) + " interface layout(s); " + lirIntToString(mir.layouts.structs.len()) + " struct layout(s); " + lirIntToString(mir.layouts.tuples.len()) + " tuple layout(s); " + lirIntToString(mir.layouts.enums.len()) + " enum layout(s)"
 }
 // Composite layout — only resolve those already in the MIR module.
 // Trace: enumerate every check that ran so root-cause is visible without
@@ -2716,7 +2742,7 @@ fn lirLowerMirFunctionParamsFromLocals(params: List<LirParam>, name: String, l: 
         if loc.isParam {
             let typ = lirLowerMirType(l, loc.typ)
             if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
-                lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "`", name)
+                lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", name)
             } else {
                 params.push(lirParamWithAttrs(lirMirParamName(loc.id), typ, lirParamAttrsFromMir(l.fn_, typ)))
             }
@@ -2737,7 +2763,7 @@ fn lirLowerMirFunctionParams(l: LirMirFunctionLowerer, ids: List<Int>, pos: Int,
     } else {
         let typ = lirLowerMirType(l, loc.typ)
         if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
-            lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "`", name)
+            lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", name)
         } else {
             let attrs = lirParamAttrsFromMir(l.fn_, typ)
             next.push(lirParamWithAttrs(lirMirParamName(id), typ, attrs))
@@ -2990,7 +3016,7 @@ fn lirLowerMirLocalsFrom(locals: List<MirLocal>, l: LirMirFunctionLowerer, pos: 
     let loc = locals[pos]
     let typ = lirLowerMirType(l, loc.typ)
     if lirTypeIsZero(typ) {
-        lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "`", "local." + loc.name)
+        lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", "local." + loc.name)
     } else if !(lirTypeIsVoid(typ)) {
         let slot = lirMirLocalSlotName(loc.id)
         l.slots.push(LirLocalSlot {id: loc.id, slot, typ})
@@ -3102,7 +3128,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let destType = lirLowerMirType(l, destLoc.typ)
     if lirTypeIsZero(destType) {
-        lirLowerError(l, LirDiagUnsupported, "unsupported assign destination type `" + destLoc.typ + "`", "assign.dest")
+        lirLowerError(l, LirDiagUnsupported, "unsupported assign destination type `" + destLoc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, destLoc.typ) + ")", "assign.dest")
         return
     }
     if mirPlaceHasProjections(instr.dest) {
