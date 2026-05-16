@@ -265,6 +265,10 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 옵션 5 진척 (PR #1861)**: `osty_rt_os_exec_with` + `osty_rt_os_exec_input_with` C wrapper (2 함수) + `rewriteStdlibSymbolToRuntime` 매핑 2 (`std.os.execWith`, `std.os.execInputWith`) 추가. source bootstrap 의 link 단계 wall 부분 해소.
 
+   **2026-05-17 stage0 audit scope 한계 측정**: `mirJsonObjectGetNamed` 가 stage0 decline 인데 audit 100% 인 이유 = `internal/selfhost/bundle/bundle.go::ToolchainCheckerFiles()` 가 mir_json.osty / mir_lower.osty / llvmgen.osty / lir_proto.osty / mir_generator.osty 등 toolchain backend 부분을 **audit 에 포함하지 않음**. 즉 audit 100% 는 **checker bundle (resolve/elab/check/ty/hir_lower/ast/lexer/parser) scope 만 cover**. install-self / build 시 monomorph 가 audit scope 외부 함수 reach 시 stage0 decline.
+
+   plan §10.1 R2 (stage0 cover) 의 "종결" 도 **scope 제한적** — checker bundle 만. backend (mir_*, llvmgen) 의 stage0 cover 는 별도 audit / trajectory 필요. PR #1858 의 3-commit cascade 도 checker bundle 의 16 decline 만 해소.
+
    **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 OSTY_STDLIB_BODY_LOWER=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
    - stage0 100% (PR #1858)
    - execWith / execInputWith C wrappers (PR #1861)
