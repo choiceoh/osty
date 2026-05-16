@@ -261,6 +261,17 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 합의 (옵션 c 채택)**: 사용자/팀이 `docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md` §3 의 narrow exception 표현 합의. CLAUDE.md "하지 말 것" 의 frozen seed line 에 narrow exception 추가 (단일 PR 에서 5 자기-제한 메커니즘 의무). 다음 sub-PR: `PR3-C-step3-c-impl` (`generated.go:41950` method-call dispatch 분기 추가 + `toolchain/elab.osty:19712` 동등 변경) → `PR3-C-step3-c-test` (use toolchain.check 통과 검증). 본 gap 의 trajectory 완성 시 narrow exception 자체 retire 예정.
 
+   **2026-05-17 PR #1858 머지 — stage0 100% 달성**: 다른 작업자 (choiceoh) 가 3-commit cascade ([70717f66](https://github.com/choiceoh/osty/commit/70717f66) classifier + map_new + stdlib struct fallback / [5ab677ff](https://github.com/choiceoh/osty/commit/5ab677ff) Cat B FnConst-in-arith / [61eec8f1](https://github.com/choiceoh/osty/commit/61eec8f1) Result/Option payload coercion + __toString) 으로 audit 8221/8237 → **8240/8241 (100.0%)**. 본 plan §10.1 R2 (stage0 cover) **종결**.
+
+   **2026-05-17 옵션 5 (source bootstrap) 시도 — next layer wall**: stage0 100% 통과 후 `OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 osty install-self` 시도 시 link 단계에서:
+   ```
+   Undefined symbols for architecture arm64:
+     "_std.os.execInputWith", referenced from: _selfRebuildWriteString
+     "_std.os.execOutput",    referenced from: _main
+     "_std.os.execWith",      referenced from: _selfRebuildBundleSource, _selfRebuildClangLinkArgs, _selfRebuildRunClang, _runSelfRebuild, _main
+   ```
+   C runtime (`osty_runtime.c:28567`) 에 `osty_rt_os_exec(cmd, args, shell)` 만 정의 — `execWith` / `execInputWith` / `execOutput` 등 8 exec 변종 부재. Osty `std.os.exec*` 9 함수 중 1 만 C runtime cover. 즉 옵션 5 도 **추가 backend wave** 동반 (C runtime 확장 + rewriteStdlibSymbolToRuntime 매핑 8+ symbol).
+
    **2026-05-17 PR3-C-step3-c-impl 시도 결과 — narrow exception 의 한도 초과**: dispatch 분기 분석 시 std.* 의 cross-package method 가 작동하는 mechanism 측정:
    - `generated.go:48427` 부근의 use-decl 처리에 `registerStdStringsAliasFns(env, alias)` / `registerStdTestingAliasFns` / `registerStdFsAliasFns` 등 **hardcoded prelude-path chain**
    - 각 `registerStdXxxAliasFns` 는 그 module 의 모든 함수를 `env.global.fns` 에 등록 → 그 후 `xxx.fn(...)` 호출이 method dispatch 안 거치고 일반 function call 로 resolve
