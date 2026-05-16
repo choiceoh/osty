@@ -20,7 +20,6 @@ type CliFlags struct {
 	AiRepair        bool
 	AiMode          string
 	DumpNativeDiags bool
-	Native          bool
 }
 
 func DefaultCliFlags() CliFlags {
@@ -320,7 +319,8 @@ func applyBoolFlag(flags *CliFlags, name string) bool {
 		flags.DumpNativeDiags = true
 		return true
 	case "native":
-		flags.Native = true
+		// Backwards compatibility: self-host pipeline is the only path;
+		// accept and ignore so old scripts keep working.
 		return true
 	case "airepair", "repair":
 		flags.AiRepair = true

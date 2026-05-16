@@ -96,7 +96,7 @@ fn main() {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, native: true, dumpNativeDiags: true}
+	flags := cliFlags{noColor: true, dumpNativeDiags: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStdout := os.Stdout
@@ -282,7 +282,7 @@ func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
 	selfhost.ResetAstbridgeLowerCount()
-	exit := runTypecheckPackageNative(dir, cliFlags{noColor: true, native: true})
+	exit := runTypecheckPackageNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
@@ -340,7 +340,7 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
 	selfhost.ResetAstbridgeLowerCount()
-	exit := runTypecheckWorkspaceNative(dir, cliFlags{noColor: true, native: true})
+	exit := runTypecheckWorkspaceNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
@@ -370,7 +370,7 @@ func TestRunTypecheckFileNativeIsAstbridgeFree(t *testing.T) {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, native: true}
+	flags := cliFlags{noColor: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStdout := os.Stdout

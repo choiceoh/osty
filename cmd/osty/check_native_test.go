@@ -96,7 +96,7 @@ fn main() {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, native: true, dumpNativeDiags: true}
+	flags := cliFlags{noColor: true, dumpNativeDiags: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStderr := os.Stderr
@@ -291,7 +291,7 @@ func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
 	selfhost.ResetAstbridgeLowerCount()
-	exit := runCheckPackageNative(dir, cliFlags{noColor: true, native: true})
+	exit := runCheckPackageNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
@@ -349,7 +349,7 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
 	selfhost.ResetAstbridgeLowerCount()
-	exit := runCheckWorkspaceNative(dir, cliFlags{noColor: true, native: true})
+	exit := runCheckWorkspaceNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
@@ -470,7 +470,7 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, native: true}
+	flags := cliFlags{noColor: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStdout := os.Stdout
@@ -511,7 +511,7 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 // 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` with no
 // flag at all routes through the self-host arena pipeline the same
 // way `--native` does. Run the subprocess CLI so the default
-// actually goes through parseFlags/dispatch, then verify exit 0 on
+// actually goes through clicmd.ParseArgs dispatch, then verify exit 0 on
 // a well-typed input. Phase 1c.5 retired the Go-hosted escape
 // hatch — the self-host path is the only path now.
 func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
@@ -535,10 +535,9 @@ func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 }
 
 // TestRunCheckFileDefaultPathIsAstbridgeFree is the in-process
-// counter assertion for the default flip. A default-flag-set
-// cliFlags{} now has native=true (set by parseFlags), so running
-// runCheckFileNative from it is the production happy path; confirm
-// zero astbridge lowerings end-to-end.
+// counter assertion for the default flip. runCheckFileNative is the
+// production happy path for single-file check; confirm zero astbridge
+// lowerings end-to-end.
 func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
@@ -550,10 +549,7 @@ func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	// parseFlags sets native=true by default; mirror that here so the
-	// test reflects the on-CLI behavior without touching the global
-	// flag package.
-	flags := cliFlags{noColor: true, native: true}
+	flags := cliFlags{noColor: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStdout := os.Stdout
