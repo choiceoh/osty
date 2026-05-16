@@ -51,12 +51,12 @@ Osty 측에 파일 IO + 스케줄링 인프라가 아직 없다. `internal/check
 
 | Annotation | Spec | Emit 메커니즘 | 추정 LOC | PR 후보 |
 |---|---|---|---|---|
-| A5 vectorize/parallel/unroll | loop metadata `!llvm.loop.vectorize.enable` 등 | per-loop metadata, MIR loop emission site | 60–100 | PR#4 |
-| A8 `#[inline]` modes | fn-attr `inlinehint` / `alwaysinline` / `noinline` | `llvmNativeFnAttrString` (이미 부분 구현) | 0 (done) | — |
-| A9 `#[hot]` / `#[cold]` + section | fn-attr + `.section .text.hot` directive | function 정의 emit site | 30–50 | PR#5 |
-| A10 `#[target_feature]` | `"target-features"="+avx2,..."` fn-attr | `llvmNativeFnAttrString` | 40–60 | PR#2 |
-| A11 `#[noalias]` / `#[noalias(p1, p2)]` | param-level `noalias` attr | param emit site | 30–50 | PR#3 |
-| A13 `#[pure]` | `readnone` fn-attr | `llvmNativeFnAttrString` + stage0 `fnDefineHeaderClose` | 20–30 + 30 (stage0) | ✅ **production 까지 착륙 2026-05-16** (scaffold + stage0 retrofit) |
+| A5 vectorize/parallel/unroll | loop metadata `!llvm.loop.vectorize.enable` 등 | per-loop metadata, MIR loop emission site | 60–100 | PR#4 (별도 path — per-instruction metadata) |
+| A8 `#[inline]` modes | fn-attr `inlinehint` / `alwaysinline` / `noinline` | stage0 `fnDefineHeaderClose` | 30 | ✅ **production 착륙 2026-05-16** |
+| A9 `#[hot]` / `#[cold]` | fn-attr `hot` / `cold` (section directive 미포함) | stage0 `fnDefineHeaderClose` | 30 | ✅ **production 착륙 2026-05-16** (section directive 별도) |
+| A10 `#[target_feature]` | `"target-features"="+f1,+f2"` string fn-attr | stage0 `fnDefineHeaderClose` | 40 | ✅ **production 착륙 2026-05-16** |
+| A11 `#[noalias]` / `#[noalias(p1, p2)]` | param-level `noalias` attr | param emit site (별도 site) | 30–50 | PR#3 (param header retrofit 필요) |
+| A13 `#[pure]` | `readnone` fn-attr | stage0 `fnDefineHeaderClose` + toolchain scaffold | 20+30 | ✅ **production 착륙 2026-05-16** |
 
 **A13 production 까지 착륙 2026-05-16**:
 - Scaffold (`toolchain/llvmgen.osty`): `LlvmNativeFunction.pure: Bool` 필드 + `llvmNativeFnAttrString` 가 inlineAttr 와 `readnone` 을 space-join. future Osty-native llvmgen path 용.

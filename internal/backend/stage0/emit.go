@@ -22,23 +22,64 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // parameter list — `") {\n"` baseline or `") <attrs> {\n"` when the
 // MIR function's annotation fields contribute LLVM fn-attrs.
 //
-// Currently emits A13 `#[pure]` → `readnone`. Future annotations
-// (A8 inline mode, A9 hot/cold, A10 target-features, A11 noalias)
-// join the same `attrs` list so every define site shares one source
-// of truth. Skip-emit for nil fn so synthesized define sites (main,
-// decline stubs) keep the attribute-free baseline.
+// Emits:
+//   - A8  `#[inline]` family   → `inlinehint` / `alwaysinline` / `noinline`
+//   - A9  `#[hot]` / `#[cold]` → `hot` / `cold`
+//   - A10 `#[target_feature]`  → `"target-features"="+f1,+f2"` string attr
+//   - A13 `#[pure]`            → `readnone`
+//
+// A11 `#[noalias]` is a per-parameter attribute (lives on individual
+// `ptr` params, not the function header) and is intentionally not
+// handled here. nil fn yields the attribute-free baseline so
+// synthesized define sites (main, decline stubs) stay byte-identical.
 func fnDefineHeaderClose(fn *mir.Function) string {
 	if fn == nil {
 		return ") {\n"
 	}
 	var attrs []string
+	switch fn.InlineMode {
+	case ir.InlineSoft:
+		attrs = append(attrs, "inlinehint")
+	case ir.InlineAlways:
+		attrs = append(attrs, "alwaysinline")
+	case ir.InlineNever:
+		attrs = append(attrs, "noinline")
+	}
+	if fn.Hot {
+		attrs = append(attrs, "hot")
+	}
+	if fn.Cold {
+		attrs = append(attrs, "cold")
+	}
 	if fn.Pure {
 		attrs = append(attrs, "readnone")
+	}
+	if len(fn.TargetFeatures) > 0 {
+		attrs = append(attrs, fnTargetFeaturesAttr(fn.TargetFeatures))
 	}
 	if len(attrs) == 0 {
 		return ") {\n"
 	}
 	return ") " + strings.Join(attrs, " ") + " {\n"
+}
+
+// fnTargetFeaturesAttr renders MIR's `TargetFeatures []string` slice
+// into LLVM's `"target-features"="+f1,+f2"` string attribute. Each
+// feature is prefixed with `+` unless it already carries an explicit
+// `+`/`-` sign so callers can opt out of a feature via `-feature`.
+func fnTargetFeaturesAttr(features []string) string {
+	parts := make([]string, 0, len(features))
+	for _, f := range features {
+		if f == "" {
+			continue
+		}
+		if f[0] == '+' || f[0] == '-' {
+			parts = append(parts, f)
+		} else {
+			parts = append(parts, "+"+f)
+		}
+	}
+	return `"target-features"="` + strings.Join(parts, ",") + `"`
 }
 
 // ListAllDeclinesEnv opts EmitMIR into surveying all declined functions

@@ -7150,3 +7150,104 @@ func TestStage0SkipsReadnoneForNonPureFn(t *testing.T) {
 		t.Fatalf("baseline define line missing for non-pure fn:\n%s", got)
 	}
 }
+
+// TestStage0EmitsInlineHintForInlineSoft — A8 bare `#[inline]` →
+// `inlinehint` fn-attr.
+func TestStage0EmitsInlineHintForInlineSoft(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "soft", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.InlineMode = ir.InlineSoft
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @soft() inlinehint {") {
+		t.Fatalf("InlineSoft missing `inlinehint`:\n%s", got)
+	}
+}
+
+// TestStage0EmitsAlwaysInlineForInlineAlways — A8 `#[inline(always)]`
+// → `alwaysinline` fn-attr.
+func TestStage0EmitsAlwaysInlineForInlineAlways(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "always", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.InlineMode = ir.InlineAlways
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @always() alwaysinline {") {
+		t.Fatalf("InlineAlways missing `alwaysinline`:\n%s", got)
+	}
+}
+
+// TestStage0EmitsNoInlineForInlineNever — A8 `#[inline(never)]` →
+// `noinline` fn-attr.
+func TestStage0EmitsNoInlineForInlineNever(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "never", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.InlineMode = ir.InlineNever
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @never() noinline {") {
+		t.Fatalf("InlineNever missing `noinline`:\n%s", got)
+	}
+}
+
+// TestStage0EmitsHotForHotAnnotation — A9 `#[hot]` → `hot` fn-attr.
+func TestStage0EmitsHotForHotAnnotation(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "hot_fn", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.Hot = true
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @hot_fn() hot {") {
+		t.Fatalf("Hot missing `hot`:\n%s", got)
+	}
+}
+
+// TestStage0EmitsColdForColdAnnotation — A9 `#[cold]` → `cold` fn-attr.
+func TestStage0EmitsColdForColdAnnotation(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "cold_fn", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.Cold = true
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @cold_fn() cold {") {
+		t.Fatalf("Cold missing `cold`:\n%s", got)
+	}
+}
+
+// TestStage0EmitsTargetFeaturesAttribute — A10 `#[target_feature(...)]`
+// → `"target-features"="+f1,+f2"` string fn-attr.
+func TestStage0EmitsTargetFeaturesAttribute(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "avx_fn", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.TargetFeatures = []string{"avx2", "fma"}
+	got := emit(t, trivialMainFn(), fn)
+	want := `define i64 @avx_fn() "target-features"="+avx2,+fma" {`
+	if !strings.Contains(got, want) {
+		t.Fatalf("TargetFeatures missing expected fn-attr; want substring %q in:\n%s", want, got)
+	}
+}
+
+// TestStage0EmitsCombinedFnAttrs — multiple annotations on one
+// function combine into a single space-separated attr list in the
+// expected order (A8, A9, A13, A10).
+func TestStage0EmitsCombinedFnAttrs(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "combo", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.InlineMode = ir.InlineAlways
+	fn.Hot = true
+	fn.Pure = true
+	fn.TargetFeatures = []string{"avx2"}
+	got := emit(t, trivialMainFn(), fn)
+	want := `define i64 @combo() alwaysinline hot readnone "target-features"="+avx2" {`
+	if !strings.Contains(got, want) {
+		t.Fatalf("Combined fn-attrs missing expected order; want substring %q in:\n%s", want, got)
+	}
+}
+
+// TestStage0RespectsExplicitTargetFeaturePrefix — `+f` / `-f`
+// prefixes in `TargetFeatures` survive as-is (no double-+).
+func TestStage0RespectsExplicitTargetFeaturePrefix(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "feat_mix", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.TargetFeatures = []string{"+avx2", "-sse3", "fma"}
+	got := emit(t, trivialMainFn(), fn)
+	want := `"target-features"="+avx2,-sse3,+fma"`
+	if !strings.Contains(got, want) {
+		t.Fatalf("Mixed +/-/bare feature prefixes wrong; want substring %q in:\n%s", want, got)
+	}
+}
