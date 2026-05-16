@@ -4023,42 +4023,26 @@ func backfillClosure(cl *Closure, expected *FnType) {
 }
 
 // repropagateClosureBodyTypes walks `body` and updates Ident
-// references whose Name matches one of `updates`. After Idents
-// are re-typed, common trivially-typed parents (BinaryExpr.T,
-// FieldExpr.T, CallExpr.T, MethodCall.T, CoalesceExpr.T,
-// QuestionExpr.T) are refreshed in a second pass so the closure's
-// body Result picks up the propagated type — without this the
-// surrounding `n > 0` keeps its ErrTypeVal.
+// references that name a backfilled closure parameter. Scope-aware:
+// a LetStmt / ForStmt / pattern binding that rebinds one of the
+// param names shadows the update within its scope, so a body
+// like `|x| { let x = 0; x + 1 }` only retypes the outer `x` use.
+//
+// After Idents are re-typed, common trivially-typed parents
+// (BinaryExpr.T, CallExpr.T, MethodCall.T, CoalesceExpr.T) are
+// refreshed in a second pass so the closure's body Result picks
+// up the propagated type — without this the surrounding `n > 0`
+// keeps its ErrTypeVal.
 func repropagateClosureBodyTypes(body *Block, updates map[string]Type) {
 	if body == nil || len(updates) == 0 {
 		return
 	}
-	Walk(VisitorFunc(func(n Node) bool {
-		id, ok := n.(*Ident)
-		if !ok || id == nil {
-			return true
-		}
-		newT, hit := updates[id.Name]
-		if !hit {
-			return true
-		}
-		if id.T == nil || id.T == ErrTypeVal {
-			id.T = CloneType(newT)
-		}
-		return true
-	}), body)
+	retypeIdentsScoped(body, updates)
 	Walk(VisitorFunc(func(n Node) bool {
 		switch e := n.(type) {
 		case *BinaryExpr:
 			if e.T == nil || e.T == ErrTypeVal {
 				e.T = inferBinaryResultType(e)
-			}
-		case *FieldExpr:
-			if (e.T == nil || e.T == ErrTypeVal) && e.X != nil {
-				// Re-derive field type from the new receiver
-				// type using the same struct-decl lookup the
-				// initial lower used.
-				e.T = inferFieldTypeFromRecv(e.X.Type(), e.Name)
 			}
 		case *CallExpr:
 			if e.T == nil || e.T == ErrTypeVal {
@@ -4083,12 +4067,257 @@ func repropagateClosureBodyTypes(body *Block, updates map[string]Type) {
 	}), body)
 }
 
+// retypeIdentsScoped recursively walks any IR subtree, updating
+// Ident.T for references that name an entry in `live` and removing
+// names from `live` for the duration of any shadowing
+// LetStmt/ForStmt/pattern-bound scope. Only Idents whose existing
+// T is nil or ErrTypeVal are touched — already-typed references
+// (including any visible-but-shadowed binding the lowerer typed
+// from the value side) are left alone.
+func retypeIdentsScoped(n Node, live map[string]Type) {
+	if n == nil || len(live) == 0 {
+		return
+	}
+	switch x := n.(type) {
+	case *Ident:
+		if x == nil {
+			return
+		}
+		if newT, hit := live[x.Name]; hit {
+			if x.T == nil || x.T == ErrTypeVal {
+				x.T = CloneType(newT)
+			}
+		}
+	case *Block:
+		if x == nil {
+			return
+		}
+		// LetStmts inside the block introduce shadowing for the
+		// rest of the block. Walk statements in order, popping
+		// names off `live` when shadowed.
+		shadowed := map[string]Type{}
+		for _, s := range x.Stmts {
+			if ls, ok := s.(*LetStmt); ok && ls != nil {
+				// LetStmt.Value is in the outer scope — walk it
+				// before the name is shadowed.
+				if ls.Value != nil {
+					retypeIdentsScoped(ls.Value, live)
+				}
+				// Walk the LetStmt's pattern bindings (irrefutable
+				// patterns destructure into multiple names).
+				if ls.Pattern != nil {
+					retypeIdentsScoped(ls.Pattern, live)
+				}
+				for _, name := range bindingNames(ls) {
+					if _, hit := live[name]; hit {
+						shadowed[name] = live[name]
+						delete(live, name)
+					}
+				}
+				continue
+			}
+			retypeIdentsScoped(s, live)
+		}
+		if x.Result != nil {
+			retypeIdentsScoped(x.Result, live)
+		}
+		// Restore shadowed names for sibling scopes.
+		for k, v := range shadowed {
+			live[k] = v
+		}
+	case *ForStmt:
+		if x == nil {
+			return
+		}
+		if x.Iter != nil {
+			retypeIdentsScoped(x.Iter, live)
+		}
+		if x.Cond != nil {
+			retypeIdentsScoped(x.Cond, live)
+		}
+		if x.Start != nil {
+			retypeIdentsScoped(x.Start, live)
+		}
+		if x.End != nil {
+			retypeIdentsScoped(x.End, live)
+		}
+		shadowedNames := patternBindingNames(x.Pattern)
+		shadowed := withShadow(live, shadowedNames)
+		if x.Body != nil {
+			retypeIdentsScoped(x.Body, live)
+		}
+		restoreShadow(live, shadowed)
+	case *Closure:
+		if x == nil {
+			return
+		}
+		// Nested closure introduces its own param scope; remove
+		// any shadowed names while walking its body.
+		var paramNames []string
+		for _, p := range x.Params {
+			if p != nil && p.Name != "" {
+				paramNames = append(paramNames, p.Name)
+			}
+		}
+		shadowed := withShadow(live, paramNames)
+		if x.Body != nil {
+			retypeIdentsScoped(x.Body, live)
+		}
+		restoreShadow(live, shadowed)
+	case *MatchExpr:
+		if x == nil {
+			return
+		}
+		if x.Scrutinee != nil {
+			retypeIdentsScoped(x.Scrutinee, live)
+		}
+		for _, arm := range x.Arms {
+			if arm == nil {
+				continue
+			}
+			shadowedNames := patternBindingNames(arm.Pattern)
+			shadowed := withShadow(live, shadowedNames)
+			if arm.Guard != nil {
+				retypeIdentsScoped(arm.Guard, live)
+			}
+			if arm.Body != nil {
+				retypeIdentsScoped(arm.Body, live)
+			}
+			restoreShadow(live, shadowed)
+		}
+	case *IfLetExpr:
+		if x == nil {
+			return
+		}
+		if x.Scrutinee != nil {
+			retypeIdentsScoped(x.Scrutinee, live)
+		}
+		shadowedNames := patternBindingNames(x.Pattern)
+		shadowed := withShadow(live, shadowedNames)
+		if x.Then != nil {
+			retypeIdentsScoped(x.Then, live)
+		}
+		restoreShadow(live, shadowed)
+		if x.Else != nil {
+			retypeIdentsScoped(x.Else, live)
+		}
+	default:
+		// Fall back to a generic walk that visits every child
+		// node — covers the common Expr / Stmt shapes (BinaryExpr,
+		// UnaryExpr, CallExpr, FieldExpr, etc.) without enumerating
+		// each case here. Re-uses ir.Walk's traversal, applying
+		// the scope-aware logic recursively to children we
+		// recognise.
+		Walk(VisitorFunc(func(child Node) bool {
+			switch child.(type) {
+			case *Block, *ForStmt, *Closure, *MatchExpr, *IfLetExpr:
+				retypeIdentsScoped(child, live)
+				return false
+			case *Ident:
+				retypeIdentsScoped(child, live)
+				return false
+			}
+			return true
+		}), n)
+	}
+}
+
+// bindingNames returns the names a LetStmt introduces — typically a
+// single `Name`, but a destructuring `let (a, b) = ...` or a
+// struct/variant pattern can yield several.
+func bindingNames(ls *LetStmt) []string {
+	if ls == nil {
+		return nil
+	}
+	if ls.Name != "" {
+		return []string{ls.Name}
+	}
+	return patternBindingNames(ls.Pattern)
+}
+
+// patternBindingNames returns every fresh name a pattern
+// introduces. Wildcards and literals contribute nothing; binding
+// patterns contribute both the outer name and any inner names.
+func patternBindingNames(p Pattern) []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	var walk func(p Pattern)
+	walk = func(p Pattern) {
+		switch x := p.(type) {
+		case *IdentPat:
+			if x != nil && x.Name != "" {
+				out = append(out, x.Name)
+			}
+		case *BindingPat:
+			if x == nil {
+				return
+			}
+			if x.Name != "" {
+				out = append(out, x.Name)
+			}
+			walk(x.Pattern)
+		case *TuplePat:
+			for _, e := range x.Elems {
+				walk(e)
+			}
+		case *StructPat:
+			for _, f := range x.Fields {
+				if f.Pattern != nil {
+					walk(f.Pattern)
+				} else if f.Name != "" {
+					out = append(out, f.Name)
+				}
+			}
+		case *VariantPat:
+			for _, a := range x.Args {
+				walk(a)
+			}
+		case *OrPat:
+			for _, alt := range x.Alts {
+				walk(alt)
+			}
+		}
+	}
+	walk(p)
+	return out
+}
+
+// withShadow removes `names` from `live`, returning the prior
+// values so a matching restoreShadow can reinstate them after the
+// scoped subtree is walked. Names not in live are skipped.
+func withShadow(live map[string]Type, names []string) map[string]Type {
+	if len(names) == 0 {
+		return nil
+	}
+	saved := map[string]Type{}
+	for _, n := range names {
+		if t, hit := live[n]; hit {
+			saved[n] = t
+			delete(live, n)
+		}
+	}
+	return saved
+}
+
+func restoreShadow(live map[string]Type, saved map[string]Type) {
+	for k, v := range saved {
+		live[k] = v
+	}
+}
+
 // inferBinaryResultType derives a result type for a BinaryExpr
-// whose checker-recorded type is ErrTypeVal. Walks the operand
-// types and applies the comparison/arithmetic shape: comparisons
-// produce Bool, arithmetic produces the common numeric type, and
-// equality/relational operators produce Bool. Returns ErrTypeVal
-// when neither operand has a usable concrete type.
+// whose checker-recorded type is ErrTypeVal. Used as a fallback
+// during closure-body re-typing where the operands have just been
+// refreshed but the parent expression's T slot still carries the
+// stale ErrType.
+//
+// Returns Bool for comparison / logical ops. For arithmetic and
+// bitwise ops the operand types are unified via `numericResult`
+// (Float promotion + Int default lane) — if unification fails
+// (mixed non-numeric or incompatible types), ErrTypeVal is
+// preserved rather than guessing.
 func inferBinaryResultType(e *BinaryExpr) Type {
 	if e == nil {
 		return ErrTypeVal
@@ -4096,14 +4325,14 @@ func inferBinaryResultType(e *BinaryExpr) Type {
 	switch e.Op {
 	case BinEq, BinNeq, BinLt, BinLeq, BinGt, BinGeq, BinAnd, BinOr:
 		return TBool
-	}
-	lt := safeExprType(e.Left)
-	rt := safeExprType(e.Right)
-	if lt != ErrTypeVal {
-		return lt
-	}
-	if rt != ErrTypeVal {
-		return rt
+	case BinAdd, BinSub, BinMul, BinDiv, BinMod,
+		BinBitAnd, BinBitOr, BinBitXor, BinShl, BinShr:
+		lt := safeExprType(e.Left)
+		rt := safeExprType(e.Right)
+		if lt == ErrTypeVal || rt == ErrTypeVal {
+			return ErrTypeVal
+		}
+		return numericResult(lt, rt)
 	}
 	return ErrTypeVal
 }
@@ -4117,33 +4346,6 @@ func safeExprType(e Expr) Type {
 		return ErrTypeVal
 	}
 	return t
-}
-
-// inferFieldTypeFromRecv re-runs the canonical struct-field
-// recovery used by lowerFieldExpr, but works without a `*lowerer`
-// reference — it only needs the post-lowering Type tree. Used
-// when closure-param backfill re-types a receiver Ident and the
-// FieldExpr above needs to be refreshed.
-//
-// Currently a no-op for builtin types and named types we can't
-// resolve locally — the surrounding code keeps the previous T
-// (often ErrTypeVal) in that case. The common shapes the
-// closure-backfill flow exercises (e.g. `box.n` in `r.map(|box|
-// box.n)`) work because the receiver is a struct value and the
-// field type comes from the AST decl, which is already cached on
-// the FieldExpr's lowered tree.
-func inferFieldTypeFromRecv(recvT Type, fieldName string) Type {
-	if recvT == nil {
-		return ErrTypeVal
-	}
-	if ot, ok := recvT.(*OptionalType); ok && ot != nil {
-		// Conservative: leave it as-is for the OptionalType
-		// branch — that path already runs through the dedicated
-		// recoverFieldType when the front-end lowering invokes
-		// FieldExpr.
-		_ = ot
-	}
-	return ErrTypeVal
 }
 
 // recoverUserMethodReturnType walks the receiver's struct/enum AST
