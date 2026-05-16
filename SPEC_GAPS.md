@@ -259,6 +259,15 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    각 옵션은 단일 세션 무리 + spec/team 합의 동반. PR3-C-step3-design.md (별도 doc) 가 다음 단계.
 
+   **2026-05-17 옵션 d 검토 (HIR/MIR method dispatch)**: HIR / IR / MIR lowering 의 method-call 처리 (`hirLowerMethodCallExprFromCore`, `lowerMethodCall`, etc.) 는 모두 elab 이 끝난 후 typed core 만 소비. 즉 elab 의 method-call sig lookup (poison 또는 valid) 결과를 그대로 받음. **옵션 d 도 같은 wall** — elab 의 dispatch 가 진짜 root.
+
+   **2026-05-17 우회 use form 검토**:
+   - `use toolchain.check as tc; tc.fn()` → E0703 (method-on-type)
+   - `use toolchain.check::{fn}` → E0704 (not callable)
+   - `use toolchain.check.fn` → E0704 (not callable)
+
+   세 use form 모두 같은 본질 — cross-package symbol 의 type/signature lookup 부재. resolver 가 use-decl path 의 leaf symbol 의 sig 를 cross-package 로 가져오지 못함. **우회 path 없음** — 옵션 c (spec narrow exception + impl) 가 단일 unlock path.
+
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 
 **관련 doc**: [docs/llvm-selfhost-plan-pr3-attempt.md](docs/llvm-selfhost-plan-pr3-attempt.md), [docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md).
