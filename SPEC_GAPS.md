@@ -284,6 +284,12 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    plan §10.1 R2 (stage0 cover) 의 "종결" 도 **scope 제한적** — checker bundle 만. backend (mir_*, llvmgen) 의 stage0 cover 는 별도 audit / trajectory 필요. PR #1858 의 3-commit cascade 도 checker bundle 의 16 decline 만 해소.
 
+   **2026-05-17 옵션 α' 측정 정정**: `internal/backend/stage0_toolchain_audit_test.go::TestStage0ToolchainAudit` 는 `resolve.PackageSourcePaths(pkgDir, false)` 사용 — toolchain/ **전체 .osty 파일** walk. bundle.ToolchainCheckerFiles() 무관. 즉 audit 의 8240/8241 (100.0%) 가 이미 mir_json / mir_lower / llvmgen / lir_proto 등 **backend 포함 전체 toolchain/ scope**. bundle.go 의 25 파일 list 는 별도 (checker bundle 구성용).
+
+   `mirJsonObjectGetNamed` 가 build path 에서 stage0 decline 인 이유 = audit "covered" 의 의미가 "stage0 가 MIR shape lower 가능" — 그러나 install-self/build 시 monomorph + LLVM IR emit 단계의 **다른 specialization** 가 stage0 decline. **audit-pass ≠ build-pass**.
+
+   본 plan 의 진짜 wall = `osty-self` 의 LLVM IR emit 단계 (LIR Proto Phase 1+ vs stage0 fallback) 활성화. PR #1858 도 audit-pass 만 해소; build/install-self pass 는 별개 wave (옵션 γ 또는 backend 별 monomorph cover).
+
    **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 OSTY_STDLIB_BODY_LOWER=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
    - stage0 100% (PR #1858)
    - execWith / execInputWith C wrappers (PR #1861)
