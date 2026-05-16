@@ -265,6 +265,15 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 옵션 5 진척 (PR #1861)**: `osty_rt_os_exec_with` + `osty_rt_os_exec_input_with` C wrapper (2 함수) + `rewriteStdlibSymbolToRuntime` 매핑 2 (`std.os.execWith`, `std.os.execInputWith`) 추가. source bootstrap 의 link 단계 wall 부분 해소.
 
+   **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 OSTY_STDLIB_BODY_LOWER=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
+   - stage0 100% (PR #1858)
+   - execWith / execInputWith C wrappers (PR #1861)
+   - `OSTY_STDLIB_BODY_LOWER=1` 활성 → execOutput body lower + tyToRepr 의 monomorph cover
+
+   plan §10.1 R2 (stage0 cover) **완전 종결**.
+
+   **2026-05-17 cmd/osty-native-checker production path next wall**: `osty-self` cached 후 `.bin/osty build --backend llvm cmd/osty-native-checker/` (stage0 fallback OFF) 시도 → `osty-self: stage0 declined function: mirJsonObjectGetNamed`. 즉 osty-self 자체가 cmd/osty-native-checker 의 main.osty (PR2 의 naive parser) 빌드 시 monomorph 후 `mirJsonObjectGetNamed` 함수가 stage0 decline. PR #1858 classifier trajectory 의 후속 작업 영역.
+
    **2026-05-17 옵션 5 next wall — execOutput constructor + cross-package struct literal**: PR #1861 후 남은 부재 symbol = `_std.os.execOutput` (single use site at `toolchain/main.osty:456`). 두 path 시도:
    - **inline struct literal**: `os.ExecOutput {exitCode: 1, stdout: "", stderr: "", timedOut: false}` — `E0500 undefined name 'timedOut'` (field shorthand 인지 부족)
    - **qualifier 제거**: `ExecOutput {...}` — `E0745 cannot find 'ExecOutput' in this scope` (cross-package type 이 toolchain prelude 에 미포함)
