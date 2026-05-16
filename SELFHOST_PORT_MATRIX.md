@@ -118,12 +118,15 @@ check / parser / format / lint / pipeline / ci 전부 ok).
    equality 로 교체. within-file unique span 보장으로 in-run 결과 동일,
    self-host portable. ~30 LOC 변경, LSP / just front 회귀 0. **LSP 의
    마지막 algorithmic pointer-identity dep 해소**.
-2. **`pub use` re-export visibility (E0553)** — **2026-05-16 design draft**:
-   [docs/e0553_pub_use_design.md](docs/e0553_pub_use_design.md). wording /
-   진단 helper / unit test 이미 존재 (`internal/diag/codes.go:946`,
-   `internal/selfhost/resolve_adapter.go:82`) — emit 사이트만 0. Path A
-   (30-50 LOC Go, 단일-홉만) / Path B (100-200 LOC Osty+Go, transitive +
-   scoped) 선택 결정 대기.
+2. **`pub use` re-export visibility (E0553)** —
+   [docs/e0553_pub_use_design.md](docs/e0553_pub_use_design.md). **Path A
+   착륙 2026-05-16**: `internal/resolve/workspace.go::validateReexportVisibility`
+   가 `ResolveAll` 의 per-package resolve 직후 walk — pub use edge 마다
+   `splitUseMemberPath(UseKey(u))` 로 base/member 분리, `target.PkgScope.LookupLocal(member)`
+   로 visibility 확인, 비-pub 이면 `selfhost.ReexportPrivateDiagnostic` 으로
+   E0553 발화. 회귀: `reexport_visibility_test.go` 의 positive/negative 쌍.
+   Path A 는 단일-홉 + non-scoped 만 — scoped (G28) 와 transitive chain 은
+   Path B 후속.
 3. **partial struct/enum cross-file stitching** — **2026-05-16 design draft**:
    [docs/partial_decl_cross_file_design.md](docs/partial_decl_cross_file_design.md).
    현재 selfhost 가 file 리스트를 받아 cross-file partial state 를 우연히

@@ -299,7 +299,98 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 			r.Diags = append(r.Diags, cd.diag)
 		}
 	}
+	// E0553 Path A — pub use of a private member (single-hop, non-scoped).
+	// Runs after per-package resolve so PkgScope is populated. Scoped
+	// imports + transitive chains are out of scope (docs/e0553_pub_use_design.md).
+	for _, rd := range w.validateReexportVisibility() {
+		if r, ok := results[rd.importer]; ok {
+			r.Diags = append(r.Diags, rd.diag)
+		}
+	}
 	return results
+}
+
+// validateReexportVisibility scans every loaded package for `pub use`
+// declarations whose re-exported member is private in its origin package
+// and emits E0553 (CodeReexportPrivate). Scoped imports (G28) and
+// transitive re-export chains are intentionally skipped — this is the
+// Path A surface from docs/e0553_pub_use_design.md.
+//
+// Must run after the per-package resolve loop so each target package's
+// PkgScope is populated; the function does its own lookups against
+// PkgScope and never touches resolve.Result.
+func (w *Workspace) validateReexportVisibility() []importCycleDiag {
+	if w == nil {
+		return nil
+	}
+	var out []importCycleDiag
+	for path, pkg := range w.Packages {
+		if pkg == nil || pkg.isStub || pkg.isCycleMarker {
+			continue
+		}
+		for _, pf := range pkg.Files {
+			if pf == nil {
+				continue
+			}
+			if pf.Run != nil {
+				for _, use := range selfhost.PackageUsesFromRun(pf.Run) {
+					if use.IsGo || !use.IsPub || use.IsScoped {
+						continue
+					}
+					base, member, ok := splitUseMemberPath(use.Path)
+					if !ok {
+						continue
+					}
+					if d, found := w.makeReexportPrivateDiag(base, member, sourcePosAt(pf.Source, use.Start), sourcePosAt(pf.Source, use.End)); found {
+						out = append(out, importCycleDiag{importer: path, diag: d})
+					}
+				}
+				continue
+			}
+			if pf.File == nil {
+				continue
+			}
+			for _, u := range pf.File.Uses {
+				if u == nil || u.IsFFI() || !u.IsPub || u.IsScoped {
+					continue
+				}
+				base, member, ok := splitUseMemberPath(UseKey(u))
+				if !ok {
+					continue
+				}
+				if d, found := w.makeReexportPrivateDiag(base, member, u.PosV, u.End()); found {
+					out = append(out, importCycleDiag{importer: path, diag: d})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// makeReexportPrivateDiag builds an E0553 diagnostic if `member` exists in
+// the target package's PkgScope but is not pub. Returns (nil, false) when
+// the target package is not loaded or the member is missing/public — those
+// cases belong to E0500 / E0508 / OK and are intentionally not E0553's
+// concern.
+func (w *Workspace) makeReexportPrivateDiag(base, member string, start, end token.Pos) (*diag.Diagnostic, bool) {
+	target := w.Packages[base]
+	if target == nil || target.PkgScope == nil {
+		return nil, false
+	}
+	sym := target.PkgScope.LookupLocal(member)
+	if sym == nil || sym.Pub {
+		return nil, false
+	}
+	result := selfhost.ReexportPrivateDiagnostic(base, member)
+	builder := diag.New(diag.Error, result.Message).Code(result.Code)
+	builder.Primary(diag.Span{Start: start, End: end}, result.Primary)
+	if result.Note != "" {
+		builder.Note(result.Note)
+	}
+	if result.Hint != "" {
+		builder.Hint(result.Hint)
+	}
+	return builder.Build(), true
 }
 
 func (w *Workspace) resolveOrder(paths []string) []string {
