@@ -259,6 +259,8 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    각 옵션은 단일 세션 무리 + spec/team 합의 동반. PR3-C-step3-design.md (별도 doc) 가 다음 단계.
 
+   **2026-05-17 합의 (옵션 c 채택)**: 사용자/팀이 `docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md` §3 의 narrow exception 표현 합의. CLAUDE.md "하지 말 것" 의 frozen seed line 에 narrow exception 추가 (단일 PR 에서 5 자기-제한 메커니즘 의무). 다음 sub-PR: `PR3-C-step3-c-impl` (`generated.go:41950` method-call dispatch 분기 추가 + `toolchain/elab.osty:19712` 동등 변경) → `PR3-C-step3-c-test` (use toolchain.check 통과 검증). 본 gap 의 trajectory 완성 시 narrow exception 자체 retire 예정.
+
    **2026-05-17 옵션 d 검토 (HIR/MIR method dispatch)**: HIR / IR / MIR lowering 의 method-call 처리 (`hirLowerMethodCallExprFromCore`, `lowerMethodCall`, etc.) 는 모두 elab 이 끝난 후 typed core 만 소비. 즉 elab 의 method-call sig lookup (poison 또는 valid) 결과를 그대로 받음. **옵션 d 도 같은 wall** — elab 의 dispatch 가 진짜 root.
 
    **2026-05-17 우회 use form 검토**:

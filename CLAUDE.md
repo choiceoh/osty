@@ -209,6 +209,12 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 
 - Osty로 작성 가능한 로직을 Go로 새로 작성
 - 제거된 부트스트랩 Osty→Go 트랜스파일러 재도입 (`internal/selfhost/generated.go` 는 동결된 시드; 재생성 경로 없음)
+  - **예외 (LLVM self-host critical path)**: cross-package method-call dispatch site 같은 **surgical hand-edit** 은 허용. 단:
+    1. 단일 PR 에서 `toolchain/*.osty` 의 동등 변경 의무 (drift 방지)
+    2. 영향 범위 한 함수 내 또는 한 dispatch arm (~50 LOC) 만
+    3. PR description 에 진단 코드 + LLVM self-host plan 의 단계 명시 (예: "PR3-C step 3, E0703 dispatch, cross-pkg method lookup")
+    4. 새 dispatch arm 추가만 — 기존 path 변경 금지 (regression 회피)
+    5. `SPEC_GAPS.md::cross-pkg-module-resolution` trajectory 완성 시 narrow exception 자체 retire — full regen 모델 재고. 합의 근거: [docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md](docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md)
 - `panic`으로 유저 입력 에러 처리
 - `ERROR_CODES.md`, `payload-types.ts` 같은 생성 파일 수동 편집
 - 외부 Go 의존성 추가 (`go.mod` 최소 상태 유지)
