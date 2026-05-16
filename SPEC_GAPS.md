@@ -263,6 +263,21 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 PR #1858 머지 — stage0 100% 달성**: 다른 작업자 (choiceoh) 가 3-commit cascade ([70717f66](https://github.com/choiceoh/osty/commit/70717f66) classifier + map_new + stdlib struct fallback / [5ab677ff](https://github.com/choiceoh/osty/commit/5ab677ff) Cat B FnConst-in-arith / [61eec8f1](https://github.com/choiceoh/osty/commit/61eec8f1) Result/Option payload coercion + __toString) 으로 audit 8221/8237 → **8240/8241 (100.0%)**. 본 plan §10.1 R2 (stage0 cover) **종결**.
 
+   **2026-05-17 옵션 5 진척 (PR #1861)**: `osty_rt_os_exec_with` + `osty_rt_os_exec_input_with` C wrapper (2 함수) + `rewriteStdlibSymbolToRuntime` 매핑 2 (`std.os.execWith`, `std.os.execInputWith`) 추가. source bootstrap 의 link 단계 wall 부분 해소.
+
+   **2026-05-17 옵션 5 next wall — execOutput constructor + cross-package struct literal**: PR #1861 후 남은 부재 symbol = `_std.os.execOutput` (single use site at `toolchain/main.osty:456`). 두 path 시도:
+   - **inline struct literal**: `os.ExecOutput {exitCode: 1, stdout: "", stderr: "", timedOut: false}` — `E0500 undefined name 'timedOut'` (field shorthand 인지 부족)
+   - **qualifier 제거**: `ExecOutput {...}` — `E0745 cannot find 'ExecOutput' in this scope` (cross-package type 이 toolchain prelude 에 미포함)
+
+   즉 **cross-package struct literal 도 같은 wall** — type / field 가 import scope 에 없음. PR3-C step 3 의 cross-package method-call wall 의 변종.
+
+   진짜 path 셋:
+   - **C wrapper** `osty_rt_os_exec_output_make(exitCode, stdout, stderr, timedOut)` — Osty `ExecOutput` struct ABI ↔ C struct layout 일치 위험 (Osty by-value struct calling convention 미명세)
+   - **stdlib body lowering** — `OSTY_STDLIB_BODY_LOWER=1` 활성 시 execOutput body 가 LLVM 으로 emit. 단 monomorph 후 `tyToRepr` 가 stage0 decline (audit 100% 와 install-self 격차)
+   - **toolchain 전체에 ExecOutput 사용 사이트 inline + flatten** — out.exitCode 등 cross-package field access 도 같은 wall, 큰 refactor
+
+   세 path 모두 깊은 작업. cross-package import (struct literal + type / method / field) 전체가 single root cause.
+
    **2026-05-17 옵션 5 (source bootstrap) 시도 — next layer wall**: stage0 100% 통과 후 `OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 osty install-self` 시도 시 link 단계에서:
    ```
    Undefined symbols for architecture arm64:
