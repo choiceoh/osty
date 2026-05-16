@@ -118,12 +118,17 @@ check / parser / format / lint / pipeline / ci 전부 ok).
    equality 로 교체. within-file unique span 보장으로 in-run 결과 동일,
    self-host portable. ~30 LOC 변경, LSP / just front 회귀 0. **LSP 의
    마지막 algorithmic pointer-identity dep 해소**.
-2. **`pub use` re-export visibility (E0553)** — 매트릭스 Resolver 우선순위 #5
-   미해결. workspace pub-symbol graph + re-export chain traversal + scoped
-   import (G28) symbol-aware use resolution 3 종 인프라 선행.
-3. **partial struct/enum cross-file stitching** — 현재 single-file (native_adapter
-   가 synthetic 단일 네임스페이스로 합쳐 통과). True workspace-level pass
-   모델 설계 필요.
+2. **`pub use` re-export visibility (E0553)** — **2026-05-16 design draft**:
+   [docs/e0553_pub_use_design.md](docs/e0553_pub_use_design.md). wording /
+   진단 helper / unit test 이미 존재 (`internal/diag/codes.go:946`,
+   `internal/selfhost/resolve_adapter.go:82`) — emit 사이트만 0. Path A
+   (30-50 LOC Go, 단일-홉만) / Path B (100-200 LOC Osty+Go, transitive +
+   scoped) 선택 결정 대기.
+3. **partial struct/enum cross-file stitching** — **2026-05-16 design draft**:
+   [docs/partial_decl_cross_file_design.md](docs/partial_decl_cross_file_design.md).
+   현재 selfhost 가 file 리스트를 받아 cross-file partial state 를 우연히
+   공유. file-level resolve refactor 시 R19(iv) silent false negative 위험.
+   Option B (selfhost post-walk pass, 80-130 LOC Osty) 권장.
 4. ~~**host_boundary.go `apply*Result` adapter 통합**~~ — **착륙 2026-05-16**.
    `applySelfhostPackageResult` (serial) 와 `runSelfhostPackageResultLocked`
    (parallel worker, 67 LOC) 가 mutex inject 외 95% 동일했던 duplication 을
@@ -139,12 +144,14 @@ check / parser / format / lint / pipeline / ci 전부 ok).
 
 **1c.5 가 "Go legacy 전부 삭제" 라는 절대 마일스톤이 아니라 "남은 algorithmic
 identity dep + visibility/merge feature" 로 재정의**되어야 실제 의미 있는
-종결점이 잡힌다. Item 1 (references.go Phase 0e) 은 2026-05-16 에 착륙 —
-**Go-side LSP 의 마지막 algorithmic pointer-identity 의존이 제거됨**. 남은
-실질 작업은 (2) E0553 visibility + (3) cross-file partial merge 2 종으로,
-둘 다 workspace pub-symbol graph + re-export chain traversal 같은 새 인프라
-설계가 선행이라 "single 작은 PR" 으로 떨어지지 않음. host_boundary.go
-adapter 정리 (4) 가 그 다음으로 작은 추가 PR 후보.
+종결점이 잡힌다. Item 1 (references.go Phase 0e) 과 Item 4 (host_boundary
+adapter 통합) 은 2026-05-16 착륙 — **Go-side LSP 의 algorithmic pointer-identity
+의존 + native checker serial/parallel duplication 둘 다 해소**. 남은 실질
+작업은 (2) E0553 visibility + (3) cross-file partial merge 2 종으로, 둘 다
+같은 날 design draft 가 docs/ 에 작성됨 (위 링크). 1c.5 외부 partial 항목들의
+액션가능성 카탈로그는 [docs/partial_matrix_survey_2026_05_16.md](docs/partial_matrix_survey_2026_05_16.md)
+참조 — 그 중 TOP 3 small-first 후보: E0553 Path A, A13 (`#[pure]`→readnone)
+LLVM emit, 숫자 리터럴 다형성 확장.
 
 ## 2026-04-24 — Phase 1c.5 code state (historical snapshot)
 
