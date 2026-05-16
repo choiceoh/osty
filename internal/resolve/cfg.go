@@ -162,6 +162,7 @@ func evaluateCfgAnnotation(a *ast.Annotation, env *CfgEnv) (bool, []*diag.Diagno
 // form (`all`/`any`/`not`). The composition may arrive via two paths:
 //   - arg.Compose set (AST lowering created AnnotationComposeArgNode)
 //   - arg.Value is a *ast.CallExpr (parser produced a call expression)
+//
 // Both paths are handled transparently.
 func evaluateCfgArg(arg *ast.AnnotationArg, env *CfgEnv) (bool, []*diag.Diagnostic) {
 	if len(arg.Compose) > 0 {

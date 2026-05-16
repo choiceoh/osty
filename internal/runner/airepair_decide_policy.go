@@ -121,9 +121,9 @@ func RepairedChanged(changeCount, skipCount int) bool {
 
 // Airepair mode names — match `--airepair-mode` flag values.
 const (
-	airepairModeRewriteOnly   = "rewrite"
-	airepairModeAutoAssist    = "auto"
-	airepairModeParseAssist   = "parse"
+	airepairModeRewriteOnly    = "rewrite"
+	airepairModeAutoAssist     = "auto"
+	airepairModeParseAssist    = "parse"
 	airepairModeFrontEndAssist = "frontend"
 )
 
