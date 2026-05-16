@@ -117,6 +117,55 @@ stage0 audit 100% 인 것을 고려하면 가능성 낮지만 — audit 의 scop
 
 각 step 단일 fresh session 으로 가능. 측정 후 root cause 결정 → 진짜 fix.
 
+## 5.1 step 1A-1E 측정 결과 (2026-05-17 후속 spike)
+
+§5 의 plan 그대로 진행 + 단계 더 세분화. 5 step 의 isolated measurement:
+
+| step | 변경 | doctor SEGFAULT? | osty-tests |
+|---|---|---|---|
+| 1A | enum 만 추가 | **YES (exit 139)** | **OK (129 passed)** |
+| 1B | + render case + lirSelect constructor | YES | OK (129 passed) |
+| 1C | + hook stub (always false) | YES | OK (129 passed) |
+| 1D | + `mangleMethodSymbol` filter revert | YES | **FAIL (51/51)** |
+| 1E | + 실제 inline impl (5 method) | YES | **FAIL (51/51)** |
+
+### 핵심 발견 (root cause 분리)
+
+**(A) doctor SEGFAULT 의 root cause = enum-only 변경**:
+- step 1A 부터 1E 까지 SEGFAULT 일관 — enum 추가 자체가 트리거
+- osty-tests 와 무관 (1A-1C 에서 osty-tests OK)
+- §4.1 (enum ordinal change) 가 확실한 root cause. 다른 코드의 어떤 path 가 LirInstrKind ordinal 또는 size 의 invariant 가정
+
+**(B) osty-tests link miss 의 root cause = `mangleMethodSymbol` filter revert**:
+- step 1D 부터 fail — filter revert 가 트리거
+- step 1C 까지는 filter keep (PR #1874 의 rewrite 적용) → osty-tests OK
+- step 1E (실제 inline impl) 도 fail — inline 이 실제로 적용 안 되고 있음을 의미
+
+### step 1E 의 inline impl 적용 실패 가설
+
+filter revert 후 raw `Int__abs` symbol 이 lir_proto 에 들어가야 함. 그러나 osty-tests 가 그것을 inline 안 받음. 가능한 이유:
+
+1. **osty-self 가 stage0 fallback 으로 빌드** — `lirTryLowerMirIntMethodIntrinsic` 새 함수가 monomorph 후 stage0 cover gap → osty-self 의 lir_proto path 에서 그 함수가 dead code 또는 declined
+2. **osty-tests 가 osty-self subprocess 호출 안 함** — 다른 path (Go-side stage0 fallback emit) 가 `Int__abs` external call 로 emit
+3. **lir_proto 의 다른 path 가 우선 분기** — `lirLookupMirFunction` 가 `Int__abs` lookup 성공 (어떤 fallback) → 우리 hook 안 거침
+
+### 다음 시도 권장 (refined)
+
+**(A) doctor SEGFAULT 해소**:
+- enum ordinal 의 hidden invariant 추적 — LirInstrKind 의 정수 비교 site 또는 array/lookup table size 가정 grep
+- 또는 enum 추가 우회 — 기존 case 의 재해석 (예: LirInstrCall 의 op field 로 "select" 지정)
+
+**(B) osty-tests inline 적용 검증**:
+- `lirTryLowerMirIntMethodIntrinsic` 에 debug eprint 추가 → osty-tests 실행 시 어떤 symbol 이 hook 거치는지 측정
+- 또는 osty-self 가 osty-tests 의 build path 에 실제 활용되는지 확인 (osty-self subprocess 호출 trace)
+- 또는 PR #1874 의 filter keep + lir_proto 가 rewritten symbol (`osty_rt_int_abs`) 인식 + inline expand (filter revert 불필요)
+
+가장 surgical = (B) 의 마지막 option — filter keep + hook 의 sym 매칭을 `osty_rt_int_abs/...` 로 변경. 이 경우:
+- mangleMethodSymbol 의 rewrite 그대로 (`Int__abs → osty_rt_int_abs`)
+- stage0: rewritten symbol 받음 → inline 안 함 → C wrapper external call (PR #1874 의 path)
+- lir_proto: rewritten symbol 받음 → 우리 hook 가 매칭 + inline → external call 회피
+- 단 stage0 와 lir_proto 양쪽 inline 다 가능하려면 stage0 의 매칭도 같이 갱신 필요
+
 ## 6. R3 trajectory 의 다음 brick 후보
 
 - **3a-debug**: 위 (1)~(3) measurement spike 후 root cause 명확화 → 진짜 fix
