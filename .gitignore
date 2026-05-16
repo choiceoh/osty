@@ -31,3 +31,8 @@ graphify-out/
 
 # `go build ./cmd/osty-vs-go` artifact when built outside .bin/.
 /osty-vs-go
+
+# osty.lock for cmd/*/ — these are dep-driven manifests; cmd subprojects
+# with [dependencies] empty regenerate a stale lock on each build.
+# examples/<name>/main.osty.lock is a different naming and stays tracked.
+cmd/*/osty.lock
