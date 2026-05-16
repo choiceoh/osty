@@ -210,6 +210,30 @@ D)  PR3 자체 보류 — M2 partial 로 만족. source bootstrap UNLOCK 이 핵
 
 **권장 (옵션 A')**: production path next wall (mirJsonObjectGetNamed) 의 stage0 cover wave 가 가장 직접적 진척. PR #1858 의 3-commit cascade 패턴 재사용 가능. unblock 시 production path 전체 활성 → cmd/osty-native-checker 의 M3 (L2 corpus) 자동 가능성.
 
+## 10. 2026-05-17 최종 측정 (PR #1865/#1868)
+
+**audit scope 의 한계 발견** + **backend audit-out 함수 수**:
+
+| file | 함수 수 | scope |
+|---|---|---|
+| toolchain/mir_json.osty | 126 | audit 외부 |
+| toolchain/mir_lower.osty | 306 | audit 외부 |
+| toolchain/mir_optimize.osty | 39 | audit 외부 |
+| toolchain/mir_generator.osty | **2659** | audit 외부 |
+| toolchain/llvmgen.osty | 500 | audit 외부 |
+| toolchain/lir_proto.osty | 418 | audit 외부 |
+| **backend 합 (audit 외부)** | **4048** | — |
+| (참고) toolchainCheckerFiles audit cover | 8240 | audit 내부 |
+
+audit 100% 는 checker bundle 만. backend 4048 함수의 stage0 cover 는 별도 trajectory. PR #1858 의 16 decline → 0 cascade 도 checker bundle 만 적용.
+
+**진짜 next-phase trajectory**: backend 4048 함수의 stage0 cover wave. PR #1858 의 classifier mechanism + 3-commit cascade 패턴 재사용 가능. 단일 fresh session 으로 가능한지 미지수 (4048 vs 16 비율 100배 이상).
+
+대안:
+- **bundle scope 확장** (옵션 α'): toolchainCheckerFiles 에 backend 파일 추가 → 새 audit 측정 → cascade unblock
+- **osty-self LIR Proto pipeline (Phase 1+) 직접 활성** (옵션 γ): stage0 우회, osty-self 의 별도 구조 변경
+- **PR #1858 author 후속 wave wait** (옵션 β): 외부 trajectory 의존
+
 위 선택지 중 하나가 명확해지면 본 doc 의 §2 cheat sheet 만으로 즉시 PR 시작 가능.
 
 ## 10. 본 doc 의 갱신 트리거
