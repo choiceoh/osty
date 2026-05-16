@@ -68,13 +68,13 @@ func TestParseAppendCallNestedItem(t *testing.T) {
 
 func TestParseAppendCallRejects(t *testing.T) {
 	cases := []string{
-		"append(only_one)",       // wrong arity
-		"push(xs, v)",            // not append
-		"append(a, b) + 1",       // trailing
-		"append(, x)",            // empty base
-		"append(xs, )",           // empty item
-		"",                       // empty
-		"append",                 // no parens
+		"append(only_one)", // wrong arity
+		"push(xs, v)",      // not append
+		"append(a, b) + 1", // trailing
+		"append(, x)",      // empty base
+		"append(xs, )",     // empty item
+		"",                 // empty
+		"append",           // no parens
 	}
 	for _, in := range cases {
 		r := ParseAppendCall(in)
@@ -216,11 +216,11 @@ func TestRewriteForeignLoopHeader(t *testing.T) {
 
 func TestRewriteLetAppendLine(t *testing.T) {
 	cases := []struct {
-		name        string
-		indent      string
-		trimmed     string
-		ok          bool
-		want        string
+		name    string
+		indent  string
+		trimmed string
+		ok      bool
+		want    string
 	}{
 		{"simple", "    ", "let xs = append(prev, x)", true, "    let mut xs = prev\n    xs.push(x)"},
 		{"mut-keyword", "", "let mut xs = append(prev, x)", true, "let mut xs = prev\nxs.push(x)"},
