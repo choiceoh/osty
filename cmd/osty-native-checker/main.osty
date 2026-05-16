@@ -1,3 +1,11 @@
+// PR1b: stub CheckResult JSON 출력 (stdin 미사용).
+//
+// 진짜 stdin readAll + JSON serde 는 PR1c+ 의 backend 작업 (`osty_rt_io_read_all`
+// C runtime + stage0 io intrinsic cover) 후 가능. 본 PR1b 는 출력 shape 만 가짜
+// CheckResult JSON 으로 갈음하여 다음 PR (manual serde / 진짜 checker 호출) 이
+// 합칠 자리만 마련.
+//
+// 같이 머지된 docs/llvm-selfhost-plan-pr1b-readiness.md §Q11 + §"한계" 참조.
 fn main() {
-    println("osty-native-checker-llvm: stub")
+    println("\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
 }
