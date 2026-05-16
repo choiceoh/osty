@@ -29878,6 +29878,41 @@ osty_rt_os_exec_output(int64_t exit_code, void *stdout_text, void *stderr_text,
   return out;
 }
 
+/* `__IntMethods` fan-out (internal/stdlib/primitives/int.osty) wired to
+ * the MIR symbol rewrite (`rewriteStdlibSymbolToRuntime` in
+ * `internal/mir/lower.go`). stage0 emits these calls inline via
+ * `renderKnownIntMethodCall`; the source-bootstrap LIR Proto path lacks
+ * an equivalent and was reaching link with `Int__{abs,min,max,clamp,
+ * signum}` undefined. Routing the symbol to a small C wrapper closes
+ * the link gap without porting the inline shape into
+ * `toolchain/lir_proto.osty`. */
+int64_t osty_rt_int_abs(int64_t self) {
+  return self < 0 ? -self : self;
+}
+
+int64_t osty_rt_int_min(int64_t self, int64_t other) {
+  return self < other ? self : other;
+}
+
+int64_t osty_rt_int_max(int64_t self, int64_t other) {
+  return self > other ? self : other;
+}
+
+int64_t osty_rt_int_clamp(int64_t self, int64_t lo, int64_t hi) {
+  int64_t lower = self < lo ? lo : self;
+  return lower > hi ? hi : lower;
+}
+
+int64_t osty_rt_int_signum(int64_t self) {
+  if (self < 0) {
+    return -1;
+  }
+  if (self > 0) {
+    return 1;
+  }
+  return 0;
+}
+
 osty_rt_os_string_result *osty_rt_os_hostname(void) {
 #if defined(_WIN32)
   char buf[MAX_COMPUTERNAME_LENGTH + 1];
