@@ -4778,12 +4778,12 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
     let mut elemLir = lirContainerElemLaneType(elemName)
     if lirTypeIsZero(elemLir) {
         if kind != "list.elem" {
-            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane", label)
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane (" + lirTypeLowerTraceMessage(l.mirModule, elemName) + ")", label)
             return lirContainerReceiverInvalid()
         }
         let compositeElem = lirLowerMirType(l, elemName)
         if lirTypeIsZero(compositeElem) || lirTypeIsVoid(compositeElem) {
-            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane or MIR layout", label)
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane or MIR layout (" + lirTypeLowerTraceMessage(l.mirModule, elemName) + ")", label)
             return lirContainerReceiverInvalid()
         }
         elemLir = compositeElem
@@ -4806,7 +4806,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
         if lirTypeIsZero(valueLir) {
             let compositeValue = lirLowerMirType(l, valueName)
             if lirTypeIsZero(compositeValue) || lirTypeIsVoid(compositeValue) {
-                lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane or MIR layout", label)
+                lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane or MIR layout (" + lirTypeLowerTraceMessage(l.mirModule, valueName) + ")", label)
                 return lirContainerReceiverInvalid()
             }
             valueLir = compositeValue

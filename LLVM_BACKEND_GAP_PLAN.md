@@ -89,9 +89,9 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
 | GAP-RECV-001 | 3105 | `<label> could not extract element type from receiver \`T\`` | List/Map/Set 타입 이름 파싱 실패 |
-| GAP-RECV-002 | 3110 | `<label> element type \`T\` has no LIR runtime lane` | 복합 element (struct in List 등) — `bytes-v1` fallback 필요 |
+| GAP-RECV-002 | lir_proto.osty:4781,4786 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `<label> element type \`T\` has no LIR runtime lane (or MIR layout)` + root-cause hint |
 | GAP-RECV-003 | 3117 | `<label> could not extract value type from receiver \`T\`` | Map<K, V>의 V 추출 실패 |
-| GAP-RECV-004 | 3122 | `<label> value type \`T\` has no LIR runtime lane` | 복합 V (struct/enum in Map<K, V>) |
+| GAP-RECV-004 | lir_proto.osty:4809 | ✅ 2026-05-17 trace 추가 | `<label> value type \`T\` has no LIR runtime lane or MIR layout` + 동일 trace |
 | GAP-RECV-005 | 3204 | `list.push composite element type \`T\` has no MIR layout` | bytes-v1 fallback도 layout 없으면 실패 |
 
 #### 2.2.5 Print intrinsic
