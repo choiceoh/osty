@@ -1423,6 +1423,16 @@ func isOpaqueNamedType(name string) bool {
 	case "List", "Map", "Set", "Option", "Result", "Channel", "Handle", "TaskGroup":
 		return true
 	}
+	// Itanium-style monomorph instances of the above
+	// (`_ZTSN4main4ListI...EE` etc.). The mangled name preserves the
+	// generic identity as a length-prefixed substring; the box layout
+	// is identical across instantiations, so the opaque-ptr scalar
+	// classification carries over without per-instance handling.
+	for _, t := range []string{"List", "Map", "Set", "Option", "Maybe", "Result", "Channel", "Handle", "TaskGroup"} {
+		if isMangledBuiltinTemplate(name, t) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -5137,7 +5147,19 @@ func resolveProjectedResultPayloadSlot(fn *mir.Function, place mir.Place, baseEx
 
 func listProjectionElementStructName(listType mir.Type, elemType mir.Type) (string, bool) {
 	listNamed, ok := listType.(*ir.NamedType)
-	if !ok || listNamed == nil || !listNamed.Builtin || listNamed.Name != "List" || len(listNamed.Args) == 0 {
+	if !ok || listNamed == nil {
+		return "", false
+	}
+	// Mangled monomorph `List<T>` (e.g. `_ZTSN4main4ListIN4main16FrontCheckedNodeEEE`)
+	// loses Builtin + Args after monomorphisation. The element type is
+	// already available from the IndexProj, so trust it directly when
+	// it's a named struct.
+	if !listNamed.Builtin || listNamed.Name != "List" || len(listNamed.Args) == 0 {
+		if isMangledBuiltinTemplate(listNamed.Name, "List") {
+			if elemNamed, ok := elemType.(*ir.NamedType); ok && elemNamed != nil && elemNamed.Name != "" {
+				return elemNamed.Name, true
+			}
+		}
 		return "", false
 	}
 	if isErrType(elemType) {
@@ -9454,6 +9476,22 @@ func emitWhileMapNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destI
 			valueType = v
 		}
 	}
+	// Final fallback for monomorphised Map<K, V> whose mangled name
+	// drops type Args (`_ZTSN4main3MapI...EE`). The peer-arg / call /
+	// use recoveries above need at least one signal; install-self
+	// reaches functions like `emptyCheckNameIndexTable` that
+	// construct + return a Map immediately without any local usage
+	// to inspect. Default both K and V to opaque ptr — every
+	// monomorph instance of stdlib Map<NamedType, NamedType> in the
+	// toolchain lowers that way at runtime.
+	if (keyType == scalarUnknown || valueType == scalarUnknown) && destLocalNameIsMangledMap(ctx.fn, destID) {
+		if keyType == scalarUnknown {
+			keyType = scalarOpaquePtr
+		}
+		if valueType == scalarUnknown {
+			valueType = scalarOpaquePtr
+		}
+	}
 	keyKind, ok := runtimeKindForScalar(keyType)
 	if !ok {
 		return false
@@ -9474,6 +9512,23 @@ func emitWhileMapNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destI
 	}
 	declareRuntimePrototype(ctx.mctx, "osty_rt_map_new", scalarOpaquePtr, args)
 	return emitWhileCallResult(ctx, out, destID, scalarOpaquePtr, "osty_rt_map_new", args)
+}
+
+// destLocalNameIsMangledMap reports whether the destination local's
+// declared type is a monomorphised `Map<K, V>` instance whose mangled
+// name no longer exposes the generic Args. Used as the last-resort
+// signal in emitWhileMapNewIntrinsic when every other K/V recovery
+// path fails.
+func destLocalNameIsMangledMap(fn *mir.Function, id mir.LocalID) bool {
+	loc := lookupLocal(fn, id)
+	if loc == nil {
+		return false
+	}
+	named, ok := loc.Type.(*ir.NamedType)
+	if !ok || named == nil {
+		return false
+	}
+	return isMangledBuiltinTemplate(named.Name, "Map")
 }
 
 func recoverMapNewArgScalarsFromStructAggregate(fn *mir.Function, mapID mir.LocalID, mctx *moduleCtx) (scalarType, scalarType, bool) {
@@ -9512,11 +9567,23 @@ func recoverMapNewArgScalarsFromStructAggregate(fn *mir.Function, mapID mir.Loca
 					return scalarUnknown, scalarUnknown, false
 				}
 				mt, ok := layout.Fields[i].Type.(*ir.NamedType)
-				if !ok || mt == nil || mt.Name != "Map" || len(mt.Args) < 2 {
+				if !ok || mt == nil {
 					return scalarUnknown, scalarUnknown, false
 				}
-				k := mctx.scalarFromType(mt.Args[0], true)
-				v := mctx.scalarFromType(mt.Args[1], true)
+				// Mangled monomorph `Map<K, V>` field (`_ZTSN4main3MapI...EE`)
+				// — Args dropped post-monomorphisation, so default to
+				// opaque ptr K/V like the destLocalNameIsMangledMap
+				// fallback in emitWhileMapNewIntrinsic.
+				var k, v scalarType
+				if mt.Name == "Map" && len(mt.Args) >= 2 {
+					k = mctx.scalarFromType(mt.Args[0], true)
+					v = mctx.scalarFromType(mt.Args[1], true)
+				} else if isMangledBuiltinTemplate(mt.Name, "Map") {
+					k = scalarOpaquePtr
+					v = scalarOpaquePtr
+				} else {
+					return scalarUnknown, scalarUnknown, false
+				}
 				if k == scalarUnknown || v == scalarUnknown {
 					return scalarUnknown, scalarUnknown, false
 				}
@@ -9704,9 +9771,17 @@ func recoverMapNewArgScalarsAsOpaquePassThrough(fn *mir.Function, mapID mir.Loca
 				switch step.Kind {
 				case mir.IntrinsicMapSet, mir.IntrinsicMapGet, mir.IntrinsicMapContains,
 					mir.IntrinsicMapKeysSorted, mir.IntrinsicMapIncr:
-					for _, arg := range step.Args {
-						if operandIsPlainLocal(arg, mapID) {
-							return scalarUnknown, scalarUnknown, false
+					// Only reject when the local is the map being
+					// modified (Args[0]). When it appears as the
+					// value being inserted (Args[2] of MapSet, etc.)
+					// the local is passed opaque — no layout
+					// requirement on the local itself.
+					if len(step.Args) > 0 && operandIsPlainLocal(step.Args[0], mapID) {
+						return scalarUnknown, scalarUnknown, false
+					}
+					for i := 1; i < len(step.Args); i++ {
+						if operandIsPlainLocal(step.Args[i], mapID) {
+							passedAsCallArg = true
 						}
 					}
 				}
@@ -9787,7 +9862,16 @@ func mapArgScalarsFromType(t mir.Type, mctx *moduleCtx) (scalarType, scalarType,
 		return scalarUnknown, scalarUnknown, false
 	}
 	named, ok := t.(*ir.NamedType)
-	if !ok || named == nil || named.Name != "Map" || len(named.Args) < 2 {
+	if !ok || named == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	// Mangled monomorph Map (`_ZTSN4main3MapI...EE`) — Args dropped,
+	// default to opaque ptr K/V (same convention as
+	// destLocalNameIsMangledMap fallback in emitWhileMapNewIntrinsic).
+	if isMangledBuiltinTemplate(named.Name, "Map") && (named.Name != "Map" || len(named.Args) < 2) {
+		return scalarOpaquePtr, scalarOpaquePtr, true
+	}
+	if named.Name != "Map" || len(named.Args) < 2 {
 		return scalarUnknown, scalarUnknown, false
 	}
 	k := mctx.scalarFromType(named.Args[0], true)
@@ -10158,11 +10242,37 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 			}
 		}
 		expr, ty, ok := resolveOperandWithLoad(ctx, out, src.Op)
-		if !ok || ty != destType {
+		if !ok {
+			return false
+		}
+		// Coercion ladder for mangled-Result payload reads where the
+		// fallback in resultPayloadScalars defaulted to opaque ptr but
+		// the actual destination expects a primitive:
+		//
+		//  - strict match
+		//  - both ptr-shaped (String/OpaquePtr): bitcast-free
+		//  - ty is OpaquePtr and destType is Int: ptrtoint
+		//  - ty is OpaquePtr and destType is Bool: ptrtoint + trunc
+		switch {
+		case ty == destType:
+			// strict match
+		case scalarLowersToPtr(ty) && scalarLowersToPtr(destType):
+			// shape-compatible ptrs
+		case ty == scalarOpaquePtr && destType == scalarInt:
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", reg, expr)
+			expr = reg
+		case ty == scalarOpaquePtr && destType == scalarBool:
+			intReg := freshReg(ctx)
+			boolReg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", intReg, expr)
+			fmt.Fprintf(out, "  %s = trunc i64 %s to i1\n", boolReg, intReg)
+			expr = boolReg
+		default:
 			return false
 		}
 		rhsExpr = expr
-		rhsTy = ty
+		rhsTy = destType
 	case *mir.BinaryRV:
 		expr, ty, ok := emitWhileBinaryRValue(ctx, out, src, destType)
 		if !ok {
@@ -10247,8 +10357,32 @@ func emitWhileFieldWrite(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.As
 		return false
 	}
 	valueExpr, valueTy, ok := resolveWhileStoreRValue(ctx, out, ai.Src, fieldTy)
-	if !ok || valueTy != fieldTy {
+	if !ok {
 		return false
+	}
+	// Same coercion ladder as the local-assign UseRV path: tolerate
+	// pointer-shape mismatches and ptrtoint when the front-end has
+	// erased a Result/Option payload type that the destination field
+	// expects as a concrete primitive (mirJsonModuleInto's
+	// `module.packageName = Ok(stringField)` after Ok's payload type
+	// was lost upstream).
+	if valueTy != fieldTy {
+		switch {
+		case scalarLowersToPtr(valueTy) && scalarLowersToPtr(fieldTy):
+			// shape-compatible ptrs
+		case valueTy == scalarOpaquePtr && fieldTy == scalarInt:
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", reg, valueExpr)
+			valueExpr = reg
+		case valueTy == scalarOpaquePtr && fieldTy == scalarBool:
+			intReg := freshReg(ctx)
+			boolReg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", intReg, valueExpr)
+			fmt.Fprintf(out, "  %s = trunc i64 %s to i1\n", boolReg, intReg)
+			valueExpr = boolReg
+		default:
+			return false
+		}
 	}
 	fmt.Fprintf(out, "  store %s %s, ptr %s\n", fieldTy.llvm(), valueExpr, slot)
 	return true
@@ -10876,18 +11010,57 @@ func optionPayloadScalar(t mir.Type, mctx *moduleCtx) (scalarType, bool) {
 		st := mctx.scalarFromType(ty.Inner, true)
 		return st, st != scalarUnknown
 	case *ir.NamedType:
-		if ty == nil || !ty.Builtin || (ty.Name != "Option" && ty.Name != "Maybe") || len(ty.Args) == 0 {
+		if ty == nil {
 			return scalarUnknown, false
 		}
-		st := mctx.scalarFromType(ty.Args[0], true)
-		return st, st != scalarUnknown
+		// Canonical pre-monomorph name with type args.
+		if ty.Builtin && (ty.Name == "Option" || ty.Name == "Maybe") && len(ty.Args) > 0 {
+			st := mctx.scalarFromType(ty.Args[0], true)
+			return st, st != scalarUnknown
+		}
+		// Itanium-style mangled monomorph instance
+		// (`_ZTSN4main6OptionI...EE` for `Option<T>`). After
+		// monomorphisation `Builtin` may be unset and the type Args
+		// may be dropped — the original generic identity survives
+		// only in the mangled name. Without this fallback every
+		// concrete Option/Maybe instance (e.g. `Option<FrontTypeRepr>`
+		// in tyToRepr) decays to `unsupported local type` even
+		// though stage0 already knows the box layout. Payload defaults
+		// to opaque ptr because every stdlib `Option<NamedType>`
+		// instance — the dominant install-self shape — lowers that way.
+		if isMangledBuiltinTemplate(ty.Name, "Option") || isMangledBuiltinTemplate(ty.Name, "Maybe") {
+			return scalarOpaquePtr, true
+		}
 	}
 	return scalarUnknown, false
 }
 
+// isMangledBuiltinTemplate reports whether `name` is the Itanium-style
+// nested-template mangling for `main::<template>` — the form
+// `_ZTSN4main<len><template>I…EE` produced by monomorphisation. Used
+// by optionPayloadScalar / resultPayloadScalars to recognise
+// concrete instances of stdlib generic boxes whose canonical name
+// ("Option", "Result") survives only as a length-prefixed substring.
+func isMangledBuiltinTemplate(name, template string) bool {
+	if !strings.HasPrefix(name, "_ZTSN") {
+		return false
+	}
+	needle := strconv.Itoa(len(template)) + template
+	return strings.Contains(name, needle)
+}
+
 func resultPayloadScalars(t mir.Type, mctx *moduleCtx) (scalarType, scalarType, bool) {
 	named, ok := t.(*ir.NamedType)
-	if !ok || named == nil || !named.Builtin || named.Name != "Result" || len(named.Args) < 2 {
+	if !ok || named == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	// Mangled monomorph instance (`_ZTSN4main6ResultI...EE`) — type
+	// Args may be dropped; default both payload slots to opaque ptr
+	// (every stdlib `Result<Named, Named>` instance lowers that way).
+	if isMangledBuiltinTemplate(named.Name, "Result") && (!named.Builtin || len(named.Args) < 2) {
+		return scalarOpaquePtr, scalarOpaquePtr, true
+	}
+	if !named.Builtin || named.Name != "Result" || len(named.Args) < 2 {
 		return scalarUnknown, scalarUnknown, false
 	}
 	okTy := mctx.scalarFromType(named.Args[0], true)
@@ -11579,6 +11752,15 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	elemTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
 	if elemTy == scalarUnknown {
 		elemTy = inferIndexedElementScalarFromPlace(ctx.fn, place, ctx.mctx)
+	}
+	// Final fallback: when the IndexProj.ElemType has been erased to
+	// `<error>` and inference failed, but the list local lowers to
+	// `ptr` (any `List<NamedType>` monomorph), default the element
+	// scalar to opaque ptr. Used by mirLowerMultiAssign et al. where
+	// `list[i]` reads an `MirLowerer`/`MirLocal`-typed slot but the
+	// IndexProj.ElemType lost the named-type info upstream.
+	if elemTy == scalarUnknown && listScalarTy == scalarOpaquePtr {
+		elemTy = scalarOpaquePtr
 	}
 	if elemTy == scalarUnknown {
 		return "", scalarUnknown, false
