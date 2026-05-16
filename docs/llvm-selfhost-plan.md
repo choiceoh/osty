@@ -37,15 +37,17 @@
 - **stage0 fallback** — `osty-self` 가 부재할 때만 작동하는 Go 측 의도적으로 좁은 emitter (`internal/backend/stage0/`). bootstrap 닭-달걀 해소. **production 빌드 경로 아님**.
 - **`scripts/verify-self-rebuild`** — stage2/stage3 byte parity 강제. fresh checkout 에서 self-host 부트스트랩이 가능한지 확인.
 - **`scripts/audit-stage0-coverage.sh`** + `TestStage0ToolchainAudit` (`OSTY_STAGE0_AUDIT=1`) — toolchain/*.osty 함수가 stage0 surface 안에 머무는 비율 측정.
-- **현재 측정 (2026-05-11, [stage0_p24_scope.md §0](stage0_p24_scope.md))**:
+- **현재 측정 (2026-05-16, spike 결과 — [llvm-selfhost-plan-spike-findings.md §Q1](llvm-selfhost-plan-spike-findings.md))**:
 
   | 메트릭 | 값 |
   |---|---|
-  | Stage0 audit cover (checker bundle 모듈) | 94.2% (6112 / 6489) |
-  | `install-self` 실제 decline | **1340 functions** (monomorph 후) |
-  | 다음 P24 target | `useDeclTailAfter` / `frontTypeReprToString` / `tyToRepr` 3 함수 — shape 별로 phase 분할 |
+  | Stage0 audit cover (toolchain 전체) | **99.8% (8221 / 8237)** |
+  | decline 함수 수 | **16** (모두 large complex 함수, blocks 11–103) |
+  | `install-self` 실제 decline | PR1 시점에 재측정 (audit-install 격차 monomorph 효과) |
 
-  두 수치의 격차는 audit 가 checker bundle 만 측정하는 반면 `install-self` 는 binary 컴파일 시 monomorphization 으로 함수 수가 늘어나기 때문 (`stage0_p24_scope.md §0` 의 설명 그대로).
+  5일 전 (2026-05-11) 의 94.2% (6112/6489) 대비 +5.6%p / +2109 함수 cover. stage0 trajectory (P24+) 진척이 plan 작성 시점 가정보다 빠름. 본 plan 의 PR3 (L1 byte parity) 시점에 stage0 100% 가 거의 확실 — 본 plan 의 PR 4–N (stage0 gap 깎기) 가 사실상 불필요해질 가능성.
+
+  두 수치의 격차 (audit cover vs install-self decline) 는 audit 가 checker bundle 만 측정하는 반면 `install-self` 는 binary 컴파일 시 monomorphization 으로 함수 수가 늘어나기 때문 (`stage0_p24_scope.md §0` 의 설명 그대로).
 
 ### 3.2 우리 plan 과 stage0 trajectory 의 관계
 
@@ -72,8 +74,14 @@ stdin → json.Decode(&CheckRequest)
 자체 빌드한 LLVM 산출물이 대체해야 하는 것:
 - Go `main()` 진입 — 우리 측 `cmd/osty-native-checker/main.osty` 신규
 - `json.NewDecoder.Decode(&req)` — Osty 의 `std.json.parseValue` + manual walk
-- `selfhost.CheckPackageStructured(*req.Package)` — `toolchain/check.osty` 의 `checkPackage` 진입점 직접 호출
-- `selfhost.CheckSourceStructured([]byte(req.Source))` — `checkSource` 진입점
+- `selfhost.CheckPackageStructured(*req.Package)` — **단일 entry 없음**. Go side adapter 가 다음 5단계 Osty 시퀀스를 호출 ([spike findings §Q3](llvm-selfhost-plan-spike-findings.md)):
+  1. `selfhostBuildPackageAst(files) -> (file, layout)`
+  2. `newElabCx(file, None)`
+  3. `selfhostInstallImportSurfaces(cx.env, imports)`
+  4. `elabFile(cx)` ← 핵심 elaboration
+  5. `serializeCheckResult(cx) -> raw`
+  6. `adaptCheckResultWithTokenLayout(raw, layout)` ← **현재 Go side 함수**, Osty 이식 필요 (N8)
+- `selfhost.CheckSourceStructured([]byte(req.Source))` — 비슷한 5단계 (선두 두 단계만 `ostyLexSource` + `astParseLexedSource` 로 갈음)
 - `json.NewEncoder.Encode(checked)` — `std.json.stringifyValue` + manual build
 
 ### 3.4 Wire shape
@@ -164,6 +172,7 @@ L1 → L2 → L3 진행 중 stage0 coverage 가 같이 올라간다. L3 통과 =
 | N5 | stdin / stdout helper — `std.io.stdin().readAll()` 또는 동등물 | osty_rt_io_read_line 만 있음. read-all helper 추가 (`osty_rt_io_read_all`) | C ~20 + Osty wrapper ~20 | 작음 |
 | N6 | LLVM build 가 `toolchain/` 모듈 + `cmd/.../main.osty` 동시 compile + link | 현재 `osty build` 가 multi-package workspace 처리하는지 확인. 단일 binary 생성 가능 여부 | 0 ~ ??? | 모름 — 확인 필요 |
 | N7 | `CheckResult` JSON field ordering 결정성 | Go encoding/json 은 struct field 선언 순서 = JSON 출력 순서. Osty 측 stringifyObject 도 같은 순서로 emit 해야 byte 동일 | ~50 (정렬 코드) | 작음 |
+| N8 | `adaptCheckResultWithTokenLayout` Osty 이식 — token.Pos → byte offset 변환 | Go side `package_adapter.go` 의 helper. Osty 측 entry 가 같은 layout 변환 수행해야 wire shape parity | ~100 | 작음~중간 (spike Q3 발견) |
 
 ### 5.3 잠재 walls (탐색 필요)
 
@@ -337,23 +346,27 @@ JSON 출력은 다음 결정성 조건을 만족해야 byte-equal 비교 가능:
 
 ### 10.1 큰 위험
 
-| 위험 | 발현 시점 | 완화 |
+| 위험 | 발현 시점 | 완화 / 현재 상태 |
 |---|---|---|
-| **R1: `osty build` 가 single-binary multi-package 빌드 불가** | PR1 시도 시 | 단일 directory (`cmd/osty-native-checker/`) 에 모든 `.osty` 모듈을 두는 패키지 모델로 강제. 또는 `osty install-self` 의 빌드 모델을 차용 |
-| **R2: stage0 coverage 가 본 plan PR3 시점에 충분히 안 올라옴 (예: 95% → 99% 가 수개월 걸림)** | PR3+ | 본 plan 을 stage0 trajectory 와 동기. L1 통과 PR 만 먼저 머지하고 L2/L3 는 stage0 100% 후 |
+| ~~**R1: `osty build` 가 single-binary multi-package 빌드 불가**~~ | ~~PR1 시도 시~~ | **종결 (spike Q2)** — `osty.toml` + `[bin]` 모델 (`toolchain/osty.toml` 그대로). PR1 에서 `cmd/osty-native-checker/osty.toml` 추가 |
+| **R2: stage0 coverage 가 본 plan PR3 시점에 충분히 안 올라옴** | PR3+ | **위험 크게 축소** — spike 측정 결과 99.8% (5일만에 +5.6%p). PR3 시점에 100% 가능성 매우 높음. PR 4–N 의 stage0 gap PR 들이 사실상 불필요해질 가능성 |
 | **R3: byte-equal 출력이 불가능한 비결정성 (예: map iteration order, hash seed)** | PR2/PR3 | wire shape 의 결정적 encoding 을 SPEC_GAPS 에 등록 후 Osty/Go 양쪽 stringify 정렬 |
-| **R4: `std.json.parseValue` 가 self-host 시 stage0 surface 밖 → P24 이전에 추가 unlock 필요** | PR1/PR2 | `OSTY_STAGE0_AUDIT=1` 로 `std.json.parseValue` 의 decline shape 미리 측정. unlock 필요하면 stage0 trajectory 에 합류 |
-| **R5: `toolchain/check.osty` 의 public entry function 부재 / 시그니처 불일치** | PR3 | N4 의 작업 — 이 plan 의 PR2 → PR3 사이에 export 추가 PR 별도 |
+| ~~**R4: `std.json.parseValue` 가 self-host 시 stage0 surface 밖**~~ | ~~PR1/PR2~~ | **종결 (spike Q1)** — stage0 99.8%, std.json 12 함수 전부 cover |
+| **R5: `toolchain/check.osty` 의 public entry function 부재 / 시그니처 불일치** | PR3 | **부분 종결 (spike Q3)** — 단일 entry 없지만 5단계 시퀀스 명확. N8 (token-layout adapter Osty 이식, ~100 LOC) 작업 항목 추가 |
 
-### 10.2 측정 필요 (open question)
+### 10.2 측정 결과 (2026-05-16 spike — [llvm-selfhost-plan-spike-findings.md](llvm-selfhost-plan-spike-findings.md))
 
-- Q1: `std.json.parseValue` 의 stage0 coverage 비율?
-- Q2: `osty build` 의 multi-binary build 모델? (`osty build dir/` 시 dir 안의 `.osty` 가 모두 한 binary?)
-- Q3: `toolchain/check.osty` 의 `checkPackage(...)` Osty signature 와 Go 의 `selfhost.CheckPackageStructured(api.PackageInput)` 의 mapping?
-- Q4: `cmd/osty-native-checker` 의 stdin EOF 처리 — 한 번 read 후 종료 vs persistent loop?
-- Q5: stderr 사용 정책 — Go-built 은 error 시 stderr 에 1줄. LLVM-built 의 동등물?
+| # | 질문 | 답 |
+|---|---|---|
+| Q1 | `std.json.parseValue` stage0 coverage? | **YES, stage0 99.8%, std.json 12함수 전부 cover** |
+| Q2 | `osty build` single-binary multi-package? | **YES, `osty.toml` + `[bin] name=... path=main.osty` 모델 (`toolchain/osty.toml` 그대로)** |
+| Q3 | `checkPackage` Osty signature mapping? | **단일 entry 없음. 5단계 Osty 시퀀스 + Go token-layout adapter (N8 작업으로 Osty 이식)** |
+| Q4 | stdin EOF — single request vs persistent loop? | **single request, readAll 패턴** |
+| Q5 | stderr 사용 정책? | **error → stderr 한 줄 + exit 1; behavior parity 는 stdout + exit code 만 비교** |
 
-각 question 은 PR1 의 첫 spike 에서 답이 나올 가능성. 답이 나오면 본 doc 의 §3.3 / §3.4 / §5 갱신.
+후속 미지수 (PR1 시점에 발견):
+- (Q6) `cmd/osty-native-checker/` 디렉토리에 `main.go` 와 `main.osty` 공존 시 `osty build` 가 `.go` 무시하는가?
+- (Q7) install-self 측정 시 99.8% audit cover 가 install-self 의 몇 %로 환산되는가? (monomorph 격차)
 
 ## 11. 다음 단계
 
