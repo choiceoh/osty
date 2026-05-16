@@ -545,20 +545,25 @@ type ResolveSummary struct {
 }
 
 // ResolvedSymbol records one symbol declared by the self-host resolver.
+// When Kind == "package", ImportPath carries the full use-decl path
+// (e.g. "toolchain.check") populated by adaptResolveResult's post-processing
+// pass. Empty for all other kinds. Consumers that want module-scoped lookup
+// can branch on `ImportPath != ""`.
 type ResolvedSymbol struct {
-	ID        string    `json:"symbolId,omitempty"`
-	PackageID string    `json:"packageId,omitempty"`
-	DeclID    string    `json:"declId,omitempty"`
-	Node      int       `json:"node"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Type      *TypeRepr `json:"type"`
-	Arity     int       `json:"arity"`
-	Depth     int       `json:"depth"`
-	Start     int       `json:"start"`
-	End       int       `json:"end"`
-	Public    bool      `json:"public"`
-	File      string    `json:"file,omitempty"`
+	ID         string    `json:"symbolId,omitempty"`
+	PackageID  string    `json:"packageId,omitempty"`
+	DeclID     string    `json:"declId,omitempty"`
+	Node       int       `json:"node"`
+	Name       string    `json:"name"`
+	Kind       string    `json:"kind"`
+	Type       *TypeRepr `json:"type"`
+	Arity      int       `json:"arity"`
+	Depth      int       `json:"depth"`
+	Start      int       `json:"start"`
+	End        int       `json:"end"`
+	Public     bool      `json:"public"`
+	File       string    `json:"file,omitempty"`
+	ImportPath string    `json:"importPath,omitempty"`
 }
 
 // ResolvedRef records one value/name reference plus its resolved target span

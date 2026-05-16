@@ -307,6 +307,47 @@ func selfhostFilterCrossFileDuplicateUseDiagnostics(result *ResolveResult, file 
 	selfhostRefreshResolveDiagnosticSummary(result)
 }
 
+// selfhostUseAliasImportPaths walks every use-decl in file and returns a map
+// from the resolved alias (the binding name) to the full import path stored
+// on the use-decl AST node. Group/scoped imports are flattened — each leaf
+// child is visited. Used by adaptResolveResult to fill ResolvedSymbol.
+// ImportPath for kind == "package" entries. Tracked in
+// SPEC_GAPS.md::cross-pkg-module-resolution path #5.
+func selfhostUseAliasImportPaths(file *AstFile) map[string]string {
+	out := map[string]string{}
+	if file == nil || file.arena == nil {
+		return out
+	}
+	var walk func(int)
+	walk = func(idx int) {
+		if idx < 0 || idx >= len(file.arena.nodes) {
+			return
+		}
+		node := file.arena.nodes[idx]
+		if node == nil {
+			return
+		}
+		if _, ok := node.kind.(*AstNodeKind_AstNUseDecl); !ok {
+			return
+		}
+		if astUseDeclIsGroup(node) {
+			for _, childIdx := range node.children {
+				walk(childIdx)
+			}
+			return
+		}
+		alias := srAstUseAlias(file, node)
+		if alias == "" || node.text == "" {
+			return
+		}
+		out[alias] = node.text
+	}
+	for _, declIdx := range file.arena.decls {
+		walk(declIdx)
+	}
+	return out
+}
+
 func selfhostPackageUseAliasStarts(file *AstFile, layout *selfhostPackageTokenLayout) map[string][]int {
 	out := map[string][]int{}
 	if file == nil || file.arena == nil {
@@ -517,21 +558,31 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 		TypeRefs:    make([]ResolvedTypeRef, 0, len(resolved.typeRefList)),
 		Diagnostics: make([]ResolveDiagnosticRecord, 0, len(resolved.diagnostics)),
 	}
+	// Build alias → use-decl import path map for the "package" kind post-
+	// processing pass below. SelfSymbol (generated.go frozen seed) does not
+	// carry import paths, so we rebuild them from the AST here. Tracked in
+	// SPEC_GAPS.md::cross-pkg-module-resolution path #5.
+	importPaths := selfhostUseAliasImportPaths(file)
 	for _, sym := range resolved.symbols {
 		if sym == nil {
 			continue
 		}
 		start, end := offsets(sym.start, sym.end)
+		var importPath string
+		if sym.kind == "package" {
+			importPath = importPaths[sym.name]
+		}
 		result.Symbols = append(result.Symbols, ResolvedSymbol{
-			Node:   sym.node,
-			Name:   sym.name,
-			Kind:   sym.kind,
-			Type:   apiTypeReprFromLegacyName(sym.typeName),
-			Arity:  sym.arity,
-			Depth:  sym.depth,
-			Start:  start,
-			End:    end,
-			Public: sym.public,
+			Node:       sym.node,
+			Name:       sym.name,
+			Kind:       sym.kind,
+			Type:       apiTypeReprFromLegacyName(sym.typeName),
+			Arity:      sym.arity,
+			Depth:      sym.depth,
+			Start:      start,
+			End:        end,
+			Public:     sym.public,
+			ImportPath: importPath,
 		})
 	}
 	for _, ref := range resolved.refList {
