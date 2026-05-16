@@ -5796,7 +5796,7 @@ func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, 
 // on top.
 func qualifiedSymbol(use *ir.UseDecl, name string) string {
 	if use == nil {
-		return name
+		return rewriteStdlibSymbolToRuntime(name)
 	}
 	switch {
 	case use.IsRuntimeFFI && use.RuntimePath != "":
@@ -5805,12 +5805,29 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 		return use.GoPath + "." + name
 	}
 	if use.RawPath != "" {
-		return use.RawPath + "." + name
+		return rewriteStdlibSymbolToRuntime(use.RawPath + "." + name)
 	}
 	if use.Alias != "" {
-		return use.Alias + "." + name
+		return rewriteStdlibSymbolToRuntime(use.Alias + "." + name)
 	}
-	return name
+	return rewriteStdlibSymbolToRuntime(name)
+}
+
+// rewriteStdlibSymbolToRuntime rewrites well-known stdlib symbols that
+// have a direct C-runtime equivalent (osty_runtime.c) but no Osty body.
+// This lets stage0 fallback emit calls to runtime symbols without needing
+// per-symbol mir.IntrinsicKind cases or stage0/emit.go dispatch arms.
+//
+// Currently covered: std.io.readLine → osty_rt_io_read_line. Production
+// path (lir_proto) sees the same rewritten symbol; if it had a separate
+// mapping for the original symbol that arm is now bypassed (rewrites are
+// monotonic so no double-rewrite issue).
+func rewriteStdlibSymbolToRuntime(sym string) string {
+	switch sym {
+	case "std.io.readLine":
+		return "osty_rt_io_read_line"
+	}
+	return sym
 }
 
 // useAliasFor returns the use decl whose alias matches the ident, or
