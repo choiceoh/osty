@@ -928,6 +928,12 @@ pub struct LlvmNativeFunction {
     pub params: List<LlvmNativeParam>,
     pub body: LlvmNativeBlock,
     pub inlineMode: Int,
+    /// A13 `#[pure]` — emits the LLVM `readnone` fn-attr. Mirrors
+    /// `MirFunction.pure` (toolchain/mir.osty:950) / `ir.FnDecl.Pure`
+    /// (internal/ir/ir.go:444) so the future Osty-owned llvmgen path
+    /// can stamp readnone onto pure functions without a separate
+    /// metadata pass.
+    pub pure: Bool,
 }
 /// A8 `#[inline]` family: 0=none, 1=inlinehint, 2=alwaysinline,
 /// 3=noinline. Mirrors `ir.FnDecl.InlineMode` in the Go HIR.
@@ -956,12 +962,23 @@ pub fn llvmNativeFnAttrStringForInlineMode(mode: Int) -> String {
     llvmNativeInlineAttrKeyword(mode)
 }
 /// Assemble the fn-attribute string spliced between `)` and `\{` on a
-/// `LlvmNativeFunction`'s `define` line. Currently only the A8 inline
-/// family contributes; future annotations (hot/cold/pure/target
-/// features/noalias) land in this helper as they gain Osty-emitter
-/// coverage so all callers stay on one call shape.
+/// `LlvmNativeFunction`'s `define` line. Multiple attrs join with a
+/// single space — LLVM accepts space-separated fn-attrs in any order.
+/// Currently emits A8 (`inlinehint` / `alwaysinline` / `noinline`) +
+/// A13 (`readnone`); future annotations (hot / cold / target features /
+/// noalias) land in this helper as they gain Osty-emitter coverage so
+/// all callers stay on one call shape.
 pub fn llvmNativeFnAttrString(function: LlvmNativeFunction) -> String {
-    llvmNativeFnAttrStringForInlineMode(function.inlineMode)
+    let inlineAttr = llvmNativeFnAttrStringForInlineMode(function.inlineMode)
+    if function.pure {
+        if inlineAttr == "" {
+            "readnone"
+        } else {
+            "{inlineAttr} readnone"
+        }
+    } else {
+        inlineAttr
+    }
 }
 /// Variant of `llvmRenderFunction` that splices a fn-attribute string
 /// (e.g. `"alwaysinline"`, `"readnone"`) between the parameter list's
