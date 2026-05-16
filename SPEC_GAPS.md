@@ -238,6 +238,7 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 1. `toolchain/resolve.osty` + `toolchain/elab.osty` 의 cross-package use 처리 — 현재 prelude-special-case 만 cover, 일반 path 추가
 2. `[lib]` crate 가 dep 로 import 될 때 module file → `Module` symbol 등록 (현재 type 등록으로 fallback)
 3. `<module>.<symbol>` access 가 method-lookup 가 아니라 module-scoped symbol lookup 으로 dispatch
+4. `cmd/osty/build.go::emitViaQuery` 가 `m.Lib != nil` 인 manifest 를 library object + export meta 산출 path 로 route. **현재 manifest.go 가 `[lib]` parse + render 하나 cmd/osty 의 build 가 활용 0건** — 2026-05-16 PR 에서 explicit decline 진단으로 surface.
 
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 

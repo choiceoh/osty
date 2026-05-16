@@ -461,6 +461,17 @@ func emitAndBuildViaQuery(root string, m *manifest.Manifest, eng *ostyquery.Engi
 
 func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, binName string) *backend.Result {
 	commandName := "osty " + command
+	// Library-only manifest (`[lib]` without `[bin]`): currently the cmd/osty
+	// build pipeline only knows how to emit binaries, so a library crate's
+	// object/export-meta path is not yet wired. Surface the gap to the user
+	// instead of silently skipping. Tracked in
+	// SPEC_GAPS.md::cross-pkg-module-resolution and the LLVM self-host plan's
+	// PR3-E. Library entry handling will fold into this path once
+	// docs/llvm-selfhost-plan-pr3-design.md PR3-E lands.
+	if m != nil && m.Lib != nil && m.Bin == nil {
+		fmt.Fprintf(os.Stderr, "%s: library-only manifest ([lib] without [bin]) is not yet supported by the LLVM build path; see SPEC_GAPS.md::cross-pkg-module-resolution\n", commandName)
+		return nil
+	}
 	entryRel := "main.osty"
 	if m != nil && m.Bin != nil && m.Bin.Path != "" {
 		entryRel = m.Bin.Path
