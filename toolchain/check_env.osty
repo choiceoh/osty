@@ -66,6 +66,19 @@ pub struct CheckTypeSig {
 pub struct CheckInterfaceExt {
     pub owner: String,
     pub ifaceTy: Int,
+    /// Names of interface methods that carry a `default` body. Mirrors
+    /// `defaultBodyNodes` index-by-index. Empty when the interface has
+    /// no default-bodied methods. Populated by Phase 7 wiring (the
+    /// interface-decl walk that registers `CheckInterfaceExt` for the
+    /// concrete type that implements the interface) so the dispatcher
+    /// can fall back to the default body when the concrete type does
+    /// not override the method.
+    pub defaultBodyNames: List<String>,
+    /// AST arena indices for the default method bodies, keyed parallel
+    /// to `defaultBodyNames`. `-1` marks a name whose body lookup
+    /// failed during Phase 7 wiring (defensive — should not appear in
+    /// well-formed input).
+    pub defaultBodyNodes: List<Int>,
 }
 pub struct CheckGenericBound {
     pub tyParam: String,
@@ -1614,8 +1627,8 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterInterface(env, "Ordered")
     checkRegisterInterface(env, "Hashable")
     checkRegisterInterface(env, "ToString")
-    checkRegisterInterfaceExtends(env, CheckInterfaceExt {owner: "Ordered", ifaceTy: tyNamed(env.tys, "Equal", [])})
-    checkRegisterInterfaceExtends(env, CheckInterfaceExt {owner: "Hashable", ifaceTy: tyNamed(env.tys, "Equal", [])})
+    checkRegisterInterfaceExtends(env, CheckInterfaceExt {owner: "Ordered", ifaceTy: tyNamed(env.tys, "Equal", []), defaultBodyNames: [], defaultBodyNodes: []})
+    checkRegisterInterfaceExtends(env, CheckInterfaceExt {owner: "Hashable", ifaceTy: tyNamed(env.tys, "Equal", []), defaultBodyNames: [], defaultBodyNodes: []})
     let tSelfCmp = tySelf(env.tys, "")
     checkRegisterFn(env, CheckFnSig {name: "eq", owner: "Equal", receiverTy: tSelfCmp, hasReceiver: true, retTy: tBool(env.tys), paramNames: ["other"], paramTys: [tSelfCmp], generics: [], genericBounds: []})
     checkRegisterFn(env, CheckFnSig {name: "ne", owner: "Equal", receiverTy: tSelfCmp, hasReceiver: true, retTy: tBool(env.tys), paramNames: ["other"], paramTys: [tSelfCmp], generics: [], genericBounds: []})
