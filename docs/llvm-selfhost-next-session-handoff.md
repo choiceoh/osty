@@ -271,6 +271,23 @@ audit 100% 는 checker bundle 만. backend 4048 함수의 stage0 cover 는 별�
 
 위 선택지 중 하나가 명확해지면 본 doc 의 §2 cheat sheet 만으로 즉시 PR 시작 가능.
 
+### 10.1 옵션 α' framing 결함 (2026-05-17 측정)
+
+`toolchainCheckerFiles` 에 backend 6 파일 (mir_json/mir_lower/mir_optimize/mir_generator/llvmgen/lir_proto) 추가 시도. 측정 결과 **framing 결함 발견**:
+
+- `bundle.ToolchainCheckerFiles()` / `bundle.MergeToolchainChecker(root)` 의 **production consumer 0건**. `grep` 결과 `bundle_test.go` + `toolchain_checker_probe_test.go` (test only) 만 호출
+- `cmd/osty-native-checker/main.go` 가 `selfhost.CheckSourceStructured / CheckPackageStructured` 호출 → `internal/selfhost/generated.go` (frozen seed) 가 진짜 production checker. **bundle merge 와 무관**
+- `internal/toolchain/native_checker.go::buildNativeChecker` 가 `go build ./cmd/osty-native-checker` 로 native checker 빌드 — bundle scope 미참조
+
+**즉 옵션 α' 은 probe-only 작업**. bundle 확장은 production checker capability 에 영향 zero. handoff §10 의 "α' = production capability 확장" framing 이 실제 mechanism 과 mismatch.
+
+진짜 production capability 확장 path = `internal/selfhost/generated.go` 의 backend logic 추가:
+1. **옵션 c' (재합의)**: narrow exception 한도 확대 + `registerToolchainAliasFns` 같은 단일 mechanism. spec 재합의 필요
+2. **옵션 γ (deep)**: type-propagation gap fix (`<error>` leak 의 IR→MIR seam, `internal/mir/lower.go:3012` 코멘트 명시). multi-PR, 측정 spike 부터 시작 필요
+3. **frozen seed 정책 재고**: generated.go regen 모델 재도입 — `internal/selfhost/generated.go` 자체를 다시 자동 생성 가능하게. CLAUDE.md 의 frozen seed 결정 (PR #854) 자체 revisit
+
+α' 자체는 dropped path (probe-only). 다음 trajectory 는 위 3 path 중 선택.
+
 ## 10. 본 doc 의 갱신 트리거
 
 - 새 PR 머지 시 §7 카탈로그 갱신
