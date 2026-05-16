@@ -77,21 +77,21 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
-| GAP-INSTR-001 | 2070 | `unsupported MIR instruction kind` | 새 MirInstr* 추가 시 catch-all |
-| GAP-INSTR-002 | 2186 | `unsupported MIR callee kind` | 미정의 callee variant |
-| GAP-INSTR-003 | 2245 | `cross-module call arg type \`T\` is not implemented` | scalar/string 외 인자 |
-| GAP-INSTR-004 | 2300 | `indirect call arg type \`T\` is not implemented` | 위와 동일 indirect |
-| GAP-INSTR-005 | 2110 | `<context> requires aggregate root` | projection이 비-aggregate 대상 |
-| GAP-INSTR-006 | 2134, 2139 | `projection on non-aggregate type` / `unsupported projection` | nested struct binding pattern 등 |
+| GAP-INSTR-001 | lir_proto.osty:3151 | `unsupported MIR instruction kind \`mirInstrKindName(instr.kind)\`` — kind 이름 이미 surface 됨 (trace 불필요) | 새 MirInstr* 추가 시 catch-all |
+| GAP-INSTR-002 | lir_proto.osty:3297 | `unsupported MIR callee kind \`mirCalleeKindName(...)\`` — 동일 (kind 이름 이미 surface) | 미정의 callee variant |
+| GAP-INSTR-003 | lir_proto.osty:3340 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `cross-module call arg type \`T\` is not implemented` + root-cause hint |
+| GAP-INSTR-004 | lir_proto.osty:3526 | ✅ 2026-05-17 trace 추가 | `indirect call arg type \`T\` is not implemented` + 동일 trace |
+| GAP-INSTR-005 | lir_proto.osty:3203 | ✅ 2026-05-17 rootType.llvm 포함 | `<context> requires aggregate root, got \`<llvm-type>\`` |
+| GAP-INSTR-006 | lir_proto.osty:3238,3243 | ✅ 2026-05-17 current type + projection kind 포함 | `projection on non-aggregate type \`<llvm>\` (projection kind: ...)` / `unsupported projection kind \`<kind>\` on type \`<llvm>\`` |
 
 #### 2.2.4 Container receiver type extraction
 
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
-| GAP-RECV-001 | 3105 | `<label> could not extract element type from receiver \`T\`` | List/Map/Set 타입 이름 파싱 실패 |
-| GAP-RECV-002 | 3110 | `<label> element type \`T\` has no LIR runtime lane` | 복합 element (struct in List 등) — `bytes-v1` fallback 필요 |
-| GAP-RECV-003 | 3117 | `<label> could not extract value type from receiver \`T\`` | Map<K, V>의 V 추출 실패 |
-| GAP-RECV-004 | 3122 | `<label> value type \`T\` has no LIR runtime lane` | 복합 V (struct/enum in Map<K, V>) |
+| GAP-RECV-001 | lir_proto.osty:4775,4869,4986,5040,5818,6782,6843 | ✅ 2026-05-17 trace 추가 (`lirReceiverParseTraceMessage`) | List/Map/Set/Channel 타입 이름 파싱 실패 + container prefix 매치 trace |
+| GAP-RECV-002 | lir_proto.osty:4781,4786 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `<label> element type \`T\` has no LIR runtime lane (or MIR layout)` + root-cause hint |
+| GAP-RECV-003 | lir_proto.osty:4802 | ✅ 2026-05-17 trace 추가 (`lirReceiverParseTraceMessage`) | Map<K, V>의 V 추출 실패 + container prefix 매치 trace |
+| GAP-RECV-004 | lir_proto.osty:4809 | ✅ 2026-05-17 trace 추가 | `<label> value type \`T\` has no LIR runtime lane or MIR layout` + 동일 trace |
 | GAP-RECV-005 | 3204 | `list.push composite element type \`T\` has no MIR layout` | bytes-v1 fallback도 layout 없으면 실패 |
 
 #### 2.2.5 Print intrinsic

@@ -2246,6 +2246,37 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
     LirType {llvm: "", className: LirTypeUnknown}
 }
 
+/// lirReceiverParseTraceMessage builds the "List<...> prefix miss;
+/// Set<...> prefix miss; Map<K, V> prefix miss; Channel<...> prefix miss"
+/// trace that surfaces in `could not extract element/value type from
+/// receiver \`T\`` errors. Reports which container prefix patterns were
+/// recognized — `match` means the prefix matched but inner arg extraction
+/// failed (malformed); `miss` means the receiver type didn't look like
+/// that container at all.
+fn lirReceiverParseTraceMessage(typeName: String) -> String {
+    let listMatch = if strings.startsWith(typeName, "List<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let setMatch = if strings.startsWith(typeName, "Set<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let mapMatch = if strings.startsWith(typeName, "Map<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let channelMatch = if strings.startsWith(typeName, "Channel<") {
+        "match"
+    } else {
+        "miss"
+    }
+    "List<...> prefix " + listMatch + "; Set<...> prefix " + setMatch + "; Map<K, V> prefix " + mapMatch + "; Channel<...> prefix " + channelMatch
+}
+
 /// lirTypeLowerTraceMessage builds the "primitive miss; ref-builtin miss;
 /// option/result miss; N interface layout(s); ..." trace string that
 /// surfaces in `unsupported {module/param/local/assign-dest} type` errors.
@@ -3169,7 +3200,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
 }
 fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: MirLocal, rootType: LirType, value: LirOperand, valueMirType: String, context: String) {
     if rootType.className != LirTypeAggregate {
-        lirLowerError(l, LirDiagUnsupported, context + " requires aggregate root", context)
+        lirLowerError(l, LirDiagUnsupported, context + " requires aggregate root, got `" + rootType.llvm + "`", context)
         return
     }
     let leafTypeName = lirMirProjectionLeafType(place.projections)
@@ -3204,12 +3235,12 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
     let mut idx = 0
     for proj in place.projections {
         if current.typ.className != LirTypeAggregate {
-            lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type", context)
+            lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type `" + current.typ.llvm + "` (projection kind: " + mirProjectionKindName(proj.kind) + ")", context)
             return
         }
         let step = lirProjectionStepFromMir(l, proj)
         if step.kind == LirProjInvalid {
-            lirLowerError(l, LirDiagUnsupported, context + " unsupported projection", context)
+            lirLowerError(l, LirDiagUnsupported, context + " unsupported projection kind `" + mirProjectionKindName(proj.kind) + "` on type `" + current.typ.llvm + "`", context)
             return
         }
         frames.push(lirProjectionFrame(current, step.index))
@@ -3337,7 +3368,7 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     for arg in instr.args {
         let paramType = lirLowerMirType(l, arg.typ)
         if lirTypeIsZero(paramType) {
-            lirLowerError(l, LirDiagUnsupported, "cross-module call arg type `" + arg.typ + "` is not implemented", "call.cross")
+            lirLowerError(l, LirDiagUnsupported, "cross-module call arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", "call.cross")
             return
         }
         let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
@@ -3523,7 +3554,7 @@ fn lirLowerMirIndirectCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     for arg in instr.args {
         let paramType = lirLowerMirType(l, arg.typ)
         if lirTypeIsZero(paramType) {
-            lirLowerError(l, LirDiagUnsupported, "indirect call arg type `" + arg.typ + "` is not implemented", "call.indirect")
+            lirLowerError(l, LirDiagUnsupported, "indirect call arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", "call.indirect")
             return
         }
         let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
@@ -4772,18 +4803,18 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
         lirListElemTypeName(instr.args[0].typ)
     }
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "`", label)
+        lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
         return lirContainerReceiverInvalid()
     }
     let mut elemLir = lirContainerElemLaneType(elemName)
     if lirTypeIsZero(elemLir) {
         if kind != "list.elem" {
-            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane", label)
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane (" + lirTypeLowerTraceMessage(l.mirModule, elemName) + ")", label)
             return lirContainerReceiverInvalid()
         }
         let compositeElem = lirLowerMirType(l, elemName)
         if lirTypeIsZero(compositeElem) || lirTypeIsVoid(compositeElem) {
-            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane or MIR layout", label)
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane or MIR layout (" + lirTypeLowerTraceMessage(l.mirModule, elemName) + ")", label)
             return lirContainerReceiverInvalid()
         }
         elemLir = compositeElem
@@ -4799,14 +4830,14 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
     if kind == "map.kv" {
         let valueName = lirMapValueTypeName(instr.args[0].typ)
         if valueName == "" {
-            lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "`", label)
+            lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
             return lirContainerReceiverInvalid()
         }
         let mut valueLir = lirContainerElemLaneType(valueName)
         if lirTypeIsZero(valueLir) {
             let compositeValue = lirLowerMirType(l, valueName)
             if lirTypeIsZero(compositeValue) || lirTypeIsVoid(compositeValue) {
-                lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane or MIR layout", label)
+                lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane or MIR layout (" + lirTypeLowerTraceMessage(l.mirModule, valueName) + ")", label)
                 return lirContainerReceiverInvalid()
             }
             valueLir = compositeValue
@@ -4866,7 +4897,7 @@ fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "`", "list.push")
+        lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.push")
         return
     }
     let elemLane = lirContainerElemLaneType(elemName)
@@ -4983,7 +5014,7 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "`", "list.get")
+        lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.get")
         return
     }
     if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
@@ -5037,7 +5068,7 @@ fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "`", "list.insert")
+        lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.insert")
         return
     }
     if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
@@ -5815,7 +5846,7 @@ fn lirLowerMirSelectSend(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[1].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "select.send could not extract element type from channel `" + instr.args[1].typ + "`", "select.send")
+        lirLowerError(l, LirDiagUnsupported, "select.send could not extract element type from channel `" + instr.args[1].typ + "` (" + lirReceiverParseTraceMessage(instr.args[1].typ) + ")", "select.send")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
@@ -6779,7 +6810,7 @@ fn lirLowerMirChanSend(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "chan.send could not extract element type from `" + instr.args[0].typ + "`", "chan.send")
+        lirLowerError(l, LirDiagUnsupported, "chan.send could not extract element type from `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "chan.send")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
@@ -6840,7 +6871,7 @@ fn lirLowerMirChanRecv(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "chan.recv could not extract element type from `" + instr.args[0].typ + "`", "chan.recv")
+        lirLowerError(l, LirDiagUnsupported, "chan.recv could not extract element type from `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "chan.recv")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
