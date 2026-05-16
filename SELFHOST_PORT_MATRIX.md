@@ -78,7 +78,7 @@ flip + embedded fallback 제거 (#1669/#1671/#1674/#1687) 가 누적되면서 �
 
 | 파일 | 매트릭스 기록 | 2026-05-16 실측 | 비고 |
 |---|---|---|---|
-| `internal/check/host_boundary.go` | 1990 / 1878 | **496** | 위 PR 시리즈로 ~1400 LOC 축소. 잔여는 native checker factory (영구) + `apply*Result` 어댑터 글루 (정리 가능) |
+| `internal/check/host_boundary.go` | 1990 / 1878 | **484** (2026-05-16 \[locked-variant 통합\] 후) | 위 PR 시리즈로 ~1400 LOC 축소. 2026-05-16 추가 정리: `runSelfhostPackageResultLocked` 와 `applySelfhostPackageResult` 의 95% duplication 을 `runSelfhostPackageCheck` (compute) + `foldSelfhostPackageOutcome` (write, optional mutex) + `selfhostPackageOutcome` 타입으로 통합. 잔여는 native checker factory (영구) |
 | `internal/check/inspect.go` | 647 | **83** | adapter (selfhost InspectRecord → Go check.InspectRecord). "큰 잔여" 아님 |
 | `internal/resolve/resolve.go` | "5108 LOC (디렉토리 전체)" | **109** | 파일 단독은 thin facade (`ResolvePackage` / `ResolvePackageDefault` / `ResolveFileSourceDefault`). 7 production + 11 test caller. **삭제 불가 — 공개 surface**. body-walk resolver 는 이미 selfhost (resolve.osty) 이전 완료 |
 | `internal/resolve/cfg.go` | 318 | **69** (2026-05-16 cleanup) | 아래 cleanup 섹션 참조 |
@@ -124,9 +124,18 @@ check / parser / format / lint / pipeline / ci 전부 ok).
 3. **partial struct/enum cross-file stitching** — 현재 single-file (native_adapter
    가 synthetic 단일 네임스페이스로 합쳐 통과). True workspace-level pass
    모델 설계 필요.
-4. **host_boundary.go `apply*Result` adapter 통합** (선택) — Check.File /
-   Check.Package 라우팅 단일화 후 ~100-150 LOC 추가 정리 가능. 1c.5 critical
-   path 는 아님.
+4. ~~**host_boundary.go `apply*Result` adapter 통합**~~ — **착륙 2026-05-16**.
+   `applySelfhostPackageResult` (serial) 와 `runSelfhostPackageResultLocked`
+   (parallel worker, 67 LOC) 가 mutex inject 외 95% 동일했던 duplication 을
+   `runSelfhostPackageCheck(pkg, ws, stdlib, privileged) selfhostPackageOutcome`
+   (pure compute, 무-mutation) + `foldSelfhostPackageOutcome(result, pr,
+   outcome, *sync.Mutex)` (write, optional locking) 으로 정리. serial caller
+   는 `mu=nil`, workspace 병렬 worker 는 단일 shared mutex 로 결과 폴드.
+   `runSelfhostPackageResultLocked` 삭제. `OSTY_NATIVE_CHECKER_SOURCE_DUMP`
+   환경변수 dump 패턴 4 사이트 도 `maybeDumpNativeCheckerSource` helper 로
+   통합. 순 LOC 감소 (-12) 보다는 "병렬/직렬 path 가 한 source of truth"
+   로 정렬된 게 핵심. `check` package 테스트 + `just front` 모두 통과,
+   동작 보존.
 
 **1c.5 가 "Go legacy 전부 삭제" 라는 절대 마일스톤이 아니라 "남은 algorithmic
 identity dep + visibility/merge feature" 로 재정의**되어야 실제 의미 있는
