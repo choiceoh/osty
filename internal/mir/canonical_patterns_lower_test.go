@@ -121,16 +121,12 @@ fn cityOf(u: User?) -> String {
     pairs.len()
 }`,
 		},
-		// `closure_capture_int` (`|x| x + n` as the return value
-		// of `fn makeAdder(n: Int) -> fn(Int) -> Int`) requires
-		// return-position closure inference — the expected
-		// signature comes from the enclosing fn's return type, not
-		// from a method-call arg slot. The method-arg backfill
-		// (`backfillClosureArgsFromMethodCall`) doesn't see it.
-		// Tracked as future work; the LIR Proto
-		// `source_closure_int_capture` fixture exercises the
-		// LLVM-side shape and the checker may already infer it
-		// in some configurations.
+		{
+			name: "closure_capture_int",
+			src: `fn makeAdder(n: Int) -> fn(Int) -> Int {
+    |x| x + n
+}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

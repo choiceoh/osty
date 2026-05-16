@@ -257,7 +257,45 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	if fn.Body != nil {
 		out.Body = l.lowerBlock(fn.Body)
 	}
+	// Return-position closure inference: `fn f() -> fn(Int) -> Int { |x| x + 1 }`
+	// — the trailing-expression closure inherits its expected
+	// signature from the declared return type. Without this,
+	// the closure's `Params[i].Type` stays nil and the body's
+	// Idents reading those params lower with ErrTypeVal.
+	// `lowerClosure` already handles the equivalent let-with-
+	// annotation case via `out.T = l.exprType(c)` when the
+	// checker captures it, but the return-position case is
+	// usually missing because the checker doesn't run on the
+	// builtin-routed Closure node.
+	if fnT, ok := out.Return.(*FnType); ok && fnT != nil {
+		backfillTrailingClosure(out.Body, fnT)
+	}
 	return out
+}
+
+// backfillTrailingClosure refines a function body's trailing
+// closure expression with an expected fn signature. The trailing
+// closure can live in either `Block.Result` (when the body's
+// final expression is captured as the block's implicit result)
+// or the last `ExprStmt` of `Block.Stmts` (when the parser
+// preserved it as a statement-position trailing expression — the
+// common case for single-expr `fn` bodies). Both shapes lower to
+// the same closure value; both need the backfill.
+func backfillTrailingClosure(body *Block, expected *FnType) {
+	if body == nil || expected == nil {
+		return
+	}
+	if cl, ok := body.Result.(*Closure); ok && cl != nil {
+		backfillClosure(cl, expected)
+		return
+	}
+	if n := len(body.Stmts); n > 0 {
+		if es, ok := body.Stmts[n-1].(*ExprStmt); ok && es != nil {
+			if cl, ok := es.X.(*Closure); ok && cl != nil {
+				backfillClosure(cl, expected)
+			}
+		}
+	}
 }
 
 // extractInlineMode reads the v0.6 A8 `#[inline]` family off the
@@ -1787,6 +1825,20 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 		out.Value = l.lowerExpr(s.Value)
 		if out.Type == nil {
 			out.Type = out.Value.Type()
+		}
+		// Closure-from-annotation backfill: `let f: fn(Int) ->
+		// Int = |x| x + 1` carries the closure's expected
+		// signature in the LetStmt's type annotation. Propagate
+		// it back into the Closure value so its un-annotated
+		// param/Return slots resolve before the body's Idents
+		// poison downstream lowering.
+		if cl, ok := out.Value.(*Closure); ok && cl != nil {
+			if fnT, ok := out.Type.(*FnType); ok && fnT != nil {
+				backfillClosure(cl, fnT)
+				if out.Value.Type() == nil || out.Value.Type() == ErrTypeVal {
+					out.Type = cl.T
+				}
+			}
 		}
 	}
 	if !usableRecoveredType(out.Type) {
