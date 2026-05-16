@@ -267,6 +267,21 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 stage0 audit scope 한계 측정**: `mirJsonObjectGetNamed` 가 stage0 decline 인데 audit 100% 인 이유 = `internal/selfhost/bundle/bundle.go::ToolchainCheckerFiles()` 가 mir_json.osty / mir_lower.osty / llvmgen.osty / lir_proto.osty / mir_generator.osty 등 toolchain backend 부분을 **audit 에 포함하지 않음**. 즉 audit 100% 는 **checker bundle (resolve/elab/check/ty/hir_lower/ast/lexer/parser) scope 만 cover**. install-self / build 시 monomorph 가 audit scope 외부 함수 reach 시 stage0 decline.
 
+   **2026-05-17 backend audit-out 함수 수 측정**:
+
+   | 파일 | 함수 수 |
+   |---|---|
+   | toolchain/mir_json.osty | 126 |
+   | toolchain/mir_lower.osty | 306 |
+   | toolchain/mir_optimize.osty | 39 |
+   | toolchain/mir_generator.osty | **2659** |
+   | toolchain/llvmgen.osty | 500 |
+   | toolchain/lir_proto.osty | 418 |
+   | **합 (backend, audit 외부)** | **4048** |
+   | (참고) toolchainCheckerFiles 25 파일 audit cover | 8240 |
+
+   audit cover (8240) 의 거의 절반에 해당하는 backend 영역 (4048) 이 audit 외부. PR #1858 의 3-commit cascade 도 checker bundle 의 16 decline 만 해소. **진짜 cross-cutting trajectory 의 다음 phase = backend 4048 함수의 stage0 cover wave**.
+
    plan §10.1 R2 (stage0 cover) 의 "종결" 도 **scope 제한적** — checker bundle 만. backend (mir_*, llvmgen) 의 stage0 cover 는 별도 audit / trajectory 필요. PR #1858 의 3-commit cascade 도 checker bundle 의 16 decline 만 해소.
 
    **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 OSTY_STDLIB_BODY_LOWER=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
