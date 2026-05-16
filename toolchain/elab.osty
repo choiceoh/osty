@@ -130,6 +130,7 @@ fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
     match node.kind {
         AstNIntLit -> elabCheckIntLit(cx, idx, node, expected),
         AstNFloatLit -> elabCheckFloatLit(cx, node, expected),
+        AstNBinary -> elabCheckBinary(cx, idx, node, expected),
         AstNParen -> elabCheck(cx, node.left, expected),
         AstNBlock -> elabCheckBlock(cx, idx, node, expected),
         AstNIdent -> elabCheckViaInfer(cx, idx, expected),
@@ -286,6 +287,43 @@ fn elabCheckFloatLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let inferred = elabInferFloatLit(cx, node)
     let _ = checkExpectAssignable(cx.env, expected, inferred.ty, node.start, node.end)
     inferred
+}
+/// binOpIsArithmetic reports whether op produces a value in the same
+/// numeric domain as its operands (Add/Sub/Mul/Div/Mod). These ops
+/// preserve the operand type so an expected numeric type can be safely
+/// propagated to both sides. Comparison / logical / bitwise / shift /
+/// coalesce ops do not preserve operand type → not eligible.
+fn binOpIsArithmetic(op: BinOp) -> Bool {
+    match op {
+        BoAdd -> true,
+        BoSub -> true,
+        BoMul -> true,
+        BoDiv -> true,
+        BoMod -> true,
+        _ -> false,
+    }
+}
+/// elabCheckBinary narrows arithmetic binary operands when the
+/// surrounding context provides a concrete numeric expected type
+/// (`let x: Float64 = 1 + 2` → both `1` and `2` directly take Float64
+/// instead of riding UntypedInt → subtype). Non-arithmetic ops fall
+/// through to the generic infer-then-subtype path so comparison /
+/// logical / bitwise / shift / coalesce keep their established
+/// inference rules.
+fn elabCheckBinary(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabResult {
+    let tys = cx.env.tys
+    let resolved = checkResolveAliasDeep(cx.env, expected)
+    let op = tokenToBinOp(node.op)
+    if !binOpIsArithmetic(op) || !(tyIsInteger(tys, resolved) || tyIsFloat(tys, resolved)) {
+        return elabCheckViaInfer(cx, idx, expected)
+    }
+    let left = elabCheck(cx, node.left, resolved)
+    let right = elabCheck(cx, node.right, resolved)
+    let leftTy = checkResolveAliasDeep(cx.env, left.ty)
+    let rightTy = checkResolveAliasDeep(cx.env, right.ty)
+    let ty = binOpResultType(cx.env, op, leftTy, rightTy, node.start, node.end)
+    let coreIdx = coreBinary(cx.core, op, left.node, right.node, ty, node.start, node.end)
+    ElabResult {node: coreIdx, ty}
 }
 // ---------------------------------------------------------------------
 // Ident.

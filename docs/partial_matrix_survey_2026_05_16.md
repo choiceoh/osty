@@ -11,7 +11,7 @@
 | 1 | Interface default-body | 150–300 | Osty | 없음 | ✅ | `check_env.osty` 의 inheritance 구조 활용, default body lookup fallback 추가 |
 | 2 | Annotation LLVM emit (A5/A8/A9/A10/A11/A13) | 100–250 (split) | Osty | 없음 | ✅ × 6 PR | 아래 §3 상세 |
 | 3 | Defer lifecycle (runtime) | 500+ | Osty + Go + spec | SPEC_GAPS entry | ✗ | Cross-cutting backend; spec decision 선행 |
-| 4 | 숫자 리터럴 다형성 | 50–100 | Osty | 없음 | ✅ | `elab.osty:273` 격리된 함수 |
+| 4 | 숫자 리터럴 다형성 | 50–100 | Osty | 없음 | ✅ 1차 착륙 2026-05-16 (arith 전파) | `elabCheckBinary` 추가로 `let x: T = a op b` 의 양 피연산자에 T 전파. 비-arith 는 infer→subtype 유지 |
 | 5 | Closure annotation requirement (E0752) | 80–150 | Osty | 없음 | ✅ | param seeding 만 구현 — closure elab 범위 확장 |
 | 6 | Raw-ptr handling (privilege+POD) | 200–400 | Osty | 없음 | ⚠️ | 3-gate 통합 권장; 분할 시 conflict 위험 |
 | 7 | File/Package/Workspace 진입점 정리 | 100–200 | Osty | 없음 | ✅ | Go exec wrapper 완료, Osty phase 정리만 |
@@ -28,8 +28,8 @@
 
 ## TOP 3 단독 작은 PR 후보 (가장 빨리 끝낼 수 있는 것)
 
-### 1. **숫자 리터럴 다형성** (50–100 LOC, Osty)
-`toolchain/elab.osty:273` 의 expected-type 기반 narrowing 이 좁다. caller context (변수 init / 함수 인자 / return 타입) 에서 expected type 을 더 적극적으로 inference 에 흘려보내면 됨. 격리된 elab 함수 1-2 개, 회귀 fixture 1-2 개. **session 1-2 회**.
+### 1. **숫자 리터럴 다형성** (50–100 LOC, Osty) — **1차 착륙 2026-05-16**
+`toolchain/elab.osty` 에 `elabCheckBinary` + `binOpIsArithmetic` 추가. `elabCheckImpl` dispatch 에 `AstNBinary -> elabCheckBinary` 등록. 효과: `let x: Float64 = 1 + 2` 의 `1` / `2` 가 UntypedInt 거치지 않고 직접 Float64 채택. 비-arith op (`==` / `&` / `<<` / `??` 등) 과 비-numeric expected 는 기존 infer→subtype fallback 유지. 후속 가능한 확장: 함수 인자 context narrowing (현재 `elabInferCall` 가 expected 받지만 numeric 리터럴 별도 처리 없음), unary `-1` 의 expected 전파.
 
 ### 2. **Closure annotation requirement (E0752)** (80–150 LOC, Osty)
 `toolchain/elab.osty:1849` 가 param seeding 만 한다. annotation 검증 부족. closure elab 격리 범위, E0752 code 가 이미 정의. 선행 의존 없음. **session 1-2 회**.
