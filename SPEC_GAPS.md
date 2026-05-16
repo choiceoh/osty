@@ -245,6 +245,20 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 PR3-C-impl-go 분석**: `adaptResolveResult` (`internal/selfhost/resolve_adapter.go:509`) 가 `SelfSymbol → ResolvedSymbol` 변환 시 `sym.typeName` 을 `apiTypeReprFromLegacyName(sym.typeName)` 로 type repr 로 변환. **typeName 필드 재사용 hack 불가** — package symbol 의 typeName 에 import path 저장하면 잘못된 type repr 가 생성됨. 그리고 `SelfSymbol` (generated.go frozen) 에 ImportPath 필드 부재 → Go-side adapter 가 직접 가져올 데이터 없음. **정통 fix path = post-processing layer**: `adaptResolveResult` 가 resolve 끝난 후 `AstFile` 의 use-decl 을 별도 walk 해서 `alias → importPath` map 구축, ResolvedSymbol 의 `kind == "package"` 인 항목에 매핑된 path 후처리로 fill. checker 측은 ResolvedSymbol.ImportPath 가 비어있으면 현재 path 유지 (regression 없음), 비어있지 않으면 module-scoped lookup. 추정 작업 ~80–120 LOC (`api/types.go` + `resolve_adapter.go` + `internal/check` 의 dispatch site 1-2 곳). 단일 fresh session 가능 추정.
 
+   **2026-05-17 step 1+2 머지 (PR #1842)**: `ResolvedSymbol.ImportPath` 필드 + `selfhostUseAliasImportPaths` walker + `adaptResolveResult` 의 post-processing pass 착륙. `kind == "package"` symbol 이 import path 데이터 보유. `just prepush` 모든 회귀 0건.
+
+   **2026-05-17 step 3 wall**: `cmd/osty-native-checker/main.osty` 에서 `use toolchain.check as tc; tc.frontInvalidTypeRepr()` 재시도 시 **여전히 `E0703 no method on type 'tc'`**. method-call dispatch site:
+   - `internal/selfhost/generated.go:28553` — `checkDiag(..., "no method '%s' on type '%s'", ...)` (frozen seed)
+   - `toolchain/elab.osty:2056` 부근 — transpile source (generated.go 에 반영 안 됨, PR #854 retire)
+
+   두 dispatch site 모두 **frozen seed 또는 retire 된 regen path** — Osty 측 변경이 production checker 에 반영 안 됨. step 3 의 진짜 fix path 옵션:
+
+   a) **generated.go 의 method-call dispatch 사이트 직접 수정** — `kind == "package"` 이고 `ImportPath != ""` 인 owner 의 method lookup 을 module-scoped 로 분기. **PR #854 frozen seed 결정과 충돌** — spec-level 정책 재논의 필요.
+   b) **새 post-processing layer (checker 출력)** — `CheckResult.Diagnostics` 의 E0703 entry 가 owner 이름과 매칭되는 package symbol 의 ImportPath 가 비어있지 않으면 진단 suppress + selfhostInvokeModuleMethod 같은 별도 wrapper 호출. 매우 hacky, 단 spec 위반 회피.
+   c) **spec PR 로 PR #854 의 frozen seed 결정 narrow** — checker 의 cross-package method-call dispatch 만 regen 허용. partial regen path 도입.
+
+   각 옵션은 단일 세션 무리 + spec/team 합의 동반. PR3-C-step3-design.md (별도 doc) 가 다음 단계.
+
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 
 **관련 doc**: [docs/llvm-selfhost-plan-pr3-attempt.md](docs/llvm-selfhost-plan-pr3-attempt.md), [docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md).
