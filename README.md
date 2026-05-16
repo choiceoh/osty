@@ -53,6 +53,7 @@ native-only through the LLVM backend.
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
+| `osty-native-checker` LLVM self-build (`cmd/osty-native-checker/main.osty`) | walking skeleton (2026-05-17) — `OSTY_STAGE0_FALLBACK=1 osty build --backend llvm cmd/osty-native-checker/` 가 binary 산출 + 실행, empty-source fixture 에서 Go-built `osty-native-checker` 와 byte-identical `CheckResult` JSON 출력 (M2 partial). 진짜 checker 호출 (`elabFile` 등) 은 cross-package method-call wall ([`SPEC_GAPS::cross-pkg-module-resolution`](./SPEC_GAPS.md), [docs/llvm-selfhost-plan.md](./docs/llvm-selfhost-plan.md) PR3-C step 3) 으로 차단. multi-fixture / L2 spec corpus / L3 toolchain self-input parity 는 step 3 unlock 후 — 자세한 trajectory 는 [`cmd/osty-native-checker/README.md`](./cmd/osty-native-checker/README.md) |
 
 Status note (revalidated 2026-04-28): the universal
 LLVM CLI wedge called out in older status docs is closed. A hello-world
