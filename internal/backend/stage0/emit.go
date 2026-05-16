@@ -18,6 +18,70 @@ import (
 // usual unsupported skeleton diagnostic with route `stage0`.
 var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 
+// fnDefineHeaderClose returns the suffix written after a function's
+// parameter list — `") {\n"` baseline or `") <attrs> {\n"` when the
+// MIR function's annotation fields contribute LLVM fn-attrs.
+//
+// Emits:
+//   - A8  `#[inline]` family   → `inlinehint` / `alwaysinline` / `noinline`
+//   - A9  `#[hot]` / `#[cold]` → `hot` / `cold`
+//   - A10 `#[target_feature]`  → `"target-features"="+f1,+f2"` string attr
+//   - A13 `#[pure]`            → `readnone`
+//
+// A11 `#[noalias]` is a per-parameter attribute (lives on individual
+// `ptr` params, not the function header) and is intentionally not
+// handled here. nil fn yields the attribute-free baseline so
+// synthesized define sites (main, decline stubs) stay byte-identical.
+func fnDefineHeaderClose(fn *mir.Function) string {
+	if fn == nil {
+		return ") {\n"
+	}
+	var attrs []string
+	switch fn.InlineMode {
+	case ir.InlineSoft:
+		attrs = append(attrs, "inlinehint")
+	case ir.InlineAlways:
+		attrs = append(attrs, "alwaysinline")
+	case ir.InlineNever:
+		attrs = append(attrs, "noinline")
+	}
+	if fn.Hot {
+		attrs = append(attrs, "hot")
+	}
+	if fn.Cold {
+		attrs = append(attrs, "cold")
+	}
+	if fn.Pure {
+		attrs = append(attrs, "readnone")
+	}
+	if len(fn.TargetFeatures) > 0 {
+		attrs = append(attrs, fnTargetFeaturesAttr(fn.TargetFeatures))
+	}
+	if len(attrs) == 0 {
+		return ") {\n"
+	}
+	return ") " + strings.Join(attrs, " ") + " {\n"
+}
+
+// fnTargetFeaturesAttr renders MIR's `TargetFeatures []string` slice
+// into LLVM's `"target-features"="+f1,+f2"` string attribute. Each
+// feature is prefixed with `+` unless it already carries an explicit
+// `+`/`-` sign so callers can opt out of a feature via `-feature`.
+func fnTargetFeaturesAttr(features []string) string {
+	parts := make([]string, 0, len(features))
+	for _, f := range features {
+		if f == "" {
+			continue
+		}
+		if f[0] == '+' || f[0] == '-' {
+			parts = append(parts, f)
+		} else {
+			parts = append(parts, "+"+f)
+		}
+	}
+	return `"target-features"="` + strings.Join(parts, ",") + `"`
+}
+
 // ListAllDeclinesEnv opts EmitMIR into surveying all declined functions
 // in one pass instead of stopping at the first.
 //
@@ -2303,7 +2367,7 @@ func emitSequentialVoid(out *strings.Builder, fn *mir.Function, pat voidPattern)
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 	for _, pi := range pat.pending {
 		emitPendingInstr(out, pi)
@@ -5103,7 +5167,7 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 
 	for _, pi := range pat.pending {
@@ -5419,7 +5483,7 @@ func emitIfElseReturn(out *strings.Builder, fn *mir.Function, pat ifElsePattern)
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	emitBlock(out, pat.entry)
 	fmt.Fprintf(out, "  br %s %s, label %%%s, label %%%s\n", pat.condType, pat.condExpr, pat.thenLabel, pat.elseLabel)
@@ -5677,7 +5741,7 @@ func emitScalarReturnChain(out *strings.Builder, fn *mir.Function, pat scalarRet
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	for i, rung := range pat.rungs {
 		if i > 0 {
 			out.WriteString("\n")
@@ -5909,7 +5973,7 @@ func emitShortCircuitGuardReturn(out *strings.Builder, fn *mir.Function, pat sho
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	emitBlock(out, pat.entry)
 	fmt.Fprintf(out, "  br %s %s, label %%%s, label %%%s\n\n", pat.entryCondTyp, pat.entryCond, pat.thenBlk.label, pat.elseBlk.label)
 
@@ -6084,7 +6148,7 @@ func emitShortCircuitBoolReturn(out *strings.Builder, fn *mir.Function, pat shor
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	emitBlock(out, pat.entry)
 	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n\n", pat.entryCond, pat.rungs[0].thenBlk.label, pat.rungs[0].elseBlk.label)
 
@@ -6359,7 +6423,7 @@ func emitShortCircuitCallFallbackBoolReturn(out *strings.Builder, fn *mir.Functi
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	emitBlock(out, pat.entry)
 	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n\n", pat.entryCond, pat.trueLabel, pat.callLabel)
 	fmt.Fprintf(out, "%s:\n", pat.trueLabel)
@@ -6649,7 +6713,7 @@ func emitIfElseAggregateReturn(out *strings.Builder, fn *mir.Function, pat ifEls
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	// Entry block.
 	emitBlock(out, pat.entry)
@@ -6967,7 +7031,7 @@ func emitOrShortCircuitIfElseAggregate(out *strings.Builder, fn *mir.Function, p
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	// entry: left-cond + branch to short_true / right_eval
 	emitBlock(out, pat.entry)
@@ -7315,7 +7379,7 @@ func emitElseIfChainAggregate(out *strings.Builder, fn *mir.Function, pat elseIf
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	// Emit each rung: cond + br to its arm vs the next rung label.
 	for i, rung := range pat.rungs {
@@ -7677,7 +7741,7 @@ func emitOrChainAggregate(out *strings.Builder, fn *mir.Function, pat orChainPat
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	// entry: leftCond + branch(short_true / right_eval).
 	emitBlock(out, pat.entry)
@@ -7930,7 +7994,7 @@ func emitDirectAggregateCall(out *strings.Builder, fn *mir.Function, pat directA
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 
 	out.WriteString(pat.callPrelude)
@@ -11717,7 +11781,7 @@ func emitWhileLoopReturn(out *strings.Builder, fn *mir.Function, pat whileLoopPa
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	// Entry: alloca declarations + entry body + branch to header.
 	out.WriteString("entry:\n")
@@ -11948,7 +12012,7 @@ func emitForInRangeReturn(out *strings.Builder, fn *mir.Function, pat forInRange
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 
 	out.WriteString("entry:\n")
 	for _, sd := range pat.stackDecls {
@@ -12723,7 +12787,7 @@ func emitForInListReturn(out *strings.Builder, fn *mir.Function, pat forInListPa
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 	for _, sd := range pat.stackDecls {
 		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
@@ -13054,7 +13118,7 @@ func emitForInListEarlyExit(out *strings.Builder, fn *mir.Function, pat forInLis
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 	for _, sd := range pat.stackDecls {
 		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
@@ -14197,7 +14261,7 @@ func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggreg
 		}
 		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 	}
-	out.WriteString(") {\n")
+	out.WriteString(fnDefineHeaderClose(fn))
 	out.WriteString("entry:\n")
 	for _, pi := range pat.pending {
 		emitPendingInstr(out, pi)
@@ -17590,7 +17654,7 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 			}
 			fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 		}
-		out.WriteString(") {\n")
+		out.WriteString(fnDefineHeaderClose(fn))
 	} else {
 		fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
 		for i, name := range pat.paramNames {
@@ -17599,7 +17663,7 @@ func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFG
 			}
 			fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
 		}
-		out.WriteString(") {\n")
+		out.WriteString(fnDefineHeaderClose(fn))
 	}
 	// LLVM rule: the FIRST basic block in a function may not have
 	// predecessors. When the source MIR's entry block is the target

@@ -328,6 +328,20 @@ fn h(err: Error) -> Error? {
 }
 // === END
 
+// === CASE: E0752 === closure param lacks annotation in unconstrained context
+fn no_expected_fn_type() {
+    let g = |x| x + 1
+    let _ = g
+}
+// === END
+
+// === CASE: E0752 === closure param mixed annotation — un-annotated param still requires it
+fn mixed_annotation() {
+    let g = |x: Int, y| x + y
+    let _ = g
+}
+// === END
+
 // === CASE: E0763 === `break 'label` references a label not in scope
 fn no_such_label() {
     'outer: for i in 0..10 {

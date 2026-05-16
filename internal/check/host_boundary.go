@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/semanticdb"
@@ -208,15 +209,11 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		// public-AST -> selfhost-AstArena lowering and avoids routing single-file
 		// checks back through the astbridge/public-AST adapter path.
 		checkedSrc = selfhostFileStructuredSource(file, rr, src)
-		if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
-			_ = os.WriteFile(dump, checkedSrc.source, 0o644)
-		}
+		maybeDumpNativeCheckerSource(checkedSrc.source)
 		checked, err = r.CheckPackageStructured(selfhostSingleFileCheckInput(file, src, stdlib))
 	default:
 		checkedSrc = selfhostFileSource(file, rr, src, stdlib)
-		if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
-			_ = os.WriteFile(dump, checkedSrc.source, 0o644)
-		}
+		maybeDumpNativeCheckerSource(checkedSrc.source)
 		checked, err = runner.CheckSourceStructured(checkedSrc.source)
 	}
 	if err != nil {
@@ -231,38 +228,52 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	result.SemanticDB = semanticdb.FromCheck(checked)
-
 }
 
-func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
-	if result == nil || pkg == nil {
-		return
-	}
+// selfhostPackageOutcome bundles the per-package native checker invocation
+// result. Both success and unavailability paths populate diags; success
+// additionally populates src / telemetry / checked and sets ran=true so
+// callers can fold the data back into a Result under whatever locking
+// discipline they need.
+type selfhostPackageOutcome struct {
+	diags     []*diag.Diagnostic
+	src       selfhostCheckedSource
+	telemetry *NativeCheckerTelemetry
+	checked   api.CheckResult
+	ran       bool
+}
+
+// runSelfhostPackageCheck routes a package through the configured native
+// checker and returns the bundled outcome. No Result is mutated here so
+// the function is safe to call from multiple goroutines; serial and
+// worker-pool callers share this single source-of-truth and only differ
+// in how they fold the outcome back.
+func runSelfhostPackageCheck(pkg *resolve.Package, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) selfhostPackageOutcome {
 	runner, note := nativeCheckerFactory()
 	if runner == nil {
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			"no Osty-native checker executable is configured",
-			note,
-		))
-		return
+		return selfhostPackageOutcome{
+			diags: []*diag.Diagnostic{checkerUnavailableDiag(
+				"package",
+				"no Osty-native checker executable is configured",
+				note,
+			)},
+		}
 	}
 	src := selfhostPackageSource(pkg, ws, stdlib)
-	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
-		_ = os.WriteFile(dump, src.source, 0o644)
-	}
+	maybeDumpNativeCheckerSource(src.source)
 	if len(src.source) == 0 {
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			"package source bytes were not available to the native checker boundary",
-		))
-		return
+		return selfhostPackageOutcome{
+			diags: []*diag.Diagnostic{checkerUnavailableDiag(
+				"package",
+				"package source bytes were not available to the native checker boundary",
+			)},
+		}
 	}
+	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
 	var (
 		checked api.CheckResult
 		err     error
 	)
-	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
 	switch r := runner.(type) {
 	case nativePackageChecker:
 		checked, err = r.CheckPackageStructured(input)
@@ -270,18 +281,49 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolv
 		checked, err = runner.CheckSourceStructured(src.source)
 	}
 	if err != nil {
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			subproc.FailureNotes("the Osty-native checker executable failed", err)...,
-		))
-		return
+		return selfhostPackageOutcome{
+			diags: []*diag.Diagnostic{checkerUnavailableDiag(
+				"package",
+				subproc.FailureNotes("the Osty-native checker executable failed", err)...,
+			)},
+		}
 	}
 	policy := nativeDiagPolicy{privileged: privileged}
-	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(src, checked, policy)...)
-	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
-	result.NativeCheckResult = cloneNativeCheckResult(checked)
-	attachSemanticDB(result, pr, checked)
+	return selfhostPackageOutcome{
+		diags:     nativeCheckerDiagsForCheckedSource(src, checked, policy),
+		src:       src,
+		telemetry: nativeCheckerTelemetry(checked, policy),
+		checked:   checked,
+		ran:       true,
+	}
+}
 
+// foldSelfhostPackageOutcome writes outcome into result. When mu is non-nil
+// the writes are serialized — used by the workspace parallel worker pool
+// where multiple goroutines fold into shared Result-graph fields. For
+// single-threaded callers pass nil for mu.
+func foldSelfhostPackageOutcome(result *Result, pr *resolve.PackageResult, outcome selfhostPackageOutcome, mu *sync.Mutex) {
+	if result == nil {
+		return
+	}
+	if mu != nil {
+		mu.Lock()
+		defer mu.Unlock()
+	}
+	result.Diags = append(result.Diags, outcome.diags...)
+	if !outcome.ran {
+		return
+	}
+	result.NativeCheckerTelemetry = outcome.telemetry
+	result.NativeCheckResult = cloneNativeCheckResult(outcome.checked)
+	attachSemanticDB(result, pr, outcome.checked)
+}
+
+func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
+	if result == nil || pkg == nil {
+		return
+	}
+	foldSelfhostPackageOutcome(result, pr, runSelfhostPackageCheck(pkg, ws, stdlib, privileged), nil)
 }
 
 func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*resolve.PackageResult, results map[string]*Result, stdlib resolve.StdlibProvider) {
@@ -343,7 +385,11 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 		go func() {
 			defer wg.Done()
 			for j := range ch {
-				runSelfhostPackageResultLocked(j.result, j.pkg, j.pr, ws, stdlib, j.privileged, &mu)
+				if j.result == nil || j.pkg == nil {
+					continue
+				}
+				outcome := runSelfhostPackageCheck(j.pkg, ws, stdlib, j.privileged)
+				foldSelfhostPackageOutcome(j.result, j.pr, outcome, &mu)
 			}
 		}()
 	}
@@ -354,72 +400,14 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 	wg.Wait()
 }
 
-// runSelfhostPackageResultLocked performs the native checker call
-// outside the lock (thread-safe: the input is a read-only view of the
-// resolved workspace, and each runner.CheckPackageStructured call
-// carries its own state) and then serializes the overlay writes to
-// the shared type maps under `mu`. This is the parallel variant of
-// applySelfhostPackageResult; the single-threaded fast path in
-// applySelfhostWorkspaceResults still calls the non-locked version.
-func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, mu *sync.Mutex) {
-	if result == nil || pkg == nil {
-		return
-	}
-	runner, note := nativeCheckerFactory()
-	if runner == nil {
-		mu.Lock()
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			"no Osty-native checker executable is configured",
-			note,
-		))
-		mu.Unlock()
-		return
-	}
-	src := selfhostPackageSource(pkg, ws, stdlib)
+// maybeDumpNativeCheckerSource writes src to the path named by the
+// OSTY_NATIVE_CHECKER_SOURCE_DUMP environment variable. No-op when the
+// variable is empty or write fails — strictly a debug aid for inspecting
+// the bytes handed to the bootstrapped checker.
+func maybeDumpNativeCheckerSource(src []byte) {
 	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
-		_ = os.WriteFile(dump, src.source, 0o644)
+		_ = os.WriteFile(dump, src, 0o644)
 	}
-	if len(src.source) == 0 {
-		mu.Lock()
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			"package source bytes were not available to the native checker boundary",
-		))
-		mu.Unlock()
-		return
-	}
-	var (
-		checked api.CheckResult
-		err     error
-	)
-	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
-	switch r := runner.(type) {
-	case nativePackageChecker:
-		checked, err = r.CheckPackageStructured(input)
-	default:
-		checked, err = runner.CheckSourceStructured(src.source)
-	}
-	if err != nil {
-		mu.Lock()
-		result.Diags = append(result.Diags, checkerUnavailableDiag(
-			"package",
-			subproc.FailureNotes("the Osty-native checker executable failed", err)...,
-		))
-		mu.Unlock()
-		return
-	}
-	policy := nativeDiagPolicy{privileged: privileged}
-	diags := nativeCheckerDiagsForCheckedSource(src, checked, policy)
-	telemetry := nativeCheckerTelemetry(checked, policy)
-
-	mu.Lock()
-	defer mu.Unlock()
-	result.Diags = append(result.Diags, diags...)
-	result.NativeCheckerTelemetry = telemetry
-	result.NativeCheckResult = cloneNativeCheckResult(checked)
-	attachSemanticDB(result, pr, checked)
-
 }
 
 func attachSemanticDB(result *Result, pr *resolve.PackageResult, checked api.CheckResult) {

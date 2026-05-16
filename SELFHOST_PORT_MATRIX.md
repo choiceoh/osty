@@ -6,7 +6,11 @@ Go → Osty 셀프호스팅 포팅 현황 매트릭스. 리졸버 / 체커 잔�
 
 > **Scope**: `internal/resolve` ↔ `toolchain/resolve.osty`, `internal/check` ↔
 > `toolchain/check*.osty` + `toolchain/elab.osty` + `toolchain/hir_lower.osty`.
-> 기준일: 2026-04-26 (post-rebase audit, HEAD = #921 + Phase 0 fixes).
+> 기준일: **2026-05-16** (cfg.go dead cascade 제거 + Phase 1c.5 잔여 작업
+> 재측정 — 아래 "2026-05-16" 섹션이 권위). 이전 2026-04-26 스냅샷 (post-rebase
+> audit, HEAD = #921 + Phase 0 fixes) 이후 약 3주간 host_boundary 분할
+> 시리즈 (#1604/#1645/#1659/#1662/#1669/#1671/#1674/#1687) + embedded
+> fallback 제거 + managed subprocess flip 이 누적.
 > 이전 2026-04-24 스냅샷 이후 80 커밋이 들어왔고, 그 위에 Phase 0 (MirSwitchCase
 > rename + typeRepr migration + scopeFor O(N²) → sorted-binsearch+memoize) 가
 > 추가됐다. 코드 실측 기준: `--legacy` check/typecheck escape hatch 는
@@ -61,6 +65,96 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
   sweep 이 iflet/coalesce/q/opt + partial-struct field lookup + struct-field-
   default + IR-value type recovery 를 모두 메우면서 누적 폐기. 현재 count 0,
   floor 0 으로 타이트닝.
+
+## 2026-05-16 — Phase 1c.5 잔여 작업 재측정 + cfg.go dead cascade 정리
+
+2026-04-26 스냅샷 이후 host_boundary 분할 (PR #1604) / overlay opt-in (#1598) /
+PopulateLegacyMaps 제거 (#1645) / subproc 분리 (#1659/#1662) / managed subprocess
+flip + embedded fallback 제거 (#1669/#1671/#1674/#1687) 가 누적되면서 이 문서가
+2026-04-24/26 시점에 기록한 LOC 와 "잔여 Go legacy" 표면이 크게 바뀌었다. 본
+섹션이 2026-05-16 시점의 권위.
+
+### 실측 LOC vs 기록 LOC
+
+| 파일 | 매트릭스 기록 | 2026-05-16 실측 | 비고 |
+|---|---|---|---|
+| `internal/check/host_boundary.go` | 1990 / 1878 | **484** (2026-05-16 \[locked-variant 통합\] 후) | 위 PR 시리즈로 ~1400 LOC 축소. 2026-05-16 추가 정리: `runSelfhostPackageResultLocked` 와 `applySelfhostPackageResult` 의 95% duplication 을 `runSelfhostPackageCheck` (compute) + `foldSelfhostPackageOutcome` (write, optional mutex) + `selfhostPackageOutcome` 타입으로 통합. 잔여는 native checker factory (영구) |
+| `internal/check/inspect.go` | 647 | **83** | adapter (selfhost InspectRecord → Go check.InspectRecord). "큰 잔여" 아님 |
+| `internal/resolve/resolve.go` | "5108 LOC (디렉토리 전체)" | **109** | 파일 단독은 thin facade (`ResolvePackage` / `ResolvePackageDefault` / `ResolveFileSourceDefault`). 7 production + 11 test caller. **삭제 불가 — 공개 surface**. body-walk resolver 는 이미 selfhost (resolve.osty) 이전 완료 |
+| `internal/resolve/cfg.go` | 318 | **69** (2026-05-16 cleanup) | 아래 cleanup 섹션 참조 |
+| `internal/resolve/prelude.go` | "삭제 대상" | 119 | **삭제 불가 — symbol resolution 핵심**. 모든 resolver 경로가 `NewPrelude()` 의존 |
+| `internal/resolve/scope.go` | "삭제 대상" | 297 | **삭제 불가 — `Symbol` / `SymbolKind` / `Scope` / `SymbolID` 타입 정의**. references.go / signature.go / native_adapter.go / lsp 전반이 의존 |
+| `internal/lint/*` | "`*ast.File` 식별자 소비" | **0 식별자 의존** | `lint.Source()` / `lint.Package()` 모두 `selfhost.LintDiagnostics()` 한 번 호출로 끝. `typebased.go` / 자체 Refs/Defs map 없음. 매트릭스 진술 stale — 이미 깨끗 |
+| `internal/lsp/references.go` | "포인터 동등 비교가 알고리즘" | 412 | **Phase 0e 착륙 2026-05-16**. `findReferences` 의 2 사이트 → `SymbolID` equality, `containsNode` 의 6 사이트 → (Pos, End) value equality. in-run 결과 보존 + self-host portable. LSP / just front 회귀 0 |
+| `internal/lsp/signature.go` | "won't-fix candidate" | 319 | selfhost fallback (`buildStructuredSignatureInfo`) 동작; Go path 는 backup. 1c.5 critical path 아님 |
+
+### 2026-05-16 cleanup — cfg.go dead cascade 제거
+
+`internal/resolve/cfg.go` 의 `filterCfgDecls` + `evaluateCfgOnDecl` +
+`evaluateCfgAnnotation` + `evaluateCfgArg` + `evaluateCfgCompose` +
+`callArgsToCompose` + `annotationsOf` 6 함수 (~232 LOC) 와 이를 테스트하던
+`cfg_test.go` (197 LOC) 전부 제거. 총 **446 LOC** 삭제.
+
+production caller 0 인 reference impl 이었고, `#[cfg(...)]` 평가는 이미
+`toolchain/resolve.osty::srCfgDeclPasses` + `selfResolveAstFileWithCfg` +
+`srCheckCfgArgs` 가 단일 source (2026-04-28 workspace 전환 시 확정).
+`cfg.go` 잔여 69 LOC 는 `CfgEnv` 타입 + `DefaultCfgEnv()` host-runtime
+캐리어 + `toSelfhost()` projection — workspace.go / package_graph.go /
+native_adapter.go 가 라이브 소비.
+
+검증: `go build ./internal/resolve/...` 통과, `just front` 통과 (resolve /
+check / parser / format / lint / pipeline / ci 전부 ok).
+
+### 1c.5 잔여 작업 재프레이밍
+
+매트릭스의 1c.5 원래 vision ("resolve.go / cfg.go / prelude.go / scope.go
+전부 삭제") 은 stale. resolve.go 는 thin facade 이고 prelude.go / scope.go 는
+영구 인프라. **새 1c.5 정의**:
+
+1. ~~**references.go SymbolID/position 채택** (Phase 0e)~~ — **착륙 2026-05-16**.
+   `findReferences` 의 `refs[id.ID] != target` / `typeRefs[nt.ID] != target`
+   2 사이트를 `SymbolID` equality 로 (loop 외부 `targetID := target.ID()` 1회
+   계산), `containsNode` 의 6 `ast.Node(d) == decl` 사이트를 (Pos, End) value
+   equality 로 교체. within-file unique span 보장으로 in-run 결과 동일,
+   self-host portable. ~30 LOC 변경, LSP / just front 회귀 0. **LSP 의
+   마지막 algorithmic pointer-identity dep 해소**.
+2. **`pub use` re-export visibility (E0553)** —
+   [docs/e0553_pub_use_design.md](docs/e0553_pub_use_design.md). **Path A
+   착륙 2026-05-16**: `internal/resolve/workspace.go::validateReexportVisibility`
+   가 `ResolveAll` 의 per-package resolve 직후 walk — pub use edge 마다
+   `splitUseMemberPath(UseKey(u))` 로 base/member 분리, `target.PkgScope.LookupLocal(member)`
+   로 visibility 확인, 비-pub 이면 `selfhost.ReexportPrivateDiagnostic` 으로
+   E0553 발화. 회귀: `reexport_visibility_test.go` 의 positive/negative 쌍.
+   Path A 는 단일-홉 + non-scoped 만 — scoped (G28) 와 transitive chain 은
+   Path B 후속.
+3. **partial struct/enum cross-file stitching** — **2026-05-16 design draft**:
+   [docs/partial_decl_cross_file_design.md](docs/partial_decl_cross_file_design.md).
+   현재 selfhost 가 file 리스트를 받아 cross-file partial state 를 우연히
+   공유. file-level resolve refactor 시 R19(iv) silent false negative 위험.
+   Option B (selfhost post-walk pass, 80-130 LOC Osty) 권장.
+4. ~~**host_boundary.go `apply*Result` adapter 통합**~~ — **착륙 2026-05-16**.
+   `applySelfhostPackageResult` (serial) 와 `runSelfhostPackageResultLocked`
+   (parallel worker, 67 LOC) 가 mutex inject 외 95% 동일했던 duplication 을
+   `runSelfhostPackageCheck(pkg, ws, stdlib, privileged) selfhostPackageOutcome`
+   (pure compute, 무-mutation) + `foldSelfhostPackageOutcome(result, pr,
+   outcome, *sync.Mutex)` (write, optional locking) 으로 정리. serial caller
+   는 `mu=nil`, workspace 병렬 worker 는 단일 shared mutex 로 결과 폴드.
+   `runSelfhostPackageResultLocked` 삭제. `OSTY_NATIVE_CHECKER_SOURCE_DUMP`
+   환경변수 dump 패턴 4 사이트 도 `maybeDumpNativeCheckerSource` helper 로
+   통합. 순 LOC 감소 (-12) 보다는 "병렬/직렬 path 가 한 source of truth"
+   로 정렬된 게 핵심. `check` package 테스트 + `just front` 모두 통과,
+   동작 보존.
+
+**1c.5 가 "Go legacy 전부 삭제" 라는 절대 마일스톤이 아니라 "남은 algorithmic
+identity dep + visibility/merge feature" 로 재정의**되어야 실제 의미 있는
+종결점이 잡힌다. Item 1 (references.go Phase 0e) 과 Item 4 (host_boundary
+adapter 통합) 은 2026-05-16 착륙 — **Go-side LSP 의 algorithmic pointer-identity
+의존 + native checker serial/parallel duplication 둘 다 해소**. 남은 실질
+작업은 (2) E0553 visibility + (3) cross-file partial merge 2 종으로, 둘 다
+같은 날 design draft 가 docs/ 에 작성됨 (위 링크). 1c.5 외부 partial 항목들의
+액션가능성 카탈로그는 [docs/partial_matrix_survey_2026_05_16.md](docs/partial_matrix_survey_2026_05_16.md)
+참조 — 그 중 TOP 3 small-first 후보: E0553 Path A, A13 (`#[pure]`→readnone)
+LLVM emit, 숫자 리터럴 다형성 확장.
 
 ## 2026-04-24 — Phase 1c.5 code state (historical snapshot)
 
@@ -306,14 +400,14 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 | Bidirectional type inference | `(hostboundary)` | `toolchain/elab.osty:§2a.3` | E0700–E0757 | ported | Osty 구동, Go 는 JSON bridge |
 | Generic monomorphization | `(hostboundary)` | `toolchain/elab.osty:53` | — | ported | call site 별 fresh Solver |
 | 메서드 dispatch (struct/enum/iface) | `(hostboundary)` | `toolchain/elab.osty:1550` | E0703 | ported | `checkSpecializeMethodSelf` |
-| Interface default-body | `(hostboundary)` | `toolchain/check_env.osty` | — | **partial** | 상속은 기록, default body 코드패스 빈약 (`269eebf8` 가 일반화 진행중) |
+| Interface default-body | `(hostboundary)` | `toolchain/check_env.osty::CheckInterfaceExt` | — | **partial** (data model 2026-05-16) | 상속 기록 + default body 슬롯 (`defaultBodyNames` / `defaultBodyNodes` field) 추가. method-not-found 시 fallback 와이어링은 Phase 7 후속 (generated.go frozen seed 라 dormant — LLVM 셀프호스팅 flip 까지 production 영향 없음) |
 | `?` 전파 (Option/Result) | `(hostboundary)` | `toolchain/elab.osty:161,1360` | E0717 | ported | `TkOptional` intern |
 | `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty::elabInferField` + `elabInferMethodCall` + `elabWrapOptionalChain` + `toolchain/check_diag.osty::diagOptionalChainOnNon` | E0719 | **ported** | 2026-04-23 field-access + method-call 양쪽 LANG_SPEC §4 / 부록 A.6 준수로 복구. Field: `elabInferField` 가 `AstNField.flags == 1` 분기 — Option receiver `tyInnerAt` unwrap → lookup → 결과를 `elabWrapOptionalChain` 로 `Option<_>` 재래핑 (이미 Option 이면 flatten). Non-Option → E0719. Method: `elabInferMethodCall` 이 `fieldNode.flags == 1` 으로 동일 처리 — mono / generic instantiation 양쪽 return path 에서 retTy 를 wrap. `generated.go` lockstep sync. 회귀 가드: [internal/check/optional_chain_test.go](internal/check/optional_chain_test.go) 8 테스트 (field + method call 쌍 × {Option receiver 정상, `??` coalesce unwrap, non-Option E0719, 메시지 shape, nested flatten}) |
 | `??` nil-coalesce | `(hostboundary)` | `toolchain/elab.osty:432` | — | ported | Option unwrap 특수 |
 | **Defer lifecycle** | `internal/parser/parser.go`·`internal/resolve/file.go`·`internal/lint/typebased.go` | `toolchain/parser.osty:2050`·`toolchain/resolve.osty:947`·`toolchain/lint.osty:3043` | E0603 / E0608 / L0007 | static-ported | 정적 검증 (top-level defer 거부, 비-호출 defer 거부, Result/Option defer → L0007) 은 Go·Osty 양쪽에 있음. 런타임 lifecycle (LIFO / `?` propagation / cancellation / abort-skip §4.12 rules 3/7/8) 은 백엔드 영역 |
 | 패턴 exhaustiveness | `(hostboundary)` | `toolchain/elab.osty:2669` | E0712 | ported | witness 생성 phase 1, opaque range phase 2 |
 | 패턴 reachability | `(hostboundary)` | `toolchain/elab.osty:3171` | E0740, E0741 | ported | guarded pattern 추적 |
-| 숫자 리터럴 다형성 | `(hostboundary)` | `toolchain/elab.osty:273` | — | partial | 기대 타입 기반 narrowing, 범위 좁음 |
+| 숫자 리터럴 다형성 | `(hostboundary)` | `toolchain/elab.osty:266,279,290` | — | partial (확장 2026-05-16, **dormant**) | 기대 타입 기반 narrowing — IntLit / FloatLit 직접 + `elabCheckBinary` 가 BoAdd/Sub/Mul/Div/Mod 의 양 피연산자에 expected 전파 (`let x: Float64 = 1 + 2` → 1, 2 둘 다 Float64 직접 채택). 비-arith / 비-numeric expected 는 infer→subtype fallback. **toolchain/elab.osty 변경이라 generated.go frozen seed 와 분리 — LLVM 셀프호스팅 flip 까지 production 영향 없음** (cf. J/K) |
 | Closure capture / escape (E0743) | `(hostboundary)` | `toolchain/elab.osty:1849` · `toolchain/check.osty` (collectFnDecl/Struct/Enum/TypeAlias/LetDecl) · `toolchain/ty.osty::tyEscapingCapabilityHead` | E0743 | **ported** | 2026-04-24 phase 2a+2b 착륙. decl-site 5 곳 (fn ret / struct field / enum payload / type alias / top-level let) + call-site 2 곳 (`elabInferCall`, `elabInferMethodCall`) 가 monomorph 후 retTy 를 구조적으로 검사. `spawn` 이름 exemption 으로 prelude/`Group.spawn`/`thread.spawn` 을 한 번에 허용. negative 코퍼스 5 케이스로 잠금 |
 | `Self` specialization | `(hostboundary)` | `toolchain/elab.osty:1700` | — | ported | `6cd17fa2` 최근 착륙 |
 | Annotation semantic validation | `(hostboundary)` | `toolchain/resolve.osty` (arg validators) + `toolchain/hir_lower.osty:923-950` (extract) + `toolchain/mir.osty::MirFunction` + `toolchain/mir_lower.osty::mirLowerCopyFnAnnotations` (HIR→MIR 전달) | E0739 | **partial (LLVM-emission 남음)** | 2026-04-23 resolve 단계 arg validator 10 종 전부 이식. HIR extract 계층 + HirFnDecl 필드 10 종 landing 완료. **2026-04-23 후속**: MirFunction 이 9 annotation 그룹 필드 (`vectorize[Width/Scalable/Predicate]` / `noVectorize` / `parallel` / `unroll[Count]` / `inlineMode` (MirInlineMode enum) / `hot` / `cold` / `targetFeatures` / `noaliasAll` / `noaliasParams` / `pure`) 을 HirFnDecl 로부터 `mirLowerCopyFnAnnotations` 가 lossless 복사 — Go `ir.FnDecl` shim 이 소비할 수 있는 단일 MIR-level 소스 완성. **잔여**: `toolchain/llvmgen.osty` 가 이 MIR 필드를 LLVM fn-attr / loop-metadata 로 emit 하는 경로 (A5 loop md / A8 fn attr / A9 section 배치 / A10 target-features / A11 noalias param attr / A13 readnone). 현재는 Go `internal/llvmgen` 쪽이 emit 을 전담 — Osty native LLVMgen 은 여전히 scalar-only |
@@ -331,10 +425,10 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 | Diagnostic file path 결합 | `host_boundary.go::stampPackageDiags` | `toolchain/check_diag.osty` | — | partial | Go 가 경로 스탬프, Osty 가 메시지 렌더 |
 | **Native checker exec 경계** | `host_boundary.go::nativeCheckerExec` | — | — | **n/a** | 외부 바이너리 인터페이스 — 포팅 대상 아님 |
 | Embedded selfhost bridge | `host_boundary.go::embeddedNativeChecker` | `toolchain/check_bridge.osty` (9줄) | — | n/a | **9줄짜리 얇은 stub — AST 변경에 취약** |
-| **Inspect / per-node 기록** | `internal/check/inspect.go` (647 LOC — 2026-04-24 실측) | `toolchain/inspect.osty` + `toolchain/inspect_hint.osty` + tests + `internal/selfhost/inspect_adapter.go` (Go 브리지) | — | **partial** | 2026-04-24 점진 착륙: v1~v1.11 까지 포팅. **2026-04-24 후속**: bundle 등록 + `generated.go` regen + Go 브리지 착륙. `toolchain/inspect.osty` / `inspect_hint.osty` 를 `bundle.toolchainCheckerFiles` 에 추가 후 `go generate ./internal/selfhost/...` 이 exit 0 + `go build ./...` 통과. PR #824 의 `for _ in` → `for _k in` 리네임이 transpiler 버그를 우회했고, `elabPoisonResult` regression 은 재현되지 않아 별도 수정 없이 해소. `internal/selfhost/inspect_adapter.go::InspectFromSource(src []byte) []api.InspectRecord` 공개. `api.InspectRecord` (byte offsets + 렌더된 타입 문자열) 는 `check.InspectRecord` (`types.Type` + `token.Pos`) 와 달리 self-host 의 pre-lift 표현 그대로 노출 — CLI 와 IDE 소비자는 구조적 타입이 필요하면 당분간 Go-side `check.Inspect` 유지. **남은 갭**: (1) For-loop body / 필드 접근 chain / method call receiver 같은 기타 container shape 미커버. (2) Expression `notes` (generic instantiation / method-call marker) 비어있음. (3) CLI `osty check --inspect` 는 여전히 Go `check.Inspect` 호출 — `--arena` 토글 추가 + Go parity 검증 후 전환. |
+| **Inspect / per-node 기록** | `internal/check/inspect.go` (647 LOC — 2026-04-24 실측) | `toolchain/inspect.osty` + `toolchain/inspect_hint.osty` + tests + `internal/selfhost/inspect_adapter.go` (Go 브리지) | — | **partial** | 2026-04-24 점진 착륙: v1~v1.11 까지 포팅. **2026-04-24 후속**: bundle 등록 + `generated.go` regen + Go 브리지 착륙. `toolchain/inspect.osty` / `inspect_hint.osty` 를 `bundle.toolchainCheckerFiles` 에 추가 후 `go generate ./internal/selfhost/...` 이 exit 0 + `go build ./...` 통과. PR #824 의 `for _ in` → `for _k in` 리네임이 transpiler 버그를 우회했고, `elabPoisonResult` regression 은 재현되지 않아 별도 수정 없이 해소. `internal/selfhost/inspect_adapter.go::InspectFromSource(src []byte) []api.InspectRecord` 공개. `api.InspectRecord` (byte offsets + 렌더된 타입 문자열) 는 `check.InspectRecord` (`types.Type` + `token.Pos`) 와 달리 self-host 의 pre-lift 표현 그대로 노출 — CLI 와 IDE 소비자는 구조적 타입이 필요하면 당분간 Go-side `check.Inspect` 유지. **남은 갭** (2026-05-16 재정렬): (1) For-loop body / 필드 접근 chain / method call receiver 같은 기타 container shape 미커버 — `toolchain/inspect.osty` 거주, generated.go frozen seed 라 LLVM 셀프호스팅 flip 까지 dormant. (2) Expression `notes` (generic instantiation / method-call marker) 비어있음 — 같은 dormancy. (3) ~~CLI `osty check --inspect` 는 여전히 Go `check.Inspect` 호출~~ **이미 selfhost 라우팅** — `check.InspectSource` 가 `selfhost.InspectFromSource` 를 즉시 호출 (`internal/check/inspect.go:52`). "--arena toggle" 항목은 stale, 별도 토글 불필요. 2026-05-16: `internal/selfhost/inspect_baseline_test.go` 가 v1.11 동작 (FnDecl + Binding 출현) 잠금 |
 | Generic bound checking | `(hostboundary)` | `toolchain/elab.osty` | E0749 | ported | monomorph 시 bound 강제 |
 | Pattern shape mismatch (E0753) | `(hostboundary)` | `toolchain/elab.osty:elabPattern` | E0753 | ported | — |
-| Closure annotation requirement | `(hostboundary)` | `toolchain/elab.osty:1849` | E0752 | partial | param seeding 만 |
+| Closure annotation requirement | `(hostboundary)` | `toolchain/elab.osty::elabInferClosure` (line ~3025) | E0752 | partial (test coverage + per-param scaffold 2026-05-16) | param seeding + 무-context fallback 정상 emit 확인. `internal/check/closure_annotation_test.go` 6 케이스 (E0752 fire/skip 4 + per-param mismatch dormant 1 + per-param match 1) + spec corpus waiver. **per-param annotation vs expected fn-type mismatch** 진단을 `elabInferClosure` 에 추가 — `checkExpectAssignable(env, expectedParam, declaredTy, paramStart, paramEnd)` 호출로 E0700 을 param annotation 위치에 발화. **현재 dormant**: production `osty-native-checker` 는 `internal/selfhost/generated.go` (frozen seed) 에서 빌드되므로 `toolchain/elab.osty` 변경은 LLVM 셀프호스팅 flip 까지 비활성. 테스트는 `t.Skip` 표시 |
 
 ### Checker 포팅 우선순위
 
@@ -386,15 +480,14 @@ catch up 할 때 trivial-portable 하게 만드는 경로로 전환.
 | 0a | `internal/lsp/handlers.go` | `hoverForSymbol` → `hoverSymbolView` extractor + `selfhost.LSPHoverMarkdown(view)`. `writeSymSignature` 삭제. |
 | 0b | `internal/lsp/completion.go` | `completionItemFromSym` → `completionSymbolView` + `completionItemFromView`. 모든 정책 (Kind/Detail/SortText) 가 view 통과. |
 | 0d | `internal/lsp/refactor.go` | `keyedUse.u *ast.UseDecl` → `keyedUse.view LSPUseDeclView`. `unusedUseSet map[*ast.UseDecl]bool` → `unusedUseOffsets map[int]bool`. `useGroup`/`useKey`/`useSourceText`/`endOfLineOffset`/`hasTriviaBetweenUses`/`keyWithAlias` 1-line shim 6 종 삭제 — 모두 `LSP*` 직접 호출. `useDeclViews([]*ast.UseDecl) []LSPUseDeclView` 가 유일 pointer-touch site. |
+| 0e | `internal/lsp/references.go` | 2026-05-16 착륙. `findReferences` 의 `refs[id.ID] != target` / `typeRefs[nt.ID] != target` 2 사이트를 `SymbolID` equality 로 교체 (`refs[id.ID].ID() != targetID`, target.ID() 는 loop 진입 전 1 회 계산). `containsNode` 의 `ast.Node(d) == decl` 6 사이트 (top-level / struct field / struct method / enum variant / enum method / interface method) 를 (Pos, End) value equality 로 교체 — within-file unique span 이라 in-run 결과 동일, self-host portable. 변경 ~30 LOC, LSP/just front 회귀 0. |
 
 평가 결과 보류 (별도 design 필요):
 
 - **0c (signature.go)**: 단일 `symbolDoc` call 외에는 `*types.FnType` /
   `*ast.FnDecl` 포인터에 직접 의존. extraction layer 를 추가해도 가치 낮음.
-- **0e (references.go)**: `if refs[id.ID] != target` 의 **포인터 동등 비교가
-  알고리즘 그 자체**. value-typed view 로 깎을 수 없고 `SymbolID`
-  (`internal/resolve/symbolid.go`) 또는 NodeID 기반 identity 모델을 도입해야
-  한다. `containsNode` 의 `ast.Node(d) == decl` 도 같은 종류. 별도 PR.
+  selfhost fallback (`buildStructuredSignatureInfo`) 가 이미 동작하므로
+  critical path 아님 — close as won't-fix 후보.
 
 후속 항목:
 - `references.go` SymbolID identity 도입 (별도 design 문서 선행 권장)

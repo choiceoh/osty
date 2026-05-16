@@ -936,7 +936,7 @@ fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         } else {
             let ifaceTy = astTypeToTyInCollect(cx, memberIdx)
             if ifaceTy >= 0 {
-                checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt {owner: name, ifaceTy})
+                checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt {owner: name, ifaceTy, defaultBodyNames: [], defaultBodyNodes: []})
             } else {
                 let _ = memberIdx
             }
