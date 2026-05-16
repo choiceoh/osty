@@ -1806,7 +1806,22 @@ func (s *monoState) scanExpr(e Expr) {
 	switch e := e.(type) {
 	case *CallExpr:
 		// Rewrite generic call to mangled specialization.
-		if len(e.TypeArgs) > 0 {
+		//
+		// CallExpr.TypeArgs is sourced from the checker's instantiation
+		// table. For most user-side generic calls it carries the full
+		// list. For stdlib method-body calls rewritten via
+		// `RewriteStdlibMethodCallsites` (`opt.map(|x| ...)` →
+		// `osty_std_option__Option__map(opt, |x| ...)`), the receiver's
+		// concrete owner args are already prepended, but the closure-
+		// returning combinators commonly leave method-local generics
+		// (e.g. `map<U>`'s `U`) implicit — the checker records no
+		// turbofish for them and we have to derive them from the
+		// concrete arg types at rewrite time. Without that fallback,
+		// the call site silently leaves `osty_std_option__Option__map`
+		// unspecialized, the generic template gets dropped from the
+		// output module, and downstream lowering walls on the
+		// unresolved symbol.
+		if len(e.TypeArgs) > 0 || s.callCalleeIsGenericFn(e) {
 			s.rewriteGenericCall(e)
 			// After monomorphization the backend contract is fully
 			// concrete: any remaining CallExpr.TypeArgs are just
@@ -1924,10 +1939,40 @@ func (s *monoState) scanExpr(e Expr) {
 	}
 }
 
+// callCalleeIsGenericFn reports whether c.Callee references a known
+// generic free fn in this module. Used to admit `osty_std_…` stdlib
+// method-body calls into `rewriteGenericCall` even when the checker
+// did not record any method-local type args — `rewriteGenericCall`
+// then derives the missing args by unifying the concrete arg types
+// against the generic param types. Without this admission, the
+// `len(e.TypeArgs) > 0` gate in `scanExpr` would leave those calls
+// pointing at a generic symbol that gets dropped in Pass 2.
+func (s *monoState) callCalleeIsGenericFn(c *CallExpr) bool {
+	if s == nil || c == nil {
+		return false
+	}
+	id, ok := c.Callee.(*Ident)
+	if !ok || id == nil || id.Name == "" {
+		return false
+	}
+	_, ok = s.genericsByName[id.Name]
+	return ok
+}
+
 // rewriteGenericCall translates a generic free-fn call site into its
 // mangled specialization. Only calls whose callee resolves to a
 // top-level generic FnDecl are rewritten; others are left alone (the
 // checker should have rejected anything else, but we stay defensive).
+//
+// When `c.TypeArgs` is shorter than `orig.Generics` (the common shape
+// after `RewriteStdlibMethodCallsites` for closure-taking combinators
+// like `opt.map(|x| ...)` — the receiver's owner args are prepended
+// but the method-local generics are left for inference), the missing
+// suffix is derived by unifying each param's structural type against
+// the matching arg's concrete type. Each generic param is resolved
+// by the first param position that mentions it; this is sufficient
+// for Option/Result/List combinators where every method generic
+// flows through a closure return or a pair-typed param.
 func (s *monoState) rewriteGenericCall(c *CallExpr) {
 	id, ok := c.Callee.(*Ident)
 	if !ok {
@@ -1937,10 +1982,15 @@ func (s *monoState) rewriteGenericCall(c *CallExpr) {
 	if !ok {
 		return
 	}
-	mangled := s.request(orig, c.TypeArgs)
+	typeArgs := c.TypeArgs
+	if len(typeArgs) < len(orig.Generics) {
+		typeArgs = s.inferMissingGenericArgs(orig, c, typeArgs)
+	}
+	mangled := s.request(orig, typeArgs)
 	if mangled == "" {
 		return
 	}
+	c.TypeArgs = typeArgs
 	// Substitute the call's return type and the callee identifier's
 	// FnType using the same env `request` used to mangle the symbol.
 	// Without this, downstream IR/MIR lowering sees `let r = first(xs)`
@@ -1962,6 +2012,135 @@ func (s *monoState) rewriteGenericCall(c *CallExpr) {
 	id.Name = mangled
 	id.TypeArgs = nil
 	c.TypeArgs = nil
+}
+
+// inferMissingGenericArgs fills out a short c.TypeArgs by unifying
+// each remaining generic param against the concrete arg type at the
+// first param position that mentions it. Returns the original
+// `provided` unchanged if no progress can be made (a still-short
+// result trips `request`'s arity check and reports a normal warning).
+//
+// The unification is structural and unidirectional: walk param type
+// and arg type together, and whenever we see a `TypeVar{Name: G}` in
+// the param while standing over a concrete subtype in the arg,
+// record `G → arg-subtype`. Nested NamedType / OptionalType /
+// TupleType / FnType shapes recurse; mismatched constructors abort
+// the walk for that arg position (leaving G unbound for now). The
+// closure-taking combinators on Option/Result/List/Iter satisfy this
+// — e.g. `map<U>(self: Option<T>, f: fn(T) -> U)` resolves `U` from
+// arg[1] = `fn(Int) -> Int` by walking into the FnType's Return.
+func (s *monoState) inferMissingGenericArgs(fn *FnDecl, c *CallExpr, provided []Type) []Type {
+	if fn == nil || c == nil {
+		return provided
+	}
+	out := make([]Type, len(fn.Generics))
+	for i := range fn.Generics {
+		if i < len(provided) {
+			out[i] = provided[i]
+		}
+	}
+	env := SubstEnv{}
+	for i, p := range fn.Generics {
+		if p != nil && out[i] != nil {
+			env[p.Name] = out[i]
+		}
+	}
+	for argIdx, arg := range c.Args {
+		if argIdx >= len(fn.Params) || fn.Params[argIdx] == nil {
+			break
+		}
+		paramTy := fn.Params[argIdx].Type
+		if paramTy == nil || arg.Value == nil {
+			continue
+		}
+		argTy := arg.Value.Type()
+		if argTy == nil || argTy == ErrTypeVal {
+			continue
+		}
+		unifyTypeVarSlots(paramTy, argTy, env)
+	}
+	for i, p := range fn.Generics {
+		if p == nil || out[i] != nil {
+			continue
+		}
+		if bound, ok := env[p.Name]; ok && !containsTypeVar(bound) {
+			out[i] = bound
+		}
+	}
+	for _, t := range out {
+		if t == nil {
+			return provided
+		}
+	}
+	return out
+}
+
+// unifyTypeVarSlots walks paramTy and argTy structurally, recording
+// `TypeVar.Name → concrete subtype` pairs into env. Used to derive
+// implicit method-local generics for stdlib combinator call sites.
+// Mismatched shapes silently stop their subtree — the caller falls
+// back to the existing arity check when env doesn't cover every
+// generic param.
+func unifyTypeVarSlots(paramTy, argTy Type, env SubstEnv) {
+	if paramTy == nil || argTy == nil {
+		return
+	}
+	switch p := paramTy.(type) {
+	case *TypeVar:
+		if p.Name == "" {
+			return
+		}
+		if _, seen := env[p.Name]; seen {
+			return
+		}
+		env[p.Name] = CloneType(argTy)
+		return
+	case *NamedType:
+		// A bare `NamedType{Name: G}` with no args is the IR
+		// lowerer's alternate encoding for a type parameter. Treat
+		// it like *TypeVar.
+		if len(p.Args) == 0 && p.Package == "" && !p.Builtin {
+			if _, seen := env[p.Name]; !seen {
+				env[p.Name] = CloneType(argTy)
+			}
+			return
+		}
+		a, ok := argTy.(*NamedType)
+		if !ok || a == nil || a.Name != p.Name || len(a.Args) != len(p.Args) {
+			return
+		}
+		for i := range p.Args {
+			unifyTypeVarSlots(p.Args[i], a.Args[i], env)
+		}
+	case *OptionalType:
+		if a, ok := argTy.(*OptionalType); ok && a != nil {
+			unifyTypeVarSlots(p.Inner, a.Inner, env)
+			return
+		}
+		// `Option<T>` (NamedType) and `T?` (OptionalType) are
+		// surface synonyms; cross-match when the arg uses the
+		// expanded form.
+		if a, ok := argTy.(*NamedType); ok && a != nil && a.Name == "Option" && len(a.Args) == 1 {
+			unifyTypeVarSlots(p.Inner, a.Args[0], env)
+		}
+	case *TupleType:
+		a, ok := argTy.(*TupleType)
+		if !ok || a == nil || len(a.Elems) != len(p.Elems) {
+			return
+		}
+		for i := range p.Elems {
+			unifyTypeVarSlots(p.Elems[i], a.Elems[i], env)
+		}
+	case *FnType:
+		a, ok := argTy.(*FnType)
+		if !ok || a == nil || len(a.Params) != len(p.Params) {
+			return
+		}
+		for i := range p.Params {
+			unifyTypeVarSlots(p.Params[i], a.Params[i], env)
+		}
+		unifyTypeVarSlots(p.Return, a.Return, env)
+	}
 }
 
 // ==== Helpers ====

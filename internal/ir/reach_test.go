@@ -227,6 +227,61 @@ func TestReachAndReachMethodsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestBuiltinTypeOwningModuleResolvesGenericCollectionTypes(t *testing.T) {
+	cases := []struct {
+		name, want string
+	}{
+		{"List", "collections"},
+		{"Iter", "iter"},
+		{"Option", "option"},
+		{"Result", "result"},
+		{"Map", ""},
+		{"Set", ""},
+		{"NotAType", ""},
+	}
+	for _, c := range cases {
+		if got := BuiltinTypeOwningModule(c.name); got != c.want {
+			t.Errorf("BuiltinTypeOwningModule(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestReachMethodsPicksUpBuiltinOptionAndResultMethods(t *testing.T) {
+	// Receivers carrying `Builtin: true` with an empty Package — the
+	// shape `ir.Lower` emits for prelude `Option<T>` / `Result<T,E>`
+	// values — must route through `BuiltinTypeOwningModule` so the
+	// body-injection pipeline can pull in their bodied combinators
+	// (`map`, `andThen`, `filter`, …). Before Option/Result were
+	// registered in the table, these MethodCalls were silently
+	// dropped from the reach set and `xs.map(|x| ...)`-style
+	// combinator chains stayed unrewritten through MIR/LLVM.
+	optTy := &NamedType{Builtin: true, Name: "Option", Args: []Type{TInt}}
+	resTy := &NamedType{Builtin: true, Name: "Result", Args: []Type{TInt, TString}}
+	mod := &Module{
+		Package: "main",
+		Script: []Stmt{
+			&ExprStmt{X: &MethodCall{
+				Receiver: &Ident{Name: "opt", T: optTy},
+				Name:     "map",
+			}},
+			&ExprStmt{X: &MethodCall{
+				Receiver: &Ident{Name: "res", T: resTy},
+				Name:     "andThen",
+			}},
+		},
+	}
+	got := ReachMethods(mod)
+	want := []MethodRef{
+		{Module: "option", Type: "Option", Method: "map"},
+		{Module: "result", Type: "Result", Method: "andThen"},
+	}
+	for _, w := range want {
+		if _, ok := got[w]; !ok {
+			t.Errorf("ReachMethods() missing %v; got %v", w, got)
+		}
+	}
+}
+
 func TestReachSkipsFieldAccessOnNonIdent(t *testing.T) {
 	// (getObj.load()).compare(a) — outer receiver is CallExpr, not Ident.
 	inner := &CallExpr{

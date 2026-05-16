@@ -216,23 +216,22 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 				return true
 			}
 		}
-		named, ok := mc.Receiver.Type().(*ir.NamedType)
-		if !ok || named == nil || named.Name == "" {
-			return true
-		}
 		// Builtin generic types (`List<T>`, `Map<K, V>`, `Set<T>`,
 		// `Option<T>`, `Result<T, E>`) reach the IR with `Builtin:
-		// true` but `Package: ""`. Discovery in `ir.ReachMethods`
-		// patches the package to the canonical owning module; do
-		// the same here so the rewrite finds its match.
-		module := named.Package
-		if module == "" && named.Builtin {
-			module = ir.BuiltinTypeOwningModule(named.Name)
-		}
-		if module == "" {
+		// true` but `Package: ""`, and `T?` reaches as
+		// `OptionalType` — Option<T>'s surface form. Discovery in
+		// `ir.ReachMethods` normalises both into the canonical
+		// owning module via `stdlibReceiverOwner`; mirror it here
+		// so the rewrite finds its match for chained combinator
+		// shapes like `opt.map(...).filter(...)` whose second hop
+		// is typed `Int?` rather than `Option<Int>`.
+		recvTy := mc.Receiver.Type()
+		module, typeName, ok := stdlibReceiverOwnerForRewrite(recvTy)
+		if !ok {
 			return true
 		}
-		mangled, hit := set[key{module: module, typeName: named.Name, method: mc.Name}]
+		named, _ := recvTy.(*ir.NamedType)
+		mangled, hit := set[key{module: module, typeName: typeName, method: mc.Name}]
 		if !hit {
 			return true
 		}
@@ -247,6 +246,29 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			SpanV: mc.SpanV,
 		})
 		args = append(args, mc.Args...)
+		// `methodToFreeFn` prepends the owner's generic params onto the
+		// free fn's Generics list (so `Option<T>.map<U>` becomes a
+		// `[T, U]`-generic free fn). The user-side MethodCall only
+		// carries the method-local `TypeArgs` the checker recorded
+		// (commonly empty for combinators where the method generic is
+		// inferred from a closure return), so monomorph's `request`
+		// would fail the arity check and silently leave the call
+		// against a generic symbol that gets dropped from the output
+		// module. Prepend the receiver's concrete owner args
+		// (`Option<Int>` → `[Int]`, `Int?` → `[Int]`) so the
+		// rewritten call carries `[ownerArgs..., methodArgs...]` and
+		// the arity matches.
+		ownerArgs := stdlibReceiverOwnerArgs(recvTy)
+		typeArgs := mc.TypeArgs
+		if len(ownerArgs) > 0 {
+			combined := make([]ir.Type, 0, len(ownerArgs)+len(typeArgs))
+			for _, a := range ownerArgs {
+				combined = append(combined, ir.CloneType(a))
+			}
+			combined = append(combined, typeArgs...)
+			typeArgs = combined
+		}
+		_ = named
 		swap[mc] = &ir.CallExpr{
 			Callee: &ir.Ident{
 				Name:  mangled,
@@ -254,7 +276,7 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 				T:     stdlibFnType(args, mc.T),
 				SpanV: mc.SpanV,
 			},
-			TypeArgs: mc.TypeArgs,
+			TypeArgs: typeArgs,
 			Args:     args,
 			T:        mc.T,
 			SpanV:    mc.SpanV,
@@ -267,6 +289,62 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 	rw := &stdlibMethodCallsiteSpliceVisitor{swap: swap}
 	ir.Walk(rw, mod)
 	return valueRewriteCount + rw.count
+}
+
+// stdlibReceiverOwnerForRewrite mirrors `ir.stdlibReceiverOwner` for
+// the call-site rewriter — kept inline here so the rewriter does not
+// need to import an unexported helper. Returns the (module, type)
+// pair the method-body injector keyed under, or false when no stdlib
+// owner applies.
+//
+// Accepts `NamedType` (including Builtin types with empty Package
+// fields) and `OptionalType` (the surface form of `Option<T>` —
+// chained combinators like `opt.map(...).filter(...)` are typed
+// `Int?` on the second hop and must still resolve to
+// `option.Option`).
+func stdlibReceiverOwnerForRewrite(t ir.Type) (module string, typeName string, ok bool) {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		if x == nil || x.Name == "" {
+			return "", "", false
+		}
+		module = x.Package
+		if module == "" && x.Builtin {
+			module = ir.BuiltinTypeOwningModule(x.Name)
+		}
+		if module == "" {
+			return "", "", false
+		}
+		return module, x.Name, true
+	case *ir.OptionalType:
+		if x == nil {
+			return "", "", false
+		}
+		return "option", "Option", true
+	}
+	return "", "", false
+}
+
+// stdlibReceiverOwnerArgs returns the concrete type arguments that
+// should be prepended onto a method call's TypeArgs to satisfy the
+// owner-prefix slot of the synthesised free fn. For a NamedType this
+// is the type's Args; for an OptionalType (`Int?`), it is the inner
+// type lifted into a single-element slice so it matches Option<T>'s
+// generic shape.
+func stdlibReceiverOwnerArgs(t ir.Type) []ir.Type {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		if x == nil {
+			return nil
+		}
+		return x.Args
+	case *ir.OptionalType:
+		if x == nil || x.Inner == nil {
+			return nil
+		}
+		return []ir.Type{x.Inner}
+	}
+	return nil
 }
 
 func stdlibFnType(args []ir.Arg, ret ir.Type) ir.Type {
