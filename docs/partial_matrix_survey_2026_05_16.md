@@ -56,9 +56,12 @@ Osty 측에 파일 IO + 스케줄링 인프라가 아직 없다. `internal/check
 | A9 `#[hot]` / `#[cold]` + section | fn-attr + `.section .text.hot` directive | function 정의 emit site | 30–50 | PR#5 |
 | A10 `#[target_feature]` | `"target-features"="+avx2,..."` fn-attr | `llvmNativeFnAttrString` | 40–60 | PR#2 |
 | A11 `#[noalias]` / `#[noalias(p1, p2)]` | param-level `noalias` attr | param emit site | 30–50 | PR#3 |
-| A13 `#[pure]` | `readnone` fn-attr | `llvmNativeFnAttrString` | 20–30 | ✅ 착륙 2026-05-16 (toolchain scaffold) |
+| A13 `#[pure]` | `readnone` fn-attr | `llvmNativeFnAttrString` + stage0 `fnDefineHeaderClose` | 20–30 + 30 (stage0) | ✅ **production 까지 착륙 2026-05-16** (scaffold + stage0 retrofit) |
 
-**A13 착륙 2026-05-16** (scaffold-only): `LlvmNativeFunction` 에 `pure: Bool` 필드 추가, `llvmNativeFnAttrString` 가 `function.pure` 일 때 `readnone` 을 inlineAttr 와 space-join 해 emit. **단 production stage0 (`internal/backend/stage0/emit.go`) 는 여전히 fn-attr 을 emit 하지 않는다** — `toolchain/llvmgen.osty` 의 `LlvmNativeFunction` 은 Go bridge 가 구성하지 않는 future-state subsystem (PR #850 의 A8 wire 도 같은 path). 실제 production 출력에 readnone 이 나가려면 stage0 retrofit (~150 LOC) 이 별도 선행 — 결정 대기. scaffold 자체는 osty-native llvmgen 이 production-default 가 될 때 자동으로 활성.
+**A13 production 까지 착륙 2026-05-16**:
+- Scaffold (`toolchain/llvmgen.osty`): `LlvmNativeFunction.pure: Bool` 필드 + `llvmNativeFnAttrString` 가 inlineAttr 와 `readnone` 을 space-join. future Osty-native llvmgen path 용.
+- Production (`internal/backend/stage0/emit.go`): `fnDefineHeaderClose(fn *mir.Function) string` helper 추가. 19 sites 의 `out.WriteString(") {\n")` 를 helper 호출로 일괄 교체. `fn.Pure` 일 때 `") readnone {\n"` 발화. 테스트: `TestStage0EmitsReadnoneForPureFn` + `TestStage0SkipsReadnoneForNonPureFn` (baseline byte-identical 보장).
+- 후속 가능: 같은 `fnDefineHeaderClose` helper 안에 A8 inline / A9 hot/cold / A10 target-features / A11 noalias / A5 vectorize-related metadata 추가. 모두 단일 진입점.
 
 **중앙 helper 일반화 PR**: `llvmNativeFnAttrString` 을 `[]string` 누적 모델로 refactor (A8 + A10 + A11 + A13 을 한 곳에서 조립). A13 PR 직후 1 회. 50 LOC.
 

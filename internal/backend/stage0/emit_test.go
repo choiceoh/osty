@@ -7122,3 +7122,31 @@ func TestStage0GenericCFGResultEnumReturn(t *testing.T) {
 		}
 	}
 }
+
+// TestStage0EmitsReadnoneForPureFn — A13 `#[pure]` → `readnone` fn-attr
+// surfaces in the stage0 LLVM emit. Mirrors the helper at
+// `internal/backend/stage0/emit.go::fnDefineHeaderClose`.
+func TestStage0EmitsReadnoneForPureFn(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "pure_zero", retT: ir.TInt, src: useRV(intConst(0))})
+	fn.Pure = true
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "define i64 @pure_zero() readnone {") {
+		t.Fatalf("pure fn missing `readnone` fn-attr:\n%s", got)
+	}
+}
+
+// TestStage0SkipsReadnoneForNonPureFn — baseline byte-identical output
+// for an unannotated function. Guards against the helper accidentally
+// stamping `readnone` on every function.
+func TestStage0SkipsReadnoneForNonPureFn(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{name: "plain_zero", retT: ir.TInt, src: useRV(intConst(0))})
+	got := emit(t, trivialMainFn(), fn)
+	if strings.Contains(got, "@plain_zero() readnone") {
+		t.Fatalf("non-pure fn unexpectedly emitted `readnone`:\n%s", got)
+	}
+	if !strings.Contains(got, "define i64 @plain_zero() {") {
+		t.Fatalf("baseline define line missing for non-pure fn:\n%s", got)
+	}
+}
