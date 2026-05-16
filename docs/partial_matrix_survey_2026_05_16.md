@@ -16,7 +16,7 @@
 | 6 | Raw-ptr handling (privilege+POD) | 200–400 | Osty | 없음 | ⚠️ | 3-gate 통합 권장; 분할 시 conflict 위험 |
 | 7 | File/Package/Workspace 진입점 정리 | 100–200 | Osty | 없음 | ✅ | Go exec wrapper 완료, Osty phase 정리만 |
 | 8 | Diagnostic file-path stamping | 50–100 | Osty + Go | 없음 | ✅ | Go `stampPackageDiags` 의 Osty 측 이관 |
-| 9 | Inspect missing shapes (for-loop / field-chain / receiver) | 200–400 (split) | Osty + Go | v1.11 done | ⚠️ × 3 PR | 각 shape 50-150 LOC |
+| 9 | Inspect missing shapes (for-loop / field-chain / receiver) | 200–400 (split) | Osty (dormant) + Go (baseline test) | v1.11 done | ⚠️ × 3 PR (dormant) | 각 shape 50-150 LOC — 모두 `toolchain/inspect.osty` 거주, generated.go frozen seed 라 LLVM 셀프호스팅 flip 까지 dormant. 2026-05-16: 기존 v1.11 동작 잠금 (`internal/selfhost/inspect_baseline_test.go`) + 매트릭스의 stale "--arena toggle" 항목 정정 (single-file 이미 `selfhost.InspectFromSource` 라우팅) |
 | 10 | Workspace package input / worker pool | 300–600 | Go-only | Osty IO/scheduling design | ✗ | 호스트 경계 인프라; 최후 |
 | 11 | E0553 `pub use` visibility | 30–50 (Path A) / 150-200 (Path B) | Go (A) / Osty+Go (B) | scoped G28 (B) | ✅ (A) | [별도 design 문서](e0553_pub_use_design.md) |
 | 12 | Partial decl cross-file stitching | 80–130 | Osty | 없음 | ✅ | [별도 design 문서](partial_decl_cross_file_design.md) |
