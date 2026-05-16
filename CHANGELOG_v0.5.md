@@ -177,6 +177,43 @@ incrementally.
 Entries touching the shipped rows above, newest first. Hashes are
 short; `git log <hash>` for the full message.
 
+- **LLVM self-host walking skeleton (2026-05-16 ~ 2026-05-17)** — 25 PR
+  chain ([#1812](https://github.com/choiceoh/osty/pull/1812) ~
+  [#1851](https://github.com/choiceoh/osty/pull/1851)) 가
+  `cmd/osty-native-checker/` 를 dual-target (Go shell + LLVM-built Osty
+  entry) 로 만들고 plan §12 의 M1/M2 partial 달성. 자세한 trajectory
+  는 [docs/llvm-selfhost-plan.md](./docs/llvm-selfhost-plan.md) +
+  `docs/llvm-selfhost-plan-pr*.md` 시리즈.
+  - **M1 walking skeleton** ([#1816](https://github.com/choiceoh/osty/pull/1816)):
+    `cmd/osty-native-checker/osty.toml` + `main.osty` 신규.
+    `OSTY_STAGE0_FALLBACK=1 osty build --backend llvm cmd/osty-native-checker/`
+    가 LLVM binary 산출 + 실행.
+  - **PR1c — 진짜 stdin** ([#1826](https://github.com/choiceoh/osty/pull/1826)):
+    `internal/mir/lower.go::qualifiedSymbol` 에 `rewriteStdlibSymbolToRuntime`
+    helper 추가, `std.io.readLine` → `osty_rt_io_read_line` MIR symbol
+    rewrite. stage0 fallback + production path (lir_proto) 양쪽 일관.
+    backend wall 의 가장 큰 부분 (per-symbol stage0 cover) 우회.
+  - **PR2 — manual naive parser** ([#1829](https://github.com/choiceoh/osty/pull/1829)):
+    `std.json.*` 호출의 stdlib body injection wall 우회. primitive
+    `strings.indexOf` + `strings.slice` 만 사용한 source field 추출.
+    backend 의존 0.
+  - **M2 partial byte parity**: empty-source fixture (`{"source":""}`)
+    에 대해 Go-built `osty-native-checker` 와 LLVM-built 가 byte-identical
+    `CheckResult` JSON 출력. multi-fixture parity 는 PR3 의 cross-package
+    method-call wall 후.
+  - **PR3-C-impl-go step 1+2** ([#1842](https://github.com/choiceoh/osty/pull/1842)):
+    `api/types.go::ResolvedSymbol.ImportPath` 필드 + `resolve_adapter.go::
+    selfhostUseAliasImportPaths` walker + post-processing pass. `kind ==
+    "package"` symbol 이 use-decl 의 import path 보유.
+  - **Spec gap + design docs**: `SPEC_GAPS.md::cross-pkg-module-resolution`
+    open gap 신규 등록 ([#1832](https://github.com/choiceoh/osty/pull/1832))
+    + cross-package method-call dispatch 의 4 옵션 분석
+    ([#1845](https://github.com/choiceoh/osty/pull/1845)) + 우회 use form
+    3 종 측정 ([#1847](https://github.com/choiceoh/osty/pull/1847)) + 옵션
+    c (spec narrow exception) 의 CLAUDE.md 변경 draft
+    ([#1848](https://github.com/choiceoh/osty/pull/1848)). 다음 unlock 은
+    사용자/팀 합의 동반.
+
 - **Phase 2 scheduler + compiler-speed wave (2026-04-22)** — three paths merged under a "real-world speedup" umbrella:
   - **Runtime scheduler (Phase 2)**: thread-per-task pthread model replaced by worker pool + per-worker Chase-Lev work-stealing deque + linked-list FIFO inject queue + on-demand detached elastic worker for blocking saturation. `OSTY_SCHED_WORKERS` env override. ThreadSanitizer-clean (slot publication is release/acquire). Observed 3.97x speedup (16 CPU-bound tasks, workers=1→4). Full details in [RUNTIME_SCHEDULER.md](./RUNTIME_SCHEDULER.md). ABI unchanged so MIR/backend don't recompile. As a side effect, `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` (main's "list trace-kind mismatch" issue) are fixed.
   - **Parallel `check.Workspace()`**: per-package native-checker calls run on a GOMAXPROCS worker pool with a mutex only around the shared type-map overlay. 3.36x speedup on 8 synthesized packages, 2.55x on 32 ([`internal/check/workspace_parallel_test.go`](./internal/check/workspace_parallel_test.go) bench + equivalence test). `OSTY_CHECK_PARALLEL=0` disables for debugging ordering bugs.
