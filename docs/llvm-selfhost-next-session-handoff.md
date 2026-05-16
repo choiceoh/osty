@@ -210,6 +210,27 @@ D)  PR3 자체 보류 — M2 partial 로 만족. source bootstrap UNLOCK 이 핵
 
 **권장 (옵션 A')**: production path next wall (mirJsonObjectGetNamed) 의 stage0 cover wave 가 가장 직접적 진척. PR #1858 의 3-commit cascade 패턴 재사용 가능. unblock 시 production path 전체 활성 → cmd/osty-native-checker 의 M3 (L2 corpus) 자동 가능성.
 
+## 10a. 2026-05-17 옵션 γ Phase 1 인벤토리 측정
+
+`toolchain/mir_generator.osty` 의 Phase 1 단계 (grep `Phase 1[a-z]`):
+
+| Phase | 내용 | 상태 |
+|---|---|---|
+| **1a** | block label + operand-free terminator (return / goto / unreachable) | ✓ 착륙 |
+| **1b** | terminator operands wired (PR #1271) | ✓ 착륙 |
+| **1c** | per-instruction emission (MirInstrAssign + rvalue arms) | **진행 중** (line 17715+) |
+| **1d** | MirRVNullary 진짜 값 + MirInstrCall + Intrinsic | TODO |
+| **1p** | MirConstString string pool | ✓ 착륙 |
+
+`mirJsonObjectGetNamed` decline = Phase 1c/d 의 미구현 reach (for loop 의 list indexing + if + early Some return + None fallback = MirInstrAssign + multiple rvalue arms + MirInstrCall).
+
+**옵션 γ 의 진짜 sub-trajectory** = mir_generator.osty 의 **Phase 1c + Phase 1d 진척**. 추정 작업:
+- Phase 1c rvalue arms 확장 (~수십 LOC per arm × 10+ arms)
+- Phase 1d MirInstrCall / Intrinsic emit (수백 LOC, intrinsic family 별)
+- 검증: cmd/osty-native-checker build production path 통과
+
+본 plan scope 외 — mir_generator owner trajectory. PR #1858 의 stage0 cascade 패턴 (PR1/PR2/PR3 wave) 으로 cover 추가도 같은 layer 의 별개 작업.
+
 ## 10. 2026-05-17 최종 측정 (PR #1865/#1868)
 
 **audit scope 의 한계 발견** + **backend audit-out 함수 수**:
