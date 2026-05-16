@@ -198,9 +198,10 @@ func (s *Server) targetSymbolAt(doc *document, lspPos Position) *resolve.Symbol 
 // (same URI + same start position) are collapsed before return.
 func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDecl bool) []Location {
 	var out []Location
+	targetID := target.ID()
 	visit := func(uri string, src []byte, li *lineIndex, refIdents []*ast.Ident, typeRefIdents []*ast.NamedType, refs map[ast.NodeID]*resolve.Symbol, typeRefs map[ast.NodeID]*resolve.Symbol) {
 		for _, id := range refIdents {
-			if refs[id.ID] != target {
+			if refs[id.ID].ID() != targetID {
 				continue
 			}
 			out = append(out, Location{
@@ -209,7 +210,7 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 			})
 		}
 		for _, nt := range typeRefIdents {
-			if typeRefs[nt.ID] != target {
+			if typeRefs[nt.ID].ID() != targetID {
 				continue
 			}
 			// `auth.User` is a single NamedType whose head reference
@@ -355,46 +356,54 @@ func (s *Server) declLocation(doc *document, sym *resolve.Symbol) (Location, boo
 	}, true
 }
 
-// containsNode reports whether `decl` was parsed from `file`. Checks
-// by pointer equality against every top-level declaration in the
-// file, plus common nested declaration sites (methods on type bodies).
-// Good enough for rename/reference locations because resolver symbols
-// only ever point at top-level-attached declarations.
+// containsNode reports whether `decl` was parsed from `file`. Matches
+// by (Pos, End) value equality — within a single file's parse tree
+// every node's byte span is unique, so position equality is equivalent
+// to pointer identity but stays portable to the self-hosted compiler
+// (which has no Go-style pointer identity for AST nodes).
+//
+// Covers every top-level declaration plus the nested decl sites that
+// resolver symbols can point at: struct fields/methods, enum
+// variants/methods, interface methods.
 func containsNode(file *ast.File, decl ast.Node) bool {
 	if file == nil || decl == nil {
 		return false
 	}
+	targetPos := decl.Pos()
+	targetEnd := decl.End()
+	sameSpan := func(n ast.Node) bool {
+		return n.Pos() == targetPos && n.End() == targetEnd
+	}
 	for _, d := range file.Decls {
-		if ast.Node(d) == decl {
+		if sameSpan(d) {
 			return true
 		}
-		// Descend one level to cover methods/fields/variants.
 		switch n := d.(type) {
 		case *ast.StructDecl:
 			for _, f := range n.Fields {
-				if ast.Node(f) == decl {
+				if sameSpan(f) {
 					return true
 				}
 			}
 			for _, m := range n.Methods {
-				if ast.Node(m) == decl {
+				if sameSpan(m) {
 					return true
 				}
 			}
 		case *ast.EnumDecl:
 			for _, v := range n.Variants {
-				if ast.Node(v) == decl {
+				if sameSpan(v) {
 					return true
 				}
 			}
 			for _, m := range n.Methods {
-				if ast.Node(m) == decl {
+				if sameSpan(m) {
 					return true
 				}
 			}
 		case *ast.InterfaceDecl:
 			for _, m := range n.Methods {
-				if ast.Node(m) == decl {
+				if sameSpan(m) {
 					return true
 				}
 			}

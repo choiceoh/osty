@@ -85,7 +85,7 @@ flip + embedded fallback 제거 (#1669/#1671/#1674/#1687) 가 누적되면서 �
 | `internal/resolve/prelude.go` | "삭제 대상" | 119 | **삭제 불가 — symbol resolution 핵심**. 모든 resolver 경로가 `NewPrelude()` 의존 |
 | `internal/resolve/scope.go` | "삭제 대상" | 297 | **삭제 불가 — `Symbol` / `SymbolKind` / `Scope` / `SymbolID` 타입 정의**. references.go / signature.go / native_adapter.go / lsp 전반이 의존 |
 | `internal/lint/*` | "`*ast.File` 식별자 소비" | **0 식별자 의존** | `lint.Source()` / `lint.Package()` 모두 `selfhost.LintDiagnostics()` 한 번 호출로 끝. `typebased.go` / 자체 Refs/Defs map 없음. 매트릭스 진술 stale — 이미 깨끗 |
-| `internal/lsp/references.go` | "포인터 동등 비교가 알고리즘" | 404 | **사실 — 진짜 algorithmic dep**. `findReferences` 2 사이트 (`refs[id.ID] != target` / `typeRefs[nt.ID] != target`) + `containsNode` 6 사이트 (`ast.Node(d) == decl` for top-level/struct field/struct method/enum variant/enum method/interface method). Phase 0e 미착륙 |
+| `internal/lsp/references.go` | "포인터 동등 비교가 알고리즘" | 412 | **Phase 0e 착륙 2026-05-16**. `findReferences` 의 2 사이트 → `SymbolID` equality, `containsNode` 의 6 사이트 → (Pos, End) value equality. in-run 결과 보존 + self-host portable. LSP / just front 회귀 0 |
 | `internal/lsp/signature.go` | "won't-fix candidate" | 319 | selfhost fallback (`buildStructuredSignatureInfo`) 동작; Go path 는 backup. 1c.5 critical path 아님 |
 
 ### 2026-05-16 cleanup — cfg.go dead cascade 제거
@@ -111,12 +111,13 @@ check / parser / format / lint / pipeline / ci 전부 ok).
 전부 삭제") 은 stale. resolve.go 는 thin facade 이고 prelude.go / scope.go 는
 영구 인프라. **새 1c.5 정의**:
 
-1. **references.go SymbolID/position 채택** (Phase 0e) — `*resolve.Symbol`
-   pointer equality 를 `SymbolID` equality 또는 NodeID-keyed identity 로 교체.
-   `containsNode` 의 6 `ast.Node(d) == decl` 사이트도 position/file-membership
-   기반으로 전환. **이게 LSP 마지막 algorithmic identity dep**. 추정 ~50-100
-   LOC 변경. `internal/resolve/symbolid.go` (88 LOC) 가 이미 content-addressable
-   해시 제공 — 채택만 하면 됨.
+1. ~~**references.go SymbolID/position 채택** (Phase 0e)~~ — **착륙 2026-05-16**.
+   `findReferences` 의 `refs[id.ID] != target` / `typeRefs[nt.ID] != target`
+   2 사이트를 `SymbolID` equality 로 (loop 외부 `targetID := target.ID()` 1회
+   계산), `containsNode` 의 6 `ast.Node(d) == decl` 사이트를 (Pos, End) value
+   equality 로 교체. within-file unique span 보장으로 in-run 결과 동일,
+   self-host portable. ~30 LOC 변경, LSP / just front 회귀 0. **LSP 의
+   마지막 algorithmic pointer-identity dep 해소**.
 2. **`pub use` re-export visibility (E0553)** — 매트릭스 Resolver 우선순위 #5
    미해결. workspace pub-symbol graph + re-export chain traversal + scoped
    import (G28) symbol-aware use resolution 3 종 인프라 선행.
@@ -128,10 +129,13 @@ check / parser / format / lint / pipeline / ci 전부 ok).
    path 는 아님.
 
 **1c.5 가 "Go legacy 전부 삭제" 라는 절대 마일스톤이 아니라 "남은 algorithmic
-identity dep 1 종 + visibility/merge feature 2 종 해결" 로 재정의**되어야 실제
-의미 있는 종결점이 잡힌다. Item 1 (references.go) 이 단독으로 가장 명확한 첫
-PR 후보 — symbolid.go 이미 존재, 변경 scope 작음, 직후 다른 작업 unblock 없음
-(symbol id 채택 그 자체가 deliverable).
+identity dep + visibility/merge feature" 로 재정의**되어야 실제 의미 있는
+종결점이 잡힌다. Item 1 (references.go Phase 0e) 은 2026-05-16 에 착륙 —
+**Go-side LSP 의 마지막 algorithmic pointer-identity 의존이 제거됨**. 남은
+실질 작업은 (2) E0553 visibility + (3) cross-file partial merge 2 종으로,
+둘 다 workspace pub-symbol graph + re-export chain traversal 같은 새 인프라
+설계가 선행이라 "single 작은 PR" 으로 떨어지지 않음. host_boundary.go
+adapter 정리 (4) 가 그 다음으로 작은 추가 PR 후보.
 
 ## 2026-04-24 — Phase 1c.5 code state (historical snapshot)
 
@@ -457,15 +461,14 @@ catch up 할 때 trivial-portable 하게 만드는 경로로 전환.
 | 0a | `internal/lsp/handlers.go` | `hoverForSymbol` → `hoverSymbolView` extractor + `selfhost.LSPHoverMarkdown(view)`. `writeSymSignature` 삭제. |
 | 0b | `internal/lsp/completion.go` | `completionItemFromSym` → `completionSymbolView` + `completionItemFromView`. 모든 정책 (Kind/Detail/SortText) 가 view 통과. |
 | 0d | `internal/lsp/refactor.go` | `keyedUse.u *ast.UseDecl` → `keyedUse.view LSPUseDeclView`. `unusedUseSet map[*ast.UseDecl]bool` → `unusedUseOffsets map[int]bool`. `useGroup`/`useKey`/`useSourceText`/`endOfLineOffset`/`hasTriviaBetweenUses`/`keyWithAlias` 1-line shim 6 종 삭제 — 모두 `LSP*` 직접 호출. `useDeclViews([]*ast.UseDecl) []LSPUseDeclView` 가 유일 pointer-touch site. |
+| 0e | `internal/lsp/references.go` | 2026-05-16 착륙. `findReferences` 의 `refs[id.ID] != target` / `typeRefs[nt.ID] != target` 2 사이트를 `SymbolID` equality 로 교체 (`refs[id.ID].ID() != targetID`, target.ID() 는 loop 진입 전 1 회 계산). `containsNode` 의 `ast.Node(d) == decl` 6 사이트 (top-level / struct field / struct method / enum variant / enum method / interface method) 를 (Pos, End) value equality 로 교체 — within-file unique span 이라 in-run 결과 동일, self-host portable. 변경 ~30 LOC, LSP/just front 회귀 0. |
 
 평가 결과 보류 (별도 design 필요):
 
 - **0c (signature.go)**: 단일 `symbolDoc` call 외에는 `*types.FnType` /
   `*ast.FnDecl` 포인터에 직접 의존. extraction layer 를 추가해도 가치 낮음.
-- **0e (references.go)**: `if refs[id.ID] != target` 의 **포인터 동등 비교가
-  알고리즘 그 자체**. value-typed view 로 깎을 수 없고 `SymbolID`
-  (`internal/resolve/symbolid.go`) 또는 NodeID 기반 identity 모델을 도입해야
-  한다. `containsNode` 의 `ast.Node(d) == decl` 도 같은 종류. 별도 PR.
+  selfhost fallback (`buildStructuredSignatureInfo`) 가 이미 동작하므로
+  critical path 아님 — close as won't-fix 후보.
 
 후속 항목:
 - `references.go` SymbolID identity 도입 (별도 design 문서 선행 권장)
