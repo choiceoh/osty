@@ -285,15 +285,104 @@ func backfillTrailingClosure(body *Block, expected *FnType) {
 	if body == nil || expected == nil {
 		return
 	}
-	if cl, ok := body.Result.(*Closure); ok && cl != nil {
-		backfillClosure(cl, expected)
-		return
+	if body.Result != nil {
+		backfillExprIfClosure(body.Result, expected)
 	}
 	if n := len(body.Stmts); n > 0 {
-		if es, ok := body.Stmts[n-1].(*ExprStmt); ok && es != nil {
-			if cl, ok := es.X.(*Closure); ok && cl != nil {
-				backfillClosure(cl, expected)
+		switch s := body.Stmts[n-1].(type) {
+		case *ExprStmt:
+			if s != nil {
+				backfillExprIfClosure(s.X, expected)
 			}
+		case *IfStmt:
+			// Trailing `if/else` at statement position used as
+			// the implicit return — both branches' trailing
+			// closures take the same expected fn type.
+			if s == nil {
+				return
+			}
+			backfillTrailingClosure(s.Then, expected)
+			backfillTrailingClosure(s.Else, expected)
+		case *MatchStmt:
+			if s == nil {
+				return
+			}
+			for _, arm := range s.Arms {
+				if arm == nil || arm.Body == nil {
+					continue
+				}
+				backfillTrailingClosure(arm.Body, expected)
+			}
+		case *ReturnStmt:
+			if s == nil {
+				return
+			}
+			backfillExprIfClosure(s.Value, expected)
+		}
+	}
+}
+
+// backfillExprIfClosure descends into expression shapes that
+// preserve a single trailing value (Closure, IfExpr, MatchExpr,
+// BlockExpr) and runs `backfillClosure` on any reached Closure
+// node. Used by `backfillTrailingClosure` to propagate the
+// expected fn signature into closures nested inside branch
+// expressions, e.g.:
+//
+//	fn pick(b: Bool) -> fn(Int) -> Int {
+//	    if b { |x| x + 1 } else { |x| x - 1 }
+//	}
+//
+// Without the recursive walk, each branch's trailing closure
+// stays with un-typed params and the lifted MIR fn signatures
+// poison their bodies.
+func backfillExprIfClosure(e Expr, expected *FnType) {
+	if e == nil || expected == nil {
+		return
+	}
+	switch x := e.(type) {
+	case *Closure:
+		if x != nil {
+			backfillClosure(x, expected)
+		}
+	case *IfExpr:
+		if x == nil {
+			return
+		}
+		backfillTrailingClosure(x.Then, expected)
+		backfillTrailingClosure(x.Else, expected)
+		if x.T == nil || x.T == ErrTypeVal {
+			x.T = expected
+		}
+	case *MatchExpr:
+		if x == nil {
+			return
+		}
+		for _, arm := range x.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			backfillTrailingClosure(arm.Body, expected)
+		}
+		if x.T == nil || x.T == ErrTypeVal {
+			x.T = expected
+		}
+	case *BlockExpr:
+		if x == nil || x.Block == nil {
+			return
+		}
+		backfillTrailingClosure(x.Block, expected)
+		if x.T == nil || x.T == ErrTypeVal {
+			x.T = expected
+		}
+	case *IfLetExpr:
+		if x == nil {
+			return
+		}
+		backfillTrailingClosure(x.Then, expected)
+		backfillTrailingClosure(x.Else, expected)
+		if x.T == nil || x.T == ErrTypeVal {
+			x.T = expected
 		}
 	}
 }
