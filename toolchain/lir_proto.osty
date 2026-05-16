@@ -1923,6 +1923,12 @@ pub fn lirPlanSameFamilyCoercionOpcode(from: LirType, to: LirType, unsigned: Boo
     if from.className == LirTypeFloat && to.className == LirTypeFloat {
         return lirPlanScalarCastOpcode(from, to, unsigned)
     }
+    if from.className == LirTypeInt && to.className == LirTypePtr {
+        return "inttoptr"
+    }
+    if from.className == LirTypePtr && to.className == LirTypeInt {
+        return "ptrtoint"
+    }
     ""
 }
 pub fn lirCastInstrForCoercion(dest: String, from: LirOperand, to: LirType, unsigned: Bool) -> LirInstr {
