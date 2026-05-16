@@ -670,6 +670,17 @@ func (m *moduleCtx) lookupStructFields(name string) ([]scalarType, bool) {
 	}
 	layout, ok := m.module.Layouts.Structs[name]
 	if !ok || layout == nil {
+		// Monomorph mangled name (`_ZTSN4main15MirStructLayoutE`) →
+		// retry with the demangled canonical name (`MirStructLayout`).
+		// See demangleMonomorphStructName for the parsing convention.
+		if canonical := demangleMonomorphStructName(name); canonical != "" {
+			if layout2 := m.module.Layouts.Structs[canonical]; layout2 != nil {
+				layout = layout2
+				ok = true
+			}
+		}
+	}
+	if !ok || layout == nil {
 		// stdlib struct fallback: layouts for `pub struct` types in
 		// `internal/stdlib/modules/*.osty` aren't registered in the
 		// per-user-module Layouts table (only types defined inside the
@@ -710,6 +721,14 @@ func (m *moduleCtx) lookupStructField(name string, fp *mir.FieldProj) (int, scal
 		return 0, scalarUnknown, nil, false
 	}
 	layout := m.module.Layouts.Structs[name]
+	if layout == nil {
+		if canonical := demangleMonomorphStructName(name); canonical != "" {
+			if layout2 := m.module.Layouts.Structs[canonical]; layout2 != nil {
+				layout = layout2
+				name = canonical
+			}
+		}
+	}
 	if layout == nil {
 		// stdlib struct fallback — see lookupStructFields for the
 		// rationale. The narrow per-field path returns the scalar
@@ -5151,13 +5170,17 @@ func listProjectionElementStructName(listType mir.Type, elemType mir.Type) (stri
 		return "", false
 	}
 	// Mangled monomorph `List<T>` (e.g. `_ZTSN4main4ListIN4main16FrontCheckedNodeEEE`)
-	// loses Builtin + Args after monomorphisation. The element type is
-	// already available from the IndexProj, so trust it directly when
-	// it's a named struct.
+	// loses Builtin + Args after monomorphisation. Prefer the
+	// IndexProj.ElemType when it survives as a named struct;
+	// otherwise parse the inner template argument out of the mangled
+	// list name (the `IN4main…E` segment).
 	if !listNamed.Builtin || listNamed.Name != "List" || len(listNamed.Args) == 0 {
 		if isMangledBuiltinTemplate(listNamed.Name, "List") {
 			if elemNamed, ok := elemType.(*ir.NamedType); ok && elemNamed != nil && elemNamed.Name != "" {
 				return elemNamed.Name, true
+			}
+			if inner := demangleMonomorphTemplateArg(listNamed.Name); inner != "" {
+				return inner, true
 			}
 		}
 		return "", false
@@ -11049,6 +11072,98 @@ func isMangledBuiltinTemplate(name, template string) bool {
 	return strings.Contains(name, needle)
 }
 
+// demangleMonomorphTemplateArg extracts the first template argument
+// from an Itanium-style mangling. For `_ZTSN4main4ListIN4main14MirFieldLayoutEEE`
+// (canonical `List<MirFieldLayout>`) returns `MirFieldLayout`. The
+// parser walks past the template head, requires `I` (template-args
+// start), then `N4main<len><name>E` for the single argument, then `EE`
+// for `E` (close-template) + `E` (close-nested). Returns "" when the
+// form doesn't match the single-arg main-namespace shape.
+func demangleMonomorphTemplateArg(name string) string {
+	const prefix = "_ZTSN4main"
+	if !strings.HasPrefix(name, prefix) {
+		return ""
+	}
+	rest := name[len(prefix):]
+	// Skip the outer template head (length-prefixed name).
+	digitEnd := 0
+	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return ""
+	}
+	n, err := strconv.Atoi(rest[:digitEnd])
+	if err != nil || n <= 0 || digitEnd+n > len(rest) {
+		return ""
+	}
+	rest = rest[digitEnd+n:]
+	if !strings.HasPrefix(rest, "I") {
+		return ""
+	}
+	rest = rest[1:]
+	// Parse one nested name `N4main<len><name>E`.
+	const innerPrefix = "N4main"
+	if !strings.HasPrefix(rest, innerPrefix) {
+		return ""
+	}
+	rest = rest[len(innerPrefix):]
+	digitEnd = 0
+	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return ""
+	}
+	n, err = strconv.Atoi(rest[:digitEnd])
+	if err != nil || n <= 0 || digitEnd+n > len(rest) {
+		return ""
+	}
+	component := rest[digitEnd : digitEnd+n]
+	tail := rest[digitEnd+n:]
+	if tail != "EEE" {
+		return ""
+	}
+	return component
+}
+
+// demangleMonomorphStructName extracts the canonical struct name from
+// an Itanium-style nested mangling. For `_ZTSN4main15MirStructLayoutE`
+// (no template args) returns `MirStructLayout`. For templated forms
+// (`_ZTSN4main6OptionIN4main13FrontTypeReprEEE`) returns "" — those
+// are handled by isMangledBuiltinTemplate / isOpaqueNamedType.
+// Returns "" when the format doesn't match.
+func demangleMonomorphStructName(name string) string {
+	const prefix = "_ZTSN4main"
+	if !strings.HasPrefix(name, prefix) {
+		return ""
+	}
+	rest := name[len(prefix):]
+	if rest == "" {
+		return ""
+	}
+	// Parse one length-prefixed component: <digits><name>.
+	digitEnd := 0
+	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return ""
+	}
+	n, err := strconv.Atoi(rest[:digitEnd])
+	if err != nil || n <= 0 || digitEnd+n > len(rest) {
+		return ""
+	}
+	component := rest[digitEnd : digitEnd+n]
+	tail := rest[digitEnd+n:]
+	// Reject templated forms — those use `I<args>E` after the name.
+	// Non-templated forms terminate with a single `E`.
+	if tail != "E" {
+		return ""
+	}
+	return component
+}
+
 func resultPayloadScalars(t mir.Type, mctx *moduleCtx) (scalarType, scalarType, bool) {
 	named, ok := t.(*ir.NamedType)
 	if !ok || named == nil {
@@ -15414,6 +15529,13 @@ func inferGenericLocalStructName(fn *mir.Function, id mir.LocalID, mctx *moduleC
 		if named, ok := loc.Type.(*ir.NamedType); ok && named != nil && named.Name != "" {
 			if mctx.module.Layouts.Structs[named.Name] != nil {
 				return named.Name
+			}
+			// Monomorph mangled struct (`_ZTSN4main15MirStructLayoutE`) —
+			// recover the canonical layout key.
+			if canonical := demangleMonomorphStructName(named.Name); canonical != "" {
+				if mctx.module.Layouts.Structs[canonical] != nil {
+					return canonical
+				}
 			}
 			// stdlib struct fallback — see stdlib_struct_fallback.go.
 			// Layouts table doesn't carry pub-struct layouts from
