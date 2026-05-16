@@ -18,7 +18,9 @@
 
 ## Self-host and fallback traps
 
-- The self-host/native checker path is the default CLI path.
+- The self-host/native checker path is the default CLI path (managed
+  `osty-native-checker` subprocess after `UseManagedSubprocessChecker`; see
+  `SUBPROCESS_SWITCHOVER.md`).
 - `OSTY_NATIVE_CHECKER_BIN` is for override/debug use.
 - Stage0 fallback is emergency-only and opt-in.
 - Production behavior should fail clearly rather than silently downgrade.

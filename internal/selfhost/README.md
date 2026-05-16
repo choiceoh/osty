@@ -13,8 +13,14 @@ Today the public entrypoints are:
   `ResolveSourceStructured` / `ResolvePackageStructured` expose stable Go
   adapters over the seed pure-Osty formatter and resolver for parity tests
   and self-host drift detection without changing the CLI formatter contract
-- `internal/check` — prefers the external native checker binary and uses the
-  embedded selfhost bridge as the fallback / adaptation boundary
+- `internal/check` — production paths invoke the native checker **only** as a
+  subprocess (`check.NativePackageCheck` → JSON over stdin/stdout). The CLI
+  wires `check.UseManagedSubprocessChecker` so the managed
+  `osty-native-checker` under `.osty/toolchain/<ver>/` is built on demand;
+  `OSTY_NATIVE_CHECKER_BIN` overrides that path. There is no silent embedded
+  fallback when the subprocess cannot be prepared (see `SUBPROCESS_SWITCHOVER.md`).
+  In-process adapters still lift native structured results onto `*ast.File` /
+  resolver symbols for codegen and LSP where needed.
 
 Authority rule:
 
