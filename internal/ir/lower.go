@@ -3034,6 +3034,110 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
+	l.backfillClosureArgsFromCallExpr(out, e)
+	return out
+}
+
+// backfillClosureArgsFromCallExpr propagates the callee's
+// expected param types into Closure-shaped args. The fn type
+// resolution prefers the Callee Ident's T when usable; falls
+// back to looking up the AST FnDecl for bare-Ident callees
+// (e.g. same-module user fns whose Ident.T didn't survive
+// checker-side resolution).
+//
+// Mirrors `backfillClosureArgsFromMethodCall` for the user-fn /
+// free-fn call shape: `apply(|x| x * 2, 5)` where
+// `apply: fn(fn(Int) -> Int, Int) -> Int` needs the closure arg
+// to learn its param/return types from the callee's FnType.
+func (l *lowerer) backfillClosureArgsFromCallExpr(c *CallExpr, astCall *ast.CallExpr) {
+	if c == nil {
+		return
+	}
+	hasClosureArg := false
+	for _, a := range c.Args {
+		if _, ok := a.Value.(*Closure); ok {
+			hasClosureArg = true
+			break
+		}
+	}
+	if !hasClosureArg {
+		return
+	}
+	fnT := l.resolveCalleeFnType(c.Callee, astCall)
+	if fnT == nil {
+		return
+	}
+	for i := range c.Args {
+		if i >= len(fnT.Params) {
+			break
+		}
+		cl, ok := c.Args[i].Value.(*Closure)
+		if !ok || cl == nil {
+			continue
+		}
+		expected, ok := fnT.Params[i].(*FnType)
+		if !ok || expected == nil {
+			continue
+		}
+		backfillClosure(cl, expected)
+	}
+}
+
+// resolveCalleeFnType picks the FnType for a CallExpr's callee.
+// Prefers the lowered Callee's T when it's a FnType; falls back
+// to the AST callee's resolved fn declaration so same-module
+// references whose Ident.T didn't make the round trip from the
+// resolver still resolve.
+func (l *lowerer) resolveCalleeFnType(callee Expr, astCall *ast.CallExpr) *FnType {
+	if callee == nil {
+		return nil
+	}
+	if fnT, ok := callee.Type().(*FnType); ok && fnT != nil {
+		return fnT
+	}
+	if astCall == nil {
+		return nil
+	}
+	id, ok := astCall.Fn.(*ast.Ident)
+	if !ok || id == nil {
+		return nil
+	}
+	if l.res != nil && l.res.RefsByID != nil {
+		if sym := l.res.RefsByID[id.ID]; sym != nil && sym.Decl != nil {
+			if fn, ok := sym.Decl.(*ast.FnDecl); ok && fn != nil {
+				return l.fnTypeFromAST(fn)
+			}
+		}
+	}
+	if l.file != nil {
+		for _, decl := range l.file.Decls {
+			if fn, ok := decl.(*ast.FnDecl); ok && fn != nil && fn.Name == id.Name {
+				return l.fnTypeFromAST(fn)
+			}
+		}
+	}
+	return nil
+}
+
+// fnTypeFromAST builds a FnType from a resolved ast.FnDecl using
+// the existing `lowerType` machinery. Returns nil if the decl is
+// nil or every param/return slot resolves to ErrTypeVal.
+func (l *lowerer) fnTypeFromAST(fn *ast.FnDecl) *FnType {
+	if fn == nil {
+		return nil
+	}
+	out := &FnType{}
+	for _, p := range fn.Params {
+		if p == nil {
+			out.Params = append(out.Params, ErrTypeVal)
+			continue
+		}
+		out.Params = append(out.Params, l.lowerType(p.Type))
+	}
+	out.Return = l.lowerType(fn.ReturnType)
+	if out.Return == nil {
+		out.Return = TUnit
+	}
 	return out
 }
 
@@ -3924,7 +4028,74 @@ func recoverHigherOrderMethodReturnType(recvT Type, method string, args []Arg) T
 				return nil
 			}
 			return recoverResultHigherOrderReturn(r.Args[0], r.Args[1], method, args)
+		case "Map":
+			if len(r.Args) < 2 {
+				return nil
+			}
+			return recoverMapHigherOrderReturn(r.Args[0], r.Args[1], method, args)
+		case "Set":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return recoverSetHigherOrderReturn(r.Args[0], method, args)
 		}
+	}
+	return nil
+}
+
+// recoverMapHigherOrderReturn derives the return type of
+// `Map<K, V>.<method>(args...)` for the stdlib surface that
+// surrounds the closure-arg backfill. Mirrors
+// `expectedClosureFnTypeForMap` but for the OUTGOING type.
+func recoverMapHigherOrderReturn(keyT, valT Type, method string, args []Arg) Type {
+	if keyT == nil || valT == nil {
+		return nil
+	}
+	switch method {
+	case "update", "forEach", "retainIf", "clear":
+		return TUnit
+	case "getOrInsertWith", "getOrInsert":
+		return valT
+	case "mapValues":
+		if len(args) == 1 {
+			r := closureReturnType(args[0].Value)
+			if r == nil {
+				r = valT
+			}
+			return &NamedType{Name: "Map", Args: []Type{keyT, r}, Builtin: true}
+		}
+	case "filter", "mergeWith":
+		return &NamedType{Name: "Map", Args: []Type{keyT, valT}, Builtin: true}
+	case "any", "all":
+		return TBool
+	case "count":
+		return TInt
+	case "len":
+		return TInt
+	case "isEmpty":
+		return TBool
+	}
+	return nil
+}
+
+// recoverSetHigherOrderReturn covers the stdlib `Set<T>` surface
+// methods that take a closure or otherwise need return-type
+// recovery for chain propagation.
+func recoverSetHigherOrderReturn(elem Type, method string, args []Arg) Type {
+	if elem == nil {
+		return nil
+	}
+	switch method {
+	case "forEach", "retainIf", "clear":
+		return TUnit
+	case "filter":
+		return &NamedType{Name: "Set", Args: []Type{elem}, Builtin: true}
+	case "any", "all":
+		return TBool
+	case "len":
+		return TInt
+	case "isEmpty":
+		return TBool
 	}
 	return nil
 }
@@ -4194,6 +4365,16 @@ func expectedClosureFnTypeForBuiltin(recvT Type, method string, argIdx, argCount
 				return nil
 			}
 			return expectedClosureFnTypeForResult(r.Args[0], r.Args[1], method, argIdx, argCount)
+		case "Map":
+			if len(r.Args) < 2 {
+				return nil
+			}
+			return expectedClosureFnTypeForMap(r.Args[0], r.Args[1], method, argIdx, argCount)
+		case "Set":
+			if len(r.Args) < 1 {
+				return nil
+			}
+			return expectedClosureFnTypeForSet(r.Args[0], method, argIdx, argCount)
 		}
 	}
 	return nil
@@ -4305,6 +4486,98 @@ func expectedClosureFnTypeForResult(ok, errT Type, method string, argIdx, argCou
 	case "unwrapOrElse":
 		if argIdx == 0 && argCount == 1 {
 			return &FnType{Params: []Type{errT}, Return: ok}
+		}
+	}
+	return nil
+}
+
+// expectedClosureFnTypeForMap derives the closure signature for
+// the stdlib `Map<K, V>` higher-order methods that the IR-side
+// inference path needs to backfill before MIR lifts the closure
+// body into a separate function. Mirrors the source declarations
+// in `internal/stdlib/modules/collections.osty`:
+//
+//   - `update(k: K, f: fn(V?) -> V)` — closure param is V?,
+//     return is V. Canonical usage: `m.update(k, |n| (n ?? 0) + 1)`.
+//   - `getOrInsertWith(k: K, make: fn() -> V) -> V` — closure
+//     param-less, returns V.
+//   - `mapValues<R>(f: fn(V) -> R) -> Map<K, R>` — R inferred
+//     from the closure body's return shape.
+//   - `forEach(f: fn(K, V) -> ())` — 2-param closure, Unit
+//     return.
+//   - `any(pred: fn(K, V) -> Bool) -> Bool`, `all(...) -> Bool`,
+//     `count(pred) -> Int` — 2-param Bool-returning closure.
+//   - `filter(pred: fn(K, V) -> Bool) -> Map<K, V>` — 2-param
+//     Bool, same Map back.
+//   - `retainIf(pred: fn(K, V) -> Bool)` — same shape, no
+//     return.
+//   - `mergeWith(other, combine: fn(V, V) -> V)` — closure
+//     param is (V, V), return is V.
+func expectedClosureFnTypeForMap(keyT, valT Type, method string, argIdx, argCount int) *FnType {
+	if keyT == nil || valT == nil {
+		return nil
+	}
+	switch method {
+	case "update":
+		if argIdx == 1 && argCount == 2 {
+			return &FnType{Params: []Type{&OptionalType{Inner: valT}}, Return: valT}
+		}
+	case "getOrInsertWith":
+		if argIdx == 1 && argCount == 2 {
+			return &FnType{Params: nil, Return: valT}
+		}
+	case "mapValues":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{valT}}
+		}
+	case "forEach":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{keyT, valT}, Return: TUnit}
+		}
+	case "any", "all":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{keyT, valT}, Return: TBool}
+		}
+	case "count":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{keyT, valT}, Return: TBool}
+		}
+	case "filter", "retainIf":
+		if argIdx == 0 && argCount == 1 {
+			ret := TBool
+			return &FnType{Params: []Type{keyT, valT}, Return: ret}
+		}
+	case "mergeWith":
+		if argIdx == 1 && argCount == 2 {
+			return &FnType{Params: []Type{valT, valT}, Return: valT}
+		}
+	}
+	return nil
+}
+
+// expectedClosureFnTypeForSet mirrors `expectedClosureFnTypeForMap`
+// for the stdlib `Set<T>` higher-order surface:
+//
+//   - `forEach(fn(T) -> ())` — predicate-shaped probe.
+//   - `any/all(fn(T) -> Bool) -> Bool`.
+//   - `filter(fn(T) -> Bool) -> Set<T>`.
+//   - `retainIf(fn(T) -> Bool)`.
+func expectedClosureFnTypeForSet(elem Type, method string, argIdx, argCount int) *FnType {
+	if elem == nil {
+		return nil
+	}
+	switch method {
+	case "forEach":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}, Return: TUnit}
+		}
+	case "any", "all":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}, Return: TBool}
+		}
+	case "filter", "retainIf":
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}, Return: TBool}
 		}
 	}
 	return nil
