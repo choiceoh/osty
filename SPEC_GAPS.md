@@ -261,6 +261,22 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    **2026-05-17 합의 (옵션 c 채택)**: 사용자/팀이 `docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md` §3 의 narrow exception 표현 합의. CLAUDE.md "하지 말 것" 의 frozen seed line 에 narrow exception 추가 (단일 PR 에서 5 자기-제한 메커니즘 의무). 다음 sub-PR: `PR3-C-step3-c-impl` (`generated.go:41950` method-call dispatch 분기 추가 + `toolchain/elab.osty:19712` 동등 변경) → `PR3-C-step3-c-test` (use toolchain.check 통과 검증). 본 gap 의 trajectory 완성 시 narrow exception 자체 retire 예정.
 
+   **2026-05-17 PR3-C-step3-c-impl 시도 결과 — narrow exception 의 한도 초과**: dispatch 분기 분석 시 std.* 의 cross-package method 가 작동하는 mechanism 측정:
+   - `generated.go:48427` 부근의 use-decl 처리에 `registerStdStringsAliasFns(env, alias)` / `registerStdTestingAliasFns` / `registerStdFsAliasFns` 등 **hardcoded prelude-path chain**
+   - 각 `registerStdXxxAliasFns` 는 그 module 의 모든 함수를 `env.global.fns` 에 등록 → 그 후 `xxx.fn(...)` 호출이 method dispatch 안 거치고 일반 function call 로 resolve
+   - 즉 std.* 의 cross-pkg method 가 진짜 *method* 가 아니라 prelude 의 free-fn alias
+
+   **toolchain alias 의 진짜 fix path** = `registerToolchainAliasFns` 같은 **새 mechanism** 도입 — toolchain 의 export 함수 list 를 use-decl 처리 시점에 `env.global.fns` 에 등록. 단:
+   - hardcoded list (std.* 패턴) 는 toolchain 의 함수 수백 개라 prohibitive
+   - dynamic resolve (dep manifest 의 module source parse) 는 새 architecture (cross-package symbol resolution + registration)
+   - 어느 path 든 dispatch arm `~50 LOC` 한도 초과 — 새 helper + use-decl handler 변경 + caller chain 갱신 = 다수 사이트
+
+   **narrow exception 의 #2 한도 (~50 LOC dispatch arm) 만으로는 cross-pkg method-call 의 진짜 fix 불가**. 두 옵션:
+   - **재합의 (옵션 c')**: narrow exception 한도를 "한 함수 / dispatch arm" 에서 "단일 mechanism 추가 (helper + caller chain)" 로 확대 (~150-200 LOC). 5 자기-제한 메커니즘 다른 부분은 유지.
+   - **다른 path 재검토**: stage0 trajectory 의 100% cover + production path 활성 + osty-self 자동 빌드 (옵션 5, plan §"옵션 5"). 본 plan 의 scope 외 외부 trajectory 의존.
+
+   본 trajectory 의 진짜 scope = plan §6 의 PR3-F 추정 (~50 LOC entry + N8 ~100 LOC) 보다 훨씬 큼. plan §10.1 R8 (cross-package import 모델 미성숙) 의 진짜 의미.
+
    **2026-05-17 옵션 d 검토 (HIR/MIR method dispatch)**: HIR / IR / MIR lowering 의 method-call 처리 (`hirLowerMethodCallExprFromCore`, `lowerMethodCall`, etc.) 는 모두 elab 이 끝난 후 typed core 만 소비. 즉 elab 의 method-call sig lookup (poison 또는 valid) 결과를 그대로 받음. **옵션 d 도 같은 wall** — elab 의 dispatch 가 진짜 root.
 
    **2026-05-17 우회 use form 검토**:
