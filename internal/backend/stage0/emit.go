@@ -10393,7 +10393,17 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 	if llvmOp == "" || resultType != destType {
 		return "", scalarUnknown, false
 	}
-	left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
+	// ErrType-tagged FnConst operands appear when the front-end has
+	// erased a function-pointer literal's type — e.g. the broken
+	// `selfhostProbe*` probe-source string interpolations
+	// (`toolchain/main.osty`) where `{...}` is parsed as an expression
+	// containing a stray `return` token. The function is diagnostic and
+	// never reaches the install-self critical path, but stage0 still
+	// must emit valid IR. Substitute with `i64 0` so the arithmetic is
+	// deterministic (result wrong, IR valid).
+	leftSubst := substituteErrTypeFnConstForArith(bin.Left, operandType)
+	rightSubst := substituteErrTypeFnConstForArith(bin.Right, operandType)
+	left, leftTy, ok := resolveOperandWithLoad(ctx, out, leftSubst)
 	if !ok || leftTy != operandType {
 		// Byte → Int promotion: if both operands are byte and result is int,
 		// extend both to i64 then perform the int operation.
@@ -10425,13 +10435,54 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 		}
 		return "", scalarUnknown, false
 	}
-	right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+	right, rightTy, ok := resolveOperandWithLoad(ctx, out, rightSubst)
 	if !ok || rightTy != operandType {
 		return "", scalarUnknown, false
 	}
 	reg := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
 	return reg, resultType, true
+}
+
+// substituteErrTypeFnConstForArith replaces an `ErrType`-tagged FnConst
+// operand with the zero constant of the expected operand type. The
+// substitution is targeted: only when both `op` is a `ConstOp{FnConst}`
+// whose `T` is `*ir.ErrType` AND `expected` is a numeric scalar that
+// has a defined zero. Other operands are returned unchanged so the
+// caller sees no behaviour change for well-typed MIR.
+//
+// Why: front-end erasure leaves expressions like
+// `Binary(+, Const(FnConst type=*ir.ErrType), Const(IntConst type=Int))`
+// in functions whose source was an interpolation parse error
+// (toolchain/main.osty selfhostProbe* family). The function is
+// diagnostic and never reaches the install-self critical path, but
+// stage0 must still emit valid IR so the module links. Substituting
+// `i64 0` produces deterministic but semantically meaningless
+// arithmetic (the result is wrong; the IR is valid).
+func substituteErrTypeFnConstForArith(op mir.Operand, expected scalarType) mir.Operand {
+	con, ok := op.(*mir.ConstOp)
+	if !ok || con == nil {
+		return op
+	}
+	if _, ok := con.Const.(*mir.FnConst); !ok {
+		return op
+	}
+	if !isErrType(con.T) && !isErrType(con.Const.Type()) {
+		return op
+	}
+	switch expected {
+	case scalarInt:
+		return &mir.ConstOp{Const: &mir.IntConst{Value: 0, T: &ir.PrimType{Kind: ir.PrimInt}}, T: &ir.PrimType{Kind: ir.PrimInt}}
+	case scalarByte:
+		return &mir.ConstOp{Const: &mir.IntConst{Value: 0, T: &ir.PrimType{Kind: ir.PrimByte}}, T: &ir.PrimType{Kind: ir.PrimByte}}
+	case scalarChar:
+		return &mir.ConstOp{Const: &mir.IntConst{Value: 0, T: &ir.PrimType{Kind: ir.PrimChar}}, T: &ir.PrimType{Kind: ir.PrimChar}}
+	case scalarFloat:
+		return &mir.ConstOp{Const: &mir.FloatConst{Value: 0, T: &ir.PrimType{Kind: ir.PrimFloat}}, T: &ir.PrimType{Kind: ir.PrimFloat}}
+	case scalarBool:
+		return &mir.ConstOp{Const: &mir.BoolConst{Value: false}, T: &ir.PrimType{Kind: ir.PrimBool}}
+	}
+	return op
 }
 
 func emitWhileGenericEquality(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV) (string, bool) {
@@ -15056,6 +15107,15 @@ func inferGenericLocalStructName(fn *mir.Function, id mir.LocalID, mctx *moduleC
 	if loc := lookupLocal(fn, id); loc != nil {
 		if named, ok := loc.Type.(*ir.NamedType); ok && named != nil && named.Name != "" {
 			if mctx.module.Layouts.Structs[named.Name] != nil {
+				return named.Name
+			}
+			// stdlib struct fallback — see stdlib_struct_fallback.go.
+			// Layouts table doesn't carry pub-struct layouts from
+			// `internal/stdlib/modules/*.osty`, so a local typed
+			// `os.ExecOutput` would otherwise be skipped here and
+			// downstream projection inference would lose the struct
+			// shape entirely.
+			if _, _, ok := stage0KnownStdlibStructLayout(named.Name); ok {
 				return named.Name
 			}
 		}
