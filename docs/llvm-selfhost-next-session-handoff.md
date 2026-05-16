@@ -1,30 +1,41 @@
 # LLVM self-host — 다음 세션 handoff
 
 > **목적**: fresh context 진입 시 5분에 읽고 다음 PR 진입 가능한 단일 명세.
-> **상태**: 2026-05-17 세션 종료 시점. 27 PR 머지 + spec draft 검토 대기.
+> **상태**: 2026-05-17 세션 종료 시점. 34 PR 머지 + 🎉 source bootstrap UNLOCK.
 
 ## 1. 30초 요약
 
 - **목표**: `cmd/osty-native-checker` 의 LLVM 자체 빌드 + Go-built 와 byte-identical `CheckResult` JSON. plan 본문은 [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md).
-- **현재**: M1 ✓ (binary builds+runs), M2 partial ✓ (empty-source fixture byte parity, 진짜 stdin + naive parser).
-- **다음 unlock**: cross-package method-call dispatch — **사용자/팀 합의 동반** ([PR #1848](https://github.com/choiceoh/osty/pull/1848) spec draft).
+- **현재**: M1 ✓ (binary builds+runs), M2 partial ✓ (empty-source fixture byte parity, 진짜 stdin + naive parser), 🎉 **source bootstrap UNLOCK** ([PR #1863](https://github.com/choiceoh/osty/pull/1863), `osty-self` install 됨, plan §10.1 R2 종결).
+- **다음 unlock 후보**:
+  1. **production path next wall** — `osty-self` 의 monomorph 후 `mirJsonObjectGetNamed` stage0 decline. PR [#1858](https://github.com/choiceoh/osty/pull/1858) classifier trajectory 의 후속 wave 작업.
+  2. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과 (단순 dispatch arm 아닌 새 mechanism). 옵션 c' 재합의 필요 또는 옵션 5 wait.
 - **합의 없이 자율 진행 가능**: §6.
 
 ## 2. 빌드 + 검증 (cheat sheet)
 
 ```sh
-# 빌드 (현재 OSTY_STAGE0_FALLBACK=1 필요)
+# Walking skeleton + naive parser 빌드 (PR1c + PR2)
 go build -o .bin/osty ./cmd/osty
 OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/
 
-# 실행 + 비교 (M2 byte parity 검증)
+# 실행 + 비교 (M2 partial byte parity 검증)
 go build -o /tmp/go-checker ./cmd/osty-native-checker
 LLVM_OUT=$(echo '{"source":""}' | ./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm)
 GO_OUT=$(echo '{"source":""}' | /tmp/go-checker)
 diff <(echo "$LLVM_OUT") <(echo "$GO_OUT") && echo IDENTICAL
 
-# stage0 audit (이 세션 측정 99.8%)
+# 🎉 source bootstrap UNLOCK 재현 (osty-self install, PR #1863)
+OSTY_STAGE0_FALLBACK=1 \
+  OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 \
+  OSTY_STDLIB_BODY_LOWER=1 \
+  .bin/osty install-self
+
+# stage0 audit (현재 100.0% — 8240/8241, PR #1858 머지 후)
 OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/
+
+# production path 시도 (osty-self cached 후) — next wall: mirJsonObjectGetNamed
+.bin/osty build --backend llvm cmd/osty-native-checker/
 
 # Front-end 회귀 (단일 PR 후 검증)
 just prepush  # fmt-check + vet + repair-check + ci
@@ -172,14 +183,32 @@ if pkgSym := findPackageSymbol(cx.env, ownerName); pkgSym != nil && pkgSym.Impor
 | [cmd/osty-native-checker/README.md](../cmd/osty-native-checker/README.md) | dual-target 빌드 안내 |
 | [SPEC_GAPS.md::cross-pkg-module-resolution](../SPEC_GAPS.md) | open gap (path #1~#5) |
 
-## 9. 첫 결정 (다음 세션 시작 시)
+## 9. 첫 결정 (다음 세션 시작 시) — 2026-05-17 갱신
 
 ```
-A) CLAUDE.md narrow exception (옵션 c) 합의 — sub-PR sequencing 진행
-B) 합의 보류 + §6 의 자율 작업 (stage0 16 decline, examples lock cleanup, etc.)
-C) 옵션 a (generated.go 직접) 수용 — spec 위반 인지 + 단일 PR
-D) PR3 자체 보류 — plan §12 의 M2 partial 로 만족, 다른 trajectory
+🎉 큰 진척 (2026-05-17):
+   - stage0 audit 100% (외부 PR #1858)
+   - source bootstrap UNLOCK (PR #1863) — osty-self install
+   - CLAUDE.md narrow exception 합의 머지 (PR #1857) — 단 impl 한도 초과
+
+이제 다음 4 path:
+
+A') osty-self monomorph cover wave — PR #1858 classifier mechanism 으로
+    mirJsonObjectGetNamed 등 production path 의 stage0 decline 해소.
+    PR #1858 author trajectory 의 후속. 단일 fresh session 가능.
+
+B)  옵션 c' 재합의 — narrow exception 한도를 "dispatch arm" 에서 "단일
+    mechanism" (~150-200 LOC) 으로 확대. cross-pkg symbol registration
+    추가 (registerToolchainAliasFns).
+
+C)  옵션 a 수용 — generated.go 의 method-call dispatch 직접 + struct
+    field 추가. spec 위반 인지 + 단일 PR.
+
+D)  PR3 자체 보류 — M2 partial 로 만족. source bootstrap UNLOCK 이 핵심
+    milestone 이라 plan §12 의 M3/M4 trajectory 갱신 가능.
 ```
+
+**권장 (옵션 A')**: production path next wall (mirJsonObjectGetNamed) 의 stage0 cover wave 가 가장 직접적 진척. PR #1858 의 3-commit cascade 패턴 재사용 가능. unblock 시 production path 전체 활성 → cmd/osty-native-checker 의 M3 (L2 corpus) 자동 가능성.
 
 위 선택지 중 하나가 명확해지면 본 doc 의 §2 cheat sheet 만으로 즉시 PR 시작 가능.
 
