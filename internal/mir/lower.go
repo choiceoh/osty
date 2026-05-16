@@ -5846,6 +5846,10 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 //   - std.os.execWith     → osty_rt_os_exec_with
 //   - std.os.execInputWith → osty_rt_os_exec_input_with
 //   - std.os.execOutput   → osty_rt_os_exec_output
+//   - Int__abs/min/max/clamp/signum → osty_rt_int_abs/min/max/clamp/signum
+//     (__IntMethods fan-out; source-bootstrap LIR Proto path needs a
+//     real callable target where stage0 would have inlined via
+//     `renderKnownIntMethodCall`.)
 //
 // Production path (lir_proto) sees the same rewritten symbol; if it had
 // a separate mapping for the original symbol that arm is now bypassed
@@ -5860,6 +5864,16 @@ func rewriteStdlibSymbolToRuntime(sym string) string {
 		return "osty_rt_os_exec_input_with"
 	case "std.os.execOutput":
 		return "osty_rt_os_exec_output"
+	case "Int__abs":
+		return "osty_rt_int_abs"
+	case "Int__min":
+		return "osty_rt_int_min"
+	case "Int__max":
+		return "osty_rt_int_max"
+	case "Int__clamp":
+		return "osty_rt_int_clamp"
+	case "Int__signum":
+		return "osty_rt_int_signum"
 	}
 	return sym
 }
@@ -8582,9 +8596,13 @@ func optionInnerType(t ir.Type) Type {
 }
 
 // mangleMethodSymbol returns the method symbol name shared with the
-// llvmgen convention (Type__method).
+// llvmgen convention (Type__method). The result passes through
+// `rewriteStdlibSymbolToRuntime` so primitive intrinsic fan-outs (e.g.
+// `Int__abs`) get routed to a real C-runtime callable on the
+// source-bootstrap LIR Proto path. stage0 loses its inline expansion
+// for these names in exchange for a single, definable link target.
 func mangleMethodSymbol(owner, method string) string {
-	return owner + "__" + method
+	return rewriteStdlibSymbolToRuntime(owner + "__" + method)
 }
 
 // methodCallSig returns a copy of sig without its leading receiver
