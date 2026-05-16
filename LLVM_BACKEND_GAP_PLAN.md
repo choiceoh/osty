@@ -79,8 +79,8 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 |---|---|---|---|
 | GAP-INSTR-001 | 2070 | `unsupported MIR instruction kind` | 새 MirInstr* 추가 시 catch-all |
 | GAP-INSTR-002 | 2186 | `unsupported MIR callee kind` | 미정의 callee variant |
-| GAP-INSTR-003 | 2245 | `cross-module call arg type \`T\` is not implemented` | scalar/string 외 인자 |
-| GAP-INSTR-004 | 2300 | `indirect call arg type \`T\` is not implemented` | 위와 동일 indirect |
+| GAP-INSTR-003 | lir_proto.osty:3340 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `cross-module call arg type \`T\` is not implemented` + root-cause hint |
+| GAP-INSTR-004 | lir_proto.osty:3526 | ✅ 2026-05-17 trace 추가 | `indirect call arg type \`T\` is not implemented` + 동일 trace |
 | GAP-INSTR-005 | 2110 | `<context> requires aggregate root` | projection이 비-aggregate 대상 |
 | GAP-INSTR-006 | 2134, 2139 | `projection on non-aggregate type` / `unsupported projection` | nested struct binding pattern 등 |
 

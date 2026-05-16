@@ -3337,7 +3337,7 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     for arg in instr.args {
         let paramType = lirLowerMirType(l, arg.typ)
         if lirTypeIsZero(paramType) {
-            lirLowerError(l, LirDiagUnsupported, "cross-module call arg type `" + arg.typ + "` is not implemented", "call.cross")
+            lirLowerError(l, LirDiagUnsupported, "cross-module call arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", "call.cross")
             return
         }
         let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
@@ -3523,7 +3523,7 @@ fn lirLowerMirIndirectCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     for arg in instr.args {
         let paramType = lirLowerMirType(l, arg.typ)
         if lirTypeIsZero(paramType) {
-            lirLowerError(l, LirDiagUnsupported, "indirect call arg type `" + arg.typ + "` is not implemented", "call.indirect")
+            lirLowerError(l, LirDiagUnsupported, "indirect call arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", "call.indirect")
             return
         }
         let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
