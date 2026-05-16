@@ -213,7 +213,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		SourcePath:  entry.SourcePath,
 		Source:      entry.Source,
 		Target:      target,
-		UseMIR:      useMIRBackend(features, emit),
+		UseMIR:      true,
 		EmitGC:      true,
 	}
 	capabilities := newLLVMDispatchCapabilityMatrix(entry, opts, features, emit)
@@ -605,13 +605,6 @@ func joinClangOutput(stderr, stdout []byte) string {
 		return "<no output>"
 	}
 	return strings.Join(parts, "\n")
-}
-
-// useMIRBackend reports whether LLVM emission should use the
-// MIR-direct path. Every emit mode — raw `llvm-ir`, object, binary —
-// is MIR-owned once the native-owned fast path declines coverage.
-func useMIRBackend(_ []string, _ EmitMode) bool {
-	return true
 }
 
 func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
