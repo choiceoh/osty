@@ -43,6 +43,7 @@ pub enum LirInstrKind {
     LirInstrExtractValue,
     LirInstrGep,
     LirInstrComment,
+    LirInstrSelect,
 }
 pub enum LirTermKind {
     LirTermInvalid,
@@ -279,6 +280,18 @@ pub fn lirBinary(dest: String, op: String, typ: LirType, left: String, right: St
     i.typ = typ
     i.left = left
     i.right = right
+    i
+}
+pub fn lirSelect(dest: String, typ: LirType, cond: String, trueVal: String, falseVal: String) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrSelect
+    i.dest = dest
+    i.typ = typ
+    i.args = [
+        lirOperand(lirIntType(1), cond),
+        lirOperand(typ, trueVal),
+        lirOperand(typ, falseVal),
+    ]
     i
 }
 pub fn lirUnary(dest: String, op: String, typ: LirType, value: String) -> LirInstr {
@@ -1040,6 +1053,7 @@ pub fn lirRenderInstr(i: LirInstr) -> String {
         LirInstrExtractValue -> i.dest + " = extractvalue " + lirTypeString(i.typ) + " " + i.aggregate + ", " + lirRenderIndices(i.indices),
         LirInstrGep -> lirRenderGepInstr(i),
         LirInstrComment -> lirRenderComment(i.text),
+        LirInstrSelect -> i.dest + " = select i1 " + i.args[0].value + ", " + lirTypeString(i.typ) + " " + i.args[1].value + ", " + lirTypeString(i.typ) + " " + i.args[2].value,
         _ -> "",
     }
     if base.len() == 0 || i.metadata.len() == 0 {
@@ -3311,6 +3325,9 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerMirStdFsReadToStringCall(l, instr)
         return
     }
+    if lirTryLowerMirIntMethodIntrinsic(l, instr) {
+        return
+    }
     let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
     if callee.name == "" {
         // Interface method-call indirect dispatch (E4).
@@ -3358,6 +3375,101 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
 // return type from `instr.dest` local (or void if no dest), param
 // types from each arg's declared type. Declares the symbol via
 // runtimeDecls so the renderer emits a top-level `declare` line.
+// `lirTryLowerMirIntMethodIntrinsic` inlines the `__IntMethods` fan-out
+// (`Int__abs/min/max/clamp/signum`) directly in LLVM IR, mirroring
+// stage0's `renderKnownIntMethodCall`. The MIR `qualifiedSymbol` /
+// `mangleMethodSymbol` path rewrites these to the C-runtime callable
+// names (`osty_rt_int_abs/...`) via `rewriteStdlibSymbolToRuntime`,
+// so this matcher keys on the rewritten symbols. Returns true after
+// emitting the inline sequence; false when the symbol falls outside
+// this fan-out.
+fn lirTryLowerMirIntMethodIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) -> Bool {
+    let sym = instr.calleeSymbol
+    if sym != "osty_rt_int_abs" && sym != "osty_rt_int_min" && sym != "osty_rt_int_max" && sym != "osty_rt_int_clamp" && sym != "osty_rt_int_signum" {
+        return false
+    }
+    if !instr.hasDest {
+        lirLowerError(l, LirDiagInvalidInput, "int method intrinsic `" + sym + "` requires a destination", "call.intMethod")
+        return true
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "int method intrinsic `" + sym + "` destination local out of range", "call.intMethod")
+        return true
+    }
+    let intType = lirIntType(64)
+    let mut args: List<String> = []
+    for arg in instr.args {
+        let operand = lirLowerMirOperand(l, l.instrs, arg, arg.typ, intType)
+        if operand.value == "" {
+            return true
+        }
+        args.push(operand.value)
+    }
+    let result = if sym == "osty_rt_int_abs" {
+        if args.len() != 1 {
+            lirLowerError(l, LirDiagInvalidInput, "osty_rt_int_abs expects 1 arg", "call.intMethod.abs")
+            return true
+        }
+        let neg = lirFresh(l)
+        let isNeg = lirFresh(l)
+        let res = lirFresh(l)
+        l.instrs.push(lirBinary(neg, "sub", intType, "0", args[0]))
+        l.instrs.push(lirBinary(isNeg, "icmp slt", intType, args[0], "0"))
+        l.instrs.push(lirSelect(res, intType, isNeg, neg, args[0]))
+        res
+    } else if sym == "osty_rt_int_min" {
+        if args.len() != 2 {
+            lirLowerError(l, LirDiagInvalidInput, "osty_rt_int_min expects 2 args", "call.intMethod.min")
+            return true
+        }
+        let cmp = lirFresh(l)
+        let res = lirFresh(l)
+        l.instrs.push(lirBinary(cmp, "icmp slt", intType, args[0], args[1]))
+        l.instrs.push(lirSelect(res, intType, cmp, args[0], args[1]))
+        res
+    } else if sym == "osty_rt_int_max" {
+        if args.len() != 2 {
+            lirLowerError(l, LirDiagInvalidInput, "osty_rt_int_max expects 2 args", "call.intMethod.max")
+            return true
+        }
+        let cmp = lirFresh(l)
+        let res = lirFresh(l)
+        l.instrs.push(lirBinary(cmp, "icmp sgt", intType, args[0], args[1]))
+        l.instrs.push(lirSelect(res, intType, cmp, args[0], args[1]))
+        res
+    } else if sym == "osty_rt_int_clamp" {
+        if args.len() != 3 {
+            lirLowerError(l, LirDiagInvalidInput, "osty_rt_int_clamp expects 3 args", "call.intMethod.clamp")
+            return true
+        }
+        let ltLo = lirFresh(l)
+        let lower = lirFresh(l)
+        let gtHi = lirFresh(l)
+        let res = lirFresh(l)
+        l.instrs.push(lirBinary(ltLo, "icmp slt", intType, args[0], args[1]))
+        l.instrs.push(lirSelect(lower, intType, ltLo, args[1], args[0]))
+        l.instrs.push(lirBinary(gtHi, "icmp sgt", intType, lower, args[2]))
+        l.instrs.push(lirSelect(res, intType, gtHi, args[2], lower))
+        res
+    } else {
+        if args.len() != 1 {
+            lirLowerError(l, LirDiagInvalidInput, "osty_rt_int_signum expects 1 arg", "call.intMethod.signum")
+            return true
+        }
+        let ltZero = lirFresh(l)
+        let gtZero = lirFresh(l)
+        let nonNeg = lirFresh(l)
+        let res = lirFresh(l)
+        l.instrs.push(lirBinary(ltZero, "icmp slt", intType, args[0], "0"))
+        l.instrs.push(lirBinary(gtZero, "icmp sgt", intType, args[0], "0"))
+        l.instrs.push(lirSelect(nonNeg, intType, gtZero, "1", "0"))
+        l.instrs.push(lirSelect(res, intType, ltZero, "-1", nonNeg))
+        res
+    }
+    lirStoreMirResult(l, instr.dest, lirOperand(intType, result), loc.typ, "int method result")
+    return true
+}
 fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     let retType = if instr.hasDest {
         let loc = mirFunctionLocal(l.fn_, instr.dest.local)
