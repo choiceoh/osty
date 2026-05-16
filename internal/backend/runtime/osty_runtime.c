@@ -29852,6 +29852,32 @@ osty_rt_os_exec_result *osty_rt_os_exec_input_with(const char *cmd,
                                        env_overrides, timeout_ms, stdin_text);
 }
 
+/* std.os.execOutput(exitCode, stdout, stderr, timedOut) constructs an
+ * `ExecOutput` value. The stage0 stdlib body lowering doesn't reach this
+ * symbol on the source-bootstrap path, so the MIR pipeline rewrites the
+ * call to this C wrapper. The struct layout mirrors `ExecOutput` in the
+ * stage0 known-layout table (`stage0KnownStdlibStructLayout`):
+ *   { i64 exitCode; ptr stdout; ptr stderr; i1 timedOut }
+ */
+typedef struct osty_rt_exec_output_value {
+  int64_t exit_code;
+  void *stdout_text;
+  void *stderr_text;
+  bool timed_out;
+} osty_rt_exec_output_value;
+
+osty_rt_exec_output_value *
+osty_rt_os_exec_output(int64_t exit_code, void *stdout_text, void *stderr_text,
+                       bool timed_out) {
+  osty_rt_exec_output_value *out = (osty_rt_exec_output_value *)osty_rt_xmalloc(
+      sizeof(*out), "runtime.os.execOutput.result");
+  out->exit_code = exit_code;
+  out->stdout_text = stdout_text;
+  out->stderr_text = stderr_text;
+  out->timed_out = timed_out;
+  return out;
+}
+
 osty_rt_os_string_result *osty_rt_os_hostname(void) {
 #if defined(_WIN32)
   char buf[MAX_COMPUTERNAME_LENGTH + 1];

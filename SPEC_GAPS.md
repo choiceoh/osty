@@ -276,6 +276,8 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    plan §10.1 R2 (stage0 cover) **완전 종결**.
 
+   **2026-05-17 execOutput C wrapper (이 PR)**: `osty_rt_os_exec_output(int64_t exit_code, void *stdout, void *stderr, bool timed_out)` C wrapper + `rewriteStdlibSymbolToRuntime` 매핑 `std.os.execOutput → osty_rt_os_exec_output` 추가. ExecOutput struct ABI = `{i64, ptr, ptr, i1}` (stage0KnownStdlibStructLayout 와 일치). 효과: source bootstrap 명령에서 `OSTY_STDLIB_BODY_LOWER=1` flag **의존성 제거** — `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 .bin/osty install-self` 만으로 통과. minimum-flag combination 으로 source bootstrap path 안정화. PR #1861 의 PR1c 옵션 1 패턴 확장 — 위 §"옵션 5 next wall" 의 첫 path ("C wrapper") 채택.
+
    **2026-05-17 cmd/osty-native-checker production path next wall**: `osty-self` cached 후 `.bin/osty build --backend llvm cmd/osty-native-checker/` (stage0 fallback OFF) 시도 → `osty-self: stage0 declined function: mirJsonObjectGetNamed`. 즉 osty-self 자체가 cmd/osty-native-checker 의 main.osty (PR2 의 naive parser) 빌드 시 monomorph 후 `mirJsonObjectGetNamed` 함수가 stage0 decline. PR #1858 classifier trajectory 의 후속 작업 영역.
 
    **2026-05-17 옵션 5 next wall — execOutput constructor + cross-package struct literal**: PR #1861 후 남은 부재 symbol = `_std.os.execOutput` (single use site at `toolchain/main.osty:456`). 두 path 시도:
