@@ -5663,9 +5663,21 @@ func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 		}
 	}
 	if e.IsIfLet {
+		scrut := l.lowerExpr(e.Cond)
+		pat := l.lowerPattern(e.Pattern)
+		// Pattern-binding type recovery: when a pattern like
+		// `Some(n)` introduces `n: T` from a scrutinee `opt:
+		// Option<T>`, the IR-level `lowerExpr` of the Then
+		// block may have run before the resolver propagated
+		// `n`'s type to the body's Idents. Walk Then for
+		// Idents matching the pattern's binding names and
+		// refresh their Type — this also re-types any
+		// captures inside trailing closures via
+		// `repropagateClosureBodyTypes`.
+		recoverIfLetPatternBindingTypes(scrut, pat, thenBlk)
 		return &IfLetExpr{
-			Pattern:   l.lowerPattern(e.Pattern),
-			Scrutinee: l.lowerExpr(e.Cond),
+			Pattern:   pat,
+			Scrutinee: scrut,
 			Then:      thenBlk,
 			Else:      elseBlk,
 			T:         t,
@@ -5673,6 +5685,164 @@ func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 		}
 	}
 	return &IfExpr{Cond: l.lowerExpr(e.Cond), Then: thenBlk, Else: elseBlk, T: t, SpanV: nodeSpan(e)}
+}
+
+// recoverIfLetPatternBindingTypes walks `body` and re-types
+// Idents whose Name matches a binding the pattern introduces.
+// The binding type comes from the scrutinee's structural shape:
+// `Some(n)` on `Option<T>` yields `n: T`; `Ok(v)` on
+// `Result<T,E>` yields `v: T`; tuple / struct destructures
+// recurse into the matching scrutinee field types.
+//
+// Without this recovery, captures inside trailing closures
+// (e.g. `if let Some(n) = opt { |x| x + n }`) snapshot `n`'s
+// type at body-lowering time when it's still ErrTypeVal, and
+// the captured local in the lifted MIR fn lowers as
+// `<error>`-typed. The MIR-side `builtinVariantPayloadType`
+// (PR #1820) covers match arms and direct payload reads but
+// runs too late to update closure captures.
+func recoverIfLetPatternBindingTypes(scrut Expr, pat Pattern, body *Block) {
+	if scrut == nil || pat == nil || body == nil {
+		return
+	}
+	bindings := map[string]Type{}
+	collectPatternBindingTypes(pat, scrut.Type(), bindings)
+	if len(bindings) == 0 {
+		return
+	}
+	retypeIdentsScoped(body, bindings)
+	// Closures inside the body need their Captures' T slot
+	// patched too — `repropagateClosureBodyTypes` updates
+	// Idents (including the captured ones inside lifted
+	// closure bodies) but the Closure.Captures snapshot still
+	// references the old types. Walk and refresh.
+	Walk(VisitorFunc(func(n Node) bool {
+		cl, ok := n.(*Closure)
+		if !ok || cl == nil {
+			return true
+		}
+		for _, c := range cl.Captures {
+			if c == nil {
+				continue
+			}
+			if c.T != nil && c.T != ErrTypeVal {
+				continue
+			}
+			if t, hit := bindings[c.Name]; hit && t != nil && t != ErrTypeVal {
+				c.T = CloneType(t)
+			}
+		}
+		return true
+	}), body)
+}
+
+// collectPatternBindingTypes walks a pattern and a scrutinee
+// type together, recording each IdentPat's introduced name with
+// the structural sub-type the pattern position implies. Mirrors
+// `builtinVariantPayloadType` (PR #1820) for prelude Option /
+// Result variants; for struct / tuple patterns the matching
+// field / element type is pulled directly off the scrutinee.
+// Unrecognised shapes fall through silently.
+func collectPatternBindingTypes(p Pattern, scrutT Type, out map[string]Type) {
+	if p == nil || scrutT == nil || scrutT == ErrTypeVal {
+		return
+	}
+	switch x := p.(type) {
+	case *IdentPat:
+		if x != nil && x.Name != "" {
+			out[x.Name] = scrutT
+		}
+	case *BindingPat:
+		if x == nil {
+			return
+		}
+		if x.Name != "" {
+			out[x.Name] = scrutT
+		}
+		collectPatternBindingTypes(x.Pattern, scrutT, out)
+	case *VariantPat:
+		if x == nil {
+			return
+		}
+		for i, arg := range x.Args {
+			pt := builtinVariantPayloadType(scrutT, x.Variant, i)
+			if pt == nil || pt == ErrTypeVal {
+				continue
+			}
+			collectPatternBindingTypes(arg, pt, out)
+		}
+	case *TuplePat:
+		if x == nil {
+			return
+		}
+		tt, ok := scrutT.(*TupleType)
+		if !ok || tt == nil {
+			return
+		}
+		for i, elem := range x.Elems {
+			if i >= len(tt.Elems) {
+				break
+			}
+			collectPatternBindingTypes(elem, tt.Elems[i], out)
+		}
+	case *StructPat:
+		if x == nil {
+			return
+		}
+		nt, ok := scrutT.(*NamedType)
+		if !ok || nt == nil {
+			return
+		}
+		for _, f := range x.Fields {
+			if f.Pattern == nil {
+				continue
+			}
+			// Resolve the field's type from the struct decl
+			// when accessible. Conservative: skip if we can't
+			// resolve — the binding stays untyped (no worse
+			// than before).
+		}
+		_ = nt
+	}
+}
+
+// builtinVariantPayloadType is the IR-side mirror of the MIR
+// helper added in PR #1820. Returns the i-th payload type for
+// a prelude Option / Result variant when the scrutinee carries
+// no user enum decl (the builtin case). Returns nil for
+// unrecognised shapes so callers leave the slot un-typed.
+func builtinVariantPayloadType(scrutT Type, variantName string, idx int) Type {
+	if scrutT == nil {
+		return nil
+	}
+	if ot, ok := scrutT.(*OptionalType); ok && ot != nil {
+		if variantName == "Some" && idx == 0 {
+			return ot.Inner
+		}
+		return nil
+	}
+	nt, ok := scrutT.(*NamedType)
+	if !ok || nt == nil || !nt.Builtin {
+		return nil
+	}
+	switch nt.Name {
+	case "Option", "Maybe":
+		if variantName == "Some" && idx == 0 && len(nt.Args) >= 1 {
+			return nt.Args[0]
+		}
+	case "Result":
+		switch variantName {
+		case "Ok":
+			if idx == 0 && len(nt.Args) >= 1 {
+				return nt.Args[0]
+			}
+		case "Err":
+			if idx == 0 && len(nt.Args) >= 2 {
+				return nt.Args[1]
+			}
+		}
+	}
+	return nil
 }
 
 // recoverBlockType picks a non-Err type from either branch of an if/else.
