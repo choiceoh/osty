@@ -373,23 +373,18 @@ fn selfhostProbeError() -> String {
     let source = "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
     let hir = hirLowerSource("main", source)
     let mir = mirLowerModule(hir)
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName("main", mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         return "MIR validation failed: " + strings.join(mirErrs, "; ")
     }
     let cfg = lirLowerConfig("main", "<selfhost-doctor>", "")
-    let result = lirLowerMirModule(cfg, mir)
+    let result = lirLowerMirModule(cfg, checkedMir)
     if !lirLowerOK(result) {
-        let mut rendered: List<String> = []
-        for d in result.diagnostics {
-            if d.severity == LirSeverityError {
-                rendered.push(lirDiagnosticRender(d))
-            }
+        if result.diagnostics.len() != 0 {
+            return lirDiagnosticRender(result.diagnostics[0])
         }
-        if rendered.len() == 0 {
-            return "LIR Proto lowering failed without an error diagnostic"
-        }
-        return strings.join(rendered, "; ")
+        return "LIR Proto lowering failed without an error diagnostic"
     }
     let irText = lirRenderModule(result.module)
     if irText == "" {
@@ -516,7 +511,8 @@ fn runCompile(args: List<String>) -> Int {
     }
     let hir = hirLowerSource("main", source)
     let mir = mirLowerModule(hir)
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName("main", mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         eprint("osty-self compile: MIR validation failed:\n")
         for e in mirErrs {
@@ -571,7 +567,8 @@ fn runLirProtoLower(args: List<String>) -> Int {
     }
     let hir = hirLowerSource(packageName, source)
     let mir = mirLowerModule(hir)
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName(packageName, mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         eprint("osty-self lir-proto-lower: MIR validation failed:\n")
         for e in mirErrs {
@@ -580,7 +577,7 @@ fn runLirProtoLower(args: List<String>) -> Int {
         return 1
     }
     let cfg = lirLowerConfig(packageName, path, target)
-    let result = lirLowerMirModule(cfg, mir)
+    let result = lirLowerMirModule(cfg, checkedMir)
     if !lirLowerOK(result) {
         for d in result.diagnostics {
             if d.severity == LirSeverityError {
@@ -628,10 +625,8 @@ fn runLirProtoLowerMirJson(args: List<String>) -> Int {
             return 1
         },
     }
-    if mir.packageName == "" {
-        mir.packageName = packageName
-    }
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName(packageName, mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         eprint("osty-self lir-proto-lower-mir-json: MIR validation failed:\n")
         for e in mirErrs {
@@ -640,7 +635,7 @@ fn runLirProtoLowerMirJson(args: List<String>) -> Int {
         return 1
     }
     let cfg = lirLowerConfig(packageName, path, target)
-    let result = lirLowerMirModule(cfg, mir)
+    let result = lirLowerMirModule(cfg, checkedMir)
     if !lirLowerOK(result) {
         for d in result.diagnostics {
             if d.severity == LirSeverityError {

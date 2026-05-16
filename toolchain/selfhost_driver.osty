@@ -34,16 +34,10 @@ fn selfhostDriverProbeError() -> String {
     let cfg = lirLowerConfig("main", "<selfhost-doctor>", "")
     let result = lirLowerMirModule(cfg, mir)
     if !lirLowerOK(result) {
-        let mut rendered: List<String> = []
-        for d in result.diagnostics {
-            if d.severity == LirSeverityError {
-                rendered.push(lirDiagnosticRender(d))
-            }
+        if result.diagnostics.len() != 0 {
+            return lirDiagnosticRender(result.diagnostics[0])
         }
-        if rendered.len() == 0 {
-            return "LIR Proto lowering failed without an error diagnostic"
-        }
-        return strings.join(rendered, "; ")
+        return "LIR Proto lowering failed without an error diagnostic"
     }
     let irText = lirRenderModule(result.module)
     if irText == "" {

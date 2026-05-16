@@ -486,7 +486,8 @@ pub struct MirPlace {
     pub projections: List<MirProjection>,
 }
 pub fn mirPlace(local: Int) -> MirPlace {
-    MirPlace {local, projections: []}
+    let projections: List<MirProjection> = []
+    MirPlace {local, projections}
 }
 /// mirPlaceProject returns a new Place extending `p` with `proj`.
 pub fn mirPlaceProject(p: MirPlace, proj: MirProjection) -> MirPlace {
@@ -574,7 +575,8 @@ pub struct MirRValue {
 // Cast
 // GlobalRef / Nullary
 pub fn mirRValueInvalid() -> MirRValue {
-    MirRValue {kind: MirRVInvalid, typ: "", unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields: [], aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVInvalid, typ: "", unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVUse(op: MirOperand) -> MirRValue {
     let mut rv = mirRValueInvalid()
@@ -705,10 +707,12 @@ pub struct MirInstr {
 // Shared args list (Call + Intrinsic)
 // Storage Live/Dead payload
 pub fn mirInstrInvalid() -> MirInstr {
-    MirInstr {kind: MirInstrInvalid, span: mirNoSpan(), dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: -1}
+    let args: List<MirOperand> = []
+    MirInstr {kind: MirInstrInvalid, span: mirNoSpan(), dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args, storageLocal: -1}
 }
 pub fn mirAssignInstr(dest: MirPlace, src: MirRValue, span: MirSpan) -> MirInstr {
-    MirInstr {kind: MirInstrAssign, span, dest, hasDest: true, src, calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: -1}
+    let args: List<MirOperand> = []
+    MirInstr {kind: MirInstrAssign, span, dest, hasDest: true, src, calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args, storageLocal: -1}
 }
 pub fn mirCallInstr(hasDest: Bool, dest: MirPlace, calleeSymbol: String, calleeType: String, args: List<MirOperand>, span: MirSpan) -> MirInstr {
     MirInstr {kind: MirInstrCall, span, dest, hasDest, src: mirRValueInvalid(), calleeKind: MirCalleeFn, calleeSymbol, calleeOperand: mirOperandInvalid(), calleeType, intrinsic: MirIntrinsicInvalid, args, storageLocal: -1}
@@ -720,10 +724,12 @@ pub fn mirIntrinsicInstr(hasDest: Bool, dest: MirPlace, intrinsic: MirIntrinsicK
     MirInstr {kind: MirInstrIntrinsic, span, dest, hasDest, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic, args, storageLocal: -1}
 }
 pub fn mirStorageLiveInstr(local: Int, span: MirSpan) -> MirInstr {
-    MirInstr {kind: MirInstrStorageLive, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: local}
+    let args: List<MirOperand> = []
+    MirInstr {kind: MirInstrStorageLive, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args, storageLocal: local}
 }
 pub fn mirStorageDeadInstr(local: Int, span: MirSpan) -> MirInstr {
-    MirInstr {kind: MirInstrStorageDead, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args: [], storageLocal: local}
+    let args: List<MirOperand> = []
+    MirInstr {kind: MirInstrStorageDead, span, dest: mirPlace(-1), hasDest: false, src: mirRValueInvalid(), calleeKind: MirCalleeNone, calleeSymbol: "", calleeOperand: mirOperandInvalid(), calleeType: "", intrinsic: MirIntrinsicInvalid, args, storageLocal: local}
 }
 // ====================================================================
 // Terminators
@@ -766,29 +772,35 @@ pub struct MirTerm {
 // Loop-back-edge marker: true when this terminator closes one
 // iteration of an enclosing loop (body → header).
 pub fn mirTermInvalid() -> MirTerm {
-    MirTerm {kind: MirTermInvalid, span: mirNoSpan(), target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermInvalid, span: mirNoSpan(), target: -1, thenBlock: -1, elseBlock: -1, cases, cond: mirOperandInvalid(), loopBackEdge: false}
 }
 pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
-    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases, cond: mirOperandInvalid(), loopBackEdge: false}
 }
 /// Goto terminator that closes one iteration of an enclosing loop. The
 /// LIR-Proto backend attaches `!llvm.loop` metadata to the resulting
 /// `br label %header` so vectorize / unroll / parallel hints land on
 /// the correct back-edge.
 pub fn mirGotoBackEdgeTerm(target: Int, span: MirSpan) -> MirTerm {
-    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: true}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermGoto, span, target, thenBlock: -1, elseBlock: -1, cases, cond: mirOperandInvalid(), loopBackEdge: true}
 }
 pub fn mirBranchTerm(cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) -> MirTerm {
-    MirTerm {kind: MirTermBranch, span, target: -1, thenBlock: thenB, elseBlock: elseB, cases: [], cond, loopBackEdge: false}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermBranch, span, target: -1, thenBlock: thenB, elseBlock: elseB, cases, cond, loopBackEdge: false}
 }
 pub fn mirSwitchIntTerm(scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) -> MirTerm {
     MirTerm {kind: MirTermSwitchInt, span, target: default, thenBlock: -1, elseBlock: -1, cases, cond: scrutinee, loopBackEdge: false}
 }
 pub fn mirReturnTerm(span: MirSpan) -> MirTerm {
-    MirTerm {kind: MirTermReturn, span, target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermReturn, span, target: -1, thenBlock: -1, elseBlock: -1, cases, cond: mirOperandInvalid(), loopBackEdge: false}
 }
 pub fn mirUnreachableTerm(span: MirSpan) -> MirTerm {
-    MirTerm {kind: MirTermUnreachable, span, target: -1, thenBlock: -1, elseBlock: -1, cases: [], cond: mirOperandInvalid(), loopBackEdge: false}
+    let cases: List<MirSwitchCase> = []
+    MirTerm {kind: MirTermUnreachable, span, target: -1, thenBlock: -1, elseBlock: -1, cases, cond: mirOperandInvalid(), loopBackEdge: false}
 }
 // ====================================================================
 // Locals, Basic blocks, Functions
@@ -814,6 +826,7 @@ pub struct MirBasicBlock {
     pub instrs: List<MirInstr>,
     pub term: MirTerm,
     pub hasTerm: Bool,
+    pub termKind: MirTermKind,
     pub termTarget: Int,
     pub termThenBlock: Int,
     pub termElseBlock: Int,
@@ -823,7 +836,9 @@ pub struct MirBasicBlock {
     pub span: MirSpan,
 }
 pub fn mirBasicBlock(id: Int, span: MirSpan) -> MirBasicBlock {
-    MirBasicBlock {id, instrs: [], term: mirTermInvalid(), hasTerm: false, termTarget: -1, termThenBlock: -1, termElseBlock: -1, termCases: [], termCond: mirOperandInvalid(), termLoopBackEdge: false, span}
+    let instrs: List<MirInstr> = []
+    let termCases: List<MirSwitchCase> = []
+    MirBasicBlock {id, instrs, term: mirTermInvalid(), hasTerm: false, termKind: MirTermInvalid, termTarget: -1, termThenBlock: -1, termElseBlock: -1, termCases, termCond: mirOperandInvalid(), termLoopBackEdge: false, span}
 }
 pub fn mirBlockAppend(block: MirBasicBlock, instr: MirInstr) {
     block.instrs.push(instr)
@@ -837,6 +852,7 @@ pub fn mirBlockSetTerminator(block: MirBasicBlock, t: MirTerm) {
     block.term.cases = t.cases
     block.term.cond = t.cond
     block.term.loopBackEdge = t.loopBackEdge
+    block.termKind = t.kind
     block.termTarget = t.target
     block.termThenBlock = t.thenBlock
     block.termElseBlock = t.elseBlock
@@ -846,35 +862,39 @@ pub fn mirBlockSetTerminator(block: MirBasicBlock, t: MirTerm) {
     block.hasTerm = true
 }
 pub fn mirBlockSetGotoTerminator(block: MirBasicBlock, target: Int, span: MirSpan, loopBackEdge: Bool) {
+    let cases: List<MirSwitchCase> = []
     block.term.kind = MirTermGoto
     block.term.span = span
     block.term.target = target
     block.term.thenBlock = -1
     block.term.elseBlock = -1
-    block.term.cases = []
+    block.term.cases = cases
     block.term.cond = mirOperandInvalid()
     block.term.loopBackEdge = loopBackEdge
+    block.termKind = MirTermGoto
     block.termTarget = target
     block.termThenBlock = -1
     block.termElseBlock = -1
-    block.termCases = []
+    block.termCases = cases
     block.termCond = mirOperandInvalid()
     block.termLoopBackEdge = loopBackEdge
     block.hasTerm = true
 }
 pub fn mirBlockSetBranchTerminator(block: MirBasicBlock, cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) {
+    let cases: List<MirSwitchCase> = []
     block.term.kind = MirTermBranch
     block.term.span = span
     block.term.target = -1
     block.term.thenBlock = thenB
     block.term.elseBlock = elseB
-    block.term.cases = []
+    block.term.cases = cases
     block.term.cond = cond
     block.term.loopBackEdge = false
+    block.termKind = MirTermBranch
     block.termTarget = -1
     block.termThenBlock = thenB
     block.termElseBlock = elseB
-    block.termCases = []
+    block.termCases = cases
     block.termCond = cond
     block.termLoopBackEdge = false
     block.hasTerm = true
@@ -888,6 +908,7 @@ pub fn mirBlockSetSwitchIntTerminator(block: MirBasicBlock, scrutinee: MirOperan
     block.term.cases = cases
     block.term.cond = scrutinee
     block.term.loopBackEdge = false
+    block.termKind = MirTermSwitchInt
     block.termTarget = default
     block.termThenBlock = -1
     block.termElseBlock = -1
@@ -970,7 +991,12 @@ pub fn mirInlineModeName(mode: MirInlineMode) -> String {
 }
 // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFunction {
-    MirFunction {name, params: [], returnType, returnLocal: -1, locals: [], blocks: [], entry: 0, isExternal: false, isIntrinsic: false, exported: false, exportSymbol: "", cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures: [], noaliasAll: false, noaliasParams: [], pure: false}
+    let params: List<Int> = []
+    let locals: List<MirLocal> = []
+    let blocks: List<MirBasicBlock> = []
+    let targetFeatures: List<String> = []
+    let noaliasParams: List<String> = []
+    MirFunction {name, params, returnType, returnLocal: -1, locals, blocks, entry: 0, isExternal: false, isIntrinsic: false, exported: false, exportSymbol: "", cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures, noaliasAll: false, noaliasParams, pure: false}
 }
 // A5–A13 annotation defaults match HirFnDecl's bare
 // constructor: every flag off, empty targetFeatures list,
@@ -1111,7 +1137,11 @@ pub struct MirLayoutTable {
     pub interfaces: List<MirInterfaceLayout>,
 }
 pub fn mirLayoutTable() -> MirLayoutTable {
-    MirLayoutTable {structs: [], enums: [], tuples: [], interfaces: []}
+    let structs: List<MirStructLayout> = []
+    let enums: List<MirEnumLayout> = []
+    let tuples: List<MirTupleLayout> = []
+    let interfaces: List<MirInterfaceLayout> = []
+    MirLayoutTable {structs, enums, tuples, interfaces}
 }
 /// MirModule is the MIR form of one compilation unit. It is always
 /// monomorphic: no type variable reaches a MIR node.
@@ -1124,7 +1154,13 @@ pub struct MirModule {
     pub span: MirSpan,
 }
 pub fn mirModule(packageName: String) -> MirModule {
-    MirModule {packageName, functions: [], globals: [], uses: [], layouts: mirLayoutTable(), span: mirNoSpan()}
+    let functions: List<MirFunction> = []
+    let globals: List<MirGlobal> = []
+    let uses: List<MirUse> = []
+    MirModule {packageName, functions, globals, uses, layouts: mirLayoutTable(), span: mirNoSpan()}
+}
+pub fn mirModuleWithPackageName(packageName: String, m: MirModule) -> MirModule {
+    MirModule {packageName, functions: m.functions, globals: m.globals, uses: m.uses, layouts: m.layouts, span: m.span}
 }
 pub fn mirModuleLookupFunction(m: MirModule, symbol: String) -> Int {
     let mut i = 0

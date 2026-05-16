@@ -1041,15 +1041,13 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if fn.Name == "main" {
 		// Try trivial single-block main first; if it declines (e.g.
-		// multi-block main with calls), fall through to the general
-		// matchers below so matchGenericScalarCFG can handle it.
+		// an Int-returning main or multi-block main with calls), fall
+		// through to the general matchers below.
 		err := emitTrivialMain(out, fn, mctx)
 		if err == nil {
 			return nil
 		}
-		// Only fall through for multi-block decline; intrinsic/external
-		// errors are real.
-		if len(fn.Blocks) <= 1 {
+		if !errors.Is(err, ErrUnsupported) {
 			return err
 		}
 	}
