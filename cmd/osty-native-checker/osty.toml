@@ -1,0 +1,14 @@
+[package]
+name = "osty-native-checker"
+version = "0.1.0"
+edition = "0.5"
+description = "LLVM self-build target — osty-native-checker (Osty entry point)."
+
+[bin]
+name = "osty-native-checker-llvm"
+path = "main.osty"
+
+[capabilities]
+runtime = true
+
+[dependencies]
