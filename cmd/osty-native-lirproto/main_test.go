@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/mirjson"
@@ -199,6 +201,47 @@ func TestRunMIRPayloadInvokesMirJSONLower(t *testing.T) {
 	}
 }
 
+func TestRunMIRPayloadNormalizesSelfHostedEscapedLLVM(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", `; lir-proto\nsource_filename = \"demo\"\ndefine i64 @main() \{\n  ret i64 42\n\}\n`)
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	want := "; lir-proto\nsource_filename = \"demo\"\ndefine i64 @main() {\n  ret i64 42\n}\n"
+	if resp.LLVMIR != want {
+		t.Fatalf("LLVMIR normalization drifted:\n--- got ---\n%q\n--- want ---\n%q", resp.LLVMIR, want)
+	}
+}
+
+func TestValidateSelfHostedLLVMIRCatchesUndefinedTemps(t *testing.T) {
+	ir := "define i64 @main() {\nentry:\n  ret i64 %t0\n}\n"
+	if got := validateSelfHostedLLVMIR(ir); !strings.Contains(got, "%t0") {
+		t.Fatalf("validateSelfHostedLLVMIR() = %q, want undefined %%t0", got)
+	}
+	valid := "define i64 @main() {\nentry:\n  %t0 = add i64 0, 42\n  ret i64 %t0\n}\n"
+	if got := validateSelfHostedLLVMIR(valid); got != "" {
+		t.Fatalf("validateSelfHostedLLVMIR(valid) = %q, want empty", got)
+	}
+}
+
 func TestRunMIRPayloadRetriesSourceWhenMirJSONUnsupported(t *testing.T) {
 	bin := buildFakeOstySelf(t)
 	captureDir := t.TempDir()
@@ -314,6 +357,223 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONUnsupported(t *testing.T) {
 	}
 	if strings.Contains(resp.LLVMIR, "source fallback should not run") {
 		t.Fatalf("stage0 compat unexpectedly used source fallback:\n%s", resp.LLVMIR)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("first args = %v, want MIR JSON attempt before compat", args)
+	}
+}
+
+func TestRunMIRPayloadPreservesLargeIntJSONNumbers(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+
+	payload, err := mirjson.FromModule(&mir.Module{
+		Package: "main",
+		Functions: []*mir.Function{
+			{
+				Name:        "main",
+				ReturnType:  ir.TInt,
+				ReturnLocal: 0,
+				Locals: []*mir.Local{
+					{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+				},
+				Entry: 0,
+				Blocks: []*mir.BasicBlock{
+					{
+						ID: 0,
+						Instrs: []mir.Instr{
+							&mir.AssignInstr{
+								Dest: mir.Place{Local: 0},
+								Src: &mir.UseRV{Op: &mir.ConstOp{
+									Const: &mir.IntConst{Value: math.MaxInt64, T: ir.TInt},
+									T:     ir.TInt,
+								}},
+							},
+						},
+						Term: &mir.ReturnTerm{},
+					},
+				},
+			},
+		},
+		Layouts: mir.NewLayoutTable(),
+	})
+	if err != nil {
+		t.Fatalf("build MIR JSON payload: %v", err)
+	}
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR:         payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want false: %+v", resp)
+	}
+	if !strings.Contains(resp.LLVMIR, "ret i64 9223372036854775807") {
+		t.Fatalf("LLVMIR lost large int literal:\n%s", resp.LLVMIR)
+	}
+}
+
+func TestRunMIRPayloadAcceptsStage0PartialIRWhenListAllDeclines(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+
+	payload, err := mirjson.FromModule(&mir.Module{
+		Package: "main",
+		Functions: []*mir.Function{
+			{
+				Name:        "main",
+				ReturnType:  ir.TInt,
+				ReturnLocal: 0,
+				Locals: []*mir.Local{
+					{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+				},
+				Entry: 0,
+				Blocks: []*mir.BasicBlock{
+					{
+						ID: 0,
+						Instrs: []mir.Instr{
+							&mir.AssignInstr{
+								Dest: mir.Place{Local: 0},
+								Src: &mir.UseRV{Op: &mir.ConstOp{
+									Const: &mir.IntConst{Value: 7, T: ir.TInt},
+									T:     ir.TInt,
+								}},
+							},
+						},
+						Term: &mir.ReturnTerm{},
+					},
+				},
+			},
+			{
+				Name:        "declinedHelper",
+				ReturnType:  ir.TInt,
+				ReturnLocal: 0,
+				Locals: []*mir.Local{
+					{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+				},
+				Entry: 0,
+				Blocks: []*mir.BasicBlock{
+					{ID: 0, Term: &mir.GotoTerm{Target: 0}},
+				},
+			},
+		},
+		Layouts: mir.NewLayoutTable(),
+	})
+	if err != nil {
+		t.Fatalf("build MIR JSON payload: %v", err)
+	}
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+	t.Setenv(stage0.ListAllDeclinesEnv, "1")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR:         payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want partial stage0 IR: %+v", resp)
+	}
+	if !strings.Contains(resp.LLVMIR, "define i64 @main()") || !strings.Contains(resp.LLVMIR, "ret i64 7") {
+		t.Fatalf("LLVMIR missing emitted main:\n%s", resp.LLVMIR)
+	}
+	if !strings.Contains(resp.LLVMIR, "define i64 @declinedHelper()") ||
+		!strings.Contains(resp.LLVMIR, "osty_rt_stage0_declined") {
+		t.Fatalf("LLVMIR missing decline stub:\n%s", resp.LLVMIR)
+	}
+}
+
+func TestRunMIRPayloadUsesStage0CompatWhenMirJSONTimesOut(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+
+	payload, err := mirjson.FromModule(&mir.Module{
+		Package: "main",
+		Functions: []*mir.Function{
+			{
+				Name:        "main",
+				ReturnType:  ir.TInt,
+				ReturnLocal: 0,
+				Locals: []*mir.Local{
+					{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+				},
+				Entry: 0,
+				Blocks: []*mir.BasicBlock{
+					{
+						ID: 0,
+						Instrs: []mir.Instr{
+							&mir.AssignInstr{
+								Dest: mir.Place{Local: 0},
+								Src: &mir.UseRV{Op: &mir.ConstOp{
+									Const: &mir.IntConst{Value: 42, T: ir.TInt},
+									T:     ir.TInt,
+								}},
+							},
+						},
+						Term: &mir.ReturnTerm{},
+					},
+				},
+			},
+		},
+		Layouts: mir.NewLayoutTable(),
+	})
+	if err != nil {
+		t.Fatalf("build MIR JSON payload: %v", err)
+	}
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(selfLowerTimeoutEnv, "10ms")
+	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "100")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR:         payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if resp.Declined {
+		t.Fatalf("Declined = true, want false: %+v", resp)
+	}
+	if !strings.Contains(resp.LLVMIR, "define i64 @main()") || !strings.Contains(resp.LLVMIR, "ret i64 42") {
+		t.Fatalf("LLVMIR missing timed-out stage0 compat fallback:\n%s", resp.LLVMIR)
 	}
 	args := readCapturedArgs(t, captureArgs)
 	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
@@ -451,6 +711,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"time"
 )
 
 func main() {
@@ -473,6 +734,12 @@ func main() {
 				defer dst.Close()
 				_, _ = io.Copy(dst, src)
 			}
+		}
+	}
+	if sleep := os.Getenv("FAKE_OSTY_SELF_SLEEP_MS"); sleep != "" {
+		ms, err := strconv.Atoi(sleep)
+		if err == nil && ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 	}
 	if os.Getenv("FAKE_OSTY_SELF_REJECT_MIR_JSON") != "" && len(os.Args) > 1 && os.Args[1] == "lir-proto-lower-mir-json" {

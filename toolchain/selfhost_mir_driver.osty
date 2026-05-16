@@ -123,33 +123,28 @@ fn selfhostMirDriverProbeJson() -> String {
 }
 
 fn selfhostMirDriverProbeError() -> String {
-    let mut mir = match mirJsonParseModule(selfhostMirDriverProbeJson()) {
-        Ok(m) -> m,
+    let mut mir = mirModule("main")
+    match mirJsonParseModuleInto(selfhostMirDriverProbeJson(), mir) {
+        Ok(_) -> {
+        },
         Err(e) -> {
             return e
         },
     }
-    if mir.packageName.len() == 0 {
-        mir.packageName = "main"
-    }
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName("main", mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         return "MIR validation failed: " + strings.join(mirErrs, "; ")
     }
-    let result = lirLowerMirModule(lirLowerConfig("main", "<selfhost-mir-doctor>", ""), mir)
-    if !lirLowerOK(result) {
-        let mut rendered: List<String> = []
-        for d in result.diagnostics {
-            if d.severity == LirSeverityError {
-                rendered.push(lirDiagnosticRender(d))
-            }
-        }
-        if rendered.len() == 0 {
-            return "LIR Proto lowering failed without an error diagnostic"
-        }
-        return strings.join(rendered, "; ")
+    let lowerCfg = lirLowerConfig("main", "<selfhost-mir-doctor>", "")
+    let lowerStringPoolEntries: List<LirStringGlobal> = []
+    let lowerOut = lirModuleWithStringPoolEntries("main", "<selfhost-mir-doctor>", "", lowerStringPoolEntries)
+    let lowerDiagnostics: List<LirDiagnostic> = []
+    lirLowerMirModuleListsInto(lowerCfg, lowerStringPoolEntries, "main", checkedMir.functions, checkedMir.globals, checkedMir.uses, checkedMir.layouts, checkedMir.span, lowerOut, lowerDiagnostics)
+    if lowerDiagnostics.len() != 0 {
+        return lirDiagnosticRender(lowerDiagnostics[0])
     }
-    let irText = lirRenderModule(result.module)
+    let irText = lirRenderModule(lowerOut)
     if irText.len() == 0 {
         return "LLVM IR renderer returned empty output"
     }
@@ -215,17 +210,17 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
         },
     }
     let resolvedPackageName = if packageName.len() == 0 { "main" } else { packageName }
-    let mut mir = match mirJsonParseModule(raw) {
-        Ok(m) -> m,
+    let mut mir = mirModule(resolvedPackageName)
+    match mirJsonParseModuleInto(raw, mir) {
+        Ok(_) -> {
+        },
         Err(e) -> {
             eprint("osty-self lir-proto-lower-mir-json: " + e + "\n")
             return 1
         },
     }
-    if mir.packageName.len() == 0 {
-        mir.packageName = resolvedPackageName
-    }
-    let mirErrs = mirValidateModule(mir)
+    let checkedMir = mirModuleWithPackageName(resolvedPackageName, mir)
+    let mirErrs = mirValidateModule(checkedMir)
     if mirErrs.len() != 0 {
         eprint("osty-self lir-proto-lower-mir-json: MIR validation failed:\n")
         for e in mirErrs {
@@ -233,12 +228,15 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
         }
         return 1
     }
-    let result = lirLowerMirModule(lirLowerConfig(resolvedPackageName, path, target), mir)
-    let lowerDiagnostics = result.diagnostics
+    let lowerCfg = lirLowerConfig(resolvedPackageName, path, target)
+    let lowerStringPoolEntries: List<LirStringGlobal> = []
+    let lowerOut = lirModuleWithStringPoolEntries(resolvedPackageName, path, target, lowerStringPoolEntries)
+    let lowerDiagnostics: List<LirDiagnostic> = []
+    lirLowerMirModuleListsInto(lowerCfg, lowerStringPoolEntries, resolvedPackageName, checkedMir.functions, checkedMir.globals, checkedMir.uses, checkedMir.layouts, checkedMir.span, lowerOut, lowerDiagnostics)
     if lowerDiagnostics.len() != 0 {
         selfhostMirDriverPrintLowerDiagnostics(lowerDiagnostics)
     }
-    print(lirRenderModule(result.module))
+    print(lirRenderModule(lowerOut))
     0
 }
 

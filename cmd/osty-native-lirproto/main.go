@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/llvmabi"
@@ -54,6 +55,10 @@ const SelfBinEnv = "OSTY_SELF_BIN"
 // toolchain/main.osty before it falls back to std.env.args().
 const selfForwardArgsEnv = "OSTY_SELF_REBUILD_FORWARD_ARGS"
 
+// selfLowerTimeoutEnv overrides the bootstrap guard used around
+// self-hosted LIR Proto lowering. Use "0" to disable.
+const selfLowerTimeoutEnv = "OSTY_LIRPROTO_SELF_TIMEOUT"
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -63,7 +68,9 @@ func main() {
 
 func run(stdin io.Reader, stdout io.Writer) error {
 	var req nativelirproto.Request
-	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
+	dec := json.NewDecoder(stdin)
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		return fmt.Errorf("decode lirproto request: %w", err)
 	}
 	resp, err := lower(req)
@@ -109,7 +116,7 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 	if err != nil || !resp.Declined {
 		return resp, err
 	}
-	if command == "lir-proto-lower-mir-json" && isUnsupportedSelfCommand(declineReason) {
+	if command == "lir-proto-lower-mir-json" && isMIRJSONFallbackReason(declineReason) {
 		return lowerLegacyMIRJSON(req, selfBin)
 	}
 	return resp, nil
@@ -136,19 +143,34 @@ func lowerSourceCompat(selfBin string, req nativelirproto.Request) (nativelirpro
 }
 
 func runSelfLower(selfBin string, args []string) (nativelirproto.Response, string, error) {
-	cmd := exec.Command(selfBin, args...)
+	ctx := context.Background()
+	timeout := selfLowerTimeout(args)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, selfBin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.Env = append(os.Environ(), selfForwardArgsEnv+"="+strings.Join(args, "\n"))
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			command := "command"
+			if len(args) > 0 {
+				command = args[0]
+			}
+			msg := fmt.Sprintf("osty-self %s timed out after %s", command, timeout)
+			return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
 		return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
 	}
-	ir := stdout.String()
+	ir := normalizeSelfHostedLLVMIR(stdout.String())
 	if ir == "" {
 		command := "command"
 		if len(args) > 0 {
@@ -157,12 +179,65 @@ func runSelfLower(selfBin string, args []string) (nativelirproto.Response, strin
 		msg := fmt.Sprintf("osty-self %s produced empty IR", command)
 		return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
 	}
+	if reason := validateSelfHostedLLVMIR(ir); reason != "" {
+		command := "command"
+		if len(args) > 0 {
+			command = args[0]
+		}
+		msg := fmt.Sprintf("osty-self %s produced invalid IR: %s", command, reason)
+		return nativelirproto.Response{Declined: true, Error: msg}, msg, nil
+	}
 	return nativelirproto.Response{LLVMIR: ir}, "", nil
+}
+
+func selfLowerTimeout(args []string) time.Duration {
+	if len(args) == 0 || args[0] != "lir-proto-lower-mir-json" {
+		return 0
+	}
+	if raw := os.Getenv(selfLowerTimeoutEnv); raw != "" {
+		if raw == "0" {
+			return 0
+		}
+		if d, err := time.ParseDuration(raw); err == nil {
+			return d
+		}
+	}
+	return 20 * time.Second
+}
+
+func normalizeSelfHostedLLVMIR(ir string) string {
+	return strings.NewReplacer(
+		`\"`, `"`,
+		`\{`, `{`,
+		`\}`, `}`,
+		`\n`, "\n",
+		`\\`, `\`,
+	).Replace(ir)
 }
 
 func isUnsupportedSelfCommand(msg string) bool {
 	return strings.Contains(msg, "osty-self: unsupported command") ||
 		(strings.Contains(msg, "unsupported command") && strings.Contains(msg, "lir-proto-lower-mir-json"))
+}
+
+func isInvalidSelfHostedIR(msg string) bool {
+	return strings.Contains(msg, "produced invalid IR")
+}
+
+func isMIRJSONFallbackReason(msg string) bool {
+	return isUnsupportedSelfCommand(msg) ||
+		isInvalidSelfHostedIR(msg) ||
+		strings.Contains(msg, "timed out")
+}
+
+func validateSelfHostedLLVMIR(ir string) string {
+	for i := 0; i < 512; i++ {
+		name := fmt.Sprintf("%%t%d", i)
+		if strings.Contains(ir, name) && !strings.Contains(ir, name+" =") {
+			return "temporary " + name + " is referenced before definition"
+		}
+	}
+	return ""
 }
 
 func lowerLegacyMIRJSON(req nativelirproto.Request, selfBin string) (nativelirproto.Response, error) {
@@ -230,6 +305,9 @@ func lowerMIRJSONStage0Compat(req nativelirproto.Request) (nativelirproto.Respon
 		EmitGC:      true,
 	})
 	if err != nil {
+		if len(ir) > 0 && stage0.IsListAllDeclines() {
+			return nativelirproto.Response{LLVMIR: string(ir)}, true
+		}
 		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: %v", err)}, true
 	}
 	return nativelirproto.Response{LLVMIR: string(ir)}, true

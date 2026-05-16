@@ -443,6 +443,21 @@ func TestStage0EmitsIntLiteralReturn(t *testing.T) {
 	}
 }
 
+func TestStage0EmitsIntLiteralMainViaSequentialReturn(t *testing.T) {
+	t.Parallel()
+	got := emit(t,
+		makeFn(fnSpec{name: "main", retT: ir.TInt, src: useRV(intConst(42))}),
+	)
+	for _, want := range []string{
+		"define i64 @main()",
+		"ret i64 42",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0EmitsBoolLiteralReturn(t *testing.T) {
 	t.Parallel()
 	got := emit(t, trivialMainFn(),
