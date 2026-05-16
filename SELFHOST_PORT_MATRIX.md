@@ -6,7 +6,11 @@ Go → Osty 셀프호스팅 포팅 현황 매트릭스. 리졸버 / 체커 잔�
 
 > **Scope**: `internal/resolve` ↔ `toolchain/resolve.osty`, `internal/check` ↔
 > `toolchain/check*.osty` + `toolchain/elab.osty` + `toolchain/hir_lower.osty`.
-> 기준일: 2026-04-26 (post-rebase audit, HEAD = #921 + Phase 0 fixes).
+> 기준일: **2026-05-16** (cfg.go dead cascade 제거 + Phase 1c.5 잔여 작업
+> 재측정 — 아래 "2026-05-16" 섹션이 권위). 이전 2026-04-26 스냅샷 (post-rebase
+> audit, HEAD = #921 + Phase 0 fixes) 이후 약 3주간 host_boundary 분할
+> 시리즈 (#1604/#1645/#1659/#1662/#1669/#1671/#1674/#1687) + embedded
+> fallback 제거 + managed subprocess flip 이 누적.
 > 이전 2026-04-24 스냅샷 이후 80 커밋이 들어왔고, 그 위에 Phase 0 (MirSwitchCase
 > rename + typeRepr migration + scopeFor O(N²) → sorted-binsearch+memoize) 가
 > 추가됐다. 코드 실측 기준: `--legacy` check/typecheck escape hatch 는
@@ -61,6 +65,73 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
   sweep 이 iflet/coalesce/q/opt + partial-struct field lookup + struct-field-
   default + IR-value type recovery 를 모두 메우면서 누적 폐기. 현재 count 0,
   floor 0 으로 타이트닝.
+
+## 2026-05-16 — Phase 1c.5 잔여 작업 재측정 + cfg.go dead cascade 정리
+
+2026-04-26 스냅샷 이후 host_boundary 분할 (PR #1604) / overlay opt-in (#1598) /
+PopulateLegacyMaps 제거 (#1645) / subproc 분리 (#1659/#1662) / managed subprocess
+flip + embedded fallback 제거 (#1669/#1671/#1674/#1687) 가 누적되면서 이 문서가
+2026-04-24/26 시점에 기록한 LOC 와 "잔여 Go legacy" 표면이 크게 바뀌었다. 본
+섹션이 2026-05-16 시점의 권위.
+
+### 실측 LOC vs 기록 LOC
+
+| 파일 | 매트릭스 기록 | 2026-05-16 실측 | 비고 |
+|---|---|---|---|
+| `internal/check/host_boundary.go` | 1990 / 1878 | **496** | 위 PR 시리즈로 ~1400 LOC 축소. 잔여는 native checker factory (영구) + `apply*Result` 어댑터 글루 (정리 가능) |
+| `internal/check/inspect.go` | 647 | **83** | adapter (selfhost InspectRecord → Go check.InspectRecord). "큰 잔여" 아님 |
+| `internal/resolve/resolve.go` | "5108 LOC (디렉토리 전체)" | **109** | 파일 단독은 thin facade (`ResolvePackage` / `ResolvePackageDefault` / `ResolveFileSourceDefault`). 7 production + 11 test caller. **삭제 불가 — 공개 surface**. body-walk resolver 는 이미 selfhost (resolve.osty) 이전 완료 |
+| `internal/resolve/cfg.go` | 318 | **69** (2026-05-16 cleanup) | 아래 cleanup 섹션 참조 |
+| `internal/resolve/prelude.go` | "삭제 대상" | 119 | **삭제 불가 — symbol resolution 핵심**. 모든 resolver 경로가 `NewPrelude()` 의존 |
+| `internal/resolve/scope.go` | "삭제 대상" | 297 | **삭제 불가 — `Symbol` / `SymbolKind` / `Scope` / `SymbolID` 타입 정의**. references.go / signature.go / native_adapter.go / lsp 전반이 의존 |
+| `internal/lint/*` | "`*ast.File` 식별자 소비" | **0 식별자 의존** | `lint.Source()` / `lint.Package()` 모두 `selfhost.LintDiagnostics()` 한 번 호출로 끝. `typebased.go` / 자체 Refs/Defs map 없음. 매트릭스 진술 stale — 이미 깨끗 |
+| `internal/lsp/references.go` | "포인터 동등 비교가 알고리즘" | 404 | **사실 — 진짜 algorithmic dep**. `findReferences` 2 사이트 (`refs[id.ID] != target` / `typeRefs[nt.ID] != target`) + `containsNode` 6 사이트 (`ast.Node(d) == decl` for top-level/struct field/struct method/enum variant/enum method/interface method). Phase 0e 미착륙 |
+| `internal/lsp/signature.go` | "won't-fix candidate" | 319 | selfhost fallback (`buildStructuredSignatureInfo`) 동작; Go path 는 backup. 1c.5 critical path 아님 |
+
+### 2026-05-16 cleanup — cfg.go dead cascade 제거
+
+`internal/resolve/cfg.go` 의 `filterCfgDecls` + `evaluateCfgOnDecl` +
+`evaluateCfgAnnotation` + `evaluateCfgArg` + `evaluateCfgCompose` +
+`callArgsToCompose` + `annotationsOf` 6 함수 (~232 LOC) 와 이를 테스트하던
+`cfg_test.go` (197 LOC) 전부 제거. 총 **446 LOC** 삭제.
+
+production caller 0 인 reference impl 이었고, `#[cfg(...)]` 평가는 이미
+`toolchain/resolve.osty::srCfgDeclPasses` + `selfResolveAstFileWithCfg` +
+`srCheckCfgArgs` 가 단일 source (2026-04-28 workspace 전환 시 확정).
+`cfg.go` 잔여 69 LOC 는 `CfgEnv` 타입 + `DefaultCfgEnv()` host-runtime
+캐리어 + `toSelfhost()` projection — workspace.go / package_graph.go /
+native_adapter.go 가 라이브 소비.
+
+검증: `go build ./internal/resolve/...` 통과, `just front` 통과 (resolve /
+check / parser / format / lint / pipeline / ci 전부 ok).
+
+### 1c.5 잔여 작업 재프레이밍
+
+매트릭스의 1c.5 원래 vision ("resolve.go / cfg.go / prelude.go / scope.go
+전부 삭제") 은 stale. resolve.go 는 thin facade 이고 prelude.go / scope.go 는
+영구 인프라. **새 1c.5 정의**:
+
+1. **references.go SymbolID/position 채택** (Phase 0e) — `*resolve.Symbol`
+   pointer equality 를 `SymbolID` equality 또는 NodeID-keyed identity 로 교체.
+   `containsNode` 의 6 `ast.Node(d) == decl` 사이트도 position/file-membership
+   기반으로 전환. **이게 LSP 마지막 algorithmic identity dep**. 추정 ~50-100
+   LOC 변경. `internal/resolve/symbolid.go` (88 LOC) 가 이미 content-addressable
+   해시 제공 — 채택만 하면 됨.
+2. **`pub use` re-export visibility (E0553)** — 매트릭스 Resolver 우선순위 #5
+   미해결. workspace pub-symbol graph + re-export chain traversal + scoped
+   import (G28) symbol-aware use resolution 3 종 인프라 선행.
+3. **partial struct/enum cross-file stitching** — 현재 single-file (native_adapter
+   가 synthetic 단일 네임스페이스로 합쳐 통과). True workspace-level pass
+   모델 설계 필요.
+4. **host_boundary.go `apply*Result` adapter 통합** (선택) — Check.File /
+   Check.Package 라우팅 단일화 후 ~100-150 LOC 추가 정리 가능. 1c.5 critical
+   path 는 아님.
+
+**1c.5 가 "Go legacy 전부 삭제" 라는 절대 마일스톤이 아니라 "남은 algorithmic
+identity dep 1 종 + visibility/merge feature 2 종 해결" 로 재정의**되어야 실제
+의미 있는 종결점이 잡힌다. Item 1 (references.go) 이 단독으로 가장 명확한 첫
+PR 후보 — symbolid.go 이미 존재, 변경 scope 작음, 직후 다른 작업 unblock 없음
+(symbol id 채택 그 자체가 deliverable).
 
 ## 2026-04-24 — Phase 1c.5 code state (historical snapshot)
 
