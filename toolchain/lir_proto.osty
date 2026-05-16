@@ -2246,6 +2246,37 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
     LirType {llvm: "", className: LirTypeUnknown}
 }
 
+/// lirReceiverParseTraceMessage builds the "List<...> prefix miss;
+/// Set<...> prefix miss; Map<K, V> prefix miss; Channel<...> prefix miss"
+/// trace that surfaces in `could not extract element/value type from
+/// receiver \`T\`` errors. Reports which container prefix patterns were
+/// recognized — `match` means the prefix matched but inner arg extraction
+/// failed (malformed); `miss` means the receiver type didn't look like
+/// that container at all.
+fn lirReceiverParseTraceMessage(typeName: String) -> String {
+    let listMatch = if strings.startsWith(typeName, "List<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let setMatch = if strings.startsWith(typeName, "Set<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let mapMatch = if strings.startsWith(typeName, "Map<") {
+        "match"
+    } else {
+        "miss"
+    }
+    let channelMatch = if strings.startsWith(typeName, "Channel<") {
+        "match"
+    } else {
+        "miss"
+    }
+    "List<...> prefix " + listMatch + "; Set<...> prefix " + setMatch + "; Map<K, V> prefix " + mapMatch + "; Channel<...> prefix " + channelMatch
+}
+
 /// lirTypeLowerTraceMessage builds the "primitive miss; ref-builtin miss;
 /// option/result miss; N interface layout(s); ..." trace string that
 /// surfaces in `unsupported {module/param/local/assign-dest} type` errors.
@@ -4772,7 +4803,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
         lirListElemTypeName(instr.args[0].typ)
     }
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "`", label)
+        lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
         return lirContainerReceiverInvalid()
     }
     let mut elemLir = lirContainerElemLaneType(elemName)
@@ -4799,7 +4830,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
     if kind == "map.kv" {
         let valueName = lirMapValueTypeName(instr.args[0].typ)
         if valueName == "" {
-            lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "`", label)
+            lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
             return lirContainerReceiverInvalid()
         }
         let mut valueLir = lirContainerElemLaneType(valueName)
@@ -4866,7 +4897,7 @@ fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "`", "list.push")
+        lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.push")
         return
     }
     let elemLane = lirContainerElemLaneType(elemName)
@@ -4983,7 +5014,7 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "`", "list.get")
+        lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.get")
         return
     }
     if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
@@ -5037,7 +5068,7 @@ fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "`", "list.insert")
+        lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.insert")
         return
     }
     if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
@@ -5815,7 +5846,7 @@ fn lirLowerMirSelectSend(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[1].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "select.send could not extract element type from channel `" + instr.args[1].typ + "`", "select.send")
+        lirLowerError(l, LirDiagUnsupported, "select.send could not extract element type from channel `" + instr.args[1].typ + "` (" + lirReceiverParseTraceMessage(instr.args[1].typ) + ")", "select.send")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
@@ -6779,7 +6810,7 @@ fn lirLowerMirChanSend(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "chan.send could not extract element type from `" + instr.args[0].typ + "`", "chan.send")
+        lirLowerError(l, LirDiagUnsupported, "chan.send could not extract element type from `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "chan.send")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
@@ -6840,7 +6871,7 @@ fn lirLowerMirChanRecv(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let elemName = lirChannelElementTypeName(instr.args[0].typ)
     if elemName == "" {
-        lirLowerError(l, LirDiagUnsupported, "chan.recv could not extract element type from `" + instr.args[0].typ + "`", "chan.recv")
+        lirLowerError(l, LirDiagUnsupported, "chan.recv could not extract element type from `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "chan.recv")
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
