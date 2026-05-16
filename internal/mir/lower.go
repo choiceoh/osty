@@ -5818,10 +5818,15 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 // This lets stage0 fallback emit calls to runtime symbols without needing
 // per-symbol mir.IntrinsicKind cases or stage0/emit.go dispatch arms.
 //
-// Currently covered: std.io.readLine → osty_rt_io_read_line. Production
-// path (lir_proto) sees the same rewritten symbol; if it had a separate
-// mapping for the original symbol that arm is now bypassed (rewrites are
-// monotonic so no double-rewrite issue).
+// Coverage:
+//   - std.io.readLine     → osty_rt_io_read_line
+//   - std.os.execWith     → osty_rt_os_exec_with
+//   - std.os.execInputWith → osty_rt_os_exec_input_with
+//   - std.os.execOutput   → osty_rt_os_exec_output
+//
+// Production path (lir_proto) sees the same rewritten symbol; if it had
+// a separate mapping for the original symbol that arm is now bypassed
+// (rewrites are monotonic so no double-rewrite issue).
 func rewriteStdlibSymbolToRuntime(sym string) string {
 	switch sym {
 	case "std.io.readLine":
@@ -5830,6 +5835,8 @@ func rewriteStdlibSymbolToRuntime(sym string) string {
 		return "osty_rt_os_exec_with"
 	case "std.os.execInputWith":
 		return "osty_rt_os_exec_input_with"
+	case "std.os.execOutput":
+		return "osty_rt_os_exec_output"
 	}
 	return sym
 }
