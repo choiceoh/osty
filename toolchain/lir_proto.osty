@@ -3200,7 +3200,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
 }
 fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: MirLocal, rootType: LirType, value: LirOperand, valueMirType: String, context: String) {
     if rootType.className != LirTypeAggregate {
-        lirLowerError(l, LirDiagUnsupported, context + " requires aggregate root", context)
+        lirLowerError(l, LirDiagUnsupported, context + " requires aggregate root, got `" + rootType.llvm + "`", context)
         return
     }
     let leafTypeName = lirMirProjectionLeafType(place.projections)
@@ -3235,12 +3235,12 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
     let mut idx = 0
     for proj in place.projections {
         if current.typ.className != LirTypeAggregate {
-            lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type", context)
+            lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type `" + current.typ.llvm + "` (projection kind: " + mirProjectionKindName(proj.kind) + ")", context)
             return
         }
         let step = lirProjectionStepFromMir(l, proj)
         if step.kind == LirProjInvalid {
-            lirLowerError(l, LirDiagUnsupported, context + " unsupported projection", context)
+            lirLowerError(l, LirDiagUnsupported, context + " unsupported projection kind `" + mirProjectionKindName(proj.kind) + "` on type `" + current.typ.llvm + "`", context)
             return
         }
         frames.push(lirProjectionFrame(current, step.index))

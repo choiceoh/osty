@@ -77,12 +77,12 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
-| GAP-INSTR-001 | 2070 | `unsupported MIR instruction kind` | 새 MirInstr* 추가 시 catch-all |
-| GAP-INSTR-002 | 2186 | `unsupported MIR callee kind` | 미정의 callee variant |
+| GAP-INSTR-001 | lir_proto.osty:3151 | `unsupported MIR instruction kind \`mirInstrKindName(instr.kind)\`` — kind 이름 이미 surface 됨 (trace 불필요) | 새 MirInstr* 추가 시 catch-all |
+| GAP-INSTR-002 | lir_proto.osty:3297 | `unsupported MIR callee kind \`mirCalleeKindName(...)\`` — 동일 (kind 이름 이미 surface) | 미정의 callee variant |
 | GAP-INSTR-003 | lir_proto.osty:3340 | ✅ 2026-05-17 trace 추가 (`lirTypeLowerTraceMessage`) | `cross-module call arg type \`T\` is not implemented` + root-cause hint |
 | GAP-INSTR-004 | lir_proto.osty:3526 | ✅ 2026-05-17 trace 추가 | `indirect call arg type \`T\` is not implemented` + 동일 trace |
-| GAP-INSTR-005 | 2110 | `<context> requires aggregate root` | projection이 비-aggregate 대상 |
-| GAP-INSTR-006 | 2134, 2139 | `projection on non-aggregate type` / `unsupported projection` | nested struct binding pattern 등 |
+| GAP-INSTR-005 | lir_proto.osty:3203 | ✅ 2026-05-17 rootType.llvm 포함 | `<context> requires aggregate root, got \`<llvm-type>\`` |
+| GAP-INSTR-006 | lir_proto.osty:3238,3243 | ✅ 2026-05-17 current type + projection kind 포함 | `projection on non-aggregate type \`<llvm>\` (projection kind: ...)` / `unsupported projection kind \`<kind>\` on type \`<llvm>\`` |
 
 #### 2.2.4 Container receiver type extraction
 
