@@ -31001,6 +31001,42 @@ void osty_rt_audit_os_exit(int64_t code) __asm__(
     OSTY_RT_AUDIT_SYMBOL("std.os.exit")) OSTY_RT_AUDIT_USED;
 void osty_rt_audit_os_exit(int64_t code) { exit((int)code); }
 
+/* std.os.execOutput(exitCode, stdout, stderr, timedOut) — pure struct
+ * constructor for the Osty `ExecOutput` value used by self-rebuild
+ * error paths (toolchain/main.osty: `os.execOutput(1, "", "", false)`).
+ * The stdlib defines a body but install-self's bootstrap compile keeps
+ * the stdlib symbol unresolved; stage0 then emits an external call to
+ * `std.os.execOutput` that the linker can't satisfy without this stub.
+ *
+ * Layout matches the stage0 stdlib fallback for ExecOutput
+ * (internal/backend/stage0/stdlib_struct_fallback.go): `{ i64 exitCode,
+ * ptr stdout, ptr stderr, i1 timedOut }`, GC-managed so downstream
+ * field reads see live memory. Pre-PR #1858 the install-self path
+ * declined the callers entirely (decline-stub unreachable trap) so
+ * this symbol was never referenced; now they emit real call sites and
+ * need a definition. */
+typedef struct osty_rt_audit_exec_output {
+  int64_t exit_code;
+  const char *stdout_text;
+  const char *stderr_text;
+  bool timed_out;
+} osty_rt_audit_exec_output;
+
+void *osty_rt_audit_os_exec_output(int64_t exit_code, const char *stdout_text,
+                                   const char *stderr_text,
+                                   bool timed_out) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("std.os.execOutput")) OSTY_RT_AUDIT_USED;
+void *osty_rt_audit_os_exec_output(int64_t exit_code, const char *stdout_text,
+                                   const char *stderr_text, bool timed_out) {
+  osty_rt_audit_exec_output *out = (osty_rt_audit_exec_output *)
+      osty_rt_stage0_alloc((int64_t)sizeof(osty_rt_audit_exec_output));
+  out->exit_code = exit_code;
+  out->stdout_text = stdout_text;
+  out->stderr_text = stderr_text;
+  out->timed_out = timed_out;
+  return out;
+}
+
 /* std.process.abort(msg) — emit `msg` to stderr and abort. Declared
  * `Never` on the Osty side. */
 void osty_rt_audit_process_abort(const char *msg) __asm__(
