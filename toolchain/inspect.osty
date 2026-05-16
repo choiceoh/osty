@@ -49,6 +49,21 @@ use std.strings as strings
 // The record shape mirrors `internal/check/inspect.go::InspectRecord`.
 // Keep these two definitions in lockstep — the Go bridge adapter lifts
 // Osty records into the same Go-side struct.
+//
+// **Dormant follow-up shapes** (2026-05-16 audit — docs/llvm_selfhosting_flip_design.md):
+//   - For-loop body expression records (`n + k` inside `for k in 0..5 { let m = n + k }`)
+//   - Field-chain intermediate records (`outer.mid`, `outer.mid.inner` for `outer.mid.inner.x`)
+//   - Method-call receiver type records (`x` in `x.method(args)`)
+//   - Expression notes for generic instantiation (already partially threaded via
+//     `inspectInstantiationNotesByNode`; extend to method calls)
+//
+// These all rely on the `serializeCheckResult` typed-node loop emitting
+// records for already-elab'd Binary/Field/Range/Call core nodes — the
+// current v1.11 seed only surfaces top-level binding/symbol records.
+// Adding the shapes here is dormant work until the LLVM self-hosting
+// flip propagates toolchain/inspect.osty into the production native
+// checker (the `internal/selfhost/generated.go` frozen seed currently
+// bypasses these toolchain updates).
 pub struct InspectRecord {
     pub start: Int,
     pub end: Int,
