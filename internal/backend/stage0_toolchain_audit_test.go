@@ -77,6 +77,12 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	emitBrokenTally := map[string]int{}
 	emitBrokenSamples := map[string]string{} // first sample per fingerprint
 	emitBrokenFunctions := []string{}        // names that emitted but clang rejected
+	// declineCategories accumulates one root-cause tag per declined
+	// function so the audit summary can report PR-planning buckets
+	// alongside the raw shape histogram. See
+	// internal/backend/stage0/decline_classifier.go.
+	declineCategories := []stage0.DeclineCategory{}
+	declineCategoryFns := map[stage0.DeclineCategory][]string{}
 	totalFns := 0
 	covered := 0
 	emitBroken := 0
@@ -154,6 +160,9 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			key = fingerprintFn(fn)
 		}
 		tally[key]++
+		cat := stage0.ClassifyDecline(fn)
+		declineCategories = append(declineCategories, cat)
+		declineCategoryFns[cat] = append(declineCategoryFns[cat], fn.Name)
 	}
 	t.Logf("(skipped %d functions whose front-end MIR is UnreachableTerm-only)", skipped)
 
@@ -262,6 +271,26 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			break
 		}
 		t.Logf("  %4d  %s", b.count, b.key)
+	}
+
+	// Per-category roll-up (PR-planning view). The classifier maps each
+	// declined function to one root-cause bucket; the count is what
+	// PR success deltas are measured against (per
+	// docs/stage0_p24_scope.md §6 plan). Sample function names follow
+	// so a fixture writer has a starting point.
+	categoryBuckets := stage0.NewCategoryBuckets(declineCategories)
+	t.Logf("decline categories (root-cause buckets):")
+	for _, row := range categoryBuckets {
+		t.Logf("  %4d  %s", row.Count, row.Category)
+		fnames := declineCategoryFns[row.Category]
+		if len(fnames) == 0 {
+			continue
+		}
+		sampleLimit := 5
+		if len(fnames) < sampleLimit {
+			sampleLimit = len(fnames)
+		}
+		t.Logf("        samples: %s", strings.Join(fnames[:sampleLimit], ", "))
 	}
 
 	// Pick the first declined function in the top 3 buckets and print

@@ -606,6 +606,19 @@ func (m *moduleCtx) lookupStructFields(name string) ([]scalarType, bool) {
 	}
 	layout, ok := m.module.Layouts.Structs[name]
 	if !ok || layout == nil {
+		// stdlib struct fallback: layouts for `pub struct` types in
+		// `internal/stdlib/modules/*.osty` aren't registered in the
+		// per-user-module Layouts table (only types defined inside the
+		// user's source are). Functions that destructure stdlib values
+		// (e.g. `os.execWith(...).exitCode`) project into those types
+		// and hit this lookup with a nil layout. The hardcoded fallback
+		// covers the handful of stdlib structs whose layout is stable
+		// enough that PR planning has called them out as bootstrap
+		// blockers; see docs/stage0_p24_scope.md cascade analysis.
+		if scalars, names, ok := stage0KnownStdlibStructLayout(name); ok {
+			m.registerKnownStdlibStructDef(name, scalars, names)
+			return scalars, true
+		}
 		return nil, false
 	}
 	tys := make([]scalarType, len(layout.Fields))
@@ -634,6 +647,26 @@ func (m *moduleCtx) lookupStructField(name string, fp *mir.FieldProj) (int, scal
 	}
 	layout := m.module.Layouts.Structs[name]
 	if layout == nil {
+		// stdlib struct fallback — see lookupStructFields for the
+		// rationale. The narrow per-field path returns the scalar
+		// directly; the FieldProj's Type may be ErrType (front-end
+		// erasure) and is reconstructed from the hardcoded layout.
+		if scalars, names, ok := stage0KnownStdlibStructLayout(name); ok {
+			m.registerKnownStdlibStructDef(name, scalars, names)
+			idx := fp.Index
+			if fp.Name != "" {
+				for i, n := range names {
+					if n == fp.Name {
+						idx = i
+						break
+					}
+				}
+			}
+			if idx < 0 || idx >= len(scalars) {
+				return 0, scalarUnknown, nil, false
+			}
+			return idx, scalars[idx], stage0KnownStdlibFieldIRType(name, idx), true
+		}
 		return 0, scalarUnknown, nil, false
 	}
 	field := (*mir.FieldLayout)(nil)
@@ -9345,6 +9378,18 @@ func emitWhileMapNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destI
 			valueType = v
 		}
 	}
+	if keyType == scalarUnknown || valueType == scalarUnknown {
+		if k, v, ok := recoverMapNewArgScalarsFromCalleeParam(ctx.fn, destID, ctx.mctx); ok {
+			keyType = k
+			valueType = v
+		}
+	}
+	if keyType == scalarUnknown || valueType == scalarUnknown {
+		if k, v, ok := recoverMapNewArgScalarsAsOpaquePassThrough(ctx.fn, destID); ok {
+			keyType = k
+			valueType = v
+		}
+	}
 	keyKind, ok := runtimeKindForScalar(keyType)
 	if !ok {
 		return false
@@ -9489,6 +9534,131 @@ func recoverMapNewArgScalarsFromUses(fn *mir.Function, mapID mir.LocalID, mctx *
 		return scalarUnknown, scalarUnknown, false
 	}
 	return key, value, true
+}
+
+// recoverMapNewArgScalarsFromCalleeParam recovers Map<K,V> argument
+// scalars by looking up each callee that consumes `mapID` in the
+// module's function table. When the front-end has degraded the
+// FnRef.Type to ErrType (doc §6.2 / §6.1(d), Cat C in the decline
+// classifier), the per-call peer-arg recovery in
+// `recoverMapNewArgScalarsFromUses` has no signature to cross-reference.
+// The module-level lookup bypasses that erasure: the original FnType
+// is still intact on `mir.Function.Params[i].Type`, which we recover
+// here directly. Conflicting hits across multiple call sites fall
+// through (return false) rather than committing to an inconsistent
+// runtime kind tag.
+func recoverMapNewArgScalarsFromCalleeParam(fn *mir.Function, mapID mir.LocalID, mctx *moduleCtx) (scalarType, scalarType, bool) {
+	if fn == nil || mctx == nil || mctx.module == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	key := scalarUnknown
+	value := scalarUnknown
+	merge := func(k, v scalarType) bool {
+		if k == scalarUnknown || v == scalarUnknown {
+			return true
+		}
+		if key != scalarUnknown && (key != k || value != v) {
+			return false
+		}
+		key = k
+		value = v
+		return true
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ci, ok := instr.(*mir.CallInstr)
+			if !ok {
+				continue
+			}
+			ref, ok := ci.Callee.(*mir.FnRef)
+			if !ok || ref == nil || ref.Symbol == "" {
+				continue
+			}
+			calleeFn := mctx.module.LookupFunction(ref.Symbol)
+			if calleeFn == nil {
+				continue
+			}
+			for argIndex, arg := range ci.Args {
+				if !operandIsPlainLocal(arg, mapID) {
+					continue
+				}
+				if argIndex >= len(calleeFn.Params) {
+					continue
+				}
+				paramLocal := lookupLocal(calleeFn, calleeFn.Params[argIndex])
+				if paramLocal == nil {
+					continue
+				}
+				k, v, ok := mapArgScalarsFromType(paramLocal.Type, mctx)
+				if !ok {
+					continue
+				}
+				if !merge(k, v) {
+					return scalarUnknown, scalarUnknown, false
+				}
+			}
+		}
+	}
+	if key == scalarUnknown || value == scalarUnknown {
+		return scalarUnknown, scalarUnknown, false
+	}
+	return key, value, true
+}
+
+// recoverMapNewArgScalarsAsOpaquePassThrough is the last-resort Map<K,V>
+// recovery when the type arguments survive nowhere reachable from the
+// caller — neither the local's NamedType (front-end erased to
+// `<error>`), nor MapSet siblings (the function never inserts), nor a
+// callee parameter table (the callee is a stdlib runtime symbol not in
+// `module.Functions`). The doc §6.2 anySemReq pattern manifests as
+// `Map<<error>, <error>>` on locals like the empty env-vars map in
+// `os.execWith("mkdir", [...], "", {:}, 0)`.
+//
+// Soundness: the function emits an opaque-pointer Map handle defaulted
+// to `(String, String)` runtime kind tags. Only safe when the map is
+// purely opaque — no in-function MapGet/MapSet/MapContains/MapKeysSorted
+// operations would observe the synthesised tags. The check below
+// rejects the moment any of those intrinsics references `mapID`, so a
+// real conflict stops the recovery cold rather than emitting incorrect
+// runtime layout. Functions that survive this gate either pass the map
+// straight to a callee or hold it unused (rare).
+func recoverMapNewArgScalarsAsOpaquePassThrough(fn *mir.Function, mapID mir.LocalID) (scalarType, scalarType, bool) {
+	if fn == nil {
+		return scalarUnknown, scalarUnknown, false
+	}
+	passedAsCallArg := false
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.IntrinsicInstr:
+				switch step.Kind {
+				case mir.IntrinsicMapSet, mir.IntrinsicMapGet, mir.IntrinsicMapContains,
+					mir.IntrinsicMapKeysSorted, mir.IntrinsicMapIncr:
+					for _, arg := range step.Args {
+						if operandIsPlainLocal(arg, mapID) {
+							return scalarUnknown, scalarUnknown, false
+						}
+					}
+				}
+			case *mir.CallInstr:
+				for _, arg := range step.Args {
+					if operandIsPlainLocal(arg, mapID) {
+						passedAsCallArg = true
+					}
+				}
+			}
+		}
+	}
+	if !passedAsCallArg {
+		return scalarUnknown, scalarUnknown, false
+	}
+	return scalarString, scalarString, true
 }
 
 func peerCallMapArgScalars(fn *mir.Function, symbol string, argIndex int, skipLocal mir.LocalID, mctx *moduleCtx) (scalarType, scalarType, bool) {
