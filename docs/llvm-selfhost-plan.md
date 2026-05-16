@@ -393,10 +393,12 @@ JSON 출력은 다음 결정성 조건을 만족해야 byte-equal 비교 가능:
 
 L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 
-- **M1** (PR1 머지): walking skeleton — stub but builds + runs. (corpus 비검증)
-- **M2** (PR3 머지): **L1** byte parity 10/10.
-- **M3** (PR M 머지): **L2** byte parity 100%.
-- **M4** (PR M+1 머지): **L3** byte parity 100%. ← 본 plan completion.
+- **M1** ✓ (PR1a [#1816](https://github.com/choiceoh/osty/pull/1816) 머지, 2026-05-16): walking skeleton — stub but builds + runs (`OSTY_STAGE0_FALLBACK=1` 경유)
+- **M2 부분 진척** (PR1c [#1826](https://github.com/choiceoh/osty/pull/1826) + PR2 [#1829](https://github.com/choiceoh/osty/pull/1829), 2026-05-16): empty source fixture byte parity (진짜 stdin readLine + manual naive JSON source 추출). PR3 의 cross-package wall (SPEC_GAPS::cross-pkg-module-resolution) 으로 multi-fixture parity 는 PR3-C-impl 후
+- **M3** (PR M 머지): **L2** byte parity 100%. PR3-F 후
+- **M4** (PR M+1 머지): **L3** byte parity 100%. ← 본 plan completion
+
+**2026-05-16 세션 진척**: 15 PR 머지 ([#1812](https://github.com/choiceoh/osty/pull/1812) ~ [#1835](https://github.com/choiceoh/osty/pull/1835)) — plan + 2 spike + walking skeleton + 진짜 stdin/JSON 처리 (옵션 1: `qualifiedSymbol` rewrite + 옵션 3': naive parser) + PR3 의 cross-package wall 분석 + spec 명확화 + decline 진단. PR3-C-impl (SelfSymbol.importPath + module-scoped lookup, ~150 LOC) 가 M2 완전 진입 + PR3-F 까지의 선행. 자세한 분기 결정: `docs/llvm-selfhost-plan-pr*.md` 시리즈.
 
 ### 실패 — 본 plan 폐기 조건
 
