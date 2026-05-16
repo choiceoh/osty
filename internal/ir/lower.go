@@ -4602,15 +4602,21 @@ func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
 	// Optional chaining: `b?.n` where `b: Box?` lowers as a single
 	// FieldExpr{Optional:true} whose receiver type is `Box?`. The
 	// checker often doesn't record a type for it, and the canonical
-	// struct-field lookup expects a NamedType. Unwrap the option
-	// here, look up the field on the inner nominal, and re-wrap so
-	// the optional-chaining shape `Option<fieldType>` survives —
-	// callers that need the unwrapped type (raw `.field` recovery
-	// after the checker missed it) still see the right shape on
-	// the next branch.
+	// struct-field lookup expects a NamedType. Unwrap the option,
+	// look up the field on the inner nominal, and propagate the
+	// None-short-circuit semantics: the result is Option<fieldType>
+	// unless the field is *already* optional (`Outer.inner: Inner?`),
+	// in which case `?.` flattens — chained `outer?.inner?.value`
+	// must produce `Int?`, not `Int??`. Without the flatten, MIR
+	// builds an extra Option wrapper whose None branch falls back
+	// to `none <error>` because the synthesised type can't be
+	// inferred two levels down.
 	if ot, ok := receiverType.(*OptionalType); ok && ot != nil {
 		if innerNT, ok := ot.Inner.(*NamedType); ok && innerNT != nil && !innerNT.Builtin {
 			if t := l.lookupStructFieldType(innerNT.Name, fieldName); t != nil {
+				if _, alreadyOpt := t.(*OptionalType); alreadyOpt {
+					return t
+				}
 				return &OptionalType{Inner: t}
 			}
 		}
