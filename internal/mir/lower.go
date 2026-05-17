@@ -3767,9 +3767,16 @@ func isStdlibErrorUse(use *ir.UseDecl) bool {
 func stdlibFreeFnReturnType(qualifier, name string) ir.Type {
 	if qualifier == "std.strings" || qualifier == "strings" {
 		switch name {
-		case "len", "compare", "Compare", "indexOf", "Index", "LastIndex", "count", "Count":
+		case "len", "compare", "Compare", "count", "Count":
 			return ir.TInt
-		case "lastIndexOf":
+		case "Index", "LastIndex":
+			// Go-style strings.Index / LastIndex return -1 when missing;
+			// the Osty wrappers keep the int convention.
+			return ir.TInt
+		case "indexOf", "lastIndexOf", "indexOfChar", "lastIndexOfChar":
+			// `pub fn indexOf(s, substr) -> Int?` etc — Option<Int>
+			// shapes for the Osty-facing strings helpers
+			// (internal/stdlib/modules/strings.osty).
 			return &ir.OptionalType{Inner: ir.TInt}
 		case "isEmpty", "contains", "Contains", "hasPrefix", "HasPrefix", "startsWith", "hasSuffix", "HasSuffix", "endsWith":
 			return ir.TBool
