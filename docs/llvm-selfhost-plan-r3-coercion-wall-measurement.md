@@ -1,8 +1,16 @@
 # LLVM self-host plan — R3 trajectory coercion wall measurement
 
-> **상태**: measurement (multi-session debug 의 진척 doc). cmd/osty-native-checker production build 의 `set.toString` / `string.endsWith` coercion declined wall 의 정확한 trigger 확인.
-> **선행**: R3 brick 1-7 ([PR #1873-85](https://github.com/choiceoh/osty/pull/1873)), PR3-D/E ([PR #1889-90](https://github.com/choiceoh/osty/pull/1889)).
+> **상태**: measurement (multi-session debug 의 진척 doc). cmd/osty-native-checker production build 의 `string.indexOf result` coercion declined wall 의 정확한 trigger 확인 (PR #1894 off-by-one fix 후 정확한 label 노출).
+> **선행**: R3 brick 1-7 ([PR #1873-85](https://github.com/choiceoh/osty/pull/1873)), PR3-D/E ([PR #1889-90](https://github.com/choiceoh/osty/pull/1889)), MIR JSON wire-format alignment ([PR #1894](https://github.com/choiceoh/osty/pull/1894)).
 > **소유**: backend / lir_proto.
+
+## 0. PR #1894 후 wall label 정확화
+
+| | 이전 | 이후 |
+|---|---|---|
+| declined label | `set.toString` / `string.endsWith` | `string.indexOf result` |
+
+PR #1894 (wire-format off-by-one fix) 가 MIR JSON 의 intrinsic kind 매핑을 정확화 → declined message 의 label 가 정확한 site 노출. 진짜 trigger = `string.indexOf` 의 result 처리 path.
 
 ## 1. 측정한 wall
 
@@ -67,9 +75,28 @@ Brick 8 시도 (revert 됨):
 
 ## 6. 다음 시도 권장 (multi-session)
 
-1. **osty-self 의 LLVM IR 디스어셈블** — `set.toString coercion is not supported` string literal 의 reference site 추적. `lirLowerCoercedOperand:5040` 의 declined emit site 가 어떤 다른 caller path 로 트리거.
-2. **`OSTY_LIRPROTO_DEBUG=1`** — osty-self subprocess 의 verbose mode 시도 (existence 검증 필요).
-3. **debug eprint in lirLowerCoercedOperand** — `eprint("DBG: coercion site label=" + label)` 추가, osty-self 재빌드, build 시 어떤 label 가 진짜 declined emit (set.toString / string.endsWith / 다른 label?). 단 osty-self 의 stage0 cover gap 으로 우리 변경 반영 안 될 수도.
+PR #1894 후 정확한 site = `lirLowerMirIndexOf` (`toolchain/lir_proto.osty:6315`). result 처리:
+
+```osty
+// dest.typ = "Int?" (loc.typ from MIR JSON)
+if (lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) && !lirTypeIsZero(destType) {
+    let merged = lirWrapOptionFromI64Sentinel(l, indexReg, destType, label)
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
+    return
+}
+// Fallback: i64 dest path
+lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(64), indexReg), "Int", label + " result")
+```
+
+가설:
+1. `lirStringHasQuestionSuffix("Int?")` 매칭 실패 (stage0 cover gap) → fallback path → i64 store to Option<Int> aggregate → `lirStoreMirResult` 의 coercion 실패
+2. 또는 `lirLowerMirType("Int?")` 가 stage0 cover gap 으로 zero (Unknown) 반환 → 두 path 모두 fail
+
+**brick 9 시도 (revert 됨)**: `destType.className == LirTypeAggregate` 도 sentinel-wrap path 활성화. 그러나 osty-self runtime 에 반영 안 됨 (stage0 cover gap 동일). osty-tests 회귀 zero.
+
+진짜 fix multi-session 영역:
+1. osty-self 의 LLVM IR 디스어셈블 — `lirStringHasQuestionSuffix` 또는 `lirLowerMirType` 의 stage0 lower wrong-code 확인
+2. lir_proto.osty 의 sentinel-wrap path 의 stage0 cover 확장 (PR #1858 cascade 패턴 추가 wave)
 
 ## 7. 본 doc 의 산출물
 
