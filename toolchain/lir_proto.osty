@@ -6340,7 +6340,15 @@ fn lirLowerMirIndexOf(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String,
         return
     }
     let destType = lirLowerMirType(l, loc.typ)
-    if lirIsOptionTypeName(loc.typ) && !lirTypeIsZero(destType) {
+    if (lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) && !lirTypeIsZero(destType) {
+        // Sentinel-aware wrap: `osty_rt_strings_IndexOf` returns -1
+        // for "not found", any non-negative i for the byte offset.
+        // We compare against -1 and merge `Some(i)` / `None` through
+        // an alloca slot. Without the `Question` sugar guard below,
+        // a dest typed `Int?` falls through to `lirStoreMirResult`
+        // which would auto-wrap *unconditionally* as `Some(-1)` —
+        // semantically wrong: the caller would see `Some(-1)` for
+        // "not found" instead of `None`.
         let merged = lirWrapOptionFromI64Sentinel(l, indexReg, destType, label)
         lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
         return
