@@ -160,3 +160,28 @@ Chicken-and-egg architecture wall 의 root cause = osty-self 가 자기 자신�
 multi-session brick wave 의 진짜 path:
 1. **이중 부트스트랩** — stage0 빌드된 osty-self 가 LIR Proto direct 로 새 osty-self 재빌드. 두 번째 osty-self 가 우리 변경 반영
 2. **또는** stage0/emit.go 의 cover 확장 — 특정 lir_proto.osty 함수의 wrong-code emit pattern 식별 + 새 stage0 case 추가. 단 audit 100% 의 monomorphization 후 subset 와는 다른 pre-monomorph pattern.
+
+## 11. MIR JSON term 분석 — input branch 0건 확정 (2026-05-17 추가)
+
+main.osty 원본 + minimal repro (`if let Some(i) = strings.indexOf(...)` 만) 둘 다의 staged MIR JSON 의 term 측정:
+
+```
+원본 (3 fn):
+  fn[0].naiveExtractSource: switch_int×2, goto×3, return×2
+  fn[1].emptyCheckResultJson: return
+  fn[2].main: return
+
+Minimal (1 fn):
+  fn[0].main: switch_int, goto×2, return
+```
+
+**branch term 0건**. 즉 declined `term.branch: branch condition requires i1` 는 input MIR 와 **무관** — osty-self 자체 binary 의 `lirLowerMirTerm` (또는 그 caller) 의 stage0 fallback 으로 lower 된 wrong-code 가 runtime 에 BranchTerm 처리 path 트리거 + cond.typ.llvm 가 `%Option.Int` aggregate.
+
+즉 osty-self 의 `term.branch` 처리 path 자체가 stage0 cover gap. 우리 input MIR 에 branch term 없음에도 osty-self runtime 에서 cond aggregate 의 branch 호출 chain 트리거.
+
+multi-session deep debug 의 핵심 site:
+- `internal/backend/stage0/emit.go::5772` 의 BranchTerm handling — cond LLVM type 가 i1 만 expect
+- `toolchain/lir_proto.osty::2906::MirTermBranch` — runtime path
+- 두 곳의 cover gap 식별 + 정확한 wrong-code pattern 분석 multi-session
+
+→ Chicken-and-egg wall: lir_proto.osty 변경 (brick 10) 도 stage0 cover gap 으로 미반영, stage0/emit.go 변경도 별도 wave 필요.
