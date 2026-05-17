@@ -167,6 +167,19 @@ func printInstallSelfBootstrapHint() {
 
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
+	// Forward env vars set by the user (OSTY_STAGE0_FALLBACK,
+	// OSTY_STDLIB_BODY_LOWER, etc.) and additionally enable
+	// LIST_ALL_DECLINES when stage0 fallback is active. The cascade
+	// of stdlib-generic-method monomorph functions (Result.unwrapOr,
+	// List.pop, ...) that stage0 can't fully match are diagnostic-only
+	// in the install-self critical path — emitting them as `unreachable`
+	// decline stubs lets the binary link without changing the runtime
+	// behaviour of the covered code paths. Users wanting strict mode
+	// can still override by setting OSTY_STAGE0_LIST_ALL_DECLINES=0.
+	cmd.Env = os.Environ()
+	if os.Getenv("OSTY_STAGE0_FALLBACK") != "" && os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES") == "" {
+		cmd.Env = append(cmd.Env, "OSTY_STAGE0_LIST_ALL_DECLINES=1")
+	}
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -9233,6 +9233,33 @@ func emitWhileValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 		return emitWhileCallResult(ctx, out, destID, destType, symbol, []callArg{{expr: listExpr, ty: "ptr"}, {expr: indexExpr, ty: "i64"}})
 	case mir.IntrinsicListSorted, mir.IntrinsicListToSet, mir.IntrinsicListToString:
 		return emitWhileTypedListUnaryIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicListRemoveAt:
+		// Value-returning `list.removeAt(i)` — emit as `get(i)` +
+		// `remove_at_discard(i)` since the runtime only ships the
+		// void splice helper. The caller-reads-first convention is
+		// documented at osty_rt_list_remove_at_discard. The void
+		// case (dest=nil) is handled in emitWhileIntrinsic.
+		if len(ii.Args) != 2 {
+			return false
+		}
+		listExpr, listTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok || indexTy != scalarInt {
+			return false
+		}
+		symbol := listGetSymbolFor(destType)
+		if symbol == "" {
+			return false
+		}
+		declareListGetRuntimeFor(ctx.mctx, destType)
+		valueReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call %s @%s(ptr %s, i64 %s)\n", valueReg, destType.llvm(), symbol, listExpr, indexExpr)
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_list_remove_at_discard", []callArg{{ty: "ptr"}, {ty: "i64"}})
+		fmt.Fprintf(out, "  call void @osty_rt_list_remove_at_discard(ptr %s, i64 %s)\n", listExpr, indexExpr)
+		return bindWhileResult(ctx, out, destID, destType, valueReg)
 	case mir.IntrinsicMapContains:
 		return emitWhileMapContainsIntrinsic(ctx, out, ii, destID, destType)
 	case mir.IntrinsicMapGet:
@@ -10439,9 +10466,29 @@ func coerceScalarForStore(ctx *whileLoopEmitCtx, out *strings.Builder, expr stri
 		reg := freshReg(ctx)
 		fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", reg, expr)
 		return reg, true
+	case fromTy == scalarOpaquePtr && (toTy == scalarByte || toTy == scalarChar):
+		// Narrowing variant of the opaque-ptr → int coercion:
+		// ptrtoint to i64 then trunc to the target width. Matches the
+		// stdlib-monomorph `List<Byte>` / `List<Char>` shape where
+		// the value local got hoisted to opaque ptr but the Option
+		// payload (or struct field) wants a narrower scalar.
+		i64Reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", i64Reg, expr)
+		narrowReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = trunc i64 %s to %s\n", narrowReg, i64Reg, toTy.llvm())
+		return narrowReg, true
 	case fromTy == scalarOpaquePtr && toTy == scalarBool:
 		reg := freshReg(ctx)
 		fmt.Fprintf(out, "  %s = icmp ne ptr %s, null\n", reg, expr)
+		return reg, true
+	case fromTy == scalarInt && scalarLowersToPtr(toTy):
+		// Int → opaque ptr via inttoptr — covers
+		// Option<Primitive>'s payload store when the value's local
+		// was hoisted to opaque ptr by the isMangledOstyMonomorphFn
+		// fallback (the original primitive type was erased
+		// upstream and stage0 needs an LLVM-valid coercion).
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = inttoptr i64 %s to ptr\n", reg, expr)
 		return reg, true
 	}
 	return "", false
@@ -11127,6 +11174,18 @@ func isMangledBuiltinTemplate(name, template string) bool {
 	return rest[digitEnd:digitEnd+n] == template
 }
 
+// isMangledOstyMonomorphFn reports whether `name` is an Itanium-style
+// mangling for an osty stdlib generic method/function instance
+// (`_Z<digits>osty_…`). Used to scope the "ErrType local → opaque ptr"
+// default in matchGenericScalarCFG to functions where the upstream
+// type erasure is expected and recoverable, not user-code bugs.
+func isMangledOstyMonomorphFn(name string) bool {
+	if !strings.HasPrefix(name, "_Z") {
+		return false
+	}
+	return strings.Contains(name, "osty_")
+}
+
 // demangleMonomorphTemplateArg extracts the first template argument
 // from an Itanium-style mangling. For `_ZTSN4main4ListIN4main14MirFieldLayoutEEE`
 // (canonical `List<MirFieldLayout>`) returns `MirFieldLayout`. The
@@ -11292,12 +11351,16 @@ func emitWhileOptionAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder,
 		return "", scalarUnknown, false
 	}
 	expr, ty, ok := resolveOperandWithLoad(ctx, out, agg.Fields[0])
-	if !ok || ty != payloadTy {
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	coerced, ok := coerceScalarForStore(ctx, out, expr, ty, payloadTy)
+	if !ok {
 		return "", scalarUnknown, false
 	}
 	payloadSlot := ctx.mctx.freshTempName("option.payload.slot")
 	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, obj)
-	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), expr, payloadSlot)
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), coerced, payloadSlot)
 	return obj, scalarOpaquePtr, true
 }
 
@@ -15609,11 +15672,34 @@ func inferGenericLocalStructName(fn *mir.Function, id mir.LocalID, mctx *moduleC
 					continue
 				}
 				cp, ok := use.Op.(*mir.CopyOp)
-				if !ok || !cp.Place.HasProjections() {
+				if !ok {
 					continue
 				}
-				if name := inferGenericVariantPayloadStructName(fn, cp.Place, mctx); name != "" {
-					return name
+				if cp.Place.HasProjections() {
+					if name := inferGenericVariantPayloadStructName(fn, cp.Place, mctx); name != "" {
+						return name
+					}
+					continue
+				}
+				// Direct `local#id = Copy(local#src)` — if src has a
+				// known NamedType layout, surface that as the effective
+				// struct name even when the declared type of `id`
+				// disagrees (the front-end occasionally writes the
+				// outer call's declared local type even when later
+				// assignments narrow it to a concrete struct, e.g.
+				// `local#sig: ElabCx` then `local#sig = checkFnSig`
+				// in elaborateFnBody).
+				if loc := lookupLocal(fn, cp.Place.Local); loc != nil {
+					if named, ok := loc.Type.(*ir.NamedType); ok && named != nil && named.Name != "" {
+						if mctx.module.Layouts.Structs[named.Name] != nil {
+							return named.Name
+						}
+						if canonical := demangleMonomorphStructName(named.Name); canonical != "" {
+							if mctx.module.Layouts.Structs[canonical] != nil {
+								return canonical
+							}
+						}
+					}
 				}
 			}
 		}
@@ -15955,6 +16041,18 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			if isErrType(l.Type) && genericErrLocalUsedOnlyAsNegZero(fn, l.ID) {
 				continue
 			}
+			// Stdlib generic-method monomorph (`_Z…osty_…`) — concrete
+			// T was erased post-monomorphisation, ErrType locals are
+			// the boxed payload defaults. Most lower to opaque ptr at
+			// runtime. Limit the rule to `osty_` mangled functions so
+			// user-code ErrType locals (which are usually real bugs)
+			// still fail loudly.
+			if isErrType(l.Type) && isMangledOstyMonomorphFn(fn.Name) {
+				ty = scalarOpaquePtr
+				localTypes[l.ID] = scalarOpaquePtr
+			}
+		}
+		if ty == scalarUnknown {
 			// Aggregate return local: skip scalar stack allocation; the
 			// generic tuple path tracks the SSA aggregate separately.
 			if pat.aggRetTypeName != "" && l.ID == fn.ReturnLocal {
