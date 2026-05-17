@@ -3231,15 +3231,21 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     let mut destType = lirLowerMirType(l, destLoc.typ)
-    if lirTypeIsZero(destType) {
+    let hasProj = mirPlaceHasProjections(instr.dest)
+    if lirTypeIsZero(destType) && !hasProj {
         // R3 brick 12: dest local type 이 `<error>` literal (또는
         // unknown) 인 경우 i64 default 로 graceful fallback. brick 5
         // (lirLowerMirLocalsFrom) 가 같은 패턴으로 local alloca 단계
         // cover — assign 단계도 일관성 유지. Companion fallback chain:
         // local alloca → i64 (brick 5), assign dest → i64 (this brick).
+        //
+        // R3 brick 14 (post `--emit=llvm-ir` measurement): projection
+        // path 에서 i64 fallback 시 `projection on non-aggregate type
+        // i64` wall trigger (51건). projection 은 aggregate 가 필요
+        // 하므로 unknown root type 일 때 fallback 적용 안 함.
         destType = lirIntType(64)
     }
-    if mirPlaceHasProjections(instr.dest) {
+    if hasProj {
         let leafTypeName = lirMirProjectionLeafType(instr.dest.projections)
         let leafType = lirLowerMirType(l, leafTypeName)
         let value = lirLowerMirRValue(l, instr.src, leafTypeName, leafType)
