@@ -1,15 +1,20 @@
 # LLVM self-host — 다음 세션 handoff
 
 > **목적**: fresh context 진입 시 5분에 읽고 다음 PR 진입 가능한 단일 명세.
-> **상태**: 2026-05-17 세션 종료 시점. 34 PR 머지 + 🎉 source bootstrap UNLOCK.
+> **상태**: 2026-05-17 후속 세션 종료 시점. 39+ PR 머지 + R3 trajectory brick 1/2/3a 완성.
 
 ## 1. 30초 요약
 
 - **목표**: `cmd/osty-native-checker` 의 LLVM 자체 빌드 + Go-built 와 byte-identical `CheckResult` JSON. plan 본문은 [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md).
-- **현재**: M1 ✓ (binary builds+runs), M2 partial ✓ (empty-source fixture byte parity, 진짜 stdin + naive parser), 🎉 **source bootstrap UNLOCK** ([PR #1863](https://github.com/choiceoh/osty/pull/1863), `osty-self` install 됨, plan §10.1 R2 종결).
-- **다음 unlock 후보**:
-  1. **production path next wall** — `osty-self` 의 monomorph 후 `mirJsonObjectGetNamed` stage0 decline. PR [#1858](https://github.com/choiceoh/osty/pull/1858) classifier trajectory 의 후속 wave 작업.
-  2. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과 (단순 dispatch arm 아닌 새 mechanism). 옵션 c' 재합의 필요 또는 옵션 5 wait.
+- **현재**: M1 ✓, M2 partial ✓, 🎉 **source bootstrap UNLOCK** ([PR #1863](https://github.com/choiceoh/osty/pull/1863)). **R3 trajectory 진행 중**:
+  - Brick 1 [#1873](https://github.com/choiceoh/osty/pull/1873) — PrimInt type cover (`__IntMethods` fan-out)
+  - Brick 2 [#1874](https://github.com/choiceoh/osty/pull/1874) — `Int__abs/min/max/clamp/signum` C runtime wrappers
+  - Brick 3a measurement [#1875](https://github.com/choiceoh/osty/pull/1875) + impl [#1878](https://github.com/choiceoh/osty/pull/1878) — lir_proto inline expansion (osty-self self-contained)
+  - indexOf bug fix [#1881](https://github.com/choiceoh/osty/pull/1881) — stdlibFreeFnReturnType
+- **남은 unlock 후보**:
+  1. **production path coercion walls** — cmd/osty-native-checker 빌드 시 `string.endsWith coercion` + `set.toString coercion` declined (lir_proto path 의 type alignment gap)
+  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString` 내부 NULL deref. main baseline 의 issue, 별도 trajectory
+  3. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과. 옵션 c' 재합의 필요 또는 옵션 5 (R3 trajectory) wait
 - **합의 없이 자율 진행 가능**: §6.
 
 ## 2. 빌드 + 검증 (cheat sheet)
