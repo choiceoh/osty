@@ -42,8 +42,20 @@ OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/
 echo '{"source":""}' | ./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm
 ```
 
-`OSTY_STAGE0_FALLBACK=1` is currently required — production LIR Proto path
-needs `osty-self` (which itself needs stage0 100% cover; current 99.8%).
+`OSTY_STAGE0_FALLBACK=1` is still the practical default for this LLVM build
+because **normal MIR→LLVM emission goes through `osty-self lir-proto-lower`**
+(`internal/backend/llvm.go` `emitLLVMFallback`). On a checkout without a
+working `osty-self` cache (or when that subprocess declines the MIR payload),
+the dispatcher only proceeds if you opt into the in-process **stage0**
+bootstrap emitter (`internal/backend/stage0/`, gated by this env var;
+see `internal/backend/bootstrap.go`).
+
+Stage0 **audit coverage** of `toolchain/*.osty` reached **100%** after PR
+[#1858](https://github.com/choiceoh/osty/pull/1858) (2026-05-17,
+`TestStage0ToolchainAudit`). That milestone does **not** automatically mean
+every monomorphized build of `osty-self` or every package is LIR-Proto clean;
+`SPEC_GAPS.md` still tracks **audit-pass vs build-pass** gaps and the
+`osty-native-checker` production-path wall when stage0 fallback is off.
 
 ## main.osty 한계
 
