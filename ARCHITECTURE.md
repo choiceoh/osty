@@ -73,6 +73,9 @@ through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
 | `mir_lower.osty` | ~5,500 | HIR → MIR lowerer — Stage 4a–4e incremental port |
 | `mir_optimize.osty` | — | MIR optimization passes |
 | `mir_validator.osty` | — | MIR structural validation |
+| `mir_generator.osty` | ~23,000 | MIR → LLVM IR text builders + intrinsic dispatch (native backend core) |
+| `lir_proto.osty` | ~8,300 | LIR Proto lowering / bridge consumed by `osty-self lir-proto-lower` |
+| `llvmgen.osty` | ~5,200 | LLVM ABI helpers + emission glue for the self-hosted backend |
 | `pmcompile.osty` | ~530 | Pattern-match decision tree compiler |
 | `monomorph.osty` | ~360 | Generic monomorphization — Itanium ABI mangling |
 | `monomorph_pass.osty` | ~2,240 | Stage A — generic type environment, deep clone + substitution |

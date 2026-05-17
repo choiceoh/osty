@@ -37,17 +37,15 @@
 - **stage0 fallback** — `osty-self` 가 부재할 때만 작동하는 Go 측 의도적으로 좁은 emitter (`internal/backend/stage0/`). bootstrap 닭-달걀 해소. **production 빌드 경로 아님**.
 - **`scripts/verify-self-rebuild`** — stage2/stage3 byte parity 강제. fresh checkout 에서 self-host 부트스트랩이 가능한지 확인.
 - **`scripts/audit-stage0-coverage.sh`** + `TestStage0ToolchainAudit` (`OSTY_STAGE0_AUDIT=1`) — toolchain/*.osty 함수가 stage0 surface 안에 머무는 비율 측정.
-- **현재 측정 (2026-05-16, spike 결과 — [llvm-selfhost-plan-spike-findings.md §Q1](llvm-selfhost-plan-spike-findings.md))**:
+- **스파이크 측정 (2026-05-16 — [llvm-selfhost-plan-spike-findings.md §Q1](llvm-selfhost-plan-spike-findings.md))** — 역사적 스냅샷:
 
-  | 메트릭 | 값 |
+  | 메트릭 | 값 (스파이크 시점) |
   |---|---|
   | Stage0 audit cover (toolchain 전체) | **99.8% (8221 / 8237)** |
   | decline 함수 수 | **16** (모두 large complex 함수, blocks 11–103) |
   | `install-self` 실제 decline | PR1 시점에 재측정 (audit-install 격차 monomorph 효과) |
 
-  5일 전 (2026-05-11) 의 94.2% (6112/6489) 대비 +5.6%p / +2109 함수 cover. stage0 trajectory (P24+) 진척이 plan 작성 시점 가정보다 빠름. 본 plan 의 PR3 (L1 byte parity) 시점에 stage0 100% 가 거의 확실 — 본 plan 의 PR 4–N (stage0 gap 깎기) 가 사실상 불필요해질 가능성.
-
-  두 수치의 격차 (audit cover vs install-self decline) 는 audit 가 checker bundle 만 측정하는 반면 `install-self` 는 binary 컴파일 시 monomorphization 으로 함수 수가 늘어나기 때문 (`stage0_p24_scope.md §0` 의 설명 그대로).
+- **갱신 (2026-05-17, PR [#1858](https://github.com/choiceoh/osty/pull/1858))**: `TestStage0ToolchainAudit` 기준 stage0 audit cover **100.0% (8240 / 8241)**. 위 16개 decline 웨이브는 종결. 후속 노트·정정은 [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인(같은 날짜) — 요지: **audit-pass ≠ build-pass** (`install-self` / monomorph / LIR Proto 단계에서 별도 decline 가능), `bundle.ToolchainCheckerFiles()` probe vs `resolve.PackageSourcePaths` 전체 walk 구분, production `osty-self` 경로에서 남은 wall(예: `mirJsonObjectGetNamed`) 은 이 표의 퍼센트와 독립적으로 추적.
 
 ### 3.2 우리 plan 과 stage0 trajectory 의 관계
 
@@ -57,8 +55,8 @@
 - 본 plan: **"osty-native-checker 가 LLVM 으로 자체 빌드되고 Go-built 와 같은 동작인가?"** — 셀프호스팅의 의미 단위. 측정 단위 = behavior parity.
 
 두 trajectory 가 만나는 지점:
-- stage0 coverage 100% ⇒ toolchain 전체가 LLVM lower 가능 ⇒ `osty-native-checker` LLVM 빌드도 가능 (entry-point + JSON ser/de + corpus 만 추가 작업).
-- 반대로 본 plan 은 stage0 coverage 가 < 100% 인 동안에는 production 경로 (LIR Proto 서브프로세스) 가 `osty-self` 캐시에 의존한다는 점을 받아들이고 진행. 즉 두 측정이 평행하게 진척된다.
+- stage0 **audit** 100% (PR #1858 이후, §3.1) ⇒ 남은 블로커는 주로 **LIR Proto / monomorph / cross-pkg** 축 (`SPEC_GAPS.md` 동일 날짜 타임라인) — `osty-native-checker` LLVM parity 는 여전히 entry JSON + checker 호출 + corpus 가 별도 작업.
+- production 경로 (LIR Proto 서브프로세스) 는 **빌드된 `osty-self` 캐시** 에 의존한다는 점은 변하지 않는다. audit 퍼센트와 무관하게 subprocess 가 decline 하면 `OSTY_STAGE0_FALLBACK=1` 로만 bootstrap emitter 가 개입한다 (`internal/backend/llvm.go`).
 
 ### 3.3 `osty-native-checker` 의 현재 구조
 
