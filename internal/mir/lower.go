@@ -3609,6 +3609,8 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TInt
 		case "isEmpty", "contains", "containsKey":
 			return ir.TBool
+		case "toString":
+			return ir.TString
 		}
 	case "List":
 		elemT := bs.l.listElementType(recvT)
@@ -3623,6 +3625,8 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TInt
 		case "isEmpty", "contains":
 			return ir.TBool
+		case "toString":
+			return ir.TString
 		}
 	case "Set":
 		switch method {
@@ -3630,6 +3634,8 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TInt
 		case "isEmpty", "contains":
 			return ir.TBool
+		case "toString":
+			return ir.TString
 		}
 	}
 	return nil
