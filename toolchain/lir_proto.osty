@@ -8064,10 +8064,15 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 // 가 i64 local 만든 case. brick 18 와 같은 simple shape
                 // (stage0 cover 가능). 50건 declined cover.
                 //
+                // Only reuse the already-emitted value when the skipped
+                // projection also expects an i64 leaf. Retagging an i64
+                // SSA value as a pointer/aggregate/smaller integer would
+                // produce invalid IR in later lowering.
+                //
                 // Note: cmd/osty-native-checker build 의 `%t28
                 // referenced before definition` (SSA 깸) 는 본 brick
                 // 와 무관 — revert 후에도 동일 wall (다른 path).
-                if lirStringEq(current.typ.llvm, "i64") {
+                if lirStringEq(current.typ.llvm, "i64") && lirStringEq(step.typ.llvm, "i64") {
                     current = LirOperand {typ: step.typ, value: current.value}
                     continue
                 }
