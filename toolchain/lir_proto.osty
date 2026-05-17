@@ -8053,11 +8053,26 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
             if current.typ.className != LirTypeAggregate {
                 // R3 brick 18: empty/unknown current.typ — projection
                 // skip, promote to step.typ. brick 17 패턴 (simple if
-                // + literal eq). recoverOperandType cover gap upstream
-                // 에서 type leak. step.typ 가 concrete 면 promote 만
-                // 으로 caller chain 통과; LLVM verifier 가 진짜 mismatch
-                // 검출.
+                // + literal eq).
                 if lirStringEq(current.typ.llvm, "") {
+                    current = LirOperand {typ: step.typ, value: current.value}
+                    continue
+                }
+                // R3 brick 20: i64 current.typ (brick 5 alloca'd
+                // `<error>` local → i64) — projection skip, promote.
+                // recoverOperandType cover gap upstream 에서 type leak
+                // 가 i64 local 만든 case. brick 18 와 같은 simple shape
+                // (stage0 cover 가능). 50건 declined cover.
+                //
+                // Only reuse the already-emitted value when the skipped
+                // projection also expects an i64 leaf. Retagging an i64
+                // SSA value as a pointer/aggregate/smaller integer would
+                // produce invalid IR in later lowering.
+                //
+                // Note: cmd/osty-native-checker build 의 `%t28
+                // referenced before definition` (SSA 깸) 는 본 brick
+                // 와 무관 — revert 후에도 동일 wall (다른 path).
+                if lirStringEq(current.typ.llvm, "i64") && lirStringEq(step.typ.llvm, "i64") {
                     current = LirOperand {typ: step.typ, value: current.value}
                     continue
                 }
