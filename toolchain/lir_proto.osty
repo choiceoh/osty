@@ -4391,6 +4391,17 @@ fn lirLowerMirPrintTextOperand(l: LirMirFunctionLowerer, op: MirOperand) -> LirO
     }
     let symbol = lirRuntimeToStringSymbolForType(argType)
     if symbol == "" {
+        // R3 brick 17: <error>-typed print argument graceful fallback.
+        // recoverOperandType cover gap upstream 에서 type leak —
+        // i64 으로 treat + osty_rt_int_to_string 호출. brick 5/12/15
+        // 의 `<error>` → i64 fallback chain 의 일관 적용.
+        if lirStringEq(op.typ, "<error>") {
+            let intSym = "osty_rt_int_to_string"
+            lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(intSym, lirIntType(64)))
+            let dest = lirFresh(l)
+            l.instrs.push(lirCall(dest, lirPtrType(), "@" + intSym, [lirOperand(lirIntType(64), value.value)]))
+            return lirOperand(lirPtrType(), dest)
+        }
         lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` is not implemented", "intrinsic.print")
         return lirOperandInvalid()
     }
