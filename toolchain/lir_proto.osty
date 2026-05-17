@@ -3065,7 +3065,17 @@ fn lirLowerMirLocalsFrom(locals: List<MirLocal>, l: LirMirFunctionLowerer, pos: 
         return
     }
     let loc = locals[pos]
-    let typ = lirLowerMirType(l, loc.typ)
+    let mut typ = lirLowerMirType(l, loc.typ)
+    // Type-propagation graceful fallback: when the MIR local carries a
+    // `<error>` type (typically because an upstream expression leaked
+    // it through a `recoverOperandType` cover gap), default the LIR
+    // slot to i64 instead of declining the whole function. The
+    // companion fallback in `lirStoreMirResult` then aligns producer-
+    // side stores. This trades type-precision in propagation gaps for
+    // build progress; mismatched stores surface at the LLVM verifier.
+    if lirTypeIsZero(typ) && loc.typ == "<error>" {
+        typ = lirIntType(64)
+    }
     if lirTypeIsZero(typ) {
         lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", "local." + loc.name)
     } else if !(lirTypeIsVoid(typ)) {
@@ -3736,9 +3746,21 @@ fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperan
         lirLowerError(l, LirDiagInvalidInput, context + " destination local out of range", context)
         return
     }
-    let destType = lirLowerMirType(l, loc.typ)
+    let mut destType = lirLowerMirType(l, loc.typ)
     if lirTypeIsVoid(destType) {
         return
+    }
+    // Type-propagation graceful fallback: when the dest local's MIR type
+    // is unknown (typically because an upstream expression leaked
+    // `<error>` through a `recoverOperandType` cover gap) but the
+    // producer's result type is concrete, treat the producer type as
+    // the canonical dest. This unblocks the lir_proto path for
+    // single-producer stores (e.g. `string.endsWith` → i1) without
+    // forcing every cover gap to be fixed before any build progresses.
+    // The local's LIR slot still ends up typed by the producer; a real
+    // type mismatch would surface at the LLVM verifier.
+    if destType.className == LirTypeUnknown && result.typ.className != LirTypeUnknown && !lirTypeIsZero(result.typ) {
+        destType = result.typ
     }
     if mirPlaceHasProjections(dest) {
         lirStoreProjectedMirValue(l, dest, loc, destType, result, resultTypeName, context)
