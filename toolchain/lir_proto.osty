@@ -3269,12 +3269,45 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
         } else {
             let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, destType, lirPrimitiveTypeIsUnsigned(instr.src.typ))
             if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, "assign coercion is not supported", "assign")
-                return
+                // R3 brick 15: cross-family coercion case-by-case fix.
+                // Each branch emits *correct* LLVM IR (SSA-valid)
+                // instead of the brick-8 broadest "skip" path (which
+                // broke SSA invariants by treating mismatched value as
+                // dest type without any actual conversion).
+                if value.typ.className == LirTypeInt && destType.className == LirTypeAggregate {
+                    // i64 → Option<T> / Result<T,E>: wrap as Some/Ok
+                    // (disc=0). Payload slot stays i64 since
+                    // `lirEmitAlgebraicI64` builds the canonical 2-i64
+                    // shape. Same path the production sentinel-wrap
+                    // helpers use for `xs.first()` / Option<Int>.
+                    let merged = lirEmitAlgebraicI64(l, destType, 0, value.value, "assign.wrap")
+                    if merged == "undef" {
+                        lirLowerError(l, LirDiagUnsupported, "assign coercion is not supported (aggregate wrap failed)", "assign")
+                        return
+                    }
+                    value = LirOperand {typ: destType, value: merged}
+                } else if value.typ.className == LirTypeAggregate && destType.className == LirTypeInt {
+                    // Aggregate → i64: extract first field (disc).
+                    let discReg = lirFresh(l)
+                    l.instrs.push(lirExtractValue(discReg, value.typ, value.value, [0]))
+                    value = LirOperand {typ: destType, value: discReg}
+                } else if value.typ.className == LirTypePtr && destType.className == LirTypeInt {
+                    let castName = lirFresh(l)
+                    l.instrs.push(lirCast(castName, "ptrtoint", value, destType))
+                    value = LirOperand {typ: destType, value: castName}
+                } else if value.typ.className == LirTypeInt && destType.className == LirTypePtr {
+                    let castName = lirFresh(l)
+                    l.instrs.push(lirCast(castName, "inttoptr", value, destType))
+                    value = LirOperand {typ: destType, value: castName}
+                } else {
+                    lirLowerError(l, LirDiagUnsupported, "assign coercion is not supported", "assign")
+                    return
+                }
+            } else {
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, destType))
+                value = LirOperand {typ: destType, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, destType))
-            value = LirOperand {typ: destType, value: castName}
         }
     }
     let mut slot = lirMirLocalSlot(l, destLoc.id)
