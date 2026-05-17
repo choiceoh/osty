@@ -3382,6 +3382,28 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		if payloadT := bs.l.questionOkPayloadType(xT); !isPoisonType(payloadT) && !irHasPoisonedTypeArg(payloadT) {
 			return payloadT
 		}
+	case *ir.MatchExpr:
+		// `if let Some(i) = strings.indexOf(text, marker)` desugars to
+		// MatchExpr. When the checker drops the carrier type, recover
+		// from whichever arm body still carries a concrete tail type.
+		// All arms produce the same type by exhaustiveness, so taking
+		// the first non-poisoned arm is sufficient.
+		for _, arm := range x.Arms {
+			if arm == nil {
+				continue
+			}
+			if rt := recoverBlockTailType(bs, arm.Body); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
+				return rt
+			}
+		}
+	case *ir.BlockExpr:
+		// `let x = { … }` block with a poisoned BlockExpr carrier:
+		// recover from the block's tail expression directly.
+		if x.Block != nil {
+			if rt := recoverBlockTailType(bs, x.Block); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
+				return rt
+			}
+		}
 	}
 	return nil
 }
