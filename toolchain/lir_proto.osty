@@ -5734,7 +5734,7 @@ fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "map.get destination local out of range", "map.get")
         return
     }
-    if !(lirIsOptionTypeName(loc.typ)) {
+    if !(lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) {
         lirLowerError(l, LirDiagUnsupported, "map.get destination must be Option<V>, got `" + loc.typ + "`", "map.get")
         return
     }
@@ -5816,7 +5816,7 @@ fn lirLowerMirListFirstOrLast(l: LirMirFunctionLowerer, instr: MirInstr, isLast:
         lirLowerError(l, LirDiagInvalidInput, label + " destination local out of range", label)
         return
     }
-    if !(lirIsOptionTypeName(loc.typ)) {
+    if !(lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) {
         lirLowerError(l, LirDiagUnsupported, label + " destination must be Option<T>, got `" + loc.typ + "`", label)
         return
     }
@@ -5922,7 +5922,7 @@ fn lirLowerMirListPop(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.pop destination local out of range", "list.pop")
         return
     }
-    if !(lirIsOptionTypeName(loc.typ)) {
+    if !(lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) {
         lirLowerError(l, LirDiagUnsupported, "list.pop destination must be Option<T>, got `" + loc.typ + "`", "list.pop")
         return
     }
@@ -6010,7 +6010,7 @@ fn lirLowerMirBytesGet(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "bytes.get destination local out of range", "bytes.get")
         return
     }
-    if !(lirIsOptionTypeName(loc.typ)) {
+    if !(lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)) {
         lirLowerError(l, LirDiagUnsupported, "bytes.get destination must be Option<Byte>, got `" + loc.typ + "`", "bytes.get")
         return
     }
