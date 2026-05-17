@@ -374,6 +374,17 @@ const (
 	IntrinsicEprintln               // stderr, newline
 	IntrinsicAbort                  // unreachable runtime trap
 	IntrinsicStringConcat
+	// IntrinsicBytesConcat returns Bytes. Args: [left, right].
+	// Placed here (position 7) — and not in the Bytes block below —
+	// to match the toolchain `MirIntrinsic*` enum's declaration
+	// order. The MIR JSON wire format encodes intrinsic kinds as
+	// raw integers, so Go and toolchain must agree on the iota
+	// positions or every intrinsic from this point onward gets
+	// misinterpreted at decode time. See
+	// `toolchain/mir.osty::MirIntrinsicKind` and
+	// `toolchain/mir_json.osty::mirJsonIntrinsic` for the
+	// authoritative wire mapping.
+	IntrinsicBytesConcat
 
 	// ---- concurrency: channels ----
 
@@ -625,8 +636,6 @@ const (
 	IntrinsicBytesSplit
 	// IntrinsicBytesJoin returns Bytes. Args: [sep, parts].
 	IntrinsicBytesJoin
-	// IntrinsicBytesConcat returns Bytes. Args: [left, right].
-	IntrinsicBytesConcat
 	// IntrinsicBytesRepeat returns Bytes. Args: [bytes, n].
 	IntrinsicBytesRepeat
 	// IntrinsicBytesReplace returns Bytes. Args: [bytes, old, new].
