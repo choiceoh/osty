@@ -1,0 +1,13 @@
+// Public API surface for the `toolchain` library dependency.
+//
+// PR3-D scaffold (R3 trajectory after #1886 cross-pkg dispatch arm
+// landed): exposes a minimal `[lib]` entry so downstream crates (e.g.
+// `cmd/osty-native-checker`) can declare `toolchain` as a path
+// dependency and `use toolchain.check`.
+//
+// Until `cmd/osty` grows a real lib build path (PR3-E), this file is a
+// minimal marker; the actual exports come from the rest of the package
+// once the manifest is wired up. The real cross-package method-call
+// dispatch needs `checkLookupFn` to consult the dependency's symbol
+// table (cross-env extension) — that lives outside the narrow
+// exception's per-arm scope and is tracked separately.

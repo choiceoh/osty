@@ -10,6 +10,9 @@ keywords = ["toolchain", "semver", "registry", "manifest", "diagnostics", "ir", 
 name = "osty-self"
 path = "main.osty"
 
+[lib]
+path = "lib.osty"
+
 [capabilities]
 runtime = true
 
