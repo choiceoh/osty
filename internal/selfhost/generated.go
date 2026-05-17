@@ -35758,6 +35758,14 @@ func checkRecordSymbol(env *CheckEnv, nodeIdx int, kind string, name string, own
 // toolchain/check_env.osty::checkOwnerIsUseAlias. Used by the
 // cross-package method-call dispatch arm in elab.
 //
+// Shadowing (PR #1886 review): the caller derives `name` from the
+// receiver TYPE (`elabOwnerNameForReceiver`), so a local shadowing
+// the use-alias surfaces a different ownerName and never queries
+// this helper with the shadowed name.
+//
+// Cost (PR #1886 review): O(N) over `symbolRecords` on the cold path
+// (only invoked after method lookup intentionally fails).
+//
 // CLAUDE.md narrow exception (PR3-C step 3 surgical hand-edit of the
 // frozen seed). See SPEC_GAPS.md::cross-pkg-module-resolution.
 func checkOwnerIsUseAlias(env *CheckEnv, name string) bool {

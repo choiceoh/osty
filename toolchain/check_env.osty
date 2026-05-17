@@ -893,6 +893,20 @@ pub fn checkRecordSymbol(env: CheckEnv, nodeIdx: Int, kind: String, name: String
 /// lookup of `fn` instead of failing as E0703. See
 /// SPEC_GAPS.md::cross-pkg-module-resolution (PR3-C step 3 narrow
 /// exception in CLAUDE.md).
+///
+/// Shadowing (PR #1886 review): the caller derives `name` from the
+/// receiver TYPE (`elabOwnerNameForReceiver`), not from the bare
+/// ident. A local `let tc = SomeInt` shadows the use-alias's tyNamed
+/// binding, so the receiver's resolved type is `SomeInt` and
+/// `elabOwnerNameForReceiver` returns "SomeInt" rather than "tc" —
+/// this helper is never queried with the shadowed name. The
+/// kind=="use" check below remains the right gate for the
+/// non-shadowed case.
+///
+/// Cost (PR #1886 review): O(N) over `symbolRecords` on the cold
+/// path (only invoked after method lookup intentionally fails).
+/// `symbolRecords` typically stays bounded per file; the hottest
+/// expected call rate is once per `tc.fn()` site, not per call edge.
 pub fn checkOwnerIsUseAlias(env: CheckEnv, name: String) -> Bool {
     if name == "" {
         return false
