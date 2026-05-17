@@ -2914,10 +2914,24 @@ fn lirLowerMirBlockTerm(l: LirMirFunctionLowerer, bb: MirBasicBlock, ret: LirTyp
             // i64 instead of i1. The icmp coercion preserves Osty's
             // C-style "non-zero is true" semantics and lets the
             // function lower instead of declining the whole module.
+            //
+            // R3 brick 11 (post PR #1898): aggregate cond (e.g.
+            // %Option.Int reaching here from an upstream type leak in
+            // `if let Some(i) = strings.indexOf(...)`) → extract the
+            // discriminant field (index 0, i64) and treat
+            // `disc == 0` as "Some/Ok" (present). The Option/Result
+            // ABI guarantees disc=0 for the truthy variant
+            // (mirSomeAggregateLines / mirOkAggregateLines).
             if cond.typ.className == LirTypeInt {
                 let coerced = lirFresh(l)
                 l.instrs.push(lirBinary(coerced, "icmp ne", cond.typ, cond.value, "0"))
                 cond = LirOperand {typ: lirIntType(1), value: coerced}
+            } else if cond.typ.className == LirTypeAggregate {
+                let discReg = lirFresh(l)
+                l.instrs.push(lirExtractValue(discReg, cond.typ, cond.value, [0]))
+                let presentReg = lirFresh(l)
+                l.instrs.push(lirBinary(presentReg, "icmp eq", lirIntType(64), discReg, "0"))
+                cond = LirOperand {typ: lirIntType(1), value: presentReg}
             } else {
                 lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
                 return lirUnreachable()
@@ -7218,11 +7232,18 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
             // Same coerce-via-icmp-ne-0 path as the sibling block-term
             // branch (search "branch condition requires i1" above for
             // the rationale). Keeps the two terminator-emit sites in
-            // sync.
+            // sync. R3 brick 11: aggregate cond → disc extract +
+            // `icmp eq disc, 0` for Some/Ok (present) detection.
             if cond.typ.className == LirTypeInt {
                 let coerced = lirFresh(l)
                 l.instrs.push(lirBinary(coerced, "icmp ne", cond.typ, cond.value, "0"))
                 cond = LirOperand {typ: lirIntType(1), value: coerced}
+            } else if cond.typ.className == LirTypeAggregate {
+                let discReg = lirFresh(l)
+                l.instrs.push(lirExtractValue(discReg, cond.typ, cond.value, [0]))
+                let presentReg = lirFresh(l)
+                l.instrs.push(lirBinary(presentReg, "icmp eq", lirIntType(64), discReg, "0"))
+                cond = LirOperand {typ: lirIntType(1), value: presentReg}
             } else {
                 lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
                 return lirUnreachable()
