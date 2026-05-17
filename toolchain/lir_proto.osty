@@ -4702,14 +4702,25 @@ fn lirLowerMirStringRuntimeCall(l: LirMirFunctionLowerer, instr: MirInstr, symbo
             return
         }
         if value.typ.llvm != pt.llvm {
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, pt, lirPrimitiveTypeIsUnsigned(arg.typ))
-            if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, label + " arg " + lirIntToString(i) + " coercion is not supported", label + " arg " + lirIntToString(i))
-                return
+            // Graceful fallback: when the producer's value type is
+            // unknown (typically because of an upstream `<error>`
+            // propagation leak) but the runtime call's declared param
+            // type is concrete, treat the value as already typed by
+            // the param. The LLVM verifier still catches actual
+            // mismatches; this just keeps the lir_proto path
+            // productive past `recoverOperandType` cover gaps.
+            if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: pt, value: value.value}
+            } else {
+                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, pt, lirPrimitiveTypeIsUnsigned(arg.typ))
+                if castOp == "" {
+                    lirLowerError(l, LirDiagUnsupported, label + " arg " + lirIntToString(i) + " coercion is not supported", label + " arg " + lirIntToString(i))
+                    return
+                }
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, pt))
+                value = LirOperand {typ: pt, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, pt))
-            value = LirOperand {typ: pt, value: castName}
         }
         args.push(lirOperand(pt, value.value))
         i = i + 1
