@@ -10,11 +10,12 @@
   - Brick 1 [#1873](https://github.com/choiceoh/osty/pull/1873) — PrimInt type cover (`__IntMethods` fan-out)
   - Brick 2 [#1874](https://github.com/choiceoh/osty/pull/1874) — `Int__abs/min/max/clamp/signum` C runtime wrappers
   - Brick 3a measurement [#1875](https://github.com/choiceoh/osty/pull/1875) + impl [#1878](https://github.com/choiceoh/osty/pull/1878) — lir_proto inline expansion (osty-self self-contained)
-  - indexOf bug fix [#1881](https://github.com/choiceoh/osty/pull/1881) — stdlibFreeFnReturnType
+  - Brick 4 [#1881](https://github.com/choiceoh/osty/pull/1881) — indexOf bug fix + lir_proto type-propagation graceful fallback (local + store + arg coercion 의 `<error>` graceful handling). osty-tests 129 passed, production build 부분 진척
 - **남은 unlock 후보**:
-  1. **production path coercion walls** — cmd/osty-native-checker 빌드 시 `string.endsWith coercion` + `set.toString coercion` declined (lir_proto path 의 type alignment gap)
-  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString` 내부 NULL deref. main baseline 의 issue, 별도 trajectory
-  3. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과. 옵션 c' 재합의 필요 또는 옵션 5 (R3 trajectory) wait
+  1. **production path remaining walls** — cmd/osty-native-checker 빌드 시 `string.endsWith coercion` + `set.toString coercion` 의 다른 site (PR #1881 의 graceful fallback 이 `lirLowerMirStringRuntimeCall` cover, 그러나 같은 message 가 다른 path 에서 발생). lir_proto.osty 의 9 개 "coercion is not supported" site 중 우리가 cover 한 4694 / 3761 외에 3206 (assign) / 3239 (projection) / 3724 (direct call) / 4771 (string.concat) / 4992 / 7645 (tuple) / 7688 (struct) 남음
+  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString + 1892` 내부 NULL deref (lldb backtrace 확인). main baseline 의 issue, R3 작업과 무관, 별도 trajectory
+  3. **`recoverOperandType` cover gap** — `<error>` leak 의 진짜 root. multi-site, multi-session debug. Brick 4 의 graceful fallback 은 우회로서 type-precision 잃지만 build 진척 가능
+  4. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과. 옵션 c' 재합의 필요 또는 옵션 5 (R3 trajectory) wait
 - **합의 없이 자율 진행 가능**: §6.
 
 ## 2. 빌드 + 검증 (cheat sheet)
