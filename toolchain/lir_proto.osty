@@ -7973,6 +7973,16 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 continue
             }
             if current.typ.className != LirTypeAggregate {
+                // R3 brick 18: empty/unknown current.typ — projection
+                // skip, promote to step.typ. brick 17 패턴 (simple if
+                // + literal eq). recoverOperandType cover gap upstream
+                // 에서 type leak. step.typ 가 concrete 면 promote 만
+                // 으로 caller chain 통과; LLVM verifier 가 진짜 mismatch
+                // 검출.
+                if lirStringEq(current.typ.llvm, "") {
+                    current = LirOperand {typ: step.typ, value: current.value}
+                    continue
+                }
                 lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
             }
