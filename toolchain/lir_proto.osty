@@ -2904,10 +2904,24 @@ fn lirLowerMirBlockTerm(l: LirMirFunctionLowerer, bb: MirBasicBlock, ret: LirTyp
         return t
     }
     if termKind == MirTermBranch {
-        let cond = lirLowerMirOperand(l, l.instrs, bb.termCond, "Bool", lirIntType(1))
+        let mut cond = lirLowerMirOperand(l, l.instrs, bb.termCond, "Bool", lirIntType(1))
         if cond.typ.llvm != "i1" {
-            lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
-            return lirUnreachable()
+            // Coerce integer cond → i1 via `icmp ne %v, 0`. Upstream
+            // type leaks (typically a `<error>` slot read as i64) can
+            // surface a non-i1 cond at this terminator even though the
+            // source is a Bool — `if x.endsWith(s) { ... }` after a
+            // type-leak in a sibling expression typed `_iflet.slot` as
+            // i64 instead of i1. The icmp coercion preserves Osty's
+            // C-style "non-zero is true" semantics and lets the
+            // function lower instead of declining the whole module.
+            if cond.typ.className == LirTypeInt {
+                let coerced = lirFresh(l)
+                l.instrs.push(lirBinary(coerced, "icmp ne", cond.typ, cond.value, "0"))
+                cond = LirOperand {typ: lirIntType(1), value: coerced}
+            } else {
+                lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
+                return lirUnreachable()
+            }
         }
         let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, bb.termThenBlock), lirLabelForMirBlock(l, bb.termElseBlock))
         if bb.termLoopBackEdge && lirFnHasLoopHints(l.fn_) {
@@ -7199,10 +7213,20 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
         return t
     }
     if term.kind == MirTermBranch {
-        let cond = lirLowerMirOperand(l, l.instrs, term.cond, "Bool", lirIntType(1))
+        let mut cond = lirLowerMirOperand(l, l.instrs, term.cond, "Bool", lirIntType(1))
         if cond.typ.llvm != "i1" {
-            lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
-            return lirUnreachable()
+            // Same coerce-via-icmp-ne-0 path as the sibling block-term
+            // branch (search "branch condition requires i1" above for
+            // the rationale). Keeps the two terminator-emit sites in
+            // sync.
+            if cond.typ.className == LirTypeInt {
+                let coerced = lirFresh(l)
+                l.instrs.push(lirBinary(coerced, "icmp ne", cond.typ, cond.value, "0"))
+                cond = LirOperand {typ: lirIntType(1), value: coerced}
+            } else {
+                lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
+                return lirUnreachable()
+            }
         }
         let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
         if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
