@@ -48,6 +48,9 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if req.Package != nil && req.Package.LibraryMode {
+		stripMainForLibraryMode(&entry)
+	}
 	ir, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(entry, "")
 	if err != nil {
 		return fmt.Errorf("emit native llvm-ir: %w", err)
@@ -170,6 +173,32 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 		chk = &check.Result{}
 	}
 	return backend.PrepareGraphPackage("main", entryPath, graph, "", entryFile, chk)
+}
+
+// stripMainForLibraryMode removes any top-level `main` function from
+// the entry's MIR + IR before LLVM emission. Called when the cmd/osty
+// build path requests a dependency package built as a library .o so
+// the resulting object can link alongside a consumer's own `main`
+// without `_main` symbol collision (PR-G2 cross-pkg link). All other
+// pub bodies are preserved so the consumer's `declare`d symbols get
+// resolved at link time.
+func stripMainForLibraryMode(entry *backend.Entry) {
+	if entry == nil {
+		return
+	}
+	if entry.MIR != nil {
+		filtered := entry.MIR.Functions[:0]
+		for _, fn := range entry.MIR.Functions {
+			if fn == nil {
+				continue
+			}
+			if fn.Name == "main" {
+				continue
+			}
+			filtered = append(filtered, fn)
+		}
+		entry.MIR.Functions = filtered
+	}
 }
 
 func writePackageRequest(req llvmgenRequest) (string, string, error) {
