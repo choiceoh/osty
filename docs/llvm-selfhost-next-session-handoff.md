@@ -11,12 +11,13 @@
   - Brick 2 [#1874](https://github.com/choiceoh/osty/pull/1874) — `Int__abs/min/max/clamp/signum` C runtime wrappers
   - Brick 3a measurement [#1875](https://github.com/choiceoh/osty/pull/1875) + impl [#1878](https://github.com/choiceoh/osty/pull/1878) — lir_proto inline expansion (osty-self self-contained)
   - Brick 4 [#1881](https://github.com/choiceoh/osty/pull/1881) — indexOf bug fix + lir_proto type-propagation graceful fallback (10 coercion sites cover, `<error>` graceful handling). osty-tests 129 passed.
-  - Brick 5 [#1883](https://github.com/choiceoh/osty/pull/1883) — broader local fallback (literal check 제거, lirTypeIsZero 모든 case i64 default). osty-tests 129 passed, "unsupported local type `<error>`" 일부 path 해소
+  - Brick 5 [#1883](https://github.com/choiceoh/osty/pull/1883) — broader local fallback (literal check 제거, lirTypeIsZero 모든 case i64 default). osty-tests 129 passed
+  - **Brick 6+7** [#1885](https://github.com/choiceoh/osty/pull/1885) — **recoverOperandType MatchExpr/BlockExpr cover + mirjson ErrType→Int downgrade**. **MIR JSON 의 `<error>` literal 완전 0건**, `unsupported local type <error>` decline **완전 해소**
+  - **PR3-C step 3** [#1886](https://github.com/choiceoh/osty/pull/1886) — **cross-pkg method-call dispatch arm 머지** (narrow exception 활용, 외부 작업자)
 - **남은 unlock 후보**:
-  1. **production path remaining coercion walls** — cmd/osty-native-checker 빌드 시 `string.endsWith coercion` + `set.toString coercion` 의 정확한 declined site 추적 필요. PR #1881 + #1883 의 fallback 이 cover 못 하는 path (예: `lirLowerCoercedOperand:5040` 의 `label + " coercion is not supported"` 형식). debug eprint 또는 osty-self trace 로 측정 필요 (multi-session)
-  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString + 1892` 내부 NULL deref. main baseline 의 issue, R3 작업과 무관, 별도 trajectory
-  3. **`recoverOperandType` cover gap** — `<error>` leak 의 진짜 root. multi-site, multi-session debug. Brick 4/5 의 graceful fallback 은 우회로서 type-precision 잃지만 build 진척 가능
-  4. **CLAUDE.md narrow exception 합의됨** ([PR #1857](https://github.com/choiceoh/osty/pull/1857)) — 단 impl 한도 초과. 옵션 c' 재합의 필요 또는 옵션 5 (R3 trajectory) wait
+  1. **`set.toString` / `string.endsWith` coercion walls** — osty-self 자체 build path 의 stage0 cover gap. `lirLowerCoercedOperand:5040` 에 broadest fallback (className 무관 fallback) 추가해도 osty-self runtime 에 반영 안 됨 (stage0 fallback 으로 빌드된 osty-self 의 monomorph cover gap → wrong code emit). 진짜 fix = PR #1858 cascade 패턴 추가 wave (multi-session)
+  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString + 1892` (`ldr x8, [x24]`, x24=NULL). main baseline issue, R3 무관
+  3. **PR3-C step 3 후속** — [#1886](https://github.com/choiceoh/osty/pull/1886) 머지 후 `PR3-C-step3-c-test` (`use toolchain.check; tc.fn()` 통과 검증) 가능
 - **합의 없이 자율 진행 가능**: §6.
 
 ## 2. 빌드 + 검증 (cheat sheet)
