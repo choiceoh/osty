@@ -12,6 +12,7 @@
 // PR3 의 진짜 checker 호출 + L2/L3 corpus 진행 시 std.json 으로 교체.
 use std.io
 use std.strings
+use toolchain as tc
 
 fn naiveExtractSource(text: String) -> String {
     let openMarker = "\"source\":\""
@@ -32,6 +33,10 @@ fn emptyCheckResultJson() -> String {
 fn main() {
     let input = io.readLine()
     let _source = naiveExtractSource(input)
-    // 진짜 checker 호출은 PR3 — 현재는 모든 source 입력에 empty CheckResult.
+    // PR3-E/F smoke: cross-pkg method-call dispatch (PR #1886 narrow
+    // exception + PR #1889 [lib] scaffold 의 결합). `use toolchain as tc`
+    // 의 fn 등록 path 활성 검증.
+    let _typeRepr = tc.frontInvalidTypeRepr()
+    // 진짜 checker 호출은 추가 brick 의 작업.
     println(emptyCheckResultJson())
 }

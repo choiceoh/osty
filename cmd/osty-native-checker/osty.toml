@@ -12,3 +12,4 @@ path = "main.osty"
 runtime = true
 
 [dependencies]
+toolchain = { path = "../../toolchain" }
