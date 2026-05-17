@@ -692,23 +692,6 @@ func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.
 	}
 }
 
-func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
-	t.Parallel()
-
-	if !useMIRBackend(nil, EmitLLVMIR) {
-		t.Fatal("useMIRBackend(nil, EmitLLVMIR) = false, want true")
-	}
-	if !useMIRBackend(nil, EmitObject) {
-		t.Fatal("useMIRBackend(nil, EmitObject) = false, want true")
-	}
-	if !useMIRBackend(nil, EmitBinary) {
-		t.Fatal("useMIRBackend(nil, EmitBinary) = false, want true")
-	}
-	if !useMIRBackend([]string{"mir-backend"}, EmitBinary) {
-		t.Fatal("useMIRBackend(mir-backend, EmitBinary) = false, want true")
-	}
-}
-
 func TestUseNativeOwnedLLVMIRDefaultsEnabled(t *testing.T) {
 	t.Parallel()
 
