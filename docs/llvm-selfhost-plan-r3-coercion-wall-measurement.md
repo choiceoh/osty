@@ -50,9 +50,11 @@ main.osty 의 일부분만 남기고 build 시도:
 
 ## 4. 가설
 
-declined message format `label + " coercion is not supported"` (lir_proto.osty:5040). label = "set.toString" / "string.endsWith" — `lirLowerMirStringRuntimeCall` 의 4006 / 3862 line 의 호출. 그 함수의 내부에서 `lirStoreMirResult` 또는 `lirLowerCoercedOperand` 호출이 declined trigger.
+declined message format `label + " coercion is not supported"` ([`lir_proto.osty::lirLowerCoercedOperand`](https://github.com/choiceoh/osty/blob/095641cf/toolchain/lir_proto.osty#L5126), error emit at line 5040 의 base ↦ 5126 post-refactor). label = "set.toString" / "string.endsWith" — [`lirLowerMirStringRuntimeCall`](https://github.com/choiceoh/osty/blob/095641cf/toolchain/lir_proto.osty#L4807) 의 두 호출 site (`HasSuffix` line ~3921, `set_to_string` line ~4071). 그 함수의 내부에서 `lirStoreMirResult` 또는 `lirLowerCoercedOperand` 호출이 declined trigger.
 
-가능 root cause:
+> **Line-number drift note** (review #1892 follow-up): line numbers above pinned to commit `095641cf` (main as of 2026-05-17). 후속 refactor (예: [PR #1903](https://github.com/choiceoh/osty/pull/1903) 의 `lirCoerceBranchCondToI1` helper 추출) 가 numeric line 을 shift. `git blame` / 위 permalink 가 stable.
+
+가능한 root cause:
 1. `Option<Int>` 의 match destructure 가 lir_proto 의 어떤 algebraic-handling path 에서 set.toString/endsWith 호출 (cleanup 또는 debug path)
 2. osty-self 의 stage0 lower 시 monomorphization cover gap 으로 wrong code emit (lir_proto path 가 의도 안 한 곳 트리거)
 
@@ -75,7 +77,7 @@ Brick 8 시도 (revert 됨):
 
 ## 6. 다음 시도 권장 (multi-session)
 
-PR #1894 후 정확한 site = `lirLowerMirIndexOf` (`toolchain/lir_proto.osty:6315`). result 처리:
+PR #1894 후 정확한 site = [`lirLowerMirIndexOf`](https://github.com/choiceoh/osty/blob/095641cf/toolchain/lir_proto.osty#L6347) (post brick 13/refactor: line ~6347). result 처리:
 
 ```osty
 // dest.typ = "Int?" (loc.typ from MIR JSON)
@@ -118,7 +120,7 @@ R3 trajectory 의 multi-session brick 의 시작점. 다음 fresh session 의 sp
 
 ### 정확한 site
 
-`toolchain/lir_proto.osty:2906::MirTermBranch`:
+[`toolchain/lir_proto.osty::MirTermBranch`](https://github.com/choiceoh/osty/blob/095641cf/toolchain/lir_proto.osty#L2906):
 
 ```osty
 if termKind == MirTermBranch {
