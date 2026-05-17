@@ -1,23 +1,26 @@
 # LLVM self-host — 다음 세션 handoff
 
 > **목적**: fresh context 진입 시 5분에 읽고 다음 PR 진입 가능한 단일 명세.
-> **상태**: 2026-05-17 후속 세션 종료 시점. 39+ PR 머지 + R3 trajectory brick 1/2/3a 완성.
+> **상태**: 2026-05-17 후속 세션 종료 시점. 50+ PR 머지 + R3 trajectory brick 1-12 + PR3-D~F activation 완성.
 
 ## 1. 30초 요약
 
 - **목표**: `cmd/osty-native-checker` 의 LLVM 자체 빌드 + Go-built 와 byte-identical `CheckResult` JSON. plan 본문은 [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md).
-- **현재**: M1 ✓, M2 partial ✓, 🎉 **source bootstrap UNLOCK** ([PR #1863](https://github.com/choiceoh/osty/pull/1863)). **R3 trajectory 진행 중**:
-  - Brick 1 [#1873](https://github.com/choiceoh/osty/pull/1873) — PrimInt type cover (`__IntMethods` fan-out)
-  - Brick 2 [#1874](https://github.com/choiceoh/osty/pull/1874) — `Int__abs/min/max/clamp/signum` C runtime wrappers
-  - Brick 3a measurement [#1875](https://github.com/choiceoh/osty/pull/1875) + impl [#1878](https://github.com/choiceoh/osty/pull/1878) — lir_proto inline expansion (osty-self self-contained)
-  - Brick 4 [#1881](https://github.com/choiceoh/osty/pull/1881) — indexOf bug fix + lir_proto type-propagation graceful fallback (10 coercion sites cover, `<error>` graceful handling). osty-tests 129 passed.
-  - Brick 5 [#1883](https://github.com/choiceoh/osty/pull/1883) — broader local fallback (literal check 제거, lirTypeIsZero 모든 case i64 default). osty-tests 129 passed
-  - **Brick 6+7** [#1885](https://github.com/choiceoh/osty/pull/1885) — **recoverOperandType MatchExpr/BlockExpr cover + mirjson ErrType→Int downgrade**. **MIR JSON 의 `<error>` literal 완전 0건**, `unsupported local type <error>` decline **완전 해소**
-  - **PR3-C step 3** [#1886](https://github.com/choiceoh/osty/pull/1886) — **cross-pkg method-call dispatch arm 머지** (narrow exception 활용, 외부 작업자)
+- **현재**: M1 ✓, M2 partial ✓, 🎉 **source bootstrap UNLOCK** ([PR #1863](https://github.com/choiceoh/osty/pull/1863)). **R3 trajectory 12 brick + PR3 activation 완성**:
+  - Brick 1-5 ([#1873-83](https://github.com/choiceoh/osty/pull/1873)) — type cover + C wrappers + lir_proto inline + 10 graceful fallback sites + broader local fallback
+  - Brick 6+7 ([#1885](https://github.com/choiceoh/osty/pull/1885)) — **recoverOperandType MatchExpr/BlockExpr cover + mirjson ErrType→Int downgrade**. MIR JSON `<error>` literal 완전 0건
+  - PR3-C step 3 ([#1886](https://github.com/choiceoh/osty/pull/1886)) — cross-pkg method-call dispatch arm
+  - PR3-D scaffold ([#1889](https://github.com/choiceoh/osty/pull/1889)) — toolchain [lib] manifest
+  - PR3-E/F activation ([#1890](https://github.com/choiceoh/osty/pull/1890)) — cross-pkg method-call E0703 해소
+  - measurement v1-v4 ([#1892-3/1896/1899](https://github.com/choiceoh/osty/pull/1892)) — wall trigger 정확화
+  - Brick 10 ([#1898](https://github.com/choiceoh/osty/pull/1898)) — term.branch i64 cond → i1 coerce
+  - Brick 11 ([#1900](https://github.com/choiceoh/osty/pull/1900)) — term.branch aggregate cond → disc extract + icmp eq 0
+  - **Brick 12** ([#1901](https://github.com/choiceoh/osty/pull/1901)) — **assign.dest `<error>` → i64 fallback**
+  - PR-G1 scaffold ([#1902](https://github.com/choiceoh/osty/pull/1902)) — backend.Request.ExtraObjects link plumbing
 - **남은 unlock 후보**:
-  1. **`set.toString` / `string.endsWith` coercion walls** — osty-self 자체 build path 의 stage0 cover gap. `lirLowerCoercedOperand:5040` 에 broadest fallback (className 무관 fallback) 추가해도 osty-self runtime 에 반영 안 됨 (stage0 fallback 으로 빌드된 osty-self 의 monomorph cover gap → wrong code emit). 진짜 fix = PR #1858 cascade 패턴 추가 wave (multi-session)
-  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139, crash at `selfRebuildWriteString + 1892` (`ldr x8, [x24]`, x24=NULL). main baseline issue, R3 무관
-  3. **PR3-C step 3 후속** — [#1886](https://github.com/choiceoh/osty/pull/1886) 머지 후 `PR3-C-step3-c-test` (`use toolchain.check; tc.fn()` 통과 검증) 가능
+  1. **declined messages 그대로** — `term.branch i1, got %Option.Int` + `assign.dest <error>`. brick 11/12 머지 후 PR #1898 같은 외부 fix wave 가 추가로 cover 확장해야 osty-self runtime 에 반영. Chicken-and-egg: 우리 변경이 binary 에 들어가지만 stage0 cover gap 으로 wrong code emit
+  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139. main baseline issue, R3 무관
+  3. **PR-G2~G3 (link plumbing 활성화)** — PR #1902 scaffold 후 multi-file dep 의 .o link 활성. cross-pkg fn call 의 진짜 link wall 해소
 - **합의 없이 자율 진행 가능**: §6.
 
 ## 2. 빌드 + 검증 (cheat sheet)
