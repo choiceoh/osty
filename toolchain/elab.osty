@@ -2003,7 +2003,21 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     } else {
         emptyCheckFnSig()
     }
-    let sig = checkSpecializeMethodSelf(cx.env, rawSig, lookupRecvTy)
+    let mut sig = checkSpecializeMethodSelf(cx.env, rawSig, lookupRecvTy)
+    // PR3-C step 3 narrow exception (E0703 dispatch, cross-pkg method
+    // lookup) — CLAUDE.md frozen-seed exception allows surgical
+    // hand-edit of this single dispatch arm. When the receiver name is
+    // a `use` alias (e.g. `use toolchain.check as tc` then `tc.fn()`),
+    // method lookup naturally fails because `tc` is not a real type.
+    // Fall back to a free-function lookup (`fn` with owner ""): in
+    // install-self the imported package's public free functions are
+    // already registered in the same check env.
+    if sig.name == "" && checkOwnerIsUseAlias(cx.env, ownerName) {
+        let bareSig = checkLookupFn(cx.env, methodName, "")
+        if bareSig.name != "" {
+            sig = bareSig
+        }
+    }
     if sig.name == "" {
         let hint = diagDidYouMean(checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, lookupRecvTy, ownerName), methodName))
         cx.env.local.diagnostics.push(checkDiagAttachHint(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end), hint))
