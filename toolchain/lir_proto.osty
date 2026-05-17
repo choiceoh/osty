@@ -8076,6 +8076,39 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                     current = LirOperand {typ: step.typ, value: current.value}
                     continue
                 }
+                // R3 brick 22 (PR #1909 review feedback follow-up):
+                // materialize cast path. current.typ.llvm == "i64" 인데
+                // step.typ != i64 인 경우 type-specific cast emit:
+                //   - LirTypePtr  → inttoptr (i64 → ptr)
+                //   - LirTypeInt (다른 width) → trunc (i64 → smaller)
+                //   - LirTypeAggregate → 별도 (lirEmitAlgebraicI64
+                //     이 path 에서 부적합; declined 유지)
+                // brick 21 의 restrict 가 type-compatible 만 cover 했고
+                // 본 brick 이 cast 가능한 추가 case 활성화.
+                if lirStringEq(current.typ.llvm, "i64") {
+                    if step.typ.className == LirTypePtr {
+                        let castName = lirFresh(l)
+                        instrs.push(lirCast(castName, "inttoptr", current, step.typ))
+                        current = LirOperand {typ: step.typ, value: castName}
+                        continue
+                    }
+                    if step.typ.className == LirTypeInt {
+                        let castName = lirFresh(l)
+                        instrs.push(lirCast(castName, "trunc", current, step.typ))
+                        current = LirOperand {typ: step.typ, value: castName}
+                        continue
+                    }
+                    if step.typ.className == LirTypeAggregate {
+                        // i64 → Option/Result aggregate: Some/Ok wrap
+                        // (disc=0 + i64 payload). lirEmitAlgebraicI64
+                        // 의 same path — assign coercion brick 15 cover.
+                        let merged = lirEmitAlgebraicI64(l, step.typ, 0, current.value, "projection.i64.wrap")
+                        if !lirStringEq(merged, "undef") {
+                            current = LirOperand {typ: step.typ, value: merged}
+                            continue
+                        }
+                    }
+                }
                 lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
             }
