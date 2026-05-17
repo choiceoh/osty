@@ -35,6 +35,14 @@ type MIRInput struct {
 type PackageInput struct {
 	Files             []PackageFile `json:"files,omitempty"`
 	RuntimeCapability bool          `json:"runtimeCapability,omitempty"`
+	// LibraryMode tells the subprocess to skip emitting a top-level
+	// `main` function in the resulting LLVM IR. Used by cmd/osty's
+	// cross-package dep compilation (PR-G2 / cross-pkg link) so the
+	// resulting `.o` can be linked alongside a consumer's `main`
+	// without `_main` symbol collision. The non-main bodies of the
+	// dep are still emitted so `declare`s in the consumer's IR get
+	// resolved.
+	LibraryMode bool `json:"libraryMode,omitempty"`
 }
 
 type PackageFile struct {
@@ -95,6 +103,26 @@ func TryPackage(start, entryPath string, pkg *resolve.Package) ([]byte, bool, []
 	req, err := RequestFromPackage(entryPath, pkg)
 	if err != nil {
 		return nil, false, nil, err
+	}
+	resp, err := Run(start, req)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	return []byte(resp.LLVMIR), resp.Covered, warningErrors(resp.Warnings), nil
+}
+
+// TryPackageLibrary compiles a package the same way TryPackage does
+// but with `PackageInput.LibraryMode = true`, telling the subprocess
+// to skip emitting `main` so the resulting IR can be linked into a
+// consumer binary without `_main` symbol collision. Used by the
+// cross-package dep `.o` compile path (PR-G2 cross-pkg link).
+func TryPackageLibrary(start, entryPath string, pkg *resolve.Package) ([]byte, bool, []error, error) {
+	req, err := RequestFromPackage(entryPath, pkg)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if req.Package != nil {
+		req.Package.LibraryMode = true
 	}
 	resp, err := Run(start, req)
 	if err != nil {
