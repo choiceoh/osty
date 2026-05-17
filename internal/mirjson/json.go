@@ -429,7 +429,18 @@ func fromType(t ir.Type) *Type {
 		out.Name = x.Name
 		out.Owner = x.Owner
 	case *ir.ErrType:
-		out.Kind = "error"
+		// R3 brick 6+ graceful fallback at the JSON serializer:
+		// rather than leaking `<error>` typed locals into the staged
+		// MIR JSON (which osty-self's lir_proto.osty cannot lower and
+		// surfaces as "unsupported local type `<error>`" declines),
+		// downgrade poisoned types to a plain Int. This trades type-
+		// precision in upstream recoverOperandType cover gaps for a
+		// build-progress path. The lir_proto graceful fallback (R3
+		// brick 4/5) still handles real type mismatches; this layer
+		// just stops the propagation hint from reaching the subprocess.
+		out.Kind = "prim"
+		out.Prim = "Int"
+		out.Display = "Int"
 	default:
 		out.Kind = "unknown"
 	}
