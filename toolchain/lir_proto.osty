@@ -4443,6 +4443,43 @@ fn lirLowerMirPrintTextOperand(l: LirMirFunctionLowerer, op: MirOperand) -> LirO
     }
     let symbol = lirRuntimeToStringSymbolForType(argType)
     if symbol == "" {
+        // R3 brick 17 + 19 (PR #1907 Copilot review feedback): <error>-typed
+        // print argument graceful fallback with operand normalization.
+        // recoverOperandType cover gap upstream 에서 type leak — value
+        // 의 LIR type 을 i64 로 normalize 후 osty_rt_int_to_string 호출.
+        // brick 17 의 단순 re-tag 가 wrong IR emit 위험 (float/string/
+        // empty value) 했던 review feedback 반영.
+        if lirStringEq(op.typ, "<error>") {
+            if value.value == "" {
+                lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` has empty lowered value", "intrinsic.print")
+                return lirOperandInvalid()
+            }
+            let mut payload = value
+            if !lirStringEq(value.typ.llvm, "i64") {
+                if value.typ.className == LirTypeInt {
+                    let castName = lirFresh(l)
+                    let castOpName = if lirPrimitiveTypeIsUnsigned(op.typ) {
+                        "zext"
+                    } else {
+                        "sext"
+                    }
+                    l.instrs.push(lirCast(castName, castOpName, value, lirIntType(64)))
+                    payload = LirOperand {typ: lirIntType(64), value: castName}
+                } else if value.typ.className == LirTypePtr {
+                    let castName = lirFresh(l)
+                    l.instrs.push(lirCast(castName, "ptrtoint", value, lirIntType(64)))
+                    payload = LirOperand {typ: lirIntType(64), value: castName}
+                } else {
+                    lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` cannot be normalized to i64 (got `" + value.typ.llvm + "`)", "intrinsic.print")
+                    return lirOperandInvalid()
+                }
+            }
+            let intSym = "osty_rt_int_to_string"
+            lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(intSym, lirIntType(64)))
+            let dest = lirFresh(l)
+            l.instrs.push(lirCall(dest, lirPtrType(), "@" + intSym, [lirOperand(lirIntType(64), payload.value)]))
+            return lirOperand(lirPtrType(), dest)
+        }
         lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` is not implemented", "intrinsic.print")
         return lirOperandInvalid()
     }
@@ -8014,6 +8051,16 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 continue
             }
             if current.typ.className != LirTypeAggregate {
+                // R3 brick 18: empty/unknown current.typ — projection
+                // skip, promote to step.typ. brick 17 패턴 (simple if
+                // + literal eq). recoverOperandType cover gap upstream
+                // 에서 type leak. step.typ 가 concrete 면 promote 만
+                // 으로 caller chain 통과; LLVM verifier 가 진짜 mismatch
+                // 검출.
+                if lirStringEq(current.typ.llvm, "") {
+                    current = LirOperand {typ: step.typ, value: current.value}
+                    continue
+                }
                 lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
             }
