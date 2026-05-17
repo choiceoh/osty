@@ -35753,6 +35753,28 @@ func checkRecordSymbol(env *CheckEnv, nodeIdx int, kind string, name string, own
 	}()
 }
 
+// checkOwnerIsUseAlias reports whether `name` was registered as a
+// use-decl alias (kind == "use") in the current check pass. Mirror of
+// toolchain/check_env.osty::checkOwnerIsUseAlias. Used by the
+// cross-package method-call dispatch arm in elab.
+//
+// CLAUDE.md narrow exception (PR3-C step 3 surgical hand-edit of the
+// frozen seed). See SPEC_GAPS.md::cross-pkg-module-resolution.
+func checkOwnerIsUseAlias(env *CheckEnv, name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, record := range env.local.symbolRecords {
+		if record == nil {
+			continue
+		}
+		if record.kind == "use" && record.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Osty: /tmp/selfhost_merged.osty:15160:5
 func checkRecordInstantiation(env *CheckEnv, nodeIdx int, callee string, typeArgs []int, resultTy int, start int, end int) {
 	// Osty: /tmp/selfhost_merged.osty:15161:5
@@ -41940,6 +41962,21 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	// Osty: /tmp/selfhost_merged.osty:19722:5
 	sig := checkSpecializeMethodSelf(cx.env, rawSig, lookupRecvTy)
 	_ = sig
+	// CLAUDE.md narrow exception (PR3-C step 3, E0703 dispatch,
+	// cross-pkg method lookup). When the receiver name is a `use`
+	// alias for an imported package (`use toolchain.check as tc`
+	// then `tc.fn()`), method lookup naturally fails because the
+	// alias is not a real type. Fall back to a free-function lookup
+	// (`fn` with owner ""): in install-self the imported package's
+	// public free functions are already in the same check env.
+	// Mirror of toolchain/elab.osty:2007 — single new dispatch arm,
+	// no existing path changes (see CLAUDE.md "하지 말 것" exception).
+	if sig.name == "" && checkOwnerIsUseAlias(cx.env, ownerName) {
+		bareSig := checkLookupFn(cx.env, methodName, "")
+		if bareSig.name != "" {
+			sig = bareSig
+		}
+	}
 	// Osty: /tmp/selfhost_merged.osty:19723:5
 	if sig.name == "" {
 		// Osty: /tmp/selfhost_merged.osty:19724:9

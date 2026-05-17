@@ -886,6 +886,24 @@ pub fn checkRecordBinding(env: CheckEnv, nodeIdx: Int, name: String, ty: Int, mu
 pub fn checkRecordSymbol(env: CheckEnv, nodeIdx: Int, kind: String, name: String, owner: String, ty: Int, start: Int, end: Int) {
     env.local.symbolRecords.push(CheckSymbolRecord {node: nodeIdx, kind, name, owner, ty, start, end})
 }
+/// checkOwnerIsUseAlias reports whether `name` was registered as a
+/// use-decl alias (kind == "use") in the current check pass. Used by
+/// the cross-package method-call dispatch arm in elab — `tc.fn()`
+/// where `tc` is `use toolchain.check as tc` re-routes to a free-fn
+/// lookup of `fn` instead of failing as E0703. See
+/// SPEC_GAPS.md::cross-pkg-module-resolution (PR3-C step 3 narrow
+/// exception in CLAUDE.md).
+pub fn checkOwnerIsUseAlias(env: CheckEnv, name: String) -> Bool {
+    if name == "" {
+        return false
+    }
+    for record in env.local.symbolRecords {
+        if record.kind == "use" && record.name == name {
+            return true
+        }
+    }
+    false
+}
 pub fn checkRecordInstantiation(env: CheckEnv, nodeIdx: Int, callee: String, typeArgs: List<Int>, resultTy: Int, start: Int, end: Int) {
     env.local.instantiations.push(CheckInstantiationRecord {node: nodeIdx, callee, typeArgs, resultTy, start, end})
 }
