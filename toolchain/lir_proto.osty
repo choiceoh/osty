@@ -3796,6 +3796,33 @@ fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperan
             if stored.value == "" {
                 return
             }
+        } else if (lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ) || lirIsResultTypeName(loc.typ)) && stored.typ.className != LirTypeAggregate && destType.className == LirTypeAggregate {
+            // Scalar → algebraic aggregate auto-wrap. The MIR producer
+            // returned a primitive (e.g. `string.endsWith → i1`) but
+            // the dest local is typed `Option<T>` / `T?` /
+            // `Result<T, E>` — either by `let x: T? = ...` source
+            // intent or by an upstream MIR type bug. Either way, wrap
+            // with Some / Ok through the canonical `lirEmitOption*` /
+            // `lirEmitResult*` helpers so the store sees the matched
+            // aggregate type. Without this path the build halts at
+            // `lirPlanSameFamilyCoercionOpcode` which has no rule for
+            // scalar → aggregate.
+            let isOption = lirIsOptionTypeName(loc.typ) || lirStringHasQuestionSuffix(loc.typ)
+            let wrapped = if lirAggregateHasWidenedPayload(l.out, destType) {
+                if isOption {
+                    lirEmitOptionSomeStruct(l, destType, stored)
+                } else {
+                    lirEmitResultOkStruct(l, destType, stored)
+                }
+            } else {
+                let payloadI64 = lirParseResultPayloadAsI64(l, stored.value, stored.typ)
+                if isOption {
+                    lirEmitOptionSome(l, destType, payloadI64)
+                } else {
+                    lirEmitResultOk(l, destType, payloadI64)
+                }
+            }
+            stored = lirOperand(destType, wrapped)
         } else {
             let castOp = lirPlanSameFamilyCoercionOpcode(stored.typ, destType, lirPrimitiveTypeIsUnsigned(resultTypeName))
             if castOp == "" {
@@ -4562,34 +4589,68 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // `payloadI64` must already be the i64-encoded form of the payload —
 // the caller is responsible for zext / ptrtoint / bitcast as
 // appropriate. Returns the temporary holding the constructed aggregate.
+//
+// Discriminant convention (variantIndexByName in mir/lower.go:7989):
+//   Option<T>:  Some=0, None=1
+//   Result<T,E>: Ok=0,  Err=1
+//
+// Aggregate shape produced for the default path is the 2-i64
+// `{i64 disc, i64 payload}` insertvalue chain. When `optType` /
+// `resultType` is widened (payload slot references a struct typedef
+// — detected via `lirAggregateHasWidenedPayload`) the i64 path is
+// wrong: emit `LirDiagUnsupported` and return "undef" so the caller
+// can route through the *Struct variant.
+fn lirEmitAlgebraicI64(l: LirMirFunctionLowerer, aggType: LirType, disc: Int, payloadI64: String, ctx: String) -> String {
+    if lirAggregateHasWidenedPayload(l.out, aggType) {
+        lirLowerError(l, LirDiagUnsupported, ctx + " widened aggregate `" + aggType.llvm + "` cannot be built via i64 payload path — caller must use struct variant", ctx)
+        return "undef"
+    }
+    let step1 = lirFresh(l)
+    l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), lirIntToString(disc)), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirIntType(64), payloadI64), [1]))
+    value
+}
+fn lirEmitAlgebraicStruct(l: LirMirFunctionLowerer, aggType: LirType, disc: Int, payload: LirOperand, ctx: String) -> String {
+    let structRef = lirOptionResultPayloadStructRef(l.out, aggType.llvm)
+    if structRef == "" {
+        lirLowerError(l, LirDiagUnsupported, ctx + " could not extract struct typedef from `" + aggType.llvm + "`", ctx)
+        return "undef"
+    }
+    let step1 = lirFresh(l)
+    l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), lirIntToString(disc)), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirAggregateType(structRef), payload.value), [1]))
+    value
+}
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
-    return "undef"
+    lirEmitAlgebraicI64(l, optType, 1, "0", "Option.None")
 }
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
-    return "undef"
+    lirEmitAlgebraicI64(l, optType, 0, payloadI64, "Option.Some")
 }
 // `lirEmitOptionSomeStruct` builds `Some(payload)` when `optType` is
 // the widened `{ i64 disc, %Struct payload }` shape. Callers that
 // have the struct-typed payload operand on hand should dispatch here
 // instead of pre-coercing through `lirParseResultPayloadAsI64`.
 fn lirEmitOptionSomeStruct(l: LirMirFunctionLowerer, optType: LirType, payload: LirOperand) -> String {
-    return "undef"
+    lirEmitAlgebraicStruct(l, optType, 0, payload, "Option.Some")
 }
 fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
-    return "undef"
+    lirEmitAlgebraicI64(l, resultType, 0, payloadI64, "Result.Ok")
 }
 // `lirEmitResultOkStruct` builds `Ok(payload)` when `resultType` is
 // the widened `{ i64 disc, %Struct payload }` shape.
 fn lirEmitResultOkStruct(l: LirMirFunctionLowerer, resultType: LirType, payload: LirOperand) -> String {
-    return "undef"
+    lirEmitAlgebraicStruct(l, resultType, 0, payload, "Result.Ok")
 }
 fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
-    return "undef"
+    lirEmitAlgebraicI64(l, resultType, 1, payloadI64, "Result.Err")
 }
 // `lirEmitResultErrStruct` builds `Err(payload)` when `resultType` is
 // the widened `{ i64 disc, %Struct payload }` shape.
 fn lirEmitResultErrStruct(l: LirMirFunctionLowerer, resultType: LirType, payload: LirOperand) -> String {
-    return "undef"
+    lirEmitAlgebraicStruct(l, resultType, 1, payload, "Result.Err")
 }
 // `lirAggregateHasWidenedPayload` returns true when the typedef body for an
 // aggregate type ref (e.g. "%Option.MyStruct") references a struct in the
