@@ -1924,9 +1924,16 @@ pub fn lirPlanScalarCastOpcode(from: LirType, to: LirType, unsigned: Bool) -> St
     }
     ""
 }
-/// lirPlanSameFamilyCoercionOpcode is narrower than explicit casts: it only
-/// permits integer resize and float resize. Cross-family conversion must come
-/// from MIR as an explicit cast node.
+/// lirPlanSameFamilyCoercionOpcode plans a store-site coercion: integer
+/// resize, float resize, and the int↔ptr reinterpret cast pair. The
+/// name predates the int↔ptr addition (PR #1877); those cases are
+/// **cross-family** reinterprets that lose/synthesize pointer
+/// provenance, unlike the intra-int/intra-float widening/narrowing.
+/// Callers must not assume a pure same-family widening — the planner
+/// is a "what cast opcode lets this store typecheck" oracle, not a
+/// provenance-preserving one. Cross-family conversion that does
+/// preserve provenance must still come from MIR as an explicit cast
+/// node.
 pub fn lirPlanSameFamilyCoercionOpcode(from: LirType, to: LirType, unsigned: Bool) -> String {
     if from.llvm == to.llvm {
         return ""
