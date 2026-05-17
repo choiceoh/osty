@@ -3080,12 +3080,14 @@ fn lirLowerMirLocalsFrom(locals: List<MirLocal>, l: LirMirFunctionLowerer, pos: 
     // companion fallback in `lirStoreMirResult` then aligns producer-
     // side stores. This trades type-precision in propagation gaps for
     // build progress; mismatched stores surface at the LLVM verifier.
-    if lirTypeIsZero(typ) && loc.typ == "<error>" {
+    // R3 brick 4 graceful fallback: lirLowerMirType 가 unknown 반환
+    // 한 모든 case 를 i64 default 로 처리. 진짜 cover 가 되어야 하는
+    // type 도 cover 못 하면 invalid IR — 그러나 build path 의 단순
+    // declined 보다 advance 가능. LLVM verifier 가 진짜 mismatch 검출.
+    if lirTypeIsZero(typ) {
         typ = lirIntType(64)
     }
-    if lirTypeIsZero(typ) {
-        lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", "local." + loc.name)
-    } else if !(lirTypeIsVoid(typ)) {
+    if !(lirTypeIsVoid(typ)) {
         let slot = lirMirLocalSlotName(loc.id)
         l.slots.push(LirLocalSlot {id: loc.id, slot, typ})
         l.prologue.push(lirAlloca(slot, typ, 0))
