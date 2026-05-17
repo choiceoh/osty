@@ -1440,8 +1440,9 @@ func scalarFromTypeInternal(t mir.Type, allowUserNamed bool) scalarType {
 // opaqueBuiltinTemplateNames is the canonical list of stdlib generic
 // templates whose box layouts are opaque-ptr-shaped at runtime. Used
 // by isOpaqueNamedType for both canonical names (set lookup) and
-// monomorph mangled names (per-template substring check). Hoisted out
-// of the per-call slice allocation called out in the PR #1877 review.
+// monomorph mangled names (per-template anchored-prefix check via
+// isMangledBuiltinTemplate). Hoisted out of the per-call slice
+// allocation called out in the PR #1877 review.
 var opaqueBuiltinTemplateNames = []string{
 	"List", "Map", "Set", "Option", "Maybe", "Result", "Channel", "Handle", "TaskGroup",
 }
@@ -9831,12 +9832,14 @@ func recoverMapNewArgScalarsFromCalleeParam(fn *mir.Function, mapID mir.LocalID,
 //
 // Soundness: the function emits an opaque-pointer Map handle defaulted
 // to `(String, String)` runtime kind tags. Only safe when the map is
-// purely opaque — no in-function MapGet/MapSet/MapContains/MapKeysSorted
-// operations would observe the synthesised tags. The check below
-// rejects the moment any of those intrinsics references `mapID`, so a
-// real conflict stops the recovery cold rather than emitting incorrect
-// runtime layout. Functions that survive this gate either pass the map
-// straight to a callee or hold it unused (rare).
+// purely opaque to the K/V layout — no in-function MapGet /
+// MapContains / MapKeysSorted / MapIncr touches `mapID` (these all
+// observe the K layout), and the only MapSet that touches `mapID` does
+// so as the **value being inserted** (Args[2]) where the local is
+// passed opaque. MapSet's map-arg (Args[0]) and key-arg (Args[1])
+// rejections still apply (PR #1882 review tightened the distinction).
+// Functions that survive this gate either pass the map straight to a
+// callee or appear only as a MapSet value payload (rare).
 func recoverMapNewArgScalarsAsOpaquePassThrough(fn *mir.Function, mapID mir.LocalID) (scalarType, scalarType, bool) {
 	if fn == nil {
 		return scalarUnknown, scalarUnknown, false
@@ -11148,18 +11151,22 @@ func optionPayloadScalar(t mir.Type, mctx *moduleCtx) (scalarType, bool) {
 // concrete instances of stdlib generic boxes whose canonical name
 // ("Option", "Result") survives only as a length-prefixed substring.
 // isMangledBuiltinTemplate reports whether `name` is the Itanium-style
-// `_ZTSN4main<len><template>...` mangling for a builtin generic
-// template ("Option", "Result", "List", "Map", "Set", ...). The check
-// anchors on the `N4main` namespace prefix and verifies the
-// length-prefixed identifier that follows is exactly `template` — a
-// looser substring scan could false-positive on inner template
-// arguments (PR #1877 review).
+// `_ZTSN<nslen><namespace><tlen><template>...` mangling for a builtin
+// generic template ("Option", "Result", "List", "Map", "Set", ...).
+// Accepts any namespace identifier (the monomorphiser emits both
+// `main` for toolchain-owned mangles and `osty` for stdlib/builtin
+// boxes; PR #1882 review flagged the prior `main`-only hard-code).
+// Length-prefixed exact match on the template head avoids inner
+// template-argument false positives (PR #1877 review).
 func isMangledBuiltinTemplate(name, template string) bool {
-	const prefix = "_ZTSN4main"
+	const prefix = "_ZTSN"
 	if !strings.HasPrefix(name, prefix) {
 		return false
 	}
-	rest := name[len(prefix):]
+	rest, ok := skipMangledNamespace(name[len(prefix):])
+	if !ok {
+		return false
+	}
 	digitEnd := 0
 	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
 		digitEnd++
@@ -11172,6 +11179,26 @@ func isMangledBuiltinTemplate(name, template string) bool {
 		return false
 	}
 	return rest[digitEnd:digitEnd+n] == template
+}
+
+// skipMangledNamespace consumes the first length-prefixed identifier
+// (the namespace) at the start of `rest`, returning the remainder.
+// Both `4main` and `4osty` appear in production manglings; treating
+// the namespace as opaque means new namespaces (e.g. `<pkg>`) work
+// without per-name updates.
+func skipMangledNamespace(rest string) (string, bool) {
+	digitEnd := 0
+	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return "", false
+	}
+	n, err := strconv.Atoi(rest[:digitEnd])
+	if err != nil || n <= 0 || digitEnd+n > len(rest) {
+		return "", false
+	}
+	return rest[digitEnd+n:], true
 }
 
 // isMangledOstyMonomorphFn reports whether `name` is an Itanium-style
@@ -11189,16 +11216,20 @@ func isMangledOstyMonomorphFn(name string) bool {
 // demangleMonomorphTemplateArg extracts the first template argument
 // from an Itanium-style mangling. For `_ZTSN4main4ListIN4main14MirFieldLayoutEEE`
 // (canonical `List<MirFieldLayout>`) returns `MirFieldLayout`. The
-// parser walks past the template head, requires `I` (template-args
-// start), then `N4main<len><name>E` for the single argument, then `EE`
-// for `E` (close-template) + `E` (close-nested). Returns "" when the
-// form doesn't match the single-arg main-namespace shape.
+// parser walks past the namespace + template head, requires `I`
+// (template-args start), then `N<ns><len><name>E` for the single
+// argument, then `EE` for `E` (close-template) + `E` (close-nested).
+// Returns "" when the form doesn't match. Accepts mangled instances
+// where the inner namespace differs from the outer (PR #1882 review).
 func demangleMonomorphTemplateArg(name string) string {
-	const prefix = "_ZTSN4main"
+	const prefix = "_ZTSN"
 	if !strings.HasPrefix(name, prefix) {
 		return ""
 	}
-	rest := name[len(prefix):]
+	rest, ok := skipMangledNamespace(name[len(prefix):])
+	if !ok {
+		return ""
+	}
 	// Skip the outer template head (length-prefixed name).
 	digitEnd := 0
 	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
@@ -11212,16 +11243,15 @@ func demangleMonomorphTemplateArg(name string) string {
 		return ""
 	}
 	rest = rest[digitEnd+n:]
-	if !strings.HasPrefix(rest, "I") {
+	if !strings.HasPrefix(rest, "IN") {
 		return ""
 	}
-	rest = rest[1:]
-	// Parse one nested name `N4main<len><name>E`.
-	const innerPrefix = "N4main"
-	if !strings.HasPrefix(rest, innerPrefix) {
+	rest = rest[2:] // skip "IN"
+	// Skip inner namespace (length-prefixed).
+	rest, ok = skipMangledNamespace(rest)
+	if !ok {
 		return ""
 	}
-	rest = rest[len(innerPrefix):]
 	digitEnd = 0
 	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
 		digitEnd++
@@ -11246,14 +11276,15 @@ func demangleMonomorphTemplateArg(name string) string {
 // (no template args) returns `MirStructLayout`. For templated forms
 // (`_ZTSN4main6OptionIN4main13FrontTypeReprEEE`) returns "" — those
 // are handled by isMangledBuiltinTemplate / isOpaqueNamedType.
-// Returns "" when the format doesn't match.
+// Returns "" when the format doesn't match. Accepts any namespace
+// (`main`, `osty`, package-qualified) per PR #1882 review.
 func demangleMonomorphStructName(name string) string {
-	const prefix = "_ZTSN4main"
+	const prefix = "_ZTSN"
 	if !strings.HasPrefix(name, prefix) {
 		return ""
 	}
-	rest := name[len(prefix):]
-	if rest == "" {
+	rest, ok := skipMangledNamespace(name[len(prefix):])
+	if !ok || rest == "" {
 		return ""
 	}
 	// Parse one length-prefixed component: <digits><name>.
@@ -11998,39 +12029,32 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	//     is a NamedType (user struct / opaque builtin).
 	// Final fallback: IndexProj.ElemType erased to `<error>`, list
 	// local lowers to opaque ptr — default the element scalar to
-	// opaque ptr. **Brittle assumption** (PR #1877 review): every
-	// monomorph List in install-self today is `List<NamedType>`,
-	// whose elements are pointer-shaped at runtime. A `List<Int>` /
-	// `List<Bool>` reaching this fallback would silently read the
-	// element as a pointer (wrong runtime semantics, valid IR). The
-	// upstream loss has only been observed for the named-element case
-	// so far — the list local itself usually carries the Args. Three
-	// safe shapes accepted:
-	//   - listType is mangled List monomorph (`_ZTSN4main4ListI…EE`)
-	//   - listType is canonical `List<NamedType>` with Args[0] named
-	//   - listType is itself erased to ErrType but listScalarTy is
-	//     opaque ptr AND the call-site dest is also opaque (the
-	//     mirLowerMultiAssign shape — list type info lost upstream
-	//     but the indexed read feeds a NamedType local)
+	// opaque ptr. Two safe shapes (PR #1882 review tightened the
+	// primitive-List case):
+	//   - Mangled List monomorph `_ZTSN<ns>4ListIN<ns>…EEE` where
+	//     `demangleMonomorphTemplateArg` parses out a named-struct
+	//     template argument. Mangled `List<Primitive>` (`…ListIlEE`,
+	//     `…ListIhEE`, etc.) skips this branch because the parser
+	//     rejects the `I<primitive-code>E` shape — primitives are
+	//     read at their actual scalar width upstream.
+	//   - Canonical `List<NamedType>` where Args[0] is a NamedType.
+	// The ErrType-list shape from PR #1877 is removed — without dest
+	// context (resolveWhileIndexedOperand has none) the fallback was
+	// unsound for `List<Int>`-like reads that flow into a primitive
+	// destination. Caller has to surface the right elem type via
+	// inferIndexedElementScalarFromPlace.
 	if elemTy == scalarUnknown && listScalarTy == scalarOpaquePtr {
 		listType := placeResultType(ctx.fn, listPlace)
-		accept := false
 		if named, ok := listType.(*ir.NamedType); ok && named != nil {
 			if isMangledBuiltinTemplate(named.Name, "List") {
-				accept = true
+				if demangleMonomorphTemplateArg(named.Name) != "" {
+					elemTy = scalarOpaquePtr
+				}
 			} else if named.Name == "List" && len(named.Args) > 0 {
 				if _, isNamed := named.Args[0].(*ir.NamedType); isNamed {
-					accept = true
+					elemTy = scalarOpaquePtr
 				}
 			}
-		} else if isErrType(listType) {
-			// listType fully erased upstream — surface the opaque
-			// default so the install-self build can complete. See
-			// brittle-assumption note above.
-			accept = true
-		}
-		if accept {
-			elemTy = scalarOpaquePtr
 		}
 	}
 	if elemTy == scalarUnknown {

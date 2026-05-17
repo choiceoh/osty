@@ -1924,16 +1924,22 @@ pub fn lirPlanScalarCastOpcode(from: LirType, to: LirType, unsigned: Bool) -> St
     }
     ""
 }
-/// lirPlanSameFamilyCoercionOpcode plans a store-site coercion: integer
-/// resize, float resize, and the int↔ptr reinterpret cast pair. The
-/// name predates the int↔ptr addition (PR #1877); those cases are
-/// **cross-family** reinterprets that lose/synthesize pointer
-/// provenance, unlike the intra-int/intra-float widening/narrowing.
-/// Callers must not assume a pure same-family widening — the planner
-/// is a "what cast opcode lets this store typecheck" oracle, not a
-/// provenance-preserving one. Cross-family conversion that does
-/// preserve provenance must still come from MIR as an explicit cast
-/// node.
+/// lirPlanSameFamilyCoercionOpcode plans a coercion that lets one LIR
+/// value flow into a slot / call argument / aggregate field typed
+/// `to`. Despite the legacy name, the planner is used at every
+/// coercion site in lir_proto: `lirStoreMirResult`,
+/// `lirLowerCoercedOperand`, `lirLowerMirStringRuntimeCall` args,
+/// `lirStoreProjectedMirValue`, etc. It is the single "what cast
+/// opcode lets this store typecheck" oracle.
+///
+/// Covered cast pairs:
+///   - integer ↔ integer (zext / sext / trunc) — pure widening/narrowing
+///   - float ↔ float (fpext / fptrunc)
+///   - int ↔ ptr (inttoptr / ptrtoint) — **cross-family reinterpret**
+///     added in PR #1877. Loses/synthesises pointer provenance; not
+///     a provenance-preserving conversion. Cross-family conversion
+///     that needs to preserve provenance must come from MIR as an
+///     explicit cast node, not this helper.
 pub fn lirPlanSameFamilyCoercionOpcode(from: LirType, to: LirType, unsigned: Bool) -> String {
     if from.llvm == to.llvm {
         return ""
