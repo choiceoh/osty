@@ -104,3 +104,59 @@ lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(64), indexReg), "Int", la
 - 코드 변경 없음
 
 R3 trajectory 의 multi-session brick 의 시작점. 다음 fresh session 의 spike 가 더 빠르게 root cause 식별.
+
+## 8. PR #1897 후 wall 변화 (term.branch)
+
+[PR #1897](https://github.com/choiceoh/osty/pull/1897) (List/Map/Set toString receiver-return-type recovery) 머지 후 cmd/osty-native-checker build 의 declined 변화:
+
+| | 이전 (PR #1894 후) | 이후 (PR #1897 후) |
+|---|---|---|
+| subcommand | `lir-proto-lower-mir-json` | `lir-proto-lower` (자체 path) |
+| 핵심 message | `string.indexOf result coercion` | **`term.branch: branch condition requires i1, got %Option.Int`** |
+
+진척: install-self 자체는 OK (`Built ... osty-self`). cmd build 의 새 wall = `term.branch` cond 가 `Option<Int>` aggregate 그대로 (i1 expect). `if let Some(i) = strings.indexOf(...)` 의 desugar 시 cond 가 wrap 안 됨 (checker / MIR generator 의 gap).
+
+### 정확한 site
+
+`toolchain/lir_proto.osty:2906::MirTermBranch`:
+
+```osty
+if termKind == MirTermBranch {
+    let cond = lirLowerMirOperand(l, l.instrs, bb.termCond, "Bool", lirIntType(1))
+    if cond.typ.llvm != "i1" {
+        lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
+        return lirUnreachable()
+    }
+    ...
+}
+```
+
+cond 가 `%Option.Int` aggregate. 정상 form = `presentReg = extractvalue %Option.Int %scrut, 0; cmp = icmp eq i64 %presentReg, 0` 로 wrap.
+
+## 9. brick 10 시도 (revert 됨)
+
+`term.branch` 에서 cond 가 aggregate 일 때 자동 disc extract + icmp eq 0 으로 i1 narrow:
+
+```osty
+if cond.typ.className == LirTypeAggregate {
+    let discReg = lirFresh(l)
+    l.instrs.push(lirExtractValue(discReg, cond.typ, cond.value, [0]))
+    let presentReg = lirFresh(l)
+    l.instrs.push(lirBinary(presentReg, "icmp eq", lirIntType(64), discReg, "0"))
+    cond = lirOperand(lirIntType(1), presentReg)
+}
+```
+
+검증:
+- ✓ `just osty-tests` 통과 (회귀 zero)
+- ✗ osty-self runtime 의 declined 동일 (`function "main" does not match any stage0 pattern` 으로 message format 변화 단 본질 동일)
+
+즉 brick 10 도 stage0 cover gap. 우리 새 코드 (`cond.typ.className == LirTypeAggregate` if-branch) 자체가 stage0 fallback path 에서 unsupported pattern → wrong code emit → runtime 에 같은 declined.
+
+## 10. 진짜 unlock path (multi-session architecture)
+
+Chicken-and-egg architecture wall 의 root cause = osty-self 가 자기 자신의 stage0 cover gap 으로 빌드. **어떤 lir_proto.osty 변경도 osty-self runtime 에 반영 안 됨** (brick 8/9/10 모두 동일 결과).
+
+multi-session brick wave 의 진짜 path:
+1. **이중 부트스트랩** — stage0 빌드된 osty-self 가 LIR Proto direct 로 새 osty-self 재빌드. 두 번째 osty-self 가 우리 변경 반영
+2. **또는** stage0/emit.go 의 cover 확장 — 특정 lir_proto.osty 함수의 wrong-code emit pattern 식별 + 새 stage0 case 추가. 단 audit 100% 의 monomorphization 후 subset 와는 다른 pre-monomorph pattern.
