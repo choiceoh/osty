@@ -153,6 +153,17 @@ type Request struct {
 	BinaryName    string
 	Features      []string
 	LinkLibraries []string
+	// ExtraObjects is a list of absolute paths to additional object
+	// files that should be linked alongside the main package's
+	// object when `Emit == EmitBinary`. Used by cmd/osty's cross-
+	// package build path to bring in dependency packages compiled
+	// as standalone `.o` artifacts (see PR3-G: cross-pkg link).
+	// Backends that don't link (`EmitLLVMIR`, `EmitObject`) ignore
+	// this field. Entries are appended after the main object and
+	// before the runtime object — order matters when symbol
+	// resolution depends on link order, but cross-pkg deps should
+	// be self-contained so order is rarely material.
+	ExtraObjects []string
 }
 
 // Artifacts returns the conventional artifact paths for backend n.

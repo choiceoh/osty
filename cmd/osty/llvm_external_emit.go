@@ -17,7 +17,7 @@ var tryExternalPackageLLVMIR = func(entryPath string, pkg *resolve.Package) ([]b
 
 var emitPrebuiltLLVMIR = backend.EmitPrebuiltLLVMIR
 
-func tryExternalPackageLLVMArtifacts(ctx context.Context, emitMode backend.EmitMode, layout backend.Layout, binaryName string, features []string, linkLibraries []string, entryPath string, pkg *resolve.Package) (*backend.Result, bool, error) {
+func tryExternalPackageLLVMArtifacts(ctx context.Context, emitMode backend.EmitMode, layout backend.Layout, binaryName string, features []string, linkLibraries []string, extraObjects []string, entryPath string, pkg *resolve.Package) (*backend.Result, bool, error) {
 	if pkg == nil || !backend.UseNativeOwnedLLVMIR(features, emitMode) {
 		return nil, false, nil
 	}
@@ -31,6 +31,7 @@ func tryExternalPackageLLVMArtifacts(ctx context.Context, emitMode backend.EmitM
 		BinaryName:    binaryName,
 		Features:      features,
 		LinkLibraries: linkLibraries,
+		ExtraObjects:  extraObjects,
 	}, out, warnings)
 	return result, true, err
 }

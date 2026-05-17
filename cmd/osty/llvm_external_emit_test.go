@@ -64,7 +64,7 @@ func TestTryExternalPackageLLVMArtifactsUsesCoveredExternalIR(t *testing.T) {
 	result, used, err := tryExternalPackageLLVMArtifacts(context.Background(), backend.EmitObject, backend.Layout{
 		Root:    pkg.Dir,
 		Profile: "debug",
-	}, "app", nil, []string{"osty_qt", "WebView2Loader"}, "/tmp/main.osty", pkg)
+	}, "app", nil, []string{"osty_qt", "WebView2Loader"}, nil, "/tmp/main.osty", pkg)
 	if err != nil {
 		t.Fatalf("tryExternalPackageLLVMArtifacts() error = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestTryExternalPackageLLVMArtifactsSkipsWhenFeatureOverridesNativePath(t *t
 	result, used, err := tryExternalPackageLLVMArtifacts(context.Background(), backend.EmitBinary, backend.Layout{
 		Root:    pkg.Dir,
 		Profile: "debug",
-	}, "app", []string{"mir-backend"}, nil, "/tmp/main.osty", pkg)
+	}, "app", []string{"mir-backend"}, nil, nil, "/tmp/main.osty", pkg)
 	if err != nil {
 		t.Fatalf("tryExternalPackageLLVMArtifacts() error = %v", err)
 	}

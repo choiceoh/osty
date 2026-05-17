@@ -141,6 +141,11 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 		return out, err
 	}
 	linkObjects := []string{out.Artifacts.Object}
+	// Cross-package dependency objects (see backend.Request.ExtraObjects
+	// docs) are linked after the main package object but before the
+	// runtime, so that dep `define`s satisfy main's `declare`s while
+	// the runtime still gets the last shot at any unresolved symbol.
+	linkObjects = append(linkObjects, req.ExtraObjects...)
 	if runtimeObject != "" {
 		linkObjects = append(linkObjects, runtimeObject)
 	}
