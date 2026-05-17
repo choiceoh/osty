@@ -3404,6 +3404,124 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				return rt
 			}
 		}
+	case *ir.ListLit:
+		// `[1, 2, 3]` whose checker-side List<T> got poisoned. The
+		// element type lives on `x.Elem`; rebuild the List<T> NamedType
+		// when Elem is concrete. Fall back to Elems[0].Type() when Elem
+		// itself is poisoned.
+		elemT := x.Elem
+		if isPoisonType(elemT) || irHasPoisonedTypeArg(elemT) {
+			if len(x.Elems) > 0 && x.Elems[0] != nil {
+				if et := x.Elems[0].Type(); !isPoisonType(et) && !irHasPoisonedTypeArg(et) {
+					elemT = et
+				} else if rt := bs.recoverOperandType(x.Elems[0]); rt != nil && !isPoisonType(rt) {
+					elemT = rt
+				}
+			}
+		}
+		if !isPoisonType(elemT) && !irHasPoisonedTypeArg(elemT) {
+			return &ir.NamedType{Name: "List", Args: []ir.Type{elemT}, Builtin: true}
+		}
+	case *ir.TupleLit:
+		// `(a, b, c)` with poisoned TupleType carrier: rebuild from
+		// each elem's concrete type.
+		if len(x.Elems) > 0 {
+			elemTs := make([]ir.Type, 0, len(x.Elems))
+			allConcrete := true
+			for _, e := range x.Elems {
+				if e == nil {
+					allConcrete = false
+					break
+				}
+				et := e.Type()
+				if isPoisonType(et) || irHasPoisonedTypeArg(et) {
+					if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) {
+						et = rt
+					} else {
+						allConcrete = false
+						break
+					}
+				}
+				elemTs = append(elemTs, et)
+			}
+			if allConcrete {
+				return &ir.TupleType{Elems: elemTs}
+			}
+		}
+	case *ir.MapLit:
+		// `{k: v, ...}` with poisoned Map<K, V> carrier. Rebuild from
+		// the explicit KeyT / ValT fields when concrete.
+		keyT := x.KeyT
+		valT := x.ValT
+		if !isPoisonType(keyT) && !isPoisonType(valT) && !irHasPoisonedTypeArg(keyT) && !irHasPoisonedTypeArg(valT) {
+			return &ir.NamedType{Name: "Map", Args: []ir.Type{keyT, valT}, Builtin: true}
+		}
+	case *ir.CoalesceExpr:
+		// `a ?? b` returns the unwrapped payload of Left (Option<T>'s T)
+		// when concrete, else fall back to Right's type.
+		if x.Left != nil {
+			lt := x.Left.Type()
+			if isPoisonType(lt) || irHasPoisonedTypeArg(lt) {
+				if rt := bs.recoverOperandType(x.Left); rt != nil {
+					lt = rt
+				}
+			}
+			if opt, ok := lt.(*ir.OptionalType); ok && opt.Inner != nil && !isPoisonType(opt.Inner) {
+				return opt.Inner
+			}
+		}
+		if x.Right != nil {
+			if rt := x.Right.Type(); !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
+				return rt
+			}
+			if rt := bs.recoverOperandType(x.Right); rt != nil && !isPoisonType(rt) {
+				return rt
+			}
+		}
+	case *ir.RangeLit:
+		// `start..end` with poisoned Range carrier. Build a NamedType
+		// from the Start/End element type.
+		if x.Start != nil {
+			if st := x.Start.Type(); !isPoisonType(st) && !irHasPoisonedTypeArg(st) {
+				return &ir.NamedType{Name: "Range", Args: []ir.Type{st}, Builtin: true}
+			}
+		}
+		if x.End != nil {
+			if et := x.End.Type(); !isPoisonType(et) && !irHasPoisonedTypeArg(et) {
+				return &ir.NamedType{Name: "Range", Args: []ir.Type{et}, Builtin: true}
+			}
+		}
+	case *ir.VariantLit:
+		// `EnumName.Variant(...)` whose carrier got poisoned. The Enum
+		// name survives because it's parsed, so synthesise NamedType
+		// against the enum table.
+		if x.Enum != "" {
+			if _, ok := bs.l.enums[x.Enum]; ok {
+				return &ir.NamedType{Name: x.Enum}
+			}
+		}
+	case *ir.Closure:
+		// `|x| body` with poisoned FnType carrier. Rebuild from Params
+		// + Return when both concrete.
+		if x.Return != nil && !isPoisonType(x.Return) && !irHasPoisonedTypeArg(x.Return) {
+			paramTs := make([]ir.Type, 0, len(x.Params))
+			allConcrete := true
+			for _, p := range x.Params {
+				if p == nil || isPoisonType(p.Type) || irHasPoisonedTypeArg(p.Type) {
+					allConcrete = false
+					break
+				}
+				paramTs = append(paramTs, p.Type)
+			}
+			if allConcrete {
+				return &ir.FnType{Params: paramTs, Return: x.Return}
+			}
+		}
+	case *ir.LoopExpr:
+		// `loop { ... }` with poisoned T. Default to unit — loops have
+		// no implicit value carrier in Osty (only `break value` does,
+		// and that flows through a different path).
+		return ir.TUnit
 	}
 	return nil
 }
