@@ -3072,7 +3072,17 @@ fn lirLowerMirLocalsFrom(locals: List<MirLocal>, l: LirMirFunctionLowerer, pos: 
         return
     }
     let loc = locals[pos]
-    let typ = lirLowerMirType(l, loc.typ)
+    let mut typ = lirLowerMirType(l, loc.typ)
+    // Type-propagation graceful fallback: when the MIR local carries a
+    // `<error>` type (typically because an upstream expression leaked
+    // it through a `recoverOperandType` cover gap), default the LIR
+    // slot to i64 instead of declining the whole function. The
+    // companion fallback in `lirStoreMirResult` then aligns producer-
+    // side stores. This trades type-precision in propagation gaps for
+    // build progress; mismatched stores surface at the LLVM verifier.
+    if lirTypeIsZero(typ) && loc.typ == "<error>" {
+        typ = lirIntType(64)
+    }
     if lirTypeIsZero(typ) {
         lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", "local." + loc.name)
     } else if !(lirTypeIsVoid(typ)) {
@@ -3206,6 +3216,10 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
             if value.value == "" {
                 return
             }
+        } else if value.typ.className == LirTypeUnknown {
+            // Graceful fallback (R3 brick 4): unknown value type from
+            // `<error>` propagation leak — treat as already typed by dest.
+            value = LirOperand {typ: destType, value: value.value}
         } else {
             let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, destType, lirPrimitiveTypeIsUnsigned(instr.src.typ))
             if castOp == "" {
@@ -3239,6 +3253,8 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
             if stored.value == "" {
                 return
             }
+        } else if stored.typ.className == LirTypeUnknown {
+            stored = LirOperand {typ: leafType, value: stored.value}
         } else {
             let castOp = lirPlanSameFamilyCoercionOpcode(stored.typ, leafType, lirPrimitiveTypeIsUnsigned(valueMirType))
             if castOp == "" {
@@ -3721,6 +3737,8 @@ fn lirLowerMirCallArgs(l: LirMirFunctionLowerer, args: List<MirOperand>, callee:
                 if value.value == "" {
                     return out
                 }
+            } else if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: paramType, value: value.value}
             } else {
                 let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, paramType, lirPrimitiveTypeIsUnsigned(arg.typ))
                 if castOp == "" {
@@ -3743,9 +3761,21 @@ fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperan
         lirLowerError(l, LirDiagInvalidInput, context + " destination local out of range", context)
         return
     }
-    let destType = lirLowerMirType(l, loc.typ)
+    let mut destType = lirLowerMirType(l, loc.typ)
     if lirTypeIsVoid(destType) {
         return
+    }
+    // Type-propagation graceful fallback: when the dest local's MIR type
+    // is unknown (typically because an upstream expression leaked
+    // `<error>` through a `recoverOperandType` cover gap) but the
+    // producer's result type is concrete, treat the producer type as
+    // the canonical dest. This unblocks the lir_proto path for
+    // single-producer stores (e.g. `string.endsWith` → i1) without
+    // forcing every cover gap to be fixed before any build progresses.
+    // The local's LIR slot still ends up typed by the producer; a real
+    // type mismatch would surface at the LLVM verifier.
+    if destType.className == LirTypeUnknown && result.typ.className != LirTypeUnknown && !lirTypeIsZero(result.typ) {
+        destType = result.typ
     }
     if mirPlaceHasProjections(dest) {
         lirStoreProjectedMirValue(l, dest, loc, destType, result, resultTypeName, context)
@@ -4687,14 +4717,25 @@ fn lirLowerMirStringRuntimeCall(l: LirMirFunctionLowerer, instr: MirInstr, symbo
             return
         }
         if value.typ.llvm != pt.llvm {
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, pt, lirPrimitiveTypeIsUnsigned(arg.typ))
-            if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, label + " arg " + lirIntToString(i) + " coercion is not supported", label + " arg " + lirIntToString(i))
-                return
+            // Graceful fallback: when the producer's value type is
+            // unknown (typically because of an upstream `<error>`
+            // propagation leak) but the runtime call's declared param
+            // type is concrete, treat the value as already typed by
+            // the param. The LLVM verifier still catches actual
+            // mismatches; this just keeps the lir_proto path
+            // productive past `recoverOperandType` cover gaps.
+            if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: pt, value: value.value}
+            } else {
+                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, pt, lirPrimitiveTypeIsUnsigned(arg.typ))
+                if castOp == "" {
+                    lirLowerError(l, LirDiagUnsupported, label + " arg " + lirIntToString(i) + " coercion is not supported", label + " arg " + lirIntToString(i))
+                    return
+                }
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, pt))
+                value = LirOperand {typ: pt, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, pt))
-            value = LirOperand {typ: pt, value: castName}
         }
         args.push(lirOperand(pt, value.value))
         i = i + 1
@@ -4764,14 +4805,18 @@ fn lirLowerMirStringConcat(l: LirMirFunctionLowerer, instr: MirInstr) {
         }
         if value.typ.className != LirTypePtr {
             let ptrType = lirPtrType()
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, ptrType, lirPrimitiveTypeIsUnsigned(arg.typ))
-            if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, "string.concat part coercion is not supported", "string.concat part")
-                return
+            if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: ptrType, value: value.value}
+            } else {
+                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, ptrType, lirPrimitiveTypeIsUnsigned(arg.typ))
+                if castOp == "" {
+                    lirLowerError(l, LirDiagUnsupported, "string.concat part coercion is not supported", "string.concat part")
+                    return
+                }
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, ptrType))
+                value = LirOperand {typ: ptrType, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, ptrType))
-            value = LirOperand {typ: ptrType, value: castName}
         }
         parts.push(lirOperand(lirPtrType(), value.value))
     }
@@ -4984,6 +5029,9 @@ fn lirLowerCoercedOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: St
     }
     if value.typ.llvm == hint.llvm {
         return value
+    }
+    if value.typ.className == LirTypeUnknown {
+        return LirOperand {typ: hint, value: value.value}
     }
     let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, hint, lirPrimitiveTypeIsUnsigned(op.typ))
     if castOp == "" {
@@ -7638,14 +7686,18 @@ fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: 
         }
         let mut value = lirLowerMirOperand(l, l.instrs, field, fieldLayout.typ, fieldType)
         if value.typ.llvm != fieldType.llvm {
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
-            if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, "tuple field coercion is not supported", "aggregate.tuple")
-                return lirOperandInvalid()
+            if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: fieldType, value: value.value}
+            } else {
+                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
+                if castOp == "" {
+                    lirLowerError(l, LirDiagUnsupported, "tuple field coercion is not supported", "aggregate.tuple")
+                    return lirOperandInvalid()
+                }
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, fieldType))
+                value = LirOperand {typ: fieldType, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, fieldType))
-            value = LirOperand {typ: fieldType, value: castName}
         }
         let dest = lirFresh(l)
         l.instrs.push(lirInsertValue(dest, aggregateType, current.value, value, [fieldLayout.index]))
@@ -7681,14 +7733,18 @@ fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName:
         }
         let mut value = lirLowerMirOperand(l, l.instrs, field, fieldLayout.typ, fieldType)
         if value.typ.llvm != fieldType.llvm {
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
-            if castOp == "" {
-                lirLowerError(l, LirDiagUnsupported, "struct field coercion is not supported", "aggregate.struct")
-                return lirOperandInvalid()
+            if value.typ.className == LirTypeUnknown {
+                value = LirOperand {typ: fieldType, value: value.value}
+            } else {
+                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
+                if castOp == "" {
+                    lirLowerError(l, LirDiagUnsupported, "struct field coercion is not supported", "aggregate.struct")
+                    return lirOperandInvalid()
+                }
+                let castName = lirFresh(l)
+                l.instrs.push(lirCast(castName, castOp, value, fieldType))
+                value = LirOperand {typ: fieldType, value: castName}
             }
-            let castName = lirFresh(l)
-            l.instrs.push(lirCast(castName, castOp, value, fieldType))
-            value = LirOperand {typ: fieldType, value: castName}
         }
         let dest = lirFresh(l)
         l.instrs.push(lirInsertValue(dest, aggregateType, current.value, value, [fieldLayout.index]))
