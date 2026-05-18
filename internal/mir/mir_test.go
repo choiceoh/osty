@@ -1,6 +1,7 @@
 package mir
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -694,6 +695,89 @@ func TestLowerMethodCall(t *testing.T) {
 	// Ensure no MethodCall sugar survives.
 	if strings.Contains(text, "MethodCall") {
 		t.Fatalf("HIR MethodCall leaked:\n%s", text)
+	}
+}
+
+// TestLowerMethodCallTraceDefaultSilent locks the off-by-default
+// behaviour of the OSTY_MIR_TRACE_METHOD_CALLS env-gated diagnostic:
+// without the env var set the trace writes nothing, so production
+// `osty build` / `osty check` runs do not get extra stderr noise.
+func TestLowerMethodCallTraceDefaultSilent(t *testing.T) {
+	prev := methodCallTraceWriter
+	defer func() { methodCallTraceWriter = prev }()
+	var buf bytes.Buffer
+	methodCallTraceWriter = &buf
+
+	t.Setenv("OSTY_MIR_TRACE_METHOD_CALLS", "")
+
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name:    "Point",
+		Fields:  []*ir.Field{{Name: "x", Type: ir.TInt, Exported: true}},
+		Methods: []*ir.FnDecl{{Name: "get", Return: ir.TInt, Params: []*ir.Param{{Name: "self", Type: pointT}}, Body: &ir.Block{Result: &ir.Ident{Name: "self", T: pointT}}}},
+	}
+	fn := &ir.FnDecl{
+		Name:   "callGet",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: pointT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: pointT},
+				Name:     "get",
+				T:        ir.TInt,
+			},
+		},
+	}
+	Lower(&ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}})
+	if buf.Len() != 0 {
+		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
+	}
+}
+
+// TestLowerMethodCallTraceEnabledEmitsFields exercises the trace's
+// happy path: when OSTY_MIR_TRACE_METHOD_CALLS is set the lowerer
+// emits one line per `MethodCall` dispatch carrying the method name,
+// the dispatch arm, the output symbol, and the recovered receiver
+// type. Used as the bisection tool for the FrontCheckResult__len
+// phantom-symbol class — the receiver-type field is what makes the
+// upstream type-recovery gap visible without parsing the resulting
+// LLVM IR.
+func TestLowerMethodCallTraceEnabledEmitsFields(t *testing.T) {
+	prev := methodCallTraceWriter
+	defer func() { methodCallTraceWriter = prev }()
+	var buf bytes.Buffer
+	methodCallTraceWriter = &buf
+
+	t.Setenv("OSTY_MIR_TRACE_METHOD_CALLS", "1")
+
+	// Receiver typed as a name the module never declares — mirrors
+	// the FrontCheckResult__len shape upstream type-recovery
+	// produces when a List<X> receiver gets a stale `*ir.NamedType`.
+	staleT := &ir.NamedType{Name: "Stale"}
+	fn := &ir.FnDecl{
+		Name:   "callLenOnStale",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "xs", Type: staleT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: staleT},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	Lower(&ir.Module{Package: "main", Decls: []ir.Decl{fn}})
+
+	got := buf.String()
+	for _, want := range []string{
+		`method="len"`,
+		`arm=method-mangled-fallback`,
+		`symbol="Stale__len"`,
+		`recvType=Stale`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("trace missing field %q\nfull output:\n%s", want, got)
+		}
 	}
 }
 

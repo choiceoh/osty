@@ -2,6 +2,8 @@ package mir
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -52,6 +54,68 @@ type fnSignature struct {
 // name, or nil if not known.
 func (l *lowerer) signatureForFn(name string) *fnSignature {
 	return l.fnSig[name]
+}
+
+// ==== method-call trace (env-gated diagnostic) ====
+//
+// `OSTY_MIR_TRACE_METHOD_CALLS=1` enables a per-`MethodCall`
+// dump that prints which dispatch arm `lowerMethodCallInto` took
+// (intrinsic / qualified-use / mangled fallback / …) along with
+// the receiver type the lowerer recovered. Used as the bisection
+// tool for the FrontCheckResult__len phantom-symbol class — when
+// the install-self link surfaces `<TypeName>__<method>` as an
+// undefined symbol, this trace makes it possible to see which
+// `recvType` the lowerer believed the receiver had at that
+// dispatch site.
+//
+// Output goes to `methodCallTraceWriter`, which defaults to
+// `os.Stderr` and is overridable from package tests so the
+// negative case (env unset → no output) and the field shape can
+// be asserted without parsing real stderr.
+
+var methodCallTraceWriter io.Writer = os.Stderr
+
+func methodCallTraceEnabled() bool {
+	switch os.Getenv("OSTY_MIR_TRACE_METHOD_CALLS") {
+	case "", "0", "false", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// traceMethodCallDispatch records the arm a `lowerMethodCallInto`
+// call took. `recvType` is the type the lowerer recovered for the
+// receiver (post `recoveredTypeOf`), printed via `formatTraceType`
+// (which delegates to `ir.Type.String()` plus explicit `<nil>` /
+// `<error>` placeholders) so even poisoned / `*ir.NamedType` /
+// `*ir.PrimType` shapes are legible. `arm` is a short label
+// naming which dispatch branch fired; `symbol` is the symbol the
+// emitted CallInstr or IntrinsicInstr targets — for the mangled
+// fallback that's the `<TypeName>__<method>` form the bisection
+// cares about most.
+func traceMethodCallDispatch(method, arm, symbol string, recvType ir.Type) {
+	if !methodCallTraceEnabled() {
+		return
+	}
+	fmt.Fprintf(methodCallTraceWriter,
+		"mir method-call: method=%q arm=%s symbol=%q recvType=%s\n",
+		method, arm, symbol, formatTraceType(recvType),
+	)
+}
+
+// formatTraceType renders a type for the method-call trace dump.
+// `<nil>` and `<error>` get explicit placeholders so the bisection
+// can spot upstream type-recovery gaps; every other shape
+// delegates to the `ir.Type.String()` method.
+func formatTraceType(t ir.Type) string {
+	if t == nil {
+		return "<nil>"
+	}
+	if isPoisonType(t) {
+		return "<error>"
+	}
+	return t.String()
 }
 
 // signatureForMethod returns the signature of a type method, or nil
@@ -6431,11 +6495,23 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	typeName := typeNameOf(recvType)
 	sig := bs.l.signatureForMethod(typeName, mc.Name)
 	symbol := mc.Name
+	arm := "method-bare-name"
 	if sig != nil {
 		symbol = sig.symbol
+		arm = "method-sig-found"
 	} else if typeName != "" {
 		symbol = mangleMethodSymbol(typeName, mc.Name)
+		arm = "method-mangled-fallback"
 	}
+	// Trace point: this dispatch site is where the
+	// FrontCheckResult__len phantom-symbol class surfaces — when
+	// `recvType` is a wrong/stale `*ir.NamedType` planted by upstream
+	// type-recovery, the lowerer correctly mangles to `<Name>__<method>`
+	// based on what it was told, and the undefined symbol only shows
+	// up at link time. The env-gated trace prints what `recvType`,
+	// `typeName`, and `symbol` were so bisection can compare against
+	// the source's expected receiver type.
+	traceMethodCallDispatch(mc.Name, arm, symbol, recvType)
 	callArgs := []Operand{recv}
 	var rest []Operand
 	if sig != nil {
