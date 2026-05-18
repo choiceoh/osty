@@ -3275,25 +3275,23 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
             // Graceful fallback (R3 brick 4): unknown value type from
             // `<error>` propagation leak — treat as already typed by dest.
             value = LirOperand {typ: destType, value: value.value}
-        } else if lirTypeIsVoid(value.typ) {
-            // Cross-pkg call with unresolved signature: PR3-C/F's
-            // dispatch arm emits `declare void @<pkg>.<fn>()` when the
-            // consumer's checker env doesn't know the dep's signature.
-            // The call result reaches here as void; the dest local was
-            // resolved to a concrete consumer-side type (often aggregate
-            // because the source binding annotated it). No coercion
-            // exists for void → anything.
+        } else if lirTypeIsVoid(value.typ) && strings.startsWith(destLoc.name, "_") {
+            // Cross-pkg smoke-test convention: `let _typeRepr = tc.fn()`
+            // (PR3-C/F dispatch arm) emits `declare void @<pkg>.<fn>()`
+            // when the consumer's checker env doesn't know the dep's
+            // signature. The call result reaches here as void; the dest
+            // local was resolved to a concrete consumer-side type.
             //
-            // Allocate + zero-init the slot rather than skipping
-            // outright: a reader of the slot gets a well-defined zero
-            // value (LLVM `store zeroinitializer`) instead of
-            // uninitialized garbage. Cross-pkg paths typically bind to
-            // a leading-`_` "unused" local (smoke-test convention), so
-            // the zero value isn't read; if a real consumer does read,
-            // the LLVM verifier accepts the store and the runtime
-            // observes a deterministic zero instead of undefined
-            // behavior. Real semantic correctness requires proper
-            // cross-pkg signature resolution (PR-G3+ trajectory).
+            // PR-G3 (post #1908) narrows: zero-init ONLY when the dest
+            // local name starts with `_` — the Osty unused-binding
+            // convention. This preserves the cross-pkg smoke-test
+            // unblock (cmd/osty-native-checker `let _typeRepr = ...`)
+            // without silently zero-initing real bindings whose
+            // upstream type leak should surface as a loud error so
+            // downstream consumers see "missing IR" rather than
+            // "garbage output". List.first / Map.get / etc. whose dest
+            // is `let first = xs.first()` (no `_`) take the "assign
+            // coercion is not supported" diagnostic path below.
             let mut slot = lirMirLocalSlot(l, destLoc.id)
             if slot.slot == "" {
                 slot = LirLocalSlot {id: destLoc.id, slot: lirMirLocalSlotName(destLoc.id), typ: destType}
@@ -3335,23 +3333,15 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                     let castName = lirFresh(l)
                     l.instrs.push(lirCast(castName, "inttoptr", value, destType))
                     value = LirOperand {typ: destType, value: castName}
-                } else if lirTypeIsVoid(value.typ) {
-                    // Cross-pkg call with unresolved signature: PR3-C/F
-                    // dispatch arm emits `declare void @<pkg>.<fn>()`
-                    // when the consumer's checker env doesn't know the
-                    // dep's signature. Call result arrives as void;
-                    // dest local was resolved to a concrete consumer-
-                    // side type (often aggregate because the source
-                    // binding annotated it). No coercion exists for
-                    // void → anything. Allocate + zero-init the slot
-                    // rather than declining the whole function: a
-                    // reader gets a deterministic zero value (LLVM
-                    // `store zeroinitializer`) instead of an SSA-
-                    // invalid skip. Cross-pkg paths typically bind to
-                    // a leading-`_` "unused" smoke-test local so the
-                    // zero is unread. Real semantic correctness
-                    // requires proper cross-pkg signature resolution
-                    // (PR-G3+ trajectory).
+                } else if lirTypeIsVoid(value.typ) && strings.startsWith(destLoc.name, "_") {
+                    // Cross-pkg smoke-test convention: see sibling arm
+                    // above (lirTypeIsVoid + `_`-prefix narrowing in
+                    // PR-G3). Only fires for `let _x = tc.fn()`-style
+                    // explicitly-unused bindings. Real bindings of
+                    // void → non-void take the "assign coercion is
+                    // not supported" diagnostic below — that loud
+                    // failure surfaces the upstream type-leak the
+                    // narrowing protects against silently masking.
                     let mut voidSlot = lirMirLocalSlot(l, destLoc.id)
                     if voidSlot.slot == "" {
                         voidSlot = LirLocalSlot {id: destLoc.id, slot: lirMirLocalSlotName(destLoc.id), typ: destType}
