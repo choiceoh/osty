@@ -833,8 +833,21 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 	}
 
 	// Consult the resolver for the head symbol so we can classify
-	// builtins vs user declarations vs generic parameters.
-	if sym := l.typeRef(nt); sym != nil && resolverSymbolMatchesSourceName(sym, pkg, name, nt.Path) {
+	// builtins vs user declarations vs generic parameters. The
+	// `resolverSymbolMatchesSourceName` guard rejects answers whose
+	// `Name` doesn't match the source's bare ident (a `TypeRefsByID`
+	// mismapping that has been observed in multi-file packages —
+	// see the helper's doc and PR #1919); rejected lookups fall
+	// through to source-name-based classification at the bottom of
+	// the function. Each rejection is also logged through the
+	// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD` env-gated trace so the
+	// underlying resolver bug stays observable.
+	sym := l.typeRef(nt)
+	if sym != nil && !resolverSymbolMatchesSourceName(sym, pkg, name, nt.Path) {
+		traceLowerNamedTypeGuardReject(name, sym.Name, pkg)
+		sym = nil
+	}
+	if sym != nil {
 		symName := sym.Name
 		if pkg != "" && len(nt.Path) > 0 && symName == nt.Path[0] {
 			symName = name
@@ -886,38 +899,78 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 //
 // The guard accepts the resolver-returned symbol when either:
 //
-//   - the source is package-qualified (`pkg != ""`) — package
-//     paths legitimately route through arbitrarily-named symbols
-//     (e.g. `use std.foo as bar` + `bar.Baz`), so the head-ident
-//     match below is sufficient
-//   - the source is bare AND the symbol's name matches the
-//     source last-path component
-//   - the symbol's name matches the source's first-path component
-//     (the existing fallback for qualified paths where the head
-//     is the alias and the resolver records the package symbol)
+//   - the source is **bare** (no package qualifier) AND the
+//     symbol's `Name` matches the source path's last component.
+//     Bare paths must round-trip through the resolver under their
+//     source name; anything else is a TypeRefsByID mismapping.
+//   - the source is **package-qualified** (`pkg != ""`).
+//     Cross-package type references legitimately route through
+//     arbitrarily-named symbols (e.g. `use foo as bar` +
+//     `bar.Baz` resolves through package alias machinery), so
+//     trust the resolver in that path.
 //
-// Otherwise the resolver path is skipped and `lowerNamedType`
-// falls through to the source-name-based builtin / generic-name
-// resolution at the bottom of the function, which correctly
-// classifies `List`/`Map`/`Set`/`Option`/`Result` as builtin
-// containers and everything else as a user-named type.
+// When the guard rejects, `lowerNamedType` skips the resolver
+// path and falls through to the source-name-based builtin /
+// generic-name resolution at the bottom of the function, which
+// correctly classifies `List` / `Map` / `Set` / `Option` /
+// `Result` as builtin containers and everything else as a user-
+// named type. Each rejection is also logged through
+// `traceLowerNamedTypeGuardReject` (env-gated) so the underlying
+// resolver `TypeRefsByID` bug remains observable for follow-up
+// investigation rather than silently masked.
 func resolverSymbolMatchesSourceName(sym *resolve.Symbol, pkg, name string, path []string) bool {
 	if sym == nil {
 		return false
 	}
-	if sym.Name == name {
+	if pkg == "" {
+		return sym.Name == name
+	}
+	// Package-qualified path: trust the resolver. Cross-package
+	// type references legitimately route through arbitrarily-named
+	// symbols, so accepting the resolver answer avoids false-
+	// positives on legitimate aliases. The `path` parameter is
+	// retained on the signature for parity with the qualified-path
+	// caller — future tightening of this branch can use it to
+	// require `sym.Name == path[0]` instead of the unconditional
+	// trust, but doing so today would regress on the
+	// `pub use std.X as Y` rename machinery.
+	_ = path
+	return true
+}
+
+// ==== lowerNamedType guard-reject trace (env-gated diagnostic) ====
+//
+// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD=1` enables a stderr line
+// each time `resolverSymbolMatchesSourceName` rejects a resolver-
+// returned symbol. Used so the underlying resolver `TypeRefsByID`
+// bug (`List` AST node → `FrontCheckResult` symbol etc.) remains
+// observable when the IR-layer guard masks its downstream
+// FrontCheckResult__len failure mode.
+
+var lowerNamedTypeGuardTraceWriter io.Writer = os.Stderr
+
+func lowerNamedTypeGuardTraceEnabled() bool {
+	switch os.Getenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD") {
+	case "", "0", "false", "off":
+		return false
+	default:
 		return true
 	}
-	if pkg != "" {
-		if len(path) > 0 && sym.Name == path[0] {
-			return true
-		}
-		// Package-qualified paths can resolve through arbitrarily-named
-		// symbols. Accept the resolver answer rather than risking
-		// false-positives on legitimate cross-package type references.
-		return true
+}
+
+// traceLowerNamedTypeGuardReject records each guard rejection
+// (source name vs resolver-returned symbol name mismatch).
+// `sourceName` is the source path's last component, `symName` is
+// the rejected resolver answer, `pkg` is the source path's
+// package prefix (empty for bare).
+func traceLowerNamedTypeGuardReject(sourceName, symName, pkg string) {
+	if !lowerNamedTypeGuardTraceEnabled() {
+		return
 	}
-	return false
+	fmt.Fprintf(lowerNamedTypeGuardTraceWriter,
+		"ir lowerNamedType guard reject: sourceName=%q symName=%q pkg=%q\n",
+		sourceName, symName, pkg,
+	)
 }
 
 // joinDottedPath joins a non-empty string slice with '.'.

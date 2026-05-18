@@ -167,6 +167,87 @@ func TestLowerNamedTypeRejectsResolverNameMismatch(t *testing.T) {
 	}
 }
 
+// TestLowerNamedTypeGuardRejectionEmitsTrace locks the
+// observability guarantee Copilot review #1919 asked for: when the
+// IR-layer guard rejects a resolver-returned symbol, the env-gated
+// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD` trace must fire so the
+// underlying resolver `TypeRefsByID` mismapping stays observable
+// rather than being silently masked.
+func TestLowerNamedTypeGuardRejectionEmitsTrace(t *testing.T) {
+	prev := lowerNamedTypeGuardTraceWriter
+	defer func() { lowerNamedTypeGuardTraceWriter = prev }()
+	var buf bytes.Buffer
+	lowerNamedTypeGuardTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD", "1")
+
+	listAST := &ast.NamedType{
+		ID:   ast.NodeID(44),
+		Path: []string{"List"},
+		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
+	}
+	wrongSym := &resolve.Symbol{
+		Name: "FrontCheckResult",
+		Kind: resolve.SymStruct,
+		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
+	}
+	l := &lowerer{
+		res: &resolve.Result{
+			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
+				listAST.ID: wrongSym,
+			},
+		},
+	}
+	_ = l.lowerNamedType(listAST)
+
+	got := buf.String()
+	for _, want := range []string{
+		`sourceName="List"`,
+		`symName="FrontCheckResult"`,
+		`pkg=""`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("guard-reject trace missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+// TestLowerNamedTypeGuardTraceDefaultSilent locks the
+// off-by-default behaviour of the guard trace: without
+// OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD set, even a rejection
+// emits no stderr noise (production `osty build` runs see nothing).
+func TestLowerNamedTypeGuardTraceDefaultSilent(t *testing.T) {
+	prev := lowerNamedTypeGuardTraceWriter
+	defer func() { lowerNamedTypeGuardTraceWriter = prev }()
+	var buf bytes.Buffer
+	lowerNamedTypeGuardTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD", "")
+
+	listAST := &ast.NamedType{
+		ID:   ast.NodeID(45),
+		Path: []string{"List"},
+		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
+	}
+	wrongSym := &resolve.Symbol{
+		Name: "FrontCheckResult",
+		Kind: resolve.SymStruct,
+		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
+	}
+	l := &lowerer{
+		res: &resolve.Result{
+			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
+				listAST.ID: wrongSym,
+			},
+		},
+	}
+	_ = l.lowerNamedType(listAST)
+
+	if buf.Len() != 0 {
+		t.Fatalf("guard trace writer received output despite env off: %q", buf.String())
+	}
+}
+
 // TestLowerNamedTypeAcceptsResolverNameMatch locks the
 // positive-case half of the guard: when the resolver-returned
 // symbol's name DOES match the source path's last component, the
