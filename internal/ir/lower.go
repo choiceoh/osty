@@ -2,6 +2,8 @@ package ir
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -2991,6 +2993,79 @@ func binaryOp(k token.Kind) (BinOp, bool) {
 	return 0, false
 }
 
+// ==== call-return-type trace (env-gated diagnostic) ====
+//
+// `OSTY_IR_TRACE_CALL_RETURN_TYPES=1` enables a per-`CallExpr` dump
+// at `lowerCall` that prints the callee name, the type the IR
+// builder settled on for the call's result, and which fallback path
+// supplied that type (`checker-typed-node` / `callee-fn-type` /
+// `fn-decl-return-type` / `ast-binding-type` / `unrecovered`).
+//
+// Used as the second-stage bisection tool for the FrontCheckResult__len
+// phantom-symbol class. The first-stage MIR trace (PR #1916) showed
+// the receiver of `elems.len()` typed as `FrontCheckResult<String>`
+// in `inspectSpreadTupleHints`. The let-binding's type comes from
+// `out.Value.Type()` — i.e. the CallExpr `hintTupleElems(...)`'s
+// result type, which this IR-layer trace exposes directly.
+//
+// Output goes to `callReturnTypeTraceWriter`, defaulting to `os.Stderr`
+// and overridable from package tests.
+
+var callReturnTypeTraceWriter io.Writer = os.Stderr
+
+func callReturnTypeTraceEnabled() bool {
+	switch os.Getenv("OSTY_IR_TRACE_CALL_RETURN_TYPES") {
+	case "", "0", "false", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// traceCallReturnType records the type decision IR `lowerCall`
+// made for a CallExpr. `calleeText` is a short label for the call
+// site — `<ident:name>` for direct calls, `<field:lhs.name>` for
+// method calls, `<other:%T>` for anything else. `source` names
+// which fallback layer supplied the recovered type. `t` is the IR
+// type the call site ended up tagged with.
+func traceCallReturnType(calleeText, source string, t Type) {
+	if !callReturnTypeTraceEnabled() {
+		return
+	}
+	fmt.Fprintf(callReturnTypeTraceWriter,
+		"ir call: callee=%s source=%s resultType=%s\n",
+		calleeText, source, formatCallTraceType(t),
+	)
+}
+
+func formatCallTraceType(t Type) string {
+	if t == nil {
+		return "<nil>"
+	}
+	if t == ErrTypeVal {
+		return "<error>"
+	}
+	return t.String()
+}
+
+func calleeTraceText(fn ast.Expr) string {
+	switch f := fn.(type) {
+	case *ast.Ident:
+		if f != nil {
+			return "<ident:" + f.Name + ">"
+		}
+	case *ast.FieldExpr:
+		if f != nil {
+			lhs := "?"
+			if id, ok := f.X.(*ast.Ident); ok && id != nil {
+				lhs = id.Name
+			}
+			return "<field:" + lhs + "." + f.Name + ">"
+		}
+	}
+	return fmt.Sprintf("<other:%T>", fn)
+}
+
 func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	// Detect a print-family intrinsic on a bare identifier.
 	if id, ok := e.Fn.(*ast.Ident); ok {
@@ -3082,6 +3157,7 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	}
 	callee := l.lowerExpr(fn)
 	t := l.exprType(e)
+	source := "checker-typed-node"
 	if t == ErrTypeVal || t == nil || hasPoisonedTypeArg(t) {
 		// Prefer the callee's FnType.Return when the call's own
 		// type is missing or carries a poisoned type-arg (the
@@ -3093,6 +3169,7 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 		// carry a fully-resolved return shape.
 		if recovered := recoverCallReturnType(callee); recovered != nil && recovered != ErrTypeVal && !hasPoisonedTypeArg(recovered) {
 			t = recovered
+			source = "callee-fn-type"
 		}
 		// Final fallback for bare-Ident callees whose FnType is
 		// also poisoned: re-lower the resolved fn declaration's AST
@@ -3105,15 +3182,26 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 			if id, ok := fn.(*ast.Ident); ok {
 				if rec := l.recoverFnDeclReturnType(id); rec != nil && rec != ErrTypeVal && !hasPoisonedTypeArg(rec) {
 					t = rec
+					source = "fn-decl-return-type"
 				}
 			}
 		}
 		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
 			if rec := l.bindingTypeFromAST(e); usableRecoveredType(rec) {
 				t = rec
+				source = "ast-binding-type"
 			}
 		}
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+			source = "unrecovered"
+		}
 	}
+	// Trace dispatch site: this is where the FrontCheckResult<String>
+	// type for `let elems = hintTupleElems(...)` enters IR. The MIR
+	// receiver-type trace (PR #1916) shows the wrong type at the
+	// method-call site; this trace exposes which IR-builder fallback
+	// supplied it.
+	traceCallReturnType(calleeTraceText(fn), source, t)
 	out := &CallExpr{
 		Callee:   callee,
 		TypeArgs: typeArgs,

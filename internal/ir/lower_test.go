@@ -1,6 +1,8 @@
 package ir
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
@@ -98,6 +100,89 @@ func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
 	}
 	if got := len(lit.Args); got != 1 {
 		t.Fatalf("variant args = %d, want 1", got)
+	}
+}
+
+// TestLowerCallReturnTypeTraceDefaultSilent locks the off-by-default
+// behaviour of the OSTY_IR_TRACE_CALL_RETURN_TYPES env-gated trace:
+// without the env var set the trace writes nothing.
+func TestLowerCallReturnTypeTraceDefaultSilent(t *testing.T) {
+	prev := callReturnTypeTraceWriter
+	defer func() { callReturnTypeTraceWriter = prev }()
+	var buf bytes.Buffer
+	callReturnTypeTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_CALL_RETURN_TYPES", "")
+
+	call := &ast.CallExpr{
+		ID: 7,
+		Fn: &ast.Ident{Name: "make_string"},
+	}
+	file := &ast.File{
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "s"},
+			Value:   call,
+		}},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{{
+				NodeID: int(call.ID),
+				Kind:   "Call",
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+			}},
+		},
+	}
+	Lower("main", file, nil, chk)
+	if buf.Len() != 0 {
+		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
+	}
+}
+
+// TestLowerCallReturnTypeTraceEnabledRecordsSource exercises the
+// trace's happy path: with OSTY_IR_TRACE_CALL_RETURN_TYPES=1 each
+// `CallExpr` lowering emits one line carrying the callee text,
+// the recovery source label, and the resulting type. The minimal
+// scenario uses a `make_string()` CallExpr whose checker-typed
+// node returns String, so the trace must report
+// `source=checker-typed-node` and `resultType=String`.
+func TestLowerCallReturnTypeTraceEnabledRecordsSource(t *testing.T) {
+	prev := callReturnTypeTraceWriter
+	defer func() { callReturnTypeTraceWriter = prev }()
+	var buf bytes.Buffer
+	callReturnTypeTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_CALL_RETURN_TYPES", "1")
+
+	call := &ast.CallExpr{
+		ID: 7,
+		Fn: &ast.Ident{Name: "make_string"},
+	}
+	file := &ast.File{
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "s"},
+			Value:   call,
+		}},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{{
+				NodeID: int(call.ID),
+				Kind:   "Call",
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+			}},
+		},
+	}
+	Lower("main", file, nil, chk)
+	got := buf.String()
+	for _, want := range []string{
+		`callee=<ident:make_string>`,
+		`source=checker-typed-node`,
+		`resultType=String`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("trace missing field %q\nfull output:\n%s", want, got)
+		}
 	}
 }
 
