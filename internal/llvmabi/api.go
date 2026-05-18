@@ -145,18 +145,20 @@ func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
 }
 
 // ClangCompileObjectArgsForProfile is the profile-aware variant of
-// ClangCompileObjectArgs. The "debug" profile compiles with `-O0` and
-// without LTO so install-self / `osty build --profile=debug` finish in
-// seconds instead of multi-minute ThinLTO link tail. Every other profile
-// (empty or "release") keeps the `-O3 -flto=thin` pipeline that the GC /
-// scheduler runtime have been tuned against.
+// ClangCompileObjectArgs. Profiles whose `profile.Profile.LTO` is false
+// (debug / test / profile per internal/profile/profile.go:202-241)
+// compile with `-O0` and without LTO so install-self / `osty test` /
+// `osty build --profile=...` finish in seconds instead of taking the
+// multi-minute ThinLTO link tail. Empty profile (legacy callers
+// without one in scope) and "release" keep the `-O3 -flto=thin` pipeline
+// that the GC / scheduler runtime have been tuned against.
 func ClangCompileObjectArgsForProfile(target, profile, irPath, objectPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, 8)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	if profile == "debug" {
+	if ProfileSkipsLTO(profile) {
 		args = append(args, "-O0")
 	} else {
 		args = append(args, "-O3", "-flto=thin")
@@ -172,19 +174,20 @@ func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string)
 }
 
 // ClangLinkBinaryArgsForProfile is the profile-aware variant of
-// ClangLinkBinaryArgs. The "debug" profile drops `-flto=thin` (and the
-// matching `-mllvm,-import-instr-limit` tuning) and falls back to
-// `-O0`, which is what made install-self bootstrap-link complete in
-// seconds instead of timing out at the ThinLTO import stage when the
-// self-host IR grew past ~20 MB. Release / unspecified profiles keep
-// the aggressive cross-module-inlining pipeline.
+// ClangLinkBinaryArgs. Profiles whose `profile.Profile.LTO` is false
+// (debug / test / profile per internal/profile/profile.go:202-241) drop
+// `-flto=thin` and the matching `-mllvm,-import-instr-limit` LLD tuning
+// and fall back to `-O0`, which is what made install-self bootstrap-link
+// complete in seconds instead of timing out at the ThinLTO import stage
+// when the self-host IR grew past ~20 MB. Release / unspecified profiles
+// keep the aggressive cross-module-inlining pipeline.
 func ClangLinkBinaryArgsForProfile(target, profile string, objectPaths []string, binaryPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, len(objectPaths)+10)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	if profile == "debug" {
+	if ProfileSkipsLTO(profile) {
 		args = append(args, "-O0")
 		if hasLLD() {
 			args = append(args, "-fuse-ld=lld")
@@ -206,6 +209,21 @@ func ClangLinkBinaryArgsForProfile(target, profile string, objectPaths []string,
 		args = append(args, "-pthread", "-lz")
 	}
 	return append(args, "-o", binaryPath)
+}
+
+// ProfileSkipsLTO reports whether the named build profile turns off
+// LTO + cross-module inlining for clang invocations. Mirrors the
+// canonical built-in table in internal/profile/profile.go's
+// Defaults() — the test `TestProfileSkipsLTOMatchesProfileDefaults`
+// in api_test.go locks the two in sync at compile time. Empty profile
+// (legacy callers without one in scope) and unknown profile names
+// preserve release-tier `-O3 -flto=thin` semantics.
+func ProfileSkipsLTO(profile string) bool {
+	switch profile {
+	case "debug", "test", "profile":
+		return true
+	}
+	return false
 }
 
 func hasLLD() bool {

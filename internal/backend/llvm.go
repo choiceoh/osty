@@ -564,11 +564,14 @@ func clangCompileCObjectArgs(target, profile, sourcePath, objectPath string) []s
 	// workloads (quicksort, matmul, lane_route) stay 10-50x slower than
 	// Go for no reason other than missing inlining.
 	//
-	// The "debug" profile drops both `-O3` and `-flto=thin` to match the
-	// IR-side fast-link path. Debug builds aren't trying to win
-	// throughput benchmarks; they're trying to finish install-self in
-	// seconds instead of timing out at the ThinLTO import stage.
-	if profile == "debug" {
+	// Profiles whose `profile.Profile.LTO` is false (debug / test /
+	// profile per internal/profile/profile.go:202-241) drop both `-O3`
+	// and `-flto=thin` to match the IR-side fast-link path. Those
+	// builds aren't trying to win throughput benchmarks; they're
+	// trying to finish install-self / osty test in seconds instead of
+	// timing out at the ThinLTO import stage. Single source of truth
+	// for the name list is llvmabi.ProfileSkipsLTO.
+	if llvmabi.ProfileSkipsLTO(profile) {
 		args = append(args, "-O0")
 	} else {
 		args = append(args, "-O3", "-flto=thin")
