@@ -86,12 +86,14 @@ func methodCallTraceEnabled() bool {
 
 // traceMethodCallDispatch records the arm a `lowerMethodCallInto`
 // call took. `recvType` is the type the lowerer recovered for the
-// receiver (post `recoveredTypeOf`), printed via `ir.PrintType` so
-// even poisoned / `*ir.NamedType` / `*ir.PrimType` shapes are
-// legible. `arm` is a short label naming which dispatch branch
-// fired; `symbol` is the symbol the emitted CallInstr or
-// IntrinsicInstr targets — for the mangled fallback that's the
-// `<TypeName>__<method>` form the bisection cares about most.
+// receiver (post `recoveredTypeOf`), printed via `formatTraceType`
+// (which delegates to `ir.Type.String()` plus explicit `<nil>` /
+// `<error>` placeholders) so even poisoned / `*ir.NamedType` /
+// `*ir.PrimType` shapes are legible. `arm` is a short label
+// naming which dispatch branch fired; `symbol` is the symbol the
+// emitted CallInstr or IntrinsicInstr targets — for the mangled
+// fallback that's the `<TypeName>__<method>` form the bisection
+// cares about most.
 func traceMethodCallDispatch(method, arm, symbol string, recvType ir.Type) {
 	if !methodCallTraceEnabled() {
 		return
