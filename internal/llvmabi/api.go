@@ -5,7 +5,6 @@ package llvmabi
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -341,49 +340,4 @@ func dataLayoutFor(target string) string {
 		}
 	}
 	return ""
-}
-
-const LIRProtoEnvVar = "OSTY_LLVM_LIR_PROTO"
-
-var ErrLIRProtoNotWired = errors.New("llvm backend: LIR Proto path is not wired")
-
-func LIRProtoSelected() bool { return lirProtoEnvOn(strings.TrimSpace(getenv(LIRProtoEnvVar))) }
-
-var getenv = os.Getenv
-
-func lirProtoEnvOn(value string) bool {
-	switch value {
-	case "", "0", "false", "FALSE", "False", "off", "OFF", "Off", "no", "NO", "No":
-		return false
-	}
-	return true
-}
-
-type LIRProtoRequest struct {
-	PackageName string
-	SourcePath  string
-	Source      []byte
-	Target      string
-}
-
-type LIRProtoRunner interface {
-	Run(req LIRProtoRequest) ([]byte, error)
-}
-
-type defaultLIRProtoRunner struct{}
-
-func (defaultLIRProtoRunner) Run(LIRProtoRequest) ([]byte, error) { return nil, ErrLIRProtoNotWired }
-
-var registeredLIRProtoRunner LIRProtoRunner = defaultLIRProtoRunner{}
-
-func SetLIRProtoRunner(runner LIRProtoRunner) {
-	if runner == nil {
-		registeredLIRProtoRunner = defaultLIRProtoRunner{}
-		return
-	}
-	registeredLIRProtoRunner = runner
-}
-
-func InvokeLIRProtoRunner(req LIRProtoRequest) ([]byte, error) {
-	return registeredLIRProtoRunner.Run(req)
 }

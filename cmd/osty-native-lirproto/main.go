@@ -1,6 +1,6 @@
 // Command osty-native-lirproto is the subprocess half of the
-// Phase-7 LIR Proto runner bridge. It reads a `LIRProtoRequest`-
-// shaped JSON payload on stdin and writes a `LIRProtoResponse`
+// Phase-7 LIR Proto runner bridge. It reads a `nativelirproto.Request`-
+// shaped JSON payload on stdin and writes a `nativelirproto.Response`
 // JSON object on stdout.
 //
 // Slice-2 contract: the binary's body is now a thin Go shim that

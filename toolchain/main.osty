@@ -532,8 +532,7 @@ fn runCompile(args: List<String>) -> Int {
 /// `mirEmitModule` direct emitter. Used by the
 /// `cmd/osty-native-lirproto` Go bridge as the production MIR→LLVM
 /// lowering entry. The Go side stages the source to a temp path and
-/// invokes this subcommand. (`OSTY_LLVM_LIR_PROTO` only gates whether
-/// the host `osty` binary's LLVM dispatcher tries this path first.)
+/// invokes this subcommand.
 ///
 /// CLI shape: `osty-self lir-proto-lower <path> [--package-name=NAME]
 /// [--target=TRIPLE]`. Defaults: `--package-name=main`, no target.
