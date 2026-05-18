@@ -492,11 +492,17 @@ func bridgeRefs(
 	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range refs {
-		if ref.File != "" {
-			// Only process refs for this file. The file info already
-			// constrains which merged-source offsets are valid, but
-			// the File field gives a clearer filter.
-			_ = ref.File
+		// Cross-file filter: skip refs that originate in a different
+		// source file than the one this bridge invocation owns. Without
+		// this gate, `nativeToOriginalOffset` can still return a valid
+		// offset for a foreign-file ref (when the merged-source range
+		// happens to overlap), and `identIdx[origOff]` then matches
+		// an unrelated ident in the current file, populating
+		// `refsByID[wrong_ident.ID]` with the foreign-file ref's target.
+		// Multi-file `osty install-self` previously hit this 291 times
+		// across ~50 distinct source/symbol shape mismappings.
+		if ref.File != "" && ref.File != fi.path {
+			continue
 		}
 		origOff, ok := nativeToOriginalOffset(fi, ref.Start)
 		if !ok {
@@ -610,6 +616,25 @@ func bridgeTypeRefs(
 	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range typeRefs {
+		// Cross-file filter, twin of the gate in bridgeRefs: skip
+		// typeRefs whose source file isn't the one this bridge
+		// invocation owns. Without this, `nativeToOriginalOffset` can
+		// resolve a foreign-file ref to an offset that exists in the
+		// current file's source range, and the subsequent
+		// `typeIdx[origOff]` matches an unrelated NamedType — the
+		// `TypeRefsByID[wrong_node.ID] = sym_for_other_file`
+		// mismapping shape. Measured at 3.7M cross-file refs
+		// elided per install-self run on the toolchain/ package
+		// (98.5% of all bridge ref iterations), making the bridge
+		// hot loop O(N * M) → O(N) in the cross-file dimension.
+		// The downstream IR-layer guard
+		// (`resolverSymbolMatchesSourceName`, PR #1919) still
+		// catches the residual same-file collisions
+		// (~291 per build); follow-up work needs to chase those
+		// to a per-file root cause.
+		if ref.File != "" && ref.File != fi.path {
+			continue
+		}
 		origOff, ok := nativeToOriginalOffset(fi, ref.Start)
 		if !ok {
 			continue
