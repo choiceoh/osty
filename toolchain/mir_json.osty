@@ -917,10 +917,10 @@ fn mirJsonModuleInto(value: MirJsonValue, m: MirModule) -> Result<Bool, String> 
     }
     m.packageName = mirJsonStringField(obj, 11154812, "packageName", "main")?
     m.span = mirJsonSpanField(obj, 4020328, "span")?
-    m.layouts = mirJsonLayouts(match mirJsonObjectGetNamed(obj, 7067238, "layouts") {
+    mirJsonLayoutsInto(match mirJsonObjectGetNamed(obj, 7067238, "layouts") {
         Some(v) -> v,
         None -> mirJsonEmptyObject(),
-    })?
+    }, m.layouts)?
     let usesOk = mirJsonModuleUses(mirJsonArrayField(obj, 4021098, "uses")?, 0, m)?
     let functionsOk = mirJsonModuleFunctions(mirJsonArrayField(obj, 9111069, "functions")?, 0, m)?
     let globalsOk = mirJsonModuleGlobals(mirJsonArrayField(obj, 7062783, "globals")?, 0, m)?
@@ -1399,147 +1399,116 @@ fn mirJsonRValue(value: MirJsonValue) -> Result<MirRValue, String> {
 }
 
 fn mirJsonLayouts(value: MirJsonValue) -> Result<MirLayoutTable, String> {
+    let mut out = mirLayoutTable()
+    mirJsonLayoutsInto(value, out)?
+    Ok(out)
+}
+
+fn mirJsonLayoutsInto(value: MirJsonValue, out: MirLayoutTable) -> Result<Bool, String> {
     if mirJsonIsNull(value) {
-        return Ok(mirLayoutTable())
+        return Ok(true)
     }
     let obj = mirJsonObject(value, "layouts")?
-    let mut out = mirLayoutTable()
-    out = mirJsonLayoutStructs(mirJsonArrayField(obj, 7066232, "structs")?, 0, out)?
-    out = mirJsonLayoutEnums(mirJsonArrayField(obj, 5033156, "enums")?, 0, out)?
-    out = mirJsonLayoutTuples(mirJsonArrayField(obj, 6047011, "tuples")?, 0, out)?
-    return mirJsonLayoutInterfaces(mirJsonArrayField(obj, 10133151, "interfaces")?, 0, out)
+    mirJsonLayoutStructsInto(mirJsonArrayField(obj, 7066232, "structs")?, 0, out)?
+    mirJsonLayoutEnumsInto(mirJsonArrayField(obj, 5033156, "enums")?, 0, out)?
+    mirJsonLayoutTuplesInto(mirJsonArrayField(obj, 6047011, "tuples")?, 0, out)?
+    return mirJsonLayoutInterfacesInto(mirJsonArrayField(obj, 10133151, "interfaces")?, 0, out)
 }
 
-fn mirJsonLayoutStructs(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<MirLayoutTable, String> {
+fn mirJsonLayoutStructsInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.structs.push(mirJsonStructLayout(items[pos])?)
-    return mirJsonLayoutStructs(items, pos + 1, next)
+    let obj = mirJsonObject(items[pos], "struct-layout")?
+    out.structs.push(MirStructLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?, size: mirJsonIntField(obj, 4020781, "size", 0)?, align: mirJsonIntField(obj, 5031327, "align", 0)?})
+    return mirJsonLayoutStructsInto(items, pos + 1, out)
 }
 
-fn mirJsonLayoutEnums(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<MirLayoutTable, String> {
+fn mirJsonLayoutEnumsInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.enums.push(mirJsonEnumLayout(items[pos])?)
-    return mirJsonLayoutEnums(items, pos + 1, next)
+    let obj = mirJsonObject(items[pos], "enum-layout")?
+    out.enums.push(MirEnumLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, discriminant: mirJsonTypeField(obj, 12205146, "discriminant")?, variants: mirJsonVariantLayouts(mirJsonArrayField(obj, 8085881, "variants")?)?})
+    return mirJsonLayoutEnumsInto(items, pos + 1, out)
 }
 
-fn mirJsonLayoutTuples(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<MirLayoutTable, String> {
+fn mirJsonLayoutTuplesInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.tuples.push(mirJsonTupleLayout(items[pos])?)
-    return mirJsonLayoutTuples(items, pos + 1, next)
+    let obj = mirJsonObject(items[pos], "tuple-layout")?
+    out.tuples.push(MirTupleLayout {key: mirJsonStringField(obj, 3012361, "key", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?})
+    return mirJsonLayoutTuplesInto(items, pos + 1, out)
 }
 
-fn mirJsonLayoutInterfaces(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<MirLayoutTable, String> {
+fn mirJsonLayoutInterfacesInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.interfaces.push(mirJsonInterfaceLayout(items[pos])?)
-    return mirJsonLayoutInterfaces(items, pos + 1, next)
-}
-
-fn mirJsonFieldLayout(value: MirJsonValue) -> Result<MirFieldLayout, String> {
-    let obj = mirJsonObject(value, "layout-field")?
-    Ok(MirFieldLayout {index: mirJsonIntField(obj, 5032140, "index", 0)?, name: mirJsonStringField(obj, 4019667, "name", "")?, typ: mirJsonTypeField(obj, 4020804, "type")?})
+    let obj = mirJsonObject(items[pos], "interface-layout")?
+    out.interfaces.push(MirInterfaceLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, methods: mirJsonInterfaceMethods(mirJsonArrayField(obj, 7063812, "methods")?)?, impls: mirJsonInterfaceImpls(mirJsonArrayField(obj, 5032823, "impls")?)?})
+    return mirJsonLayoutInterfacesInto(items, pos + 1, out)
 }
 
 fn mirJsonFieldLayouts(items: List<MirJsonValue>) -> Result<List<MirFieldLayout>, String> {
     let mut out: List<MirFieldLayout> = []
-    return mirJsonFieldLayoutsFrom(items, 0, out)
+    mirJsonFieldLayoutsInto(items, 0, out)?
+    Ok(out)
 }
 
-fn mirJsonFieldLayoutsFrom(items: List<MirJsonValue>, pos: Int, out: List<MirFieldLayout>) -> Result<List<MirFieldLayout>, String> {
+fn mirJsonFieldLayoutsInto(items: List<MirJsonValue>, pos: Int, out: List<MirFieldLayout>) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.push(mirJsonFieldLayout(items[pos])?)
-    return mirJsonFieldLayoutsFrom(items, pos + 1, next)
-}
-
-fn mirJsonStructLayout(value: MirJsonValue) -> Result<MirStructLayout, String> {
-    let obj = mirJsonObject(value, "struct-layout")?
-    Ok(MirStructLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?, size: mirJsonIntField(obj, 4020781, "size", 0)?, align: mirJsonIntField(obj, 5031327, "align", 0)?})
-}
-
-fn mirJsonVariantLayout(value: MirJsonValue) -> Result<MirVariantLayout, String> {
-    let obj = mirJsonObject(value, "variant-layout")?
-    Ok(MirVariantLayout {index: mirJsonIntField(obj, 5032140, "index", 0)?, name: mirJsonStringField(obj, 4019667, "name", "")?, payload: mirJsonFieldLayouts(mirJsonArrayField(obj, 7061513, "payload")?)?})
+    let obj = mirJsonObject(items[pos], "layout-field")?
+    out.push(MirFieldLayout {index: mirJsonIntField(obj, 5032140, "index", 0)?, name: mirJsonStringField(obj, 4019667, "name", "")?, typ: mirJsonTypeField(obj, 4020804, "type")?})
+    return mirJsonFieldLayoutsInto(items, pos + 1, out)
 }
 
 fn mirJsonVariantLayouts(items: List<MirJsonValue>) -> Result<List<MirVariantLayout>, String> {
     let mut out: List<MirVariantLayout> = []
-    return mirJsonVariantLayoutsFrom(items, 0, out)
+    mirJsonVariantLayoutsInto(items, 0, out)?
+    Ok(out)
 }
 
-fn mirJsonVariantLayoutsFrom(items: List<MirJsonValue>, pos: Int, out: List<MirVariantLayout>) -> Result<List<MirVariantLayout>, String> {
+fn mirJsonVariantLayoutsInto(items: List<MirJsonValue>, pos: Int, out: List<MirVariantLayout>) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.push(mirJsonVariantLayout(items[pos])?)
-    return mirJsonVariantLayoutsFrom(items, pos + 1, next)
-}
-
-fn mirJsonEnumLayout(value: MirJsonValue) -> Result<MirEnumLayout, String> {
-    let obj = mirJsonObject(value, "enum-layout")?
-    Ok(MirEnumLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, discriminant: mirJsonTypeField(obj, 12205146, "discriminant")?, variants: mirJsonVariantLayouts(mirJsonArrayField(obj, 8085881, "variants")?)?})
-}
-
-fn mirJsonTupleLayout(value: MirJsonValue) -> Result<MirTupleLayout, String> {
-    let obj = mirJsonObject(value, "tuple-layout")?
-    Ok(MirTupleLayout {key: mirJsonStringField(obj, 3012361, "key", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?})
-}
-
-fn mirJsonInterfaceMethod(value: MirJsonValue) -> Result<MirInterfaceMethod, String> {
-    let obj = mirJsonObject(value, "interface-method")?
-    Ok(MirInterfaceMethod {name: mirJsonStringField(obj, 4019667, "name", "")?, slot: mirJsonIntField(obj, 4021462, "slot", 0)?})
+    let obj = mirJsonObject(items[pos], "variant-layout")?
+    out.push(MirVariantLayout {index: mirJsonIntField(obj, 5032140, "index", 0)?, name: mirJsonStringField(obj, 4019667, "name", "")?, payload: mirJsonFieldLayouts(mirJsonArrayField(obj, 7061513, "payload")?)?})
+    return mirJsonVariantLayoutsInto(items, pos + 1, out)
 }
 
 fn mirJsonInterfaceMethods(items: List<MirJsonValue>) -> Result<List<MirInterfaceMethod>, String> {
     let mut out: List<MirInterfaceMethod> = []
-    return mirJsonInterfaceMethodsFrom(items, 0, out)
+    mirJsonInterfaceMethodsInto(items, 0, out)?
+    Ok(out)
 }
 
-fn mirJsonInterfaceMethodsFrom(items: List<MirJsonValue>, pos: Int, out: List<MirInterfaceMethod>) -> Result<List<MirInterfaceMethod>, String> {
+fn mirJsonInterfaceMethodsInto(items: List<MirJsonValue>, pos: Int, out: List<MirInterfaceMethod>) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.push(mirJsonInterfaceMethod(items[pos])?)
-    return mirJsonInterfaceMethodsFrom(items, pos + 1, next)
-}
-
-fn mirJsonInterfaceImpl(value: MirJsonValue) -> Result<MirInterfaceImpl, String> {
-    let obj = mirJsonObject(value, "interface-impl")?
-    Ok(MirInterfaceImpl {implName: mirJsonStringField(obj, 8078692, "implName", "")?, vtableSym: mirJsonStringField(obj, 9105370, "vtableSym", "")?})
+    let obj = mirJsonObject(items[pos], "interface-method")?
+    out.push(MirInterfaceMethod {name: mirJsonStringField(obj, 4019667, "name", "")?, slot: mirJsonIntField(obj, 4021462, "slot", 0)?})
+    return mirJsonInterfaceMethodsInto(items, pos + 1, out)
 }
 
 fn mirJsonInterfaceImpls(items: List<MirJsonValue>) -> Result<List<MirInterfaceImpl>, String> {
     let mut out: List<MirInterfaceImpl> = []
-    return mirJsonInterfaceImplsFrom(items, 0, out)
+    mirJsonInterfaceImplsInto(items, 0, out)?
+    Ok(out)
 }
 
-fn mirJsonInterfaceImplsFrom(items: List<MirJsonValue>, pos: Int, out: List<MirInterfaceImpl>) -> Result<List<MirInterfaceImpl>, String> {
+fn mirJsonInterfaceImplsInto(items: List<MirJsonValue>, pos: Int, out: List<MirInterfaceImpl>) -> Result<Bool, String> {
     if pos >= items.len() {
-        return Ok(out)
+        return Ok(true)
     }
-    let mut next = out
-    next.push(mirJsonInterfaceImpl(items[pos])?)
-    return mirJsonInterfaceImplsFrom(items, pos + 1, next)
-}
-
-fn mirJsonInterfaceLayout(value: MirJsonValue) -> Result<MirInterfaceLayout, String> {
-    let obj = mirJsonObject(value, "interface-layout")?
-    Ok(MirInterfaceLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, methods: mirJsonInterfaceMethods(mirJsonArrayField(obj, 7063812, "methods")?)?, impls: mirJsonInterfaceImpls(mirJsonArrayField(obj, 5032823, "impls")?)?})
+    let obj = mirJsonObject(items[pos], "interface-impl")?
+    out.push(MirInterfaceImpl {implName: mirJsonStringField(obj, 8078692, "implName", "")?, vtableSym: mirJsonStringField(obj, 9105370, "vtableSym", "")?})
+    return mirJsonInterfaceImplsInto(items, pos + 1, out)
 }
 
 fn mirJsonUnary(value: Int) -> MirUnaryOp {
