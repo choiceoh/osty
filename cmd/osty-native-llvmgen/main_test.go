@@ -58,10 +58,9 @@ func TestRunEmitsLLVMIRForMIRPayload(t *testing.T) {
 	}
 }
 
-func TestRunMIRPayloadPrefersLIRProtoWhenSelected(t *testing.T) {
+func TestRunMIRPayloadPrefersLIRProtoBridge(t *testing.T) {
 	bin := buildFakeNativeLIRProto(t)
 	capture := filepath.Join(t.TempDir(), "lir-request.json")
-	t.Setenv("OSTY_LLVM_LIR_PROTO", "1")
 	t.Setenv("OSTY_NATIVE_LIRPROTO_BIN", bin)
 	t.Setenv("FAKE_NATIVE_LIRPROTO_CAPTURE", capture)
 	t.Setenv("FAKE_NATIVE_LIRPROTO_RESPONSE", `{"llvmIr":"; lir-proto\ndefine i64 @main() { ret i64 99 }\n"}`)
@@ -110,7 +109,6 @@ func TestRunMIRPayloadPrefersLIRProtoWhenSelected(t *testing.T) {
 
 func TestRunMIRPayloadDeclinesWhenLIRProtoDeclines(t *testing.T) {
 	bin := buildFakeNativeLIRProto(t)
-	t.Setenv("OSTY_LLVM_LIR_PROTO", "1")
 	t.Setenv("OSTY_NATIVE_LIRPROTO_BIN", bin)
 	t.Setenv("FAKE_NATIVE_LIRPROTO_RESPONSE", `{"declined":true,"error":"not ready"}`)
 

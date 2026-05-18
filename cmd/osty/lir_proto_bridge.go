@@ -9,15 +9,16 @@ import (
 )
 
 // init registers the process-bridge LIR Proto runner with the
-// dispatcher. When `OSTY_LLVM_LIR_PROTO=1`, the runner spawns
-// `osty-native-lirproto` and forwards the request as JSON. As of
-// Phase-7 Slice 2, the bridge binary forks the self-hosted
-// `osty-self lir-proto-lower` subcommand (built by `osty build
-// toolchain/`) which routes MIR through the Osty-owned
-// `toolchain/lir_proto.osty` pipeline. The dispatcher's
-// fall-back-on-error policy converts a missing osty-self artifact
-// or a declined response into a structured warning + MIR-direct
-// emit so gate-on never hard-fails on a stale worktree.
+// llvmabi dispatcher. `generateLLVMIR` consults `OSTY_LLVM_LIR_PROTO`
+// before invoking this runner; when selected, the runner shells out
+// to `osty-native-lirproto` and forwards the request as JSON. The
+// bridge binary forks the self-hosted `osty-self lir-proto-lower`
+// subcommand (built by `osty build toolchain/`), which routes MIR
+// through the Osty-owned `toolchain/lir_proto.osty` pipeline. The
+// dispatcher's fall-back-on-error policy converts a missing osty-self
+// artifact or a declined response into a structured warning plus the
+// legacy dispatch routes so enabling the env gate never hard-fails on
+// a stale worktree.
 func init() {
 	llvmabi.SetLIRProtoRunner(processLIRProtoRunner{})
 }
