@@ -17308,7 +17308,14 @@ fn mirInstrIsProjectionWriteToLocal(instr: MirInstr, local: Int) -> Bool {
     if instr.dest.local != local {
         return false
     }
-    mirPlaceHasProjections(instr.dest)
+    if !mirPlaceHasProjections(instr.dest) {
+        return false
+    }
+    let last = instr.dest.projections[instr.dest.projections.len() - 1]
+    if last.kind == MirProjIndex || last.kind == MirProjDeref {
+        return false
+    }
+    true
 }
 fn mirBlockHasProjectionWriteAfter(block: MirBasicBlock, instrIdx: Int, local: Int) -> Bool {
     let mut i = instrIdx + 1
@@ -17867,17 +17874,33 @@ fn mirEmitBlockOperandValue(block: MirBasicBlock, instrIdx: Int, op: MirOperand)
     mirEmitOperand(op)
 }
 fn mirEmitModuleRValueLen(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
-    let lenSym = mirEmitLenSymbol(rv.typ)
+    let containerType = mirEmitLenContainerType(func, rv.place, rv.typ)
+    let lenSym = mirEmitLenSymbol(containerType)
     if lenSym == "" {
-        return "  ; TODO MirRVLen on container type \"" + rv.typ + "\"\n"
+        return "  ; TODO MirRVLen on container type \"" + containerType + "\"\n"
     }
     if mirPlaceHasProjections(rv.place) == false {
         let src = mirEmitFunctionLocalValueBefore(func, block, instrIdx, rv.place.local)
         return "  " + dest + " = call i64 @" + lenSym + "(ptr " + src + ")\n"
     }
     let tmp = dest + ".lx"
-    let mut out = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.place, rv.typ)
+    let mut out = mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.place, containerType)
     out + "  " + dest + " = call i64 @" + lenSym + "(ptr " + tmp + ")\n"
+}
+fn mirEmitLenContainerType(func: MirFunction, place: MirPlace, fallback: String) -> String {
+    if place.projections.len() > 0 {
+        let last = place.projections[place.projections.len() - 1]
+        if last.typ != "" {
+            return last.typ
+        }
+    }
+    if place.local >= 0 && place.local < func.locals.len() {
+        let loc = func.locals[place.local]
+        if loc.typ != "" {
+            return loc.typ
+        }
+    }
+    fallback
 }
 fn mirEmitModuleRValueDiscriminant(m: MirModule, func: MirFunction, block: MirBasicBlock, instrIdx: Int, dest: String, rv: MirRValue) -> String {
     let aggTy = mirEmitModuleDiscriminantAggType(m, func, rv)
@@ -18458,6 +18481,9 @@ fn mirCommonDominatingLocalValueFromPredsNoPhi(func: MirFunction, blockId: Int, 
     let mut saw = false
     for pred in func.blocks {
         if mirBlockTargets(pred, blockId) {
+            if pred.id >= blockId && !mirBlockHasLocalValueAtEnd(pred, local) {
+                continue
+            }
             let value = mirLocalIncomingValueForPhi(func, pred, local, depth + 1)
             if value == "" {
                 return ""
@@ -18483,6 +18509,9 @@ fn mirCommonDominatingLocalValueFromPreds(func: MirFunction, blockId: Int, local
     let mut saw = false
     for pred in func.blocks {
         if mirBlockTargets(pred, blockId) {
+            if pred.id >= blockId && !mirBlockHasLocalValueAtEnd(pred, local) {
+                continue
+            }
             let value = mirLocalIncomingValueForBlock(func, pred, local, depth + 1)
             if value == "" {
                 return ""
@@ -19473,9 +19502,10 @@ fn mirEmitDiscriminantAggType(rv: MirRValue) -> String {
 /// `osty_rt_<container>_len(ptr)` returning i64. Place must be a
 /// bare local (no projections) — Phase 1g handles projection chains.
 fn mirEmitRValueLen(dest: String, rv: MirRValue) -> String {
-    let lenSym = mirEmitLenSymbol(rv.typ)
+    let containerType = mirEmitLenContainerTypeFromPlace(rv.place, rv.typ)
+    let lenSym = mirEmitLenSymbol(containerType)
     if lenSym == "" {
-        return "  ; TODO MirRVLen on container type \"" + rv.typ + "\"\n"
+        return "  ; TODO MirRVLen on container type \"" + containerType + "\"\n"
     }
     if mirPlaceHasProjections(rv.place) == false {
         let src = mirEmitLocalRegName(rv.place.local)
@@ -19484,6 +19514,15 @@ fn mirEmitRValueLen(dest: String, rv: MirRValue) -> String {
     let tmp = dest + ".lx"
     let mut out = mirEmitProjectedReadChain(tmp, rv.place, "ptr")
     out + "  " + dest + " = call i64 @" + lenSym + "(ptr " + tmp + ")\n"
+}
+fn mirEmitLenContainerTypeFromPlace(place: MirPlace, fallback: String) -> String {
+    if place.projections.len() > 0 {
+        let last = place.projections[place.projections.len() - 1]
+        if last.typ != "" {
+            return last.typ
+        }
+    }
+    fallback
 }
 /// mirEmitLenSymbol picks the runtime helper name for a container's
 /// len intrinsic. The caller passes the rvalue's `typ` (the source-
@@ -20621,7 +20660,7 @@ fn mirEmitAssignIntoProjection(m: MirModule, func: MirFunction, block: MirBasicB
         prev = target
         i = i + 1
     }
-    let valueDest = baseReg + ".wv"
+    let valueDest = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local) + ".wv"
     out = out + mirEmitRValue(valueDest, instr.src)
     let valueTy = mirEmitRValueLLVMType(instr.src)
     let lastFieldIdx = instr.dest.projections[n - 1].index
@@ -20660,10 +20699,10 @@ fn mirEmitAssignIntoTwoStepProjection(m: MirModule, func: MirFunction, block: Mi
     let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
     let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
     let midTy = mirEmitModuleProjectionResultLLVM(m, "", firstProj)
-    let midRead = baseReg + ".r" + mirGenIntToString(instrIdx) + "_0"
-    let valueDest = baseReg + ".wv" + mirGenIntToString(instrIdx)
-    let innerWrite = baseReg + ".w" + mirGenIntToString(instrIdx) + "_1"
     let finalTarget = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)
+    let midRead = finalTarget + ".r0"
+    let valueDest = finalTarget + ".wv"
+    let innerWrite = finalTarget + ".w1"
     let mut out = "  " + midRead + " = extractvalue " + baseTy + " " + baseValue + ", " + mirGenIntToString(firstProj.index) + "\n"
     out = out + mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
     let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
@@ -20691,7 +20730,7 @@ fn mirEmitAssignIntoSingleProjection(m: MirModule, func: MirFunction, block: Mir
     let baseReg = mirEmitLocalRegName(instr.dest.local)
     let baseValue = mirProjectionBaseValueName(func, block, instrIdx, instr.dest.local)
     let baseTy = mirProjectionBaseLLVMType(m, func, instr.dest.local)
-    let valueDest = baseReg + ".w" + mirGenIntToString(instrIdx) + "_" + mirGenIntToString(proj.index)
+    let valueDest = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local) + ".wv"
     let mut out = mirEmitModuleRValue(m, func, block, instrIdx, valueDest, instr.src, -1)
     let valueTy = mirEmitModuleRValueLLVMType(m, func, instr.src)
     let target = mirProjectionWriteTargetName(block, instrIdx, instr.dest.local)

@@ -24,7 +24,7 @@ fn selfhostDriverOptionValue(args: List<String>, name: String) -> String {
 }
 
 fn selfhostDriverProbeError() -> String {
-    let source = "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
+    let source = "fn main() -> Int \{\n    let x = 41\n    return x + 1\n\}\n"
     let hir = hirLowerSource("main", source)
     let mir = mirLowerModule(hir)
     let mirErrs = mirValidateModule(mir)

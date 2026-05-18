@@ -129,3 +129,123 @@ entry:
 		t.Fatalf("stage0 alias harness output = %q, want %q", got, want)
 	}
 }
+
+func TestBundledRuntimeCIHostAliasesLinkWithHostObjects(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
+	irPath := filepath.Join(dir, "cihost_aliases.ll")
+	irObjectPath := filepath.Join(dir, "cihost_aliases.o")
+	binaryPath := filepath.Join(dir, "cihost_aliases")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	ir := `declare i1 @runtime.cihost.HasManifest(ptr)
+declare ptr @runtime.cihost.CapturePackageHost(ptr)
+
+define i32 @main() {
+entry:
+  %ok = call i1 @runtime.cihost.HasManifest(ptr null)
+  %pkg = call ptr @runtime.cihost.CapturePackageHost(ptr null)
+  ret i32 0
+}
+`
+	if err := os.WriteFile(irPath, []byte(ir), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", irPath, err)
+	}
+
+	runClang := func(label string, args []string) {
+		t.Helper()
+		out, err := exec.Command("clang", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("clang %s failed: %v\n%s", label, err, out)
+		}
+	}
+
+	runClang("compile runtime", clangCompileCObjectArgs("", "debug", runtimePath, runtimeObjectPath))
+	runClang("compile cihost alias IR", llvmabi.ClangCompileObjectArgs("", irPath, irObjectPath))
+	linkArgs := llvmabi.ClangLinkBinaryArgs("", []string{irObjectPath, runtimeObjectPath}, binaryPath)
+	linkArgs = append(linkArgs, clangPlatformRuntimeLinkArgs("")...)
+	runClang("link cihost alias binary", linkArgs)
+}
+
+func TestBundledRuntimeStdOsExecWithReturnsResultBox(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
+	irPath := filepath.Join(dir, "exec_with_result_box.ll")
+	irObjectPath := filepath.Join(dir, "exec_with_result_box.o")
+	binaryPath := filepath.Join(dir, "exec_with_result_box")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	ir := `%Result = type { i64, ptr }
+%ExecOutput = type { i64, ptr, ptr, i1 }
+
+@.cat = private unnamed_addr constant [4 x i8] c"cat\00"
+@.input = private unnamed_addr constant [6 x i8] c"probe\00"
+@.empty = private unnamed_addr constant [1 x i8] c"\00"
+
+declare ptr @osty_rt_os_exec_input_with(ptr, ptr, ptr, ptr, ptr, i64)
+
+define i32 @main() {
+entry:
+  %res = call ptr @osty_rt_os_exec_input_with(ptr @.cat, ptr null, ptr @.input, ptr @.empty, ptr null, i64 0)
+  %tagp = getelementptr inbounds %Result, ptr %res, i32 0, i32 0
+  %tag = load i64, ptr %tagp
+  %is_ok = icmp eq i64 %tag, 0
+  br i1 %is_ok, label %payload, label %bad_tag
+
+payload:
+  %payloadp = getelementptr inbounds %Result, ptr %res, i32 0, i32 1
+  %out = load ptr, ptr %payloadp
+  %has_payload = icmp ne ptr %out, null
+  br i1 %has_payload, label %exit_code, label %bad_payload
+
+exit_code:
+  %exitp = getelementptr inbounds %ExecOutput, ptr %out, i32 0, i32 0
+  %exit = load i64, ptr %exitp
+  %exit_ok = icmp eq i64 %exit, 0
+  br i1 %exit_ok, label %ok, label %bad_exit
+
+ok:
+  ret i32 0
+bad_tag:
+  ret i32 10
+bad_payload:
+  ret i32 11
+bad_exit:
+  ret i32 12
+}
+`
+	if err := os.WriteFile(irPath, []byte(ir), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", irPath, err)
+	}
+
+	runClang := func(label string, args []string) {
+		t.Helper()
+		out, err := exec.Command("clang", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("clang %s failed: %v\n%s", label, err, out)
+		}
+	}
+
+	runClang("compile runtime", clangCompileCObjectArgs("", "debug", runtimePath, runtimeObjectPath))
+	runClang("compile std.os execWith result-box IR", llvmabi.ClangCompileObjectArgs("", irPath, irObjectPath))
+	linkArgs := llvmabi.ClangLinkBinaryArgs("", []string{irObjectPath, runtimeObjectPath}, binaryPath)
+	linkArgs = append(linkArgs, clangPlatformRuntimeLinkArgs("")...)
+	runClang("link std.os execWith result-box binary", linkArgs)
+
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+}

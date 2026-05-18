@@ -275,6 +275,17 @@ pub fn llvmListRuntimeGetSymbolFor(elemTyp: String, isString: Bool) -> String {
     llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
 }
 
+pub fn llvmListRuntimeSetSymbol(suffix: String) -> String {
+    "osty_rt_list_set_" + suffix
+}
+
+pub fn llvmListRuntimeSetSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_set_string"
+    }
+    llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
+}
+
 pub fn llvmListRuntimeInsertSymbol(suffix: String) -> String {
     "osty_rt_list_insert_" + suffix
 }

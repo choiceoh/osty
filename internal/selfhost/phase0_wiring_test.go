@@ -8,11 +8,10 @@ import (
 	"testing"
 )
 
-// TestPhase0SelfHostWiringExists guards the Phase 0 self-host backend
-// wiring: the chain `hirLowerSource` → `mirLowerModule` (which itself
-// calls `hirMonomorphizeModule`) → `mirEmitModule` must be present in
-// the toolchain source, and `toolchain/main.osty` must dispatch the
-// `compile <file>` subcommand to that chain.
+// TestPhase0SelfHostWiringExists guards the self-host backend wiring:
+// the legacy MIR emitter remains available in `toolchain/mir_generator.osty`,
+// while `toolchain/main.osty` dispatches `compile <file>` through the
+// same LIR Proto path that `--selfhost-doctor` probes.
 //
 // The wiring is structural-only today because `osty-self` itself
 // can't yet be built via the LLVM backend (the backend trips on
@@ -25,9 +24,9 @@ import (
 // renames a Phase 0 entry point fails this test before the next
 // session's runtime test would.
 //
-// Phase 0 = module-skeleton emission (header + define-headers +
-// `entry:` stub returns). Phase 1+ replaces the stub returns with
-// real per-instruction lowering.
+// The historical test name is kept so old targeted test commands keep
+// working, but the guarded production path is now source → HIR → MIR →
+// LIR Proto → LLVM IR.
 func TestPhase0SelfHostWiringExists(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -523,18 +522,22 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"runLirProtoLowerMirJson(args)",
 				"hirLowerSource(",
 				"mirLowerModule(",
-				"mirEmitModule(",
+				`lirLowerConfig("main", path, "")`,
+				"lirLowerMirModule(cfg, checkedMir)",
+				"lirRenderModule(result.module)",
 			},
 		},
 		{
 			path: "toolchain/mir_json.osty",
 			needles: []string{
 				"pub fn mirJsonParseModule(",
-				"mirJsonModule(v)",
+				"fn mirJsonModule(",
 				"mirJsonFunction(",
 				"mirJsonInstr(",
 				"mirJsonRValue(",
 				"mirJsonLayouts(",
+				"fn mirJsonLayoutsInto(value: MirJsonValue, out: MirLayoutTable) -> Result<Bool, String>",
+				"fn mirJsonLayoutStructsInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String>",
 			},
 		},
 	}
@@ -548,7 +551,20 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				t.Fatalf("read %s: %v", tc.path, err)
 			}
 			text := string(src)
-			for _, needle := range tc.needles {
+			needles := tc.needles
+			if tc.path == "toolchain/mir_generator.osty" {
+				// `compile` no longer depends on the legacy direct emitter's
+				// per-instruction catalog. Keep a smoke guard that the legacy
+				// entrypoints still exist, and let LIR Proto tests own the
+				// production self-host path.
+				needles = []string{
+					"pub fn mirEmitModule(",
+					"pub fn mirEmitOpts(",
+					"pub struct MirEmitOpts ",
+					"mirEmitFunctionStub(",
+				}
+			}
+			for _, needle := range needles {
 				if !strings.Contains(text, needle) {
 					t.Errorf("missing wiring %q in %s", needle, tc.path)
 				}
@@ -592,6 +608,418 @@ func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
 	} {
 		if !strings.Contains(text, needle) {
 			t.Errorf("doctor probe missing %q", needle)
+		}
+	}
+}
+
+func TestElabInferLoopExprGuardStaysOutsideKindMatch(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "elab.osty"))
+	if err != nil {
+		t.Fatalf("read elab.osty: %v", err)
+	}
+	text := string(src)
+	if strings.Contains(text, "_ if node.kind == AstNFor && node.text == \"loopexpr\"") {
+		t.Fatalf("elabInferImpl reintroduced guarded match arm; stage0 lowers that fallback to unreachable")
+	}
+	guard := "if node.kind == AstNFor && node.text == \"loopexpr\""
+	guardPos := strings.Index(text, guard)
+	if guardPos < 0 {
+		t.Fatalf("elabInferImpl missing bootstrap-safe loopexpr guard")
+	}
+	matchPos := strings.Index(text[guardPos:], "match node.kind")
+	if matchPos < 0 {
+		t.Fatalf("elabInferImpl missing node.kind match after loopexpr guard")
+	}
+}
+
+func TestMirLowerEmitScriptSkipsSyntheticMainWhenExplicitMainExists(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_lower.osty"))
+	if err != nil {
+		t.Fatalf("read mir_lower.osty: %v", err)
+	}
+	text := string(src)
+	fnPos := strings.Index(text, "pub fn mirLowerEmitScript")
+	if fnPos < 0 {
+		t.Fatalf("mirLowerEmitScript missing")
+	}
+	body := text[fnPos:]
+	guardPos := strings.Index(body, `if existing.name == "main"`)
+	mainPos := strings.Index(body, `mirFunction("main"`)
+	if guardPos < 0 {
+		t.Fatalf("mirLowerEmitScript missing explicit-main guard")
+	}
+	if mainPos < 0 {
+		t.Fatalf("mirLowerEmitScript missing synthetic main construction")
+	}
+	if guardPos > mainPos {
+		t.Fatalf("mirLowerEmitScript checks explicit main after constructing synthetic main")
+	}
+}
+
+func TestSelfhostDoctorProbeSourceEscapesLiteralBraces(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "toolchain", "main.osty"),
+		filepath.Join(root, "toolchain", "selfhost_driver.osty"),
+	} {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(src)
+		if strings.Contains(text, `fn main() -> Int {\n`) {
+			t.Fatalf("%s has an unescaped probe source brace; self-host string interpolation corrupts the doctor probe", path)
+		}
+		if !strings.Contains(text, `fn main() -> Int \{\n`) {
+			t.Fatalf("%s missing escaped self-host doctor probe source", path)
+		}
+		if !strings.Contains(text, `\}\n"`) {
+			t.Fatalf("%s missing escaped closing brace in self-host doctor probe source", path)
+		}
+	}
+}
+
+func TestMirLowerTypeArgHelpersUseBootstrapSafeEarlyReturns(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_lower.osty"))
+	if err != nil {
+		t.Fatalf("read mir_lower.osty: %v", err)
+	}
+	text := string(src)
+	for _, fn := range []string{"hirTypeFirstArg", "hirTypeSecondArg"} {
+		start := strings.Index(text, "pub fn "+fn)
+		if start < 0 {
+			t.Fatalf("%s missing", fn)
+		}
+		end := strings.Index(text[start+1:], "\npub fn ")
+		if end < 0 {
+			t.Fatalf("%s body boundary missing", fn)
+		}
+		body := text[start : start+1+end]
+		if strings.Contains(body, "match t.kind") {
+			t.Fatalf("%s reintroduced match-expression shape; stage0 lowered its success arm to unreachable", fn)
+		}
+		if !strings.Contains(body, "return hirTypeInvalid()") {
+			t.Fatalf("%s missing early invalid return", fn)
+		}
+		if !strings.Contains(body, "t.namedArgs[") {
+			t.Fatalf("%s missing namedArgs projection", fn)
+		}
+	}
+	for _, bad := range []string{
+		"fn hirTypeContainsVar(t: HirType) -> Bool {\n    match t.kind",
+		"fn hirTypeHasErrArg(t: HirType) -> Bool {\n    match t.kind",
+		"pub fn mirLowerResultErrType(t: HirType) -> HirType {\n    match t.kind",
+		"pub fn mirLowerOptionInnerType(t: HirType) -> HirType {\n    match t.kind",
+		"fn mirLowerResultOkType(t: HirType) -> HirType {\n    match t.kind",
+		"pub fn mirLowerTupleElementTypeAt(t: HirType, idx: Int) -> HirType {\n    match t.kind",
+	} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("mir_lower.osty reintroduced bootstrap-unsafe type helper shape: %q", bad)
+		}
+	}
+	for _, good := range []string{
+		"return t.optionalInner[0]",
+		"return t.namedArgs[0]",
+		"return t.namedArgs[1]",
+		"t.tupleElems[idx]",
+	} {
+		if !strings.Contains(text, good) {
+			t.Fatalf("mir_lower.osty missing bootstrap-safe helper projection %q", good)
+		}
+	}
+}
+
+func TestMirGeneratorLenRVUsesPlaceContainerType(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_generator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_generator.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"let containerType = mirEmitLenContainerType(func, rv.place, rv.typ)",
+		"let lenSym = mirEmitLenSymbol(containerType)",
+		"mirEmitModuleProjectedReadChain(m, func, block, instrIdx, tmp, rv.place, containerType)",
+		"fn mirEmitLenContainerType(func: MirFunction, place: MirPlace, fallback: String) -> String",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir_generator.osty missing LenRV container-type wiring %q", needle)
+		}
+	}
+	if strings.Contains(text, "let lenSym = mirEmitLenSymbol(rv.typ)") {
+		t.Fatalf("mir_generator.osty still treats LenRV result type as the container type")
+	}
+}
+
+func TestMirGeneratorDominatingValueSkipsNonDefiningBackedges(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_generator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_generator.osty: %v", err)
+	}
+	text := string(src)
+	needle := "if pred.id >= blockId && !mirBlockHasLocalValueAtEnd(pred, local) {\n                continue\n            }"
+	if strings.Count(text, needle) < 2 {
+		t.Fatalf("mir_generator.osty missing non-defining backedge skip in dominating local value helpers")
+	}
+}
+
+func TestMirGeneratorIndexWritesDoNotDefineProjectionSSAValue(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_generator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_generator.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"let last = instr.dest.projections[instr.dest.projections.len() - 1]",
+		"if last.kind == MirProjIndex || last.kind == MirProjDeref",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir_generator.osty missing index/deref projection-write guard %q", needle)
+		}
+	}
+}
+
+func TestMirGeneratorProjectionWriteTempsUseBlockQualifiedNames(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_generator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_generator.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"mirProjectionWriteTargetName(block, instrIdx, instr.dest.local) + \".wv\"",
+		"let midRead = finalTarget + \".r0\"",
+		"let innerWrite = finalTarget + \".w1\"",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir_generator.osty missing block-qualified projection temp %q", needle)
+		}
+	}
+}
+
+func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "lir_proto.osty"))
+	if err != nil {
+		t.Fatalf("read lir_proto.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"fn lirStoreIndexedListValue(l: LirMirFunctionLowerer, place: MirPlace, root: MirLocal, rootType: LirType, value: LirOperand, valueMirType: String, context: String)",
+		"llvmListRuntimeSetSymbolFor(elemLane.llvm, lirContainerElemIsString(elemName))",
+		"mirRtListSymbol(\"set_bytes_v1\")",
+		"fn lirCoerceValueToType(l: LirMirFunctionLowerer, value: LirOperand, valueMirType: String, destTypeName: String, destType: LirType, context: String) -> LirOperand",
+		"fn lirRebuildDefaultI64Aggregate(l: LirMirFunctionLowerer, value: LirOperand, destType: LirType) -> LirOperand",
+		"fn lirEmitEnumDiscriminantAggregate(l: LirMirFunctionLowerer, discValue: LirOperand, destType: LirType) -> LirOperand",
+		"lirCoerceTargetIsPayloadEnum(l, destTypeName)",
+		"fn lirAppendRenderedLirBlocks(renderedBlocks: List<String>, blocks: List<LirBlock>, pos: Int)",
+		"lirAppendRenderedLirBlocks(renderedBlocks, blockLowerer.extraBlocks, 0)",
+		"fn lirBinaryAddIsStringConcat(rv: MirRValue, hintName: String, hint: LirType) -> Bool",
+		"left = lirCoerceValueToType(l, left, rv.arg.typ, \"String\", lirPtrType(), \"string concat left\")",
+		"fn lirBinaryIsStringComparison(rv: MirRValue) -> Bool",
+		"fn lirLowerMirStringComparison(l: LirMirFunctionLowerer, rv: MirRValue) -> LirOperand",
+		"lirRuntimeDeclI1FromTwoPtr(symbol)",
+		"lirRuntimeDeclI64FromTwoPtr(symbol)",
+		"l.instrs.push(lirCall(eqDest, boolType, \"@\" + symbol",
+		"l.instrs.push(lirBinary(neDest, \"xor\", boolType, eqDest, \"1\"))",
+		"out = strings.replaceAll(out, \"<\", \".\")",
+		"out = strings.replaceAll(out, \" \", \"\")",
+		"fn lirEncodedCStringByteLen(encoded: String) -> Int",
+		"lirEncodedCStringByteLen(encoded)",
+		`out = strings.replaceAll(out, "\\5C", "_")`,
+		`out = strings.replaceAll(out, "\\7B", "_")`,
+		`out = strings.replaceAll(out, "\\7D", "_")`,
+		`out = strings.replaceAll(out, "\\00", "_")`,
+		`let lbrace = strings.replaceAll(newline, lirLBrace(), lirEsc("7B"))`,
+		`let rbrace = strings.replaceAll(lbrace, lirRBrace(), lirEsc("7D"))`,
+		"let noArgs: List<LirOperand> = []",
+		"pub tempNames: List<String>",
+		"let tempNames: List<String> = []",
+		"l.tempNames.push(name)",
+		`if !(loc.isParam) && typ.className == LirTypePtr`,
+		`l.prologue.push(lirStore(lirOperand(typ, "null"), slot, 0))`,
+			`value.typ.className == LirTypePtr && destType.className == LirTypeInt`,
+			`value.typ.className == LirTypeInt && destType.className == LirTypePtr`,
+			"value = lirCoerceValueToType(l, value, arg.typ, paramLocal.typ, paramType, \"direct call arg\")",
+			"fn lirRuntimePanicDecl() -> LirRuntimeDecl",
+			"lirRuntimeDeclWithAttrs(\"osty_rt_panic\", lirVoidType(), [lirPtrType()], false, lirRuntimePanicAttrs())",
+			"if kind == MirIntrinsicAbort",
+			"fn lirLowerMirAbort(l: LirMirFunctionLowerer, instr: MirInstr)",
+			"l.instrs.push(lirCallWithAttrs(\"\", lirVoidType(), \"@osty_rt_panic\", args, \"\", lirRuntimePanicAttrs()))",
+			"let fields: List<MirFieldLayout> = []",
+			"MirStructLayout {name: \"\", mangled: \"\", fields, size: 0, align: 0}",
+			"MirTupleLayout {key: \"\", mangled: \"\", fields}",
+		} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("lir_proto.osty missing stage2-seed LIR Proto guard %q", needle)
+		}
+	}
+}
+
+func TestStage2SeedDriverAvoidsBootstrapUnsafeMatchDispatch(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	cases := []struct {
+		path      string
+		fn        string
+		forbidden string
+	}{
+		{filepath.Join(root, "toolchain", "mir_validator.osty"), "fn mirValidateInstr", "match instr.kind"},
+		{filepath.Join(root, "toolchain", "mir_validator.osty"), "fn mirValidateRValue", "match rv.kind"},
+		{filepath.Join(root, "toolchain", "mir_validator.osty"), "fn mirValidateOperand", "match op.kind"},
+		{filepath.Join(root, "toolchain", "mir_validator.osty"), "fn mirValidateProjection", "match proj.kind"},
+		{filepath.Join(root, "toolchain", "mir_validator.osty"), "fn mirValidateTerm", "match t.kind"},
+		{filepath.Join(root, "toolchain", "lir_proto.osty"), "pub fn lirRenderInstr", "match i.kind"},
+	}
+	for _, tc := range cases {
+		src, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		text := string(src)
+		start := strings.Index(text, tc.fn)
+		if start < 0 {
+			t.Fatalf("%s missing %s", tc.path, tc.fn)
+		}
+		end := strings.Index(text[start+1:], "\nfn ")
+		pubEnd := strings.Index(text[start+1:], "\npub fn ")
+		if end < 0 || (pubEnd >= 0 && pubEnd < end) {
+			end = pubEnd
+		}
+		if end < 0 {
+			t.Fatalf("%s body boundary missing for %s", tc.path, tc.fn)
+		}
+		body := text[start : start+1+end]
+		if strings.Contains(body, tc.forbidden) {
+			t.Fatalf("%s reintroduced bootstrap-unsafe match dispatch %q in %s", tc.path, tc.forbidden, tc.fn)
+		}
+	}
+}
+
+func TestSelfhostMirSupportIncludesListSetRuntimeSymbols(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "scripts", "selfhost_mir_support.osty"))
+	if err != nil {
+		t.Fatalf("read selfhost_mir_support.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"pub fn llvmListRuntimeSetSymbol(suffix: String) -> String",
+		`"osty_rt_list_set_" + suffix`,
+		"pub fn llvmListRuntimeSetSymbolFor(elemTyp: String, isString: Bool) -> String",
+		`return "osty_rt_list_set_string"`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("selfhost_mir_support.osty missing list-set runtime symbol helper %q", needle)
+		}
+	}
+}
+
+func TestMirValidatorReturnMismatchDiagnosticIsBootstrapSafe(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_validator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_validator.osty: %v", err)
+	}
+	text := string(src)
+	if strings.Contains(text, `type {ret.typ} does not match declared return type {func.returnType}`) {
+		t.Fatalf("return mismatch diagnostic still uses bootstrap-unsafe interpolation placeholders")
+	}
+	if !strings.Contains(text, `" type " + ret.typ + " does not match declared return type " + func.returnType`) {
+		t.Fatalf("return mismatch diagnostic should concatenate concrete values")
+	}
+}
+
+func TestVerifySelfRebuildStage1IgnoresStaleInTreeSelfBinary(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "scripts", "verify-self-rebuild"))
+	if err != nil {
+		t.Fatalf("read verify-self-rebuild: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		`rm -f "$toolchain_dir/.osty/out/debug/llvm/osty-self"`,
+		`rm -f "$toolchain_dir/.osty/out/release/llvm/osty-self"`,
+		"OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("verify-self-rebuild missing stage1 stale self-binary guard %q", needle)
+		}
+	}
+}
+
+func TestMirLowerVariantPayloadZeroSelectorIsRedundant(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_lower.osty"))
+	if err != nil {
+		t.Fatalf("read mir_lower.osty: %v", err)
+	}
+	text := string(src)
+	start := strings.Index(text, "fn mirLowerVariantNIsRedundantPayload")
+	if start < 0 {
+		t.Fatalf("mirLowerVariantNIsRedundantPayload missing")
+	}
+	end := strings.Index(text[start+1:], "\nfn ")
+	if end < 0 {
+		t.Fatalf("mirLowerVariantNIsRedundantPayload body boundary missing")
+	}
+	body := text[start : start+1+end]
+	if !strings.Contains(body, "idx == 0") {
+		t.Fatalf("variant payload selector 0 must stay redundant for nested enum payloads")
+	}
+	for _, forbidden := range []string{
+		`namedName == "Option"`,
+		`mirLowerTypeIsKnownEnum(l, t.namedName)`,
+		"HirTypeOptional -> false",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("variant payload selector 0 reintroduced nested algebraic exception %q", forbidden)
 		}
 	}
 }

@@ -367,10 +367,10 @@ fn runSelfRebuild(args: List<String>) -> Int {
     0
 }
 fn selfhostProbeSource() -> String {
-    "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
+    "fn main() -> Int \{\n    let x = 41\n    return x + 1\n\}\n"
 }
 fn selfhostProbeError() -> String {
-    let source = "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n"
+    let source = selfhostProbeSource()
     let hir = hirLowerSource("main", source)
     let mir = mirLowerModule(hir)
     let checkedMir = mirModuleWithPackageName("main", mir)
@@ -403,7 +403,7 @@ fn selfhostProbeError() -> String {
 }
 fn selfhostDoctorProbeError(exe: String) -> String {
     let probePath = "/tmp/osty-self-doctor-probe.osty"
-    let writeErr = selfRebuildWriteString(probePath, "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n")
+    let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
     if writeErr != "" {
         return "write probe failed: " + writeErr
     }
@@ -444,7 +444,7 @@ fn runSelfhostDoctor() -> Int {
     }
     let probePath = "/tmp/osty-self-doctor-probe.osty"
     let mut probeError = ""
-    let writeErr = selfRebuildWriteString(probePath, "fn main() -> Int {\n    let x = 41\n    return x + 1\n}\n")
+    let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
     if writeErr != "" {
         probeError = "write probe failed: " + writeErr
     } else {
@@ -489,12 +489,11 @@ fn runSelfhostDoctor() -> Int {
     println("osty-self self-rebuild driver: source bundle -> clang object/runtime link")
     0
 }
-/// runCompile is the Phase 0 self-host pipeline entry: read a source
-/// file, run it through the toolchain pipeline (HIR lower, monomorph,
-/// MIR lower, MIR emit), and print the resulting LLVM IR text to
-/// stdout. Function bodies are stubbed at structural validity (see
-/// `mirEmitModule` doc); Phase 1+ replaces the stubs with real
-/// per-instruction lowering.
+/// runCompile is the self-host pipeline entry used by the rebuild
+/// scripts: read a source file, run the toolchain pipeline (HIR → MIR),
+/// then render LLVM IR through LIR Proto. This intentionally follows
+/// the same lowering path that `--selfhost-doctor` probes, so
+/// `stage2-seed` does not fall back to the legacy direct MIR emitter.
 fn runCompile(args: List<String>) -> Int {
     if args.len() < 2 {
         eprint("osty-self compile: missing <file> argument\n")
@@ -520,9 +519,17 @@ fn runCompile(args: List<String>) -> Int {
         }
         return 1
     }
-    let opts = mirEmitOptsWithSource("main", path, "", source)
-    let irText = mirEmitModule(mir, opts)
-    print(irText)
+    let cfg = lirLowerConfig("main", path, "")
+    let result = lirLowerMirModule(cfg, checkedMir)
+    if !lirLowerOK(result) {
+        for d in result.diagnostics {
+            if d.severity == LirSeverityError {
+                eprint("osty-self compile: " + lirDiagnosticRender(d) + "\n")
+            }
+        }
+        return 1
+    }
+    print(lirRenderModule(result.module))
     0
 }
 /// runLirProtoLower is the Phase-7 Slice 2 self-host entry: read the

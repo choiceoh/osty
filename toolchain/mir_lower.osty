@@ -547,6 +547,11 @@ pub fn mirLowerEmitScript(l: MirLowerer) {
     if script.len() == 0 {
         return
     }
+    for existing in l.out.functions {
+        if existing.name == "main" {
+            return
+        }
+    }
     let span = mirSpanFromHir(l.src.span)
     let mut main = mirFunction("main", "()", span)
     mirLowerSeedFunction(main, [], hirTUnit(), span)
@@ -863,30 +868,24 @@ pub fn hirTypeIsChannel(t: HirType) -> Bool {
 /// hirTypeFirstArg returns the first type argument of a generic named
 /// type, or an invalid HirType when `t` has no arguments.
 pub fn hirTypeFirstArg(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeNamed -> {
-            if t.namedArgs.len() > 0 {
-                t.namedArgs[0]
-            } else {
-                hirTypeInvalid()
-            }
-        },
-        _ -> hirTypeInvalid(),
+    if t.kind != HirTypeNamed {
+        return hirTypeInvalid()
     }
+    if t.namedArgs.len() == 0 {
+        return hirTypeInvalid()
+    }
+    return t.namedArgs[0]
 }
 /// hirTypeSecondArg returns the second type argument of a generic
 /// named type (e.g. `Map<K, V>.V`), or an invalid HirType when absent.
 pub fn hirTypeSecondArg(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeNamed -> {
-            if t.namedArgs.len() >= 2 {
-                t.namedArgs[1]
-            } else {
-                hirTypeInvalid()
-            }
-        },
-        _ -> hirTypeInvalid(),
+    if t.kind != HirTypeNamed {
+        return hirTypeInvalid()
     }
+    if t.namedArgs.len() < 2 {
+        return hirTypeInvalid()
+    }
+    return t.namedArgs[1]
 }
 // ====================================================================
 // Operator bridging (HIR ops → MIR ops)
@@ -1698,45 +1697,43 @@ fn mirLowerShouldPreferHintType(actual: HirType, hint: HirType) -> Bool {
     hirTypeContainsVar(actual) && !hirTypeContainsVar(hint)
 }
 fn hirTypeContainsVar(t: HirType) -> Bool {
-    match t.kind {
-        HirTypeVar -> true,
-        HirTypeNamed -> {
-            for a in t.namedArgs {
-                if hirTypeContainsVar(a) {
-                    return true
-                }
-            }
-            false
-        },
-        HirTypeOptional -> {
-            if t.optionalInner.len() > 0 {
-                hirTypeContainsVar(t.optionalInner[0])
-            } else {
-                false
-            }
-        },
-        HirTypeTuple -> {
-            for elem in t.tupleElems {
-                if hirTypeContainsVar(elem) {
-                    return true
-                }
-            }
-            false
-        },
-        HirTypeFn -> {
-            for p in t.fnParams {
-                if hirTypeContainsVar(p) {
-                    return true
-                }
-            }
-            if t.fnReturn.len() > 0 {
-                hirTypeContainsVar(t.fnReturn[0])
-            } else {
-                false
-            }
-        },
-        _ -> false,
+    if t.kind == HirTypeVar {
+        return true
     }
+    if t.kind == HirTypeNamed {
+        for a in t.namedArgs {
+            if hirTypeContainsVar(a) {
+                return true
+            }
+        }
+        return false
+    }
+    if t.kind == HirTypeOptional {
+        if t.optionalInner.len() == 0 {
+            return false
+        }
+        return hirTypeContainsVar(t.optionalInner[0])
+    }
+    if t.kind == HirTypeTuple {
+        for elem in t.tupleElems {
+            if hirTypeContainsVar(elem) {
+                return true
+            }
+        }
+        return false
+    }
+    if t.kind == HirTypeFn {
+        for p in t.fnParams {
+            if hirTypeContainsVar(p) {
+                return true
+            }
+        }
+        if t.fnReturn.len() == 0 {
+            return false
+        }
+        return hirTypeContainsVar(t.fnReturn[0])
+    }
+    false
 }
 /// mirLowerExprInto lowers `e` and stores the produced value into
 /// `dest` (a bare local). Thin wrapper that forwards to
@@ -4008,44 +4005,40 @@ fn hirTypeHasErrArg(t: HirType) -> Bool {
     if hirTypeIsErr(t) {
         return true
     }
-    match t.kind {
-        HirTypeNamed -> {
-            for a in t.namedArgs {
-                if hirTypeHasErrArg(a) {
-                    return true
-                }
+    if t.kind == HirTypeNamed {
+        for a in t.namedArgs {
+            if hirTypeHasErrArg(a) {
+                return true
             }
-            false
-        },
-        HirTypeOptional -> {
-            if t.optionalInner.len() > 0 {
-                hirTypeHasErrArg(t.optionalInner[0])
-            } else {
-                false
-            }
-        },
-        HirTypeTuple -> {
-            for elem in t.tupleElems {
-                if hirTypeHasErrArg(elem) {
-                    return true
-                }
-            }
-            false
-        },
-        HirTypeFn -> {
-            for p in t.fnParams {
-                if hirTypeHasErrArg(p) {
-                    return true
-                }
-            }
-            if t.fnReturn.len() > 0 {
-                hirTypeHasErrArg(t.fnReturn[0])
-            } else {
-                false
-            }
-        },
-        _ -> false,
+        }
+        return false
     }
+    if t.kind == HirTypeOptional {
+        if t.optionalInner.len() == 0 {
+            return false
+        }
+        return hirTypeHasErrArg(t.optionalInner[0])
+    }
+    if t.kind == HirTypeTuple {
+        for elem in t.tupleElems {
+            if hirTypeHasErrArg(elem) {
+                return true
+            }
+        }
+        return false
+    }
+    if t.kind == HirTypeFn {
+        for p in t.fnParams {
+            if hirTypeHasErrArg(p) {
+                return true
+            }
+        }
+        if t.fnReturn.len() == 0 {
+            return false
+        }
+        return hirTypeHasErrArg(t.fnReturn[0])
+    }
+    false
 }
 fn mirLowerFindVariantIndex(l: MirLowerer, enumName: String, variant: String) -> Int {
     if enumName == "" {
@@ -4202,36 +4195,29 @@ pub fn mirLowerClassifyQShape(t: HirType) -> HirQShape {
 /// mirLowerResultErrType extracts the error type of a Result<T, E>.
 /// Returns an error HirType for non-Result inputs.
 pub fn mirLowerResultErrType(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeNamed -> {
-            if t.namedName == "Result" && t.namedArgs.len() >= 2 {
-                t.namedArgs[1]
-            } else {
-                hirTypeErr()
-            }
-        },
-        _ -> hirTypeErr(),
+    if t.kind != HirTypeNamed {
+        return hirTypeErr()
     }
+    if t.namedName != "Result" || t.namedArgs.len() < 2 {
+        return hirTypeErr()
+    }
+    return t.namedArgs[1]
 }
 /// mirLowerOptionInnerType extracts the inner T from T? / Option<T>.
 pub fn mirLowerOptionInnerType(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeOptional -> {
-            if t.optionalInner.len() > 0 {
-                t.optionalInner[0]
-            } else {
-                hirTypeErr()
-            }
-        },
-        HirTypeNamed -> {
-            if t.namedArgs.len() >= 1 {
-                t.namedArgs[0]
-            } else {
-                hirTypeErr()
-            }
-        },
-        _ -> hirTypeErr(),
+    if t.kind == HirTypeOptional {
+        if t.optionalInner.len() == 0 {
+            return hirTypeErr()
+        }
+        return t.optionalInner[0]
     }
+    if t.kind == HirTypeNamed {
+        if t.namedArgs.len() == 0 {
+            return hirTypeErr()
+        }
+        return t.namedArgs[0]
+    }
+    hirTypeErr()
 }
 /// mirLowerOkTagOf returns the discriminant of the "happy" arm for a
 /// `?`-able enum. Source declaration order puts Some/Ok at tag 0.
@@ -4617,16 +4603,13 @@ fn mirLowerVariantPayloadTypeForScrut(l: MirLowerer, scrutT: HirType, enumName: 
     }
 }
 fn mirLowerResultOkType(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeNamed -> {
-            if t.namedName == "Result" && t.namedArgs.len() >= 1 {
-                t.namedArgs[0]
-            } else {
-                hirTypeErr()
-            }
-        },
-        _ -> hirTypeErr(),
+    if t.kind != HirTypeNamed {
+        return hirTypeErr()
     }
+    if t.namedName != "Result" || t.namedArgs.len() == 0 {
+        return hirTypeErr()
+    }
+    return t.namedArgs[0]
 }
 // ====================================================================
 // Stage 4e-3: MethodCall + MapLit
@@ -6608,25 +6591,9 @@ pub fn mirLowerProjectionResultType(l: MirLowerer, scrutT: HirType, proj: HirPro
     curT
 }
 fn mirLowerVariantNIsRedundantPayload(l: MirLowerer, t: HirType, idx: Int) -> Bool {
-    if idx != 0 {
-        return false
-    }
-    match t.kind {
-        HirTypePrim -> true,
-        HirTypeFn -> true,
-        HirTypeTuple -> true,
-        HirTypeNamed -> {
-            if t.namedName == "Option" || t.namedName == "Maybe" || t.namedName == "Result" {
-                return false
-            }
-            if mirLowerTypeIsKnownEnum(l, t.namedName) {
-                return false
-            }
-            true
-        },
-        HirTypeOptional -> false,
-        _ -> false,
-    }
+    let _ = l
+    let _ = t
+    idx == 0
 }
 fn mirLowerTypeIsKnownEnum(l: MirLowerer, name: String) -> Bool {
     if name == "" {
@@ -6667,16 +6634,13 @@ pub fn mirLowerFlattenProjection(proj: HirProjection) -> List<HirProjection> {
 /// HirType by index. Returns ErrType for out-of-range / non-tuple
 /// inputs so callers get a consistent poisoned value.
 pub fn mirLowerTupleElementTypeAt(t: HirType, idx: Int) -> HirType {
-    match t.kind {
-        HirTypeTuple -> {
-            if idx >= 0 && idx < t.tupleElems.len() {
-                t.tupleElems[idx]
-            } else {
-                hirTypeErr()
-            }
-        },
-        _ -> hirTypeErr(),
+    if t.kind != HirTypeTuple {
+        return hirTypeErr()
     }
+    if idx < 0 || idx >= t.tupleElems.len() {
+        return hirTypeErr()
+    }
+    return t.tupleElems[idx]
 }
 /// mirLowerStructFieldType looks up a field's declared type on a
 /// struct layout by name. Falls back to ErrType when the struct /

@@ -82,6 +82,11 @@ fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
         return elabErrResult(cx, 0, 0)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
+    // Keep this guard outside the match: stage0's guarded-match fallback
+    // can turn the final `_` arm into `unreachable` in osty-self builds.
+    if node.kind == AstNFor && node.text == "loopexpr" {
+        return elabInferLoop(cx, idx, node)
+    }
     match node.kind {
         AstNIntLit -> elabInferIntLit(cx, idx, node),
         AstNFloatLit -> elabInferFloatLit(cx, node),
@@ -108,7 +113,6 @@ fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
         AstNIf -> elabInferIf(cx, node, tErr(cx.env.tys)),
         AstNMatch -> elabInferMatch(cx, node, tErr(cx.env.tys)),
         AstNQuestion -> elabInferQuestion(cx, node),
-        _ if node.kind == AstNFor && node.text == "loopexpr" -> elabInferLoop(cx, idx, node),
         _ -> elabErrResult(cx, node.start, node.end),
     }
 }
