@@ -141,12 +141,26 @@ func NeedsObjectArtifact(emit string) bool { return emit == "object" || emit == 
 func NeedsBinaryArtifact(emit string) bool { return emit == "binary" }
 
 func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
+	return ClangCompileObjectArgsForProfile(target, "", irPath, objectPath)
+}
+
+// ClangCompileObjectArgsForProfile is the profile-aware variant of
+// ClangCompileObjectArgs. The "debug" profile compiles with `-O0` and
+// without LTO so install-self / `osty build --profile=debug` finish in
+// seconds instead of multi-minute ThinLTO link tail. Every other profile
+// (empty or "release") keeps the `-O3 -flto=thin` pipeline that the GC /
+// scheduler runtime have been tuned against.
+func ClangCompileObjectArgsForProfile(target, profile, irPath, objectPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, 8)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-O3", "-flto=thin")
+	if profile == "debug" {
+		args = append(args, "-O0")
+	} else {
+		args = append(args, "-O3", "-flto=thin")
+	}
 	if strings.Contains(target, "x86_64") || strings.Contains(target, "amd64") {
 		args = append(args, "-march=x86-64-v3")
 	}
@@ -154,20 +168,38 @@ func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
 }
 
 func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
+	return ClangLinkBinaryArgsForProfile(target, "", objectPaths, binaryPath)
+}
+
+// ClangLinkBinaryArgsForProfile is the profile-aware variant of
+// ClangLinkBinaryArgs. The "debug" profile drops `-flto=thin` (and the
+// matching `-mllvm,-import-instr-limit` tuning) and falls back to
+// `-O0`, which is what made install-self bootstrap-link complete in
+// seconds instead of timing out at the ThinLTO import stage when the
+// self-host IR grew past ~20 MB. Release / unspecified profiles keep
+// the aggressive cross-module-inlining pipeline.
+func ClangLinkBinaryArgsForProfile(target, profile string, objectPaths []string, binaryPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, len(objectPaths)+10)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-O3", "-flto=thin")
-	// The `-mllvm` flag below is LLD-only — BFD ld parses it as `-m llvm`
-	// and bails with "unrecognised emulation mode: llvm". We force LLD
-	// when it's reachable and drop the import-instr-limit tuning when
-	// it isn't, so fresh-clone hosts that only have BFD ld can still
-	// produce a (slightly less aggressively-inlined) binary instead of
-	// failing the bootstrap link outright.
-	if hasLLD() {
-		args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+	if profile == "debug" {
+		args = append(args, "-O0")
+		if hasLLD() {
+			args = append(args, "-fuse-ld=lld")
+		}
+	} else {
+		args = append(args, "-O3", "-flto=thin")
+		// The `-mllvm` flag below is LLD-only — BFD ld parses it as `-m llvm`
+		// and bails with "unrecognised emulation mode: llvm". We force LLD
+		// when it's reachable and drop the import-instr-limit tuning when
+		// it isn't, so fresh-clone hosts that only have BFD ld can still
+		// produce a (slightly less aggressively-inlined) binary instead of
+		// failing the bootstrap link outright.
+		if hasLLD() {
+			args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+		}
 	}
 	args = append(args, objectPaths...)
 	if !strings.Contains(target, "windows") {

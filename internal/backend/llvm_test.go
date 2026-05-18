@@ -42,7 +42,7 @@ type fakeLLVMToolchain struct {
 	links      []linkCall
 }
 
-func (f *fakeLLVMToolchain) CompileObject(_ context.Context, irPath, objectPath, target string) error {
+func (f *fakeLLVMToolchain) CompileObject(_ context.Context, irPath, objectPath, target, _ string) error {
 	f.irCompiles = append(f.irCompiles, compileCall{
 		sourcePath: irPath,
 		objectPath: objectPath,
@@ -51,7 +51,7 @@ func (f *fakeLLVMToolchain) CompileObject(_ context.Context, irPath, objectPath,
 	return nil
 }
 
-func (f *fakeLLVMToolchain) CompileCObject(_ context.Context, sourcePath, objectPath, target string) error {
+func (f *fakeLLVMToolchain) CompileCObject(_ context.Context, sourcePath, objectPath, target, _ string) error {
 	f.cCompiles = append(f.cCompiles, compileCall{
 		sourcePath: sourcePath,
 		objectPath: objectPath,
@@ -60,7 +60,7 @@ func (f *fakeLLVMToolchain) CompileCObject(_ context.Context, sourcePath, object
 	return nil
 }
 
-func (f *fakeLLVMToolchain) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
+func (f *fakeLLVMToolchain) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target, _ string, linkLibraries []string) error {
 	f.links = append(f.links, linkCall{
 		objectPaths:   append([]string(nil), objectPaths...),
 		binaryPath:    binaryPath,

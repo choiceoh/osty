@@ -23,9 +23,9 @@ import (
 var ErrLLVMNotImplemented = errors.New(llvmabi.UnsupportedBackendErrorMessage())
 
 type llvmToolchain interface {
-	CompileObject(ctx context.Context, irPath, objectPath, target string) error
-	CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error
-	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error
+	CompileObject(ctx context.Context, irPath, objectPath, target, profile string) error
+	CompileCObject(ctx context.Context, sourcePath, objectPath, target, profile string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target, profile string, linkLibraries []string) error
 }
 
 type llvmDispatchRoute string
@@ -127,7 +127,7 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 		return out, nil
 	}
 	tc := b.llvmToolchain()
-	if err := tc.CompileObject(ctx, out.Artifacts.LLVMIR, out.Artifacts.Object, req.Layout.Target); err != nil {
+	if err := tc.CompileObject(ctx, out.Artifacts.LLVMIR, out.Artifacts.Object, req.Layout.Target, req.Layout.Profile); err != nil {
 		return out, err
 	}
 	if !llvmabi.NeedsBinaryArtifact(req.Emit.String()) {
@@ -136,7 +136,7 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if out.Artifacts.Binary == "" {
 		return out, fmt.Errorf("%s", llvmabi.MissingBinaryArtifactMessage())
 	}
-	runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, out.Artifacts, req.Layout.Target)
+	runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, out.Artifacts, req.Layout.Target, req.Layout.Profile)
 	if err != nil {
 		return out, err
 	}
@@ -149,7 +149,7 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if runtimeObject != "" {
 		linkObjects = append(linkObjects, runtimeObject)
 	}
-	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
+	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target, req.Layout.Profile, req.LinkLibraries); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -487,18 +487,18 @@ func (b LLVMBackend) llvmToolchain() llvmToolchain {
 
 type clangToolchain struct{}
 
-func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, target string) error {
-	args := llvmabi.ClangCompileObjectArgs(target, irPath, objectPath)
+func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, target, profile string) error {
+	args := llvmabi.ClangCompileObjectArgsForProfile(target, profile, irPath, objectPath)
 	return runClang(ctx, "compile object", args)
 }
 
-func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error {
-	args := clangCompileCObjectArgs(target, sourcePath, objectPath)
+func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath, target, profile string) error {
+	args := clangCompileCObjectArgs(target, profile, sourcePath, objectPath)
 	return runClang(ctx, "compile runtime", args)
 }
 
-func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
-	args := llvmabi.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
+func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target, profile string, linkLibraries []string) error {
+	args := llvmabi.ClangLinkBinaryArgsForProfile(target, profile, objectPaths, binaryPath)
 	args = append(args, clangLinkLibraryArgs(linkLibraries)...)
 	args = append(args, clangPlatformRuntimeLinkArgs(target)...)
 	return runClang(ctx, "link binary", args)
@@ -542,7 +542,7 @@ func clangLinkLibraryArgs(libraries []string) []string {
 	return args
 }
 
-func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
+func clangCompileCObjectArgs(target, profile, sourcePath, objectPath string) []string {
 	args := []string{}
 	if target != "" {
 		args = append(args, "-target", target)
@@ -556,14 +556,24 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 		args = append(args, "-pthread")
 	}
 	// -O3 + -flto=thin keeps the GC/scheduler runtime in the same tier
-	// as the IR compile path (see llvmClangCompileObjectArgs). The
-	// thinLTO bitcode lets the linker inline hot primitive runtime
-	// helpers (osty_rt_list_get_i64, osty_rt_list_len, …) at every IR
-	// call site — without it every `xs[i]` in user code pays a real
-	// cross-TU function call and the List<Int>-heavy osty-vs-go
-	// workloads (quicksort, matmul, lane_route) stay 10-50x slower
-	// than Go for no reason other than missing inlining.
-	args = append(args, "-O3", "-flto=thin", "-std=c11", "-c", sourcePath, "-o", objectPath)
+	// as the IR compile path (see ClangCompileObjectArgsForProfile in
+	// llvmabi). The thinLTO bitcode lets the linker inline hot primitive
+	// runtime helpers (osty_rt_list_get_i64, osty_rt_list_len, …) at
+	// every IR call site — without it every `xs[i]` in user code pays a
+	// real cross-TU function call and the List<Int>-heavy osty-vs-go
+	// workloads (quicksort, matmul, lane_route) stay 10-50x slower than
+	// Go for no reason other than missing inlining.
+	//
+	// The "debug" profile drops both `-O3` and `-flto=thin` to match the
+	// IR-side fast-link path. Debug builds aren't trying to win
+	// throughput benchmarks; they're trying to finish install-self in
+	// seconds instead of timing out at the ThinLTO import stage.
+	if profile == "debug" {
+		args = append(args, "-O0")
+	} else {
+		args = append(args, "-O3", "-flto=thin")
+	}
+	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
 	return args
 }
 

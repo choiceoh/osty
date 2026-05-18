@@ -16,7 +16,7 @@ import (
 var ErrONBNotImplemented = onb.ErrNotImplemented
 
 type onbLinker interface {
-	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target, profile string, linkLibraries []string) error
 }
 
 // ONBBackend is the LLVM-complementary dev/debug backend. It consumes MIR and
@@ -145,14 +145,14 @@ func (b ONBBackend) emitNative(ctx context.Context, req Request) (*Result, error
 	// any runtime symbol pay only a small link-time cost (the runtime is
 	// already cached after the first build), and unconditional linkage
 	// keeps the dev loop predictable.
-	runtimeObject, err := EnsureRuntimeObject(ctx, artifacts, req.Layout.Target)
+	runtimeObject, err := EnsureRuntimeObjectForProfile(ctx, artifacts, req.Layout.Target, req.Layout.Profile)
 	if err != nil {
 		return result, err
 	}
 	if runtimeObject != "" {
 		objects = append(objects, runtimeObject)
 	}
-	if err := b.onbLinker().LinkBinary(ctx, objects, artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
+	if err := b.onbLinker().LinkBinary(ctx, objects, artifacts.Binary, req.Layout.Target, req.Layout.Profile, req.LinkLibraries); err != nil {
 		return result, err
 	}
 	return result, nil

@@ -115,7 +115,7 @@ entry:
 		}
 	}
 
-	runClang("compile runtime", clangCompileCObjectArgs("", runtimePath, runtimeObjectPath))
+	runClang("compile runtime", clangCompileCObjectArgs("", "", runtimePath, runtimeObjectPath))
 	runClang("compile stage0 alias IR", llvmabi.ClangCompileObjectArgs("", irPath, irObjectPath))
 	linkArgs := llvmabi.ClangLinkBinaryArgs("", []string{irObjectPath, runtimeObjectPath}, binaryPath)
 	linkArgs = append(linkArgs, clangPlatformRuntimeLinkArgs("")...)

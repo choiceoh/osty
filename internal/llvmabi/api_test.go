@@ -201,6 +201,68 @@ func TestClangLinkBinaryArgsOmitsPthreadOnWindows(t *testing.T) {
 	}
 }
 
+func TestClangCompileObjectArgsDebugProfileDropsLTO(t *testing.T) {
+	got := strings.Join(ClangCompileObjectArgsForProfile("amd64-linux", "debug", "in.ll", "out.o"), " ")
+	if strings.Contains(got, "-flto") {
+		t.Errorf("debug profile compile args should not include -flto: %s", got)
+	}
+	if strings.Contains(got, "-O3") {
+		t.Errorf("debug profile compile args should not include -O3: %s", got)
+	}
+	if !strings.Contains(got, "-O0") {
+		t.Errorf("debug profile compile args should include -O0: %s", got)
+	}
+}
+
+func TestClangCompileObjectArgsReleaseProfileKeepsLTO(t *testing.T) {
+	for _, profile := range []string{"", "release"} {
+		got := strings.Join(ClangCompileObjectArgsForProfile("amd64-linux", profile, "in.ll", "out.o"), " ")
+		if !strings.Contains(got, "-flto=thin") {
+			t.Errorf("profile %q compile args missing -flto=thin: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O3") {
+			t.Errorf("profile %q compile args missing -O3: %s", profile, got)
+		}
+	}
+}
+
+func TestClangLinkBinaryArgsDebugProfileDropsLTO(t *testing.T) {
+	got := strings.Join(ClangLinkBinaryArgsForProfile("amd64-linux", "debug", []string{"a.o"}, "bin"), " ")
+	if strings.Contains(got, "-flto") {
+		t.Errorf("debug profile link args should not include -flto: %s", got)
+	}
+	if strings.Contains(got, "import-instr-limit") {
+		t.Errorf("debug profile link args should not include import-instr-limit tuning: %s", got)
+	}
+	if !strings.Contains(got, "-O0") {
+		t.Errorf("debug profile link args should include -O0: %s", got)
+	}
+}
+
+func TestClangLinkBinaryArgsReleaseProfileKeepsLTO(t *testing.T) {
+	for _, profile := range []string{"", "release"} {
+		got := strings.Join(ClangLinkBinaryArgsForProfile("amd64-linux", profile, []string{"a.o"}, "bin"), " ")
+		if !strings.Contains(got, "-flto=thin") {
+			t.Errorf("profile %q link args missing -flto=thin: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O3") {
+			t.Errorf("profile %q link args missing -O3: %s", profile, got)
+		}
+	}
+}
+
+// TestClangLinkBinaryArgsCompatWrapperUsesReleaseDefaults locks the
+// expectation that direct callers of the legacy ClangLinkBinaryArgs
+// (no profile) keep the aggressive `-O3 -flto=thin` pipeline. install-self
+// is the new caller that wants the no-LTO fast path; it does so by
+// routing through the profile-aware variant with profile == "debug".
+func TestClangLinkBinaryArgsCompatWrapperUsesReleaseDefaults(t *testing.T) {
+	got := strings.Join(ClangLinkBinaryArgs("amd64-linux", []string{"a.o"}, "bin"), " ")
+	if !strings.Contains(got, "-flto=thin") {
+		t.Errorf("legacy wrapper should default to -flto=thin: %s", got)
+	}
+}
+
 func TestRenderSkeletonContainsDiagnosticAndTarget(t *testing.T) {
 	out := RenderSkeleton("mypkg", "main.osty", "binary", "amd64-linux", errors.New("test reason"))
 	got := string(out)
