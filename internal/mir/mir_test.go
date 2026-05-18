@@ -2630,6 +2630,41 @@ func TestLowerMethodCallOnUnknownReceiverTypeRecordsMIRIssue(t *testing.T) {
 	}
 }
 
+// TestLowerMethodCallOnPrimitiveReceiverStaysSilent locks the
+// guardrail's negative case for `*ir.PrimType` receivers
+// (`Int.abs()`, `Bool.toString()`, etc.). `typeNameOf` returns
+// "Int" / "Bool" / ... for primitives, and the intrinsic_methods
+// dispatch table intentionally rewrites them through
+// mangleMethodSymbol to runtime symbols (`Int__abs` →
+// `osty_rt_int_abs` etc.). The module decl tables never carry
+// primitive entries; without explicit gating the guardrail would
+// false-positive every primitive method call.
+func TestLowerMethodCallOnPrimitiveReceiverStaysSilent(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "absOf",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+				Name:     "abs",
+				T:        ir.TInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	for _, issue := range out.Issues {
+		msg := issue.Error()
+		if strings.Contains(msg, "Int__abs") || (strings.Contains(msg, "Int") && strings.Contains(msg, "abs")) {
+			t.Fatalf("guardrail false-positived on primitive Int.abs() method call: %v", issue)
+		}
+	}
+}
+
 // TestLowerMethodCallOnDeclaredReceiverTypeStaysSilent locks the
 // guardrail's negative case: a method call on a struct that IS
 // declared in the module (even when the method isn't in the sig
