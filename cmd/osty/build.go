@@ -522,12 +522,10 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 	linkLibraries := resolvedLinkLibraries(resolved)
 
 	if backendID == backend.NameLLVM {
-		// Cross-package dependency objects: built once per dep,
-		// passed as ExtraObjects to the link step. Empty for
-		// packages with no resolved deps — the common case. The
-		// builder is wired but currently returns nil (PR-G1 ships
-		// the link plumbing; PR-G2 fills in actual dep `.o`
-		// compilation through the LIR Proto subprocess).
+		// Cross-package dependency objects: built once per dep (when
+		// OSTY_CROSS_PKG_LINK is truthy), passed as ExtraObjects to the
+		// link step. Otherwise nil — the default matches the pre–PR-G2
+		// baseline. See cmd/osty/cross_pkg_deps.go and ARCHITECTURE.md.
 		var extraObjects []string
 		if emitMode == backend.EmitBinary {
 			extraObjects = buildCrossPkgDepObjects(context.Background(), root, m, eng, lower, resolved, feats, layout)
