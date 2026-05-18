@@ -2560,6 +2560,115 @@ func TestLowerStdlibFreeLenRecoversPoisonedNestedFieldReceiverType(t *testing.T)
 	}
 }
 
+// TestLowerMethodCallOnUnknownReceiverTypeRecordsMIRIssue pins the
+// guardrail in lowerMethodCallInto's fallthrough at line ~6437:
+// when the receiver's recovered type is a NamedType the source
+// module never declared AND the method isn't in the sig table,
+// the lowerer must record a `mir issue` instead of silently
+// mangling to an undefined `<TypeName>__<method>` symbol.
+//
+// Mirrors the install-self FrontCheckResult__len phantom-symbol
+// wall:
+//
+//	ld.lld: error: undefined symbol: FrontCheckResult__len
+//	  referenced by inspectSpreadTupleHints
+//
+// where `elems = hintTupleElems(...)` is locally List<String> but
+// reaches MIR's method-call lowering with a stale
+// `FrontCheckResult` receiver type. The Lower() output preserves
+// the existing mangled CallInstr for backward compatibility (so
+// tests / consumers that depend on the current shape don't break),
+// but the recorded Issue lets install-self / CI surface the
+// upstream type-recovery bug at MIR time instead of at link time
+// 100+ seconds into the build.
+func TestLowerMethodCallOnUnknownReceiverTypeRecordsMIRIssue(t *testing.T) {
+	// Receiver typed as a name the module never declares — exactly
+	// the shape upstream type-recovery produces when it loses the
+	// real List<X> / Map<K,V> type and falls back to whatever
+	// NamedType happens to be reachable in scope.
+	staleT := &ir.NamedType{Name: "FrontCheckResult"}
+	fn := &ir.FnDecl{
+		Name:   "callLenOnStale",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "elems", Type: staleT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "elems", Kind: ir.IdentParam, T: staleT},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	// The recorded Issue should name both the method and the
+	// undeclared receiver type, plus the mangled symbol that would
+	// otherwise blow up at link time. Match on the symbol because
+	// it's the most stable substring.
+	var got string
+	for _, issue := range out.Issues {
+		if strings.Contains(issue.Error(), "FrontCheckResult__len") {
+			got = issue.Error()
+			break
+		}
+	}
+	if got == "" {
+		t.Fatalf("expected MIR issue mentioning FrontCheckResult__len for unknown-receiver method call, got issues = %v\nIR:\n%s", out.Issues, Print(out))
+	}
+	if !strings.Contains(got, "len") || !strings.Contains(got, "FrontCheckResult") {
+		t.Fatalf("MIR issue missing method or type name: %q", got)
+	}
+	// The CallInstr fallback is preserved (current shape) so
+	// downstream consumers don't break. The Issue is the signal,
+	// not the absence of the mangled call.
+	text := Print(out)
+	if !strings.Contains(text, "FrontCheckResult__len") {
+		t.Fatalf("expected mangled-symbol fallback CallInstr to remain, got:\n%s", text)
+	}
+}
+
+// TestLowerMethodCallOnDeclaredReceiverTypeStaysSilent locks the
+// guardrail's negative case: a method call on a struct that IS
+// declared in the module (even when the method isn't in the sig
+// table — methods may be added by a downstream pass) must NOT
+// record an Issue. Otherwise the guardrail flags every legitimate
+// user method call.
+func TestLowerMethodCallOnDeclaredReceiverTypeStaysSilent(t *testing.T) {
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name:   "Point",
+		Fields: []*ir.Field{{Name: "x", Type: ir.TInt, Exported: true}},
+		// Intentionally no Methods — emulates a partial-decl case
+		// where methods land in a follow-on pass after MIR collected
+		// the struct.
+	}
+	fn := &ir.FnDecl{
+		Name:   "callOnDeclared",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: pointT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: pointT},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	for _, issue := range out.Issues {
+		if strings.Contains(issue.Error(), "Point__len") {
+			t.Fatalf("guardrail false-positived on declared struct's method call: %v", issue)
+		}
+	}
+}
+
 func TestLowerStdlibMethodRecoversStaleIdentStorageType(t *testing.T) {
 	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
 	arenaT := &ir.NamedType{Name: "Arena"}

@@ -54,6 +54,43 @@ func (l *lowerer) signatureForFn(name string) *fnSignature {
 	return l.fnSig[name]
 }
 
+// namedTypeKnownToModule reports whether `name` matches a struct,
+// enum, or interface decl in the source module the lowerer is
+// processing. The "no signature + unknown declaration" combination
+// at lowerMethodCallInto is the lowering-time signal for the
+// FrontCheckResult__len phantom-symbol class — a method call whose
+// receiver typeName has no entry in any of the three decl tables
+// AND no method signature can only have come from upstream type
+// recovery picking a stale or wrong name.
+func (l *lowerer) namedTypeKnownToModule(name string) bool {
+	if name == "" {
+		return false
+	}
+	if _, ok := l.structs[name]; ok {
+		return true
+	}
+	if _, ok := l.enums[name]; ok {
+		return true
+	}
+	if _, ok := l.interfaces[name]; ok {
+		return true
+	}
+	return false
+}
+
+// isBuiltinNamedType reports whether `t` is a stdlib NamedType such
+// as `Result`, `Option`, `List<T>`, etc., that arrives in MIR with
+// `Builtin: true`. Used by the lowerMethodCallInto guardrail to
+// avoid false-positiving on stdlib container methods whose symbols
+// are satisfied by downstream stdlib lowering paths rather than
+// the source module's own decl tables.
+func isBuiltinNamedType(t ir.Type) bool {
+	if nt, ok := t.(*ir.NamedType); ok && nt != nil {
+		return nt.Builtin
+	}
+	return false
+}
+
 // signatureForMethod returns the signature of a type method, or nil
 // when unknown.
 func (l *lowerer) signatureForMethod(typeName, method string) *fnSignature {
@@ -6434,6 +6471,44 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	if sig != nil {
 		symbol = sig.symbol
 	} else if typeName != "" {
+		// Guardrail: a method call on a named receiver type with no
+		// matching method signature in the module table is almost
+		// always an upstream type-recovery bug — the receiver's local
+		// was created with a stale `*ir.NamedType{Name: <X>}` (lowerLet
+		// at line 910, recoverOperandType at line 3176) and the
+		// stdlib intrinsic dispatch above (lowerMethodCallInto at
+		// line 6408) didn't fire because the wrong type isn't a
+		// builtin shape. Silently mangling here produces an undefined
+		// symbol like `<X>__<method>` that only surfaces at link
+		// time — hundreds of seconds into install-self —
+		// masquerading as a missing runtime helper.
+		//
+		// A canonical reproducer is `inspectSpreadTupleHints` in
+		// toolchain/inspect.osty where `elems = hintTupleElems(...)`
+		// is locally `List<String>` but somehow reaches MIR with
+		// `FrontCheckResult` as the receiver type, emitting
+		// `call FrontCheckResult__len(...)` which then fails the
+		// install-self link with:
+		//   ld.lld: error: undefined symbol: FrontCheckResult__len
+		// Logging an Issue at MIR time surfaces the bug there
+		// instead of at the link stage, while preserving the
+		// existing mangled-symbol fallback so callers that DO have a
+		// matching method-but-just-not-in-sig-table (e.g. methods
+		// added via partial-decl in a downstream pass) still link.
+		// Skip the guardrail for builtin stdlib names — `Result`,
+		// `Option`, `List`, `Map`, `Channel`, etc. reach here when
+		// the stdlib intrinsic dispatch above didn't match (e.g.
+		// `Result.toString()` whose body lives in stdlib and
+		// resolves to a generated symbol downstream). Those cases
+		// are not the type-recovery bug class; the symbol gets
+		// satisfied later. Only fire on non-builtin NamedTypes
+		// the module never declared.
+		if isBuiltinNamedType(recvType) {
+			// builtin path — no guardrail
+		} else if !bs.l.namedTypeKnownToModule(typeName) {
+			bs.l.noteIssue("method call %q on receiver of type %q which has no declaration in the module — likely upstream type-recovery bug (will emit undefined symbol %s)",
+				mc.Name, typeName, mangleMethodSymbol(typeName, mc.Name))
+		}
 		symbol = mangleMethodSymbol(typeName, mc.Name)
 	}
 	callArgs := []Operand{recv}
