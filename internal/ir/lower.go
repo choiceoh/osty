@@ -3024,10 +3024,13 @@ func callReturnTypeTraceEnabled() bool {
 
 // traceCallReturnType records the type decision IR `lowerCall`
 // made for a CallExpr. `calleeText` is a short label for the call
-// site — `<ident:name>` for direct calls, `<field:lhs.name>` for
-// method calls, `<other:%T>` for anything else. `source` names
-// which fallback layer supplied the recovered type. `t` is the IR
-// type the call site ended up tagged with.
+// site — `<ident:name>` for direct calls, `<other:%T>` for the
+// non-Ident exotic shapes. Method-call and module-qualified-call
+// shapes (`*ast.FieldExpr` callees) dispatch through
+// `lowerMethodCall` / `lowerQualifiedCall` and don't reach this
+// trace; instrumenting those separately is follow-on work.
+// `source` names which fallback layer supplied the recovered
+// type. `t` is the IR type the call site ended up tagged with.
 func traceCallReturnType(calleeText, source string, t Type) {
 	if !callReturnTypeTraceEnabled() {
 		return
@@ -3048,20 +3051,17 @@ func formatCallTraceType(t Type) string {
 	return t.String()
 }
 
+// calleeTraceText renders a short label for the trace's `callee=…`
+// field. `lowerCall` returns early for `*ast.FieldExpr` callees
+// (method-call and module-qualified-call shapes dispatch through
+// `lowerMethodCall` / `lowerQualifiedCall` before the trace site
+// is reached), so this function never sees a FieldExpr today —
+// only `*ast.Ident` direct-call callees and the `<other:%T>`
+// catch-all for non-Ident exotic shapes (e.g. `(f())()` indirect
+// calls through a CallExpr callee).
 func calleeTraceText(fn ast.Expr) string {
-	switch f := fn.(type) {
-	case *ast.Ident:
-		if f != nil {
-			return "<ident:" + f.Name + ">"
-		}
-	case *ast.FieldExpr:
-		if f != nil {
-			lhs := "?"
-			if id, ok := f.X.(*ast.Ident); ok && id != nil {
-				lhs = id.Name
-			}
-			return "<field:" + lhs + "." + f.Name + ">"
-		}
+	if id, ok := fn.(*ast.Ident); ok && id != nil {
+		return "<ident:" + id.Name + ">"
 	}
 	return fmt.Sprintf("<other:%T>", fn)
 }
