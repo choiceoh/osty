@@ -90,7 +90,6 @@ jobs:
           # state.
           OSTY_SELF_BIN: ""
           OSTY_SELF_TRUSTED_KEY: ""
-          OSTY_STAGE0_FALLBACK: ""
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/scratch/osty"

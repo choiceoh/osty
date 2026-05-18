@@ -9,7 +9,7 @@ matching responsibilities, built from disjoint sources.
 | target | command | source | status |
 |---|---|---|---|
 | Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/` | `main.osty` + manual naive parser | **walking skeleton** (stub CheckResult) |
+| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + manual naive parser | **walking skeleton** (stub CheckResult) |
 
 ## Why two targets
 
@@ -20,7 +20,7 @@ reaches behavior parity (plan §12 M3/M4).
 
 ## Current state (2026-05-17)
 
-- ✓ **M1** — LLVM-built binary builds + runs (`OSTY_STAGE0_FALLBACK=1`)
+- ✓ **M1** — LLVM-built binary builds + runs (`--bootstrap-stage0`)
 - ✓ **M2 (partial)** — empty-source fixture byte-parity:
   ```
   $ echo '{"source":""}' | /tmp/go-checker
@@ -36,19 +36,19 @@ reaches behavior parity (plan §12 M3/M4).
 ```sh
 # from repo root
 go build -o .bin/osty ./cmd/osty
-OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/
+.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/
 
 # run
 echo '{"source":""}' | ./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm
 ```
 
-`OSTY_STAGE0_FALLBACK=1` is still the practical default for this LLVM build
+`--bootstrap-stage0` is still the practical default for this LLVM build
 because **normal MIR→LLVM emission goes through `osty-self lir-proto-lower`**
 (`internal/backend/llvm.go` `emitLLVMFallback`). On a checkout without a
 working `osty-self` cache (or when that subprocess declines the MIR payload),
 the dispatcher only proceeds if you opt into the in-process **stage0**
-bootstrap emitter (`internal/backend/stage0/`, gated by this env var;
-see `internal/backend/bootstrap.go`).
+bootstrap emitter (`internal/backend/stage0/`; see
+`internal/backend/bootstrap.go`).
 
 Stage0 **audit coverage** of `toolchain/*.osty` reached **100%** after PR
 [#1858](https://github.com/choiceoh/osty/pull/1858) (2026-05-17,

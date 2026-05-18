@@ -10,10 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
-
-const installSelfAllowSourceBootstrapEnv = "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP"
 
 // runInstallSelf orchestrates the bootstrap "build osty-self →
 // promote into cache" sequence. It:
@@ -106,34 +105,14 @@ func runInstallSelf(args []string, _ cliFlags) {
 			fmt.Printf("up-to-date:  %s\n", cachedPath)
 			return
 		}
-	} else if !installSelfSourceBootstrapAllowed() {
-		fmt.Fprintf(os.Stderr, "osty install-self: no osty-self bootstrap source available: %v\n", resolveErr)
-		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
-			printInstallSelfBootstrapHint()
-		} else {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "stage0 fallback is enabled, but a full source bootstrap currently requires opt-in because it can exceed memory/time limits before the emergency emitter is reached.")
-		}
-		fmt.Fprintf(os.Stderr, "to attempt the heavy source bootstrap anyway, set %s=1.\n", installSelfAllowSourceBootstrapEnv)
-		os.Exit(1)
+	} else {
+		fmt.Fprintf(os.Stderr, "osty install-self: no prebuilt osty-self available; attempting source bootstrap: %v\n", resolveErr)
 	}
 
 	builtBin, err := buildOstySelf(context.Background(), hostOsty, root, tcAbs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", err)
-		// The chicken-egg: a fresh clone has no osty-self in cache,
-		// no in-tree build, and (by default) no registry URL. The
-		// host osty's LLVM backend forks `osty-self lir-proto-lower`
-		// for emit, which declines without an osty-self to fork.
-		// `OSTY_STAGE0_FALLBACK=1` activates the bootstrap-only
-		// emitter (`docs/osty_self_bootstrap_design.md`) which can
-		// emit a small subset of MIR patterns — enough for the
-		// emergency path but not yet for the full toolchain. Surface
-		// the workflow options so the user does not have to hunt
-		// through the resolver chain in the dark.
-		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
-			printInstallSelfBootstrapHint()
-		}
+		printInstallSelfBootstrapHint()
 
 		os.Exit(1)
 	}
@@ -144,41 +123,31 @@ func runInstallSelf(args []string, _ cliFlags) {
 	fmt.Printf("installed:   %s\n", cachedPath)
 }
 
+// printInstallSelfBootstrapHint points users at prebuilt recovery options
+// after the internal source bootstrap path has already failed.
+func printInstallSelfBootstrapHint() {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "hint: install-self tried the internal source bootstrap path.")
+	fmt.Fprintln(os.Stderr, "      To avoid source bootstrap, provide a prebuilt osty-self:")
+	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
+	fmt.Fprintln(os.Stderr, "  - or point OSTY_SELF_BIN at an existing osty-self binary.")
+}
+
 // buildOstySelf invokes the host `osty` binary with the standard
 // build flags used by the self-rebuild ratchet. Returns the absolute
 // path to the produced osty-self binary.
-func installSelfSourceBootstrapAllowed() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(installSelfAllowSourceBootstrapEnv))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func printInstallSelfBootstrapHint() {
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "hint: bootstrap from a fresh clone needs an osty-self source. Pick one:")
-	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
-	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_BIN at an existing osty-self binary, or")
-	fmt.Fprintln(os.Stderr, "  - retry with OSTY_STAGE0_FALLBACK=1 to use the emergency bootstrap emitter")
-	fmt.Fprintln(os.Stderr, "    (subset coverage; see docs/osty_self_bootstrap_design.md).")
-}
-
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
-	// Forward env vars set by the user (OSTY_STAGE0_FALLBACK,
-	// OSTY_STDLIB_BODY_LOWER, etc.) and additionally enable
-	// LIST_ALL_DECLINES when stage0 fallback is active. The cascade
+	cmd := exec.CommandContext(ctx, hostOsty, "build", "--bootstrap-stage0", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
+	// Forward user env vars and enable LIST_ALL_DECLINES for the
+	// install-self bootstrap build. The cascade
 	// of stdlib-generic-method monomorph functions (Result.unwrapOr,
 	// List.pop, ...) that stage0 can't fully match are diagnostic-only
 	// in the install-self critical path — emitting them as `unreachable`
 	// decline stubs lets the binary link without changing the runtime
-	// behaviour of the covered code paths. Users wanting strict mode
-	// can still override by setting OSTY_STAGE0_LIST_ALL_DECLINES=0.
+	// behaviour of the covered code paths.
 	cmd.Env = os.Environ()
-	if os.Getenv("OSTY_STAGE0_FALLBACK") != "" && os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES") == "" {
-		cmd.Env = append(cmd.Env, "OSTY_STAGE0_LIST_ALL_DECLINES=1")
+	if os.Getenv(stage0.ListAllDeclinesEnv) == "" {
+		cmd.Env = append(cmd.Env, stage0.ListAllDeclinesEnv+"=1")
 	}
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout

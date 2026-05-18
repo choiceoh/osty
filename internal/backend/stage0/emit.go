@@ -97,8 +97,8 @@ func fnTargetFeaturesAttr(features []string) string {
 // instead of serializing them.
 //
 // The env var is read once per EmitMIR call. No effect on production
-// builds (stage0 is only consulted under OSTY_STAGE0_FALLBACK=1 in the
-// first place — see internal/backend/bootstrap.go).
+// builds (stage0 is only consulted by the explicit install-self bootstrap path;
+// see internal/backend/bootstrap.go).
 const ListAllDeclinesEnv = "OSTY_STAGE0_LIST_ALL_DECLINES"
 
 // IsListAllDeclines reports whether `OSTY_STAGE0_LIST_ALL_DECLINES=1`

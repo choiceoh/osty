@@ -353,6 +353,9 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
 }
 `)
 	req.Features = []string{"mir-backend"}
+	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
+		return []byte("declare i32 @printf(ptr, ...)\ndefine i32 @main() { ret i32 0 }\n"), true, nil, nil
+	})
 
 	got, _, directErr := EmitLLVMIRText(req.Entry, "", req.Features)
 	if directErr != nil {
@@ -786,6 +789,9 @@ func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
 }
 `)
 	req.Features = []string{"mir-backend"}
+	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
+		return []byte("; mir-direct covered by test stub\n"), true, nil, nil
+	})
 
 	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
 	if emitErr != nil {
