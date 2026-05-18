@@ -834,7 +834,7 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 
 	// Consult the resolver for the head symbol so we can classify
 	// builtins vs user declarations vs generic parameters.
-	if sym := l.typeRef(nt); sym != nil {
+	if sym := l.typeRef(nt); sym != nil && resolverSymbolMatchesSourceName(sym, pkg, name, nt.Path) {
 		symName := sym.Name
 		if pkg != "" && len(nt.Path) > 0 && symName == nt.Path[0] {
 			symName = name
@@ -872,6 +872,52 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 		}
 	}
 	return &NamedType{Package: pkg, Name: name, Args: args}
+}
+
+// resolverSymbolMatchesSourceName guards `lowerNamedType`'s
+// resolver-driven path against `TypeRefsByID` mismappings that
+// have been observed in multi-file packages — for example, the
+// `List` head ident in `hintTupleElems`'s return type signature
+// (toolchain/inspect_hint.osty) resolves to the `FrontCheckResult`
+// symbol (toolchain/check.osty) instead of `List`, producing a
+// downstream `FrontCheckResult__len` undefined symbol at
+// install-self link. See PR #1916 / #1917 / #1918 for the three
+// stages of the bisection that pinpointed this site.
+//
+// The guard accepts the resolver-returned symbol when either:
+//
+//   - the source is package-qualified (`pkg != ""`) — package
+//     paths legitimately route through arbitrarily-named symbols
+//     (e.g. `use std.foo as bar` + `bar.Baz`), so the head-ident
+//     match below is sufficient
+//   - the source is bare AND the symbol's name matches the
+//     source last-path component
+//   - the symbol's name matches the source's first-path component
+//     (the existing fallback for qualified paths where the head
+//     is the alias and the resolver records the package symbol)
+//
+// Otherwise the resolver path is skipped and `lowerNamedType`
+// falls through to the source-name-based builtin / generic-name
+// resolution at the bottom of the function, which correctly
+// classifies `List`/`Map`/`Set`/`Option`/`Result` as builtin
+// containers and everything else as a user-named type.
+func resolverSymbolMatchesSourceName(sym *resolve.Symbol, pkg, name string, path []string) bool {
+	if sym == nil {
+		return false
+	}
+	if sym.Name == name {
+		return true
+	}
+	if pkg != "" {
+		if len(path) > 0 && sym.Name == path[0] {
+			return true
+		}
+		// Package-qualified paths can resolve through arbitrarily-named
+		// symbols. Accept the resolver answer rather than risking
+		// false-positives on legitimate cross-package type references.
+		return true
+	}
+	return false
 }
 
 // joinDottedPath joins a non-empty string slice with '.'.
