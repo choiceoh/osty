@@ -511,6 +511,41 @@ the explicit selected-file path used for bootstrap generation.
 Backend-aware callers can stop at HIR, MIR, or artifact emission without
 re-running unaffected upstream work.
 
+#### LLVM binary link: cross-package dependency objects (experimental)
+
+When `osty build` emits an LLVM **binary** (`--backend llvm` with binary
+emit), the host may pass additional `.o` paths on
+`backend.Request.ExtraObjects` (`internal/backend/backend.go`). The LLVM
+backend appends them after the main package object and before the GC
+runtime object in the `LinkBinary` call (`internal/backend/llvm.go`), so
+symbols defined in dependency objects satisfy `declare` references from the
+main object while the runtime still links last.
+
+Population is implemented in `cmd/osty/cross_pkg_deps.go`:
+
+- Only runs for **workspace** builds (needs `ResolveWorkspace` in the query
+  graph), native-owned LLVM IR + binary emit, and a non-empty workspace root.
+- **`OSTY_CROSS_PKG_LINK`** gates actual work: truthy values are `1`, `true`,
+  `yes`, `on` (case-insensitive); default is **off**, so production behavior
+  matches the pre–PR-G2 baseline (cross-package calls still lower to
+  `declare`; link fails with undefined symbols unless you opt in).
+- When enabled, every **other** workspace package directory (not the package
+  being built) is compiled as a **library** via `nativellvmgen.TryPackageLibrary`
+  (skips emitting `main`, avoiding `_main` collisions) and
+  `backend.EmitPrebuiltLLVMIR` with `EmitObject`. Artifacts live under
+  `<dep_pkg>/.osty/out/<profile>/llvm-lib/`.
+- A dependency compile failure prints **`osty build: warning: dep … library compile failed`** to stderr and **does not** abort the consumer build; the
+  final link then fails with the usual undefined-symbol error if a needed
+  object was missing.
+
+**Operational caveats** (from source comments in `cross_pkg_deps.go`): the
+LIR Proto subprocess can **stall** on very large dependency packages (full
+`toolchain/` on the order of 10+ minutes has been observed), and the
+consumer build can still hit upstream **`<error>`-type** issues from the
+cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
+self-host plan. Treat the flag as a **small-dep experiment** until those gaps
+close.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
