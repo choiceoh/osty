@@ -3775,18 +3775,107 @@ func hasPoisonedTypeArg(t Type) bool {
 // still has the fully-syntactic source form, so a fresh round-trip
 // through `lowerType` produces a non-poisoned IR shape.
 func (l *lowerer) recoverFnDeclReturnType(id *ast.Ident) Type {
-	if id == nil || l.res == nil {
+	if id == nil {
+		traceFnDeclRecovery("", "", "", "<nil>", nil, "nil-ident")
+		return nil
+	}
+	if l.res == nil {
+		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "nil-resolver")
 		return nil
 	}
 	sym := l.res.RefsByID[id.ID]
 	if sym == nil || sym.Decl == nil {
+		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "no-symbol-or-decl")
 		return nil
 	}
 	fn, ok := sym.Decl.(*ast.FnDecl)
 	if !ok || fn == nil || fn.ReturnType == nil {
+		traceFnDeclRecovery(id.Name, sym.Name, "", "<nil>", nil, "wrong-decl-kind-or-nil-return")
 		return nil
 	}
-	return l.lowerType(fn.ReturnType)
+	ret := l.lowerType(fn.ReturnType)
+	traceFnDeclRecovery(id.Name, sym.Name, fn.Name, astTypeShape(fn.ReturnType), ret, "ok")
+	return ret
+}
+
+// ==== fn-decl return-type recovery trace (env-gated diagnostic) ====
+//
+// `OSTY_IR_TRACE_FN_DECL_RECOVERY=1` enables a per-call dump of
+// `recoverFnDeclReturnType` carrying the resolver lookup chain that
+// produces the recovered return type. Used as the third-stage
+// bisection tool for the FrontCheckResult<String> phantom-symbol
+// class: PR #1916 traced the MIR receiver-type ; PR #1917 traced
+// the IR `CallExpr` return-type fallback and pinpointed
+// `source=fn-decl-return-type` for the `hintTupleElems` call site ;
+// this trace shows whether the wrong type came from the resolver
+// returning the wrong `*resolve.Symbol`, the wrong `*ast.FnDecl`,
+// or `lowerType` mishandling the AST `ReturnType` node.
+//
+// Format:
+//   ir fn-decl-recovery: ident="X" symName="Y" fnName="Z" \
+//     astReturnType=<shape> recovered=<type> status=<label>
+
+var fnDeclRecoveryTraceWriter io.Writer = os.Stderr
+
+func fnDeclRecoveryTraceEnabled() bool {
+	switch os.Getenv("OSTY_IR_TRACE_FN_DECL_RECOVERY") {
+	case "", "0", "false", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func traceFnDeclRecovery(identName, symName, fnName, astShape string, recovered Type, status string) {
+	if !fnDeclRecoveryTraceEnabled() {
+		return
+	}
+	fmt.Fprintf(fnDeclRecoveryTraceWriter,
+		"ir fn-decl-recovery: ident=%q symName=%q fnName=%q astReturnType=%s recovered=%s status=%s\n",
+		identName, symName, fnName, astShape, formatCallTraceType(recovered), status,
+	)
+}
+
+// astTypeShape renders an ast.Type in a compact form for the trace.
+// Captures Path + Args structure of NamedType, plus the single-line
+// shape of OptionalType / TupleType / FnType so a `List<String>` vs
+// `FrontCheckResult<String>` mix-up is immediately visible in the
+// log without dumping the full AST.
+func astTypeShape(t ast.Type) string {
+	switch n := t.(type) {
+	case nil:
+		return "<nil>"
+	case *ast.NamedType:
+		if n == nil {
+			return "<nil>"
+		}
+		path := strings.Join(n.Path, ".")
+		if len(n.Args) == 0 {
+			return fmt.Sprintf("Named(%s)", path)
+		}
+		args := make([]string, len(n.Args))
+		for i, a := range n.Args {
+			args[i] = astTypeShape(a)
+		}
+		return fmt.Sprintf("Named(%s)<%s>", path, strings.Join(args, ","))
+	case *ast.OptionalType:
+		if n == nil {
+			return "<nil>"
+		}
+		return fmt.Sprintf("Optional(%s)", astTypeShape(n.Inner))
+	case *ast.TupleType:
+		if n == nil {
+			return "<nil>"
+		}
+		parts := make([]string, len(n.Elems))
+		for i, e := range n.Elems {
+			parts[i] = astTypeShape(e)
+		}
+		return fmt.Sprintf("Tuple(%s)", strings.Join(parts, ","))
+	case *ast.FnType:
+		return "FnType(...)"
+	}
+	return fmt.Sprintf("<other:%T>", t)
 }
 
 // recoverCallReturnType pulls the return type off the callee's FnType

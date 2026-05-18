@@ -280,6 +280,88 @@ func TestLowerNamedTypeAcceptsResolverNameMatch(t *testing.T) {
 	}
 }
 
+// TestRecoverFnDeclReturnTypeTraceDefaultSilent locks the
+// off-by-default behaviour of the OSTY_IR_TRACE_FN_DECL_RECOVERY
+// env-gated diagnostic: without the env var set even the
+// nil-resolver early-return path emits nothing.
+func TestRecoverFnDeclReturnTypeTraceDefaultSilent(t *testing.T) {
+	prev := fnDeclRecoveryTraceWriter
+	defer func() { fnDeclRecoveryTraceWriter = prev }()
+	var buf bytes.Buffer
+	fnDeclRecoveryTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "")
+
+	// nil-resolver case — would have produced a status line if
+	// the env gate were broken.
+	l := &lowerer{}
+	l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
+
+	// Non-nil resolver with no RefsByID entry — exercises the
+	// `no-symbol-or-decl` path.
+	l2 := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
+	l2.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
+
+	if buf.Len() != 0 {
+		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
+	}
+}
+
+// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver locks
+// the env-on nil-resolver case: `Lower(...)` permits a nil
+// resolver and this diagnostic is meant to produce an explicit
+// no-data status so env-enabled bisections do not silently omit
+// recovery attempts.
+func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver(t *testing.T) {
+	prev := fnDeclRecoveryTraceWriter
+	defer func() { fnDeclRecoveryTraceWriter = prev }()
+	var buf bytes.Buffer
+	fnDeclRecoveryTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
+
+	l := &lowerer{}
+	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
+
+	got := buf.String()
+	for _, want := range []string{
+		`ident="anything"`,
+		`status=nil-resolver`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("nil-resolver trace missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol exercises
+// the env-on `no-symbol-or-decl` path with a real but empty
+// resolver. Without this, "trace enabled but no symbol" was
+// indistinguishable from "trace never ran" — the very case the
+// trace was meant to surface.
+func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol(t *testing.T) {
+	prev := fnDeclRecoveryTraceWriter
+	defer func() { fnDeclRecoveryTraceWriter = prev }()
+	var buf bytes.Buffer
+	fnDeclRecoveryTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
+
+	l := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
+	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything", ID: ast.NodeID(42)})
+
+	got := buf.String()
+	for _, want := range []string{
+		`ident="anything"`,
+		`status=no-symbol-or-decl`,
+		`astReturnType=<nil>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no-symbol trace missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
 // TestLowerCallReturnTypeTraceDefaultSilent locks the off-by-default
 // behaviour of the OSTY_IR_TRACE_CALL_RETURN_TYPES env-gated trace:
 // without the env var set the trace writes nothing.
