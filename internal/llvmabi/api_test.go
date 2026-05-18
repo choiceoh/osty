@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/profile"
 )
 
 func TestUnsupportedDiagnosticForKnownKinds(t *testing.T) {
@@ -198,6 +200,90 @@ func TestClangLinkBinaryArgsOmitsPthreadOnWindows(t *testing.T) {
 	got := strings.Join(ClangLinkBinaryArgs("amd64-windows", []string{"a.o"}, "bin"), " ")
 	if strings.Contains(got, "-pthread") {
 		t.Errorf("link args should not include -pthread on windows: %s", got)
+	}
+}
+
+func TestClangCompileObjectArgsNoLTOProfilesDropLTO(t *testing.T) {
+	for _, profile := range []string{"debug", "test", "profile"} {
+		got := strings.Join(ClangCompileObjectArgsForProfile("amd64-linux", profile, "in.ll", "out.o"), " ")
+		if strings.Contains(got, "-flto") {
+			t.Errorf("profile %q compile args should not include -flto: %s", profile, got)
+		}
+		if strings.Contains(got, "-O3") {
+			t.Errorf("profile %q compile args should not include -O3: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O0") {
+			t.Errorf("profile %q compile args should include -O0: %s", profile, got)
+		}
+	}
+}
+
+func TestClangCompileObjectArgsReleaseProfileKeepsLTO(t *testing.T) {
+	for _, profile := range []string{"", "release", "unknown-custom"} {
+		got := strings.Join(ClangCompileObjectArgsForProfile("amd64-linux", profile, "in.ll", "out.o"), " ")
+		if !strings.Contains(got, "-flto=thin") {
+			t.Errorf("profile %q compile args missing -flto=thin: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O3") {
+			t.Errorf("profile %q compile args missing -O3: %s", profile, got)
+		}
+	}
+}
+
+func TestClangLinkBinaryArgsNoLTOProfilesDropLTO(t *testing.T) {
+	for _, profile := range []string{"debug", "test", "profile"} {
+		got := strings.Join(ClangLinkBinaryArgsForProfile("amd64-linux", profile, []string{"a.o"}, "bin"), " ")
+		if strings.Contains(got, "-flto") {
+			t.Errorf("profile %q link args should not include -flto: %s", profile, got)
+		}
+		if strings.Contains(got, "import-instr-limit") {
+			t.Errorf("profile %q link args should not include import-instr-limit tuning: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O0") {
+			t.Errorf("profile %q link args should include -O0: %s", profile, got)
+		}
+	}
+}
+
+func TestClangLinkBinaryArgsReleaseProfileKeepsLTO(t *testing.T) {
+	for _, profile := range []string{"", "release", "unknown-custom"} {
+		got := strings.Join(ClangLinkBinaryArgsForProfile("amd64-linux", profile, []string{"a.o"}, "bin"), " ")
+		if !strings.Contains(got, "-flto=thin") {
+			t.Errorf("profile %q link args missing -flto=thin: %s", profile, got)
+		}
+		if !strings.Contains(got, "-O3") {
+			t.Errorf("profile %q link args missing -O3: %s", profile, got)
+		}
+	}
+}
+
+// TestClangLinkBinaryArgsCompatWrapperUsesReleaseDefaults locks the
+// expectation that direct callers of the legacy ClangLinkBinaryArgs
+// (no profile) keep the aggressive `-O3 -flto=thin` pipeline.
+// install-self / osty test are the new callers that want the no-LTO
+// fast path; they route through the profile-aware variant with the
+// matching profile name.
+func TestClangLinkBinaryArgsCompatWrapperUsesReleaseDefaults(t *testing.T) {
+	got := strings.Join(ClangLinkBinaryArgs("amd64-linux", []string{"a.o"}, "bin"), " ")
+	if !strings.Contains(got, "-flto=thin") {
+		t.Errorf("legacy wrapper should default to -flto=thin: %s", got)
+	}
+}
+
+// TestProfileSkipsLTOMatchesProfileDefaults locks the ProfileSkipsLTO
+// name list against profile.Defaults() — every built-in profile whose
+// `LTO` field is false MUST be in the no-LTO clang-args path, and
+// every profile whose `LTO` field is true MUST stay on the release-tier
+// path. If a new built-in profile lands in profile.go's Defaults(),
+// this test fails loudly so the clang-args helper stays in sync
+// instead of silently inheriting whichever default the unknown-name
+// fallback (release) picks.
+func TestProfileSkipsLTOMatchesProfileDefaults(t *testing.T) {
+	for _, p := range profile.Defaults().Profiles {
+		if got, want := ProfileSkipsLTO(p.Name), !p.LTO; got != want {
+			t.Errorf("ProfileSkipsLTO(%q) = %v, want %v (profile.Defaults() has LTO=%v)",
+				p.Name, got, want, p.LTO)
+		}
 	}
 }
 

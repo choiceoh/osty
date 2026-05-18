@@ -141,12 +141,28 @@ func NeedsObjectArtifact(emit string) bool { return emit == "object" || emit == 
 func NeedsBinaryArtifact(emit string) bool { return emit == "binary" }
 
 func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
+	return ClangCompileObjectArgsForProfile(target, "", irPath, objectPath)
+}
+
+// ClangCompileObjectArgsForProfile is the profile-aware variant of
+// ClangCompileObjectArgs. Profiles whose `profile.Profile.LTO` is false
+// (debug / test / profile per internal/profile/profile.go:202-241)
+// compile with `-O0` and without LTO so install-self / `osty test` /
+// `osty build --profile=...` finish in seconds instead of taking the
+// multi-minute ThinLTO link tail. Empty profile (legacy callers
+// without one in scope) and "release" keep the `-O3 -flto=thin` pipeline
+// that the GC / scheduler runtime have been tuned against.
+func ClangCompileObjectArgsForProfile(target, profile, irPath, objectPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, 8)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-O3", "-flto=thin")
+	if ProfileSkipsLTO(profile) {
+		args = append(args, "-O0")
+	} else {
+		args = append(args, "-O3", "-flto=thin")
+	}
 	if strings.Contains(target, "x86_64") || strings.Contains(target, "amd64") {
 		args = append(args, "-march=x86-64-v3")
 	}
@@ -154,26 +170,60 @@ func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
 }
 
 func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
+	return ClangLinkBinaryArgsForProfile(target, "", objectPaths, binaryPath)
+}
+
+// ClangLinkBinaryArgsForProfile is the profile-aware variant of
+// ClangLinkBinaryArgs. Profiles whose `profile.Profile.LTO` is false
+// (debug / test / profile per internal/profile/profile.go:202-241) drop
+// `-flto=thin` and the matching `-mllvm,-import-instr-limit` LLD tuning
+// and fall back to `-O0`, which is what made install-self bootstrap-link
+// complete in seconds instead of timing out at the ThinLTO import stage
+// when the self-host IR grew past ~20 MB. Release / unspecified profiles
+// keep the aggressive cross-module-inlining pipeline.
+func ClangLinkBinaryArgsForProfile(target, profile string, objectPaths []string, binaryPath string) []string {
 	target = CanonicalLLVMTarget(target)
 	args := make([]string, 0, len(objectPaths)+10)
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-O3", "-flto=thin")
-	// The `-mllvm` flag below is LLD-only — BFD ld parses it as `-m llvm`
-	// and bails with "unrecognised emulation mode: llvm". We force LLD
-	// when it's reachable and drop the import-instr-limit tuning when
-	// it isn't, so fresh-clone hosts that only have BFD ld can still
-	// produce a (slightly less aggressively-inlined) binary instead of
-	// failing the bootstrap link outright.
-	if hasLLD() {
-		args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+	if ProfileSkipsLTO(profile) {
+		args = append(args, "-O0")
+		if hasLLD() {
+			args = append(args, "-fuse-ld=lld")
+		}
+	} else {
+		args = append(args, "-O3", "-flto=thin")
+		// The `-mllvm` flag below is LLD-only — BFD ld parses it as `-m llvm`
+		// and bails with "unrecognised emulation mode: llvm". We force LLD
+		// when it's reachable and drop the import-instr-limit tuning when
+		// it isn't, so fresh-clone hosts that only have BFD ld can still
+		// produce a (slightly less aggressively-inlined) binary instead of
+		// failing the bootstrap link outright.
+		if hasLLD() {
+			args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+		}
 	}
 	args = append(args, objectPaths...)
 	if !strings.Contains(target, "windows") {
 		args = append(args, "-pthread", "-lz")
 	}
 	return append(args, "-o", binaryPath)
+}
+
+// ProfileSkipsLTO reports whether the named build profile turns off
+// LTO + cross-module inlining for clang invocations. Mirrors the
+// canonical built-in table in internal/profile/profile.go's
+// Defaults() — the test `TestProfileSkipsLTOMatchesProfileDefaults`
+// in api_test.go locks the two in sync at compile time. Empty profile
+// (legacy callers without one in scope) and unknown profile names
+// preserve release-tier `-O3 -flto=thin` semantics.
+func ProfileSkipsLTO(profile string) bool {
+	switch profile {
+	case "debug", "test", "profile":
+		return true
+	}
+	return false
 }
 
 func hasLLD() bool {

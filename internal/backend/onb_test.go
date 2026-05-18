@@ -17,7 +17,7 @@ type fakeONBLinker struct {
 	links []linkCall
 }
 
-func (f *fakeONBLinker) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
+func (f *fakeONBLinker) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target, _ string, linkLibraries []string) error {
 	f.links = append(f.links, linkCall{
 		objectPaths:   append([]string(nil), objectPaths...),
 		binaryPath:    binaryPath,
