@@ -832,6 +832,9 @@ func defineTopLevelSymbols(
 		if sym.Depth != 0 {
 			continue
 		}
+		if sym.File != "" && sym.File != fi.path {
+			continue
+		}
 		if sym.Kind == "package" {
 			continue
 		}
