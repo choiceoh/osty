@@ -30468,6 +30468,21 @@ void *osty_rt_keychain_delete(const char *service, const char *account) {
 
 #if defined(__GNUC__) || defined(__clang__)
 
+/* Mach-O (macOS) prepends `_` to C-ABI symbol names; ELF (Linux) does not.
+ * The `__asm__("foo")` directive emits the literal string as the symbol
+ * name with NO further mangling — so the raw string we pass must already
+ * include any platform-specific prefix that the matching `declare @foo`
+ * IR-side reference will resolve to. `OSTY_GC_SYMBOL(name)` (defined
+ * above) does exactly that — adds `_` on `__APPLE__`, leaves bare
+ * elsewhere — and is reused here so the cihost shims, GC roots, and
+ * audit-symbol shims all share one source of truth.
+ *
+ * Without this prefix the cihost shims silently linked on Linux but
+ * failed on macOS with `Undefined symbols: "_runtime.cihost.X",
+ * referenced from <main.o>` — particularly visible after PR #1914
+ * dropped LTO from debug builds (LTO sometimes optimized away the dead
+ * ci.osty paths before the linker noticed the missing symbols). */
+
 static void *runtime_cihost_empty_string(void) {
   return osty_rt_string_dup_site("", 0, "runtime.cihost.stub");
 }
@@ -30475,60 +30490,54 @@ static void *runtime_cihost_empty_string(void) {
 static void *runtime_cihost_empty_list(void) { return osty_rt_list_new(); }
 
 /* --- Bool returning --- */
-bool runtime_cihost_KeepAlive(void) __asm__("runtime.cihost.KeepAlive");
+bool runtime_cihost_KeepAlive(void) __asm__(OSTY_GC_SYMBOL("runtime.cihost.KeepAlive"));
 bool runtime_cihost_KeepAlive(void) { return false; }
 
-bool runtime_cihost_HasManifest(void *manifest) __asm__(
-    "runtime.cihost.HasManifest");
+bool runtime_cihost_HasManifest(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.HasManifest"));
 bool runtime_cihost_HasManifest(void *manifest) {
   (void)manifest;
   return false;
 }
 
-bool runtime_cihost_HasWorkspace(void *manifest) __asm__(
-    "runtime.cihost.HasWorkspace");
+bool runtime_cihost_HasWorkspace(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.HasWorkspace"));
 bool runtime_cihost_HasWorkspace(void *manifest) {
   (void)manifest;
   return false;
 }
 
-bool runtime_cihost_HasDependencies(void *manifest) __asm__(
-    "runtime.cihost.HasDependencies");
+bool runtime_cihost_HasDependencies(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.HasDependencies"));
 bool runtime_cihost_HasDependencies(void *manifest) {
   (void)manifest;
   return false;
 }
 
 /* --- ptr returning, no args --- */
-void *runtime_cihost_NowUTC(void) __asm__("runtime.cihost.NowUTC");
+void *runtime_cihost_NowUTC(void) __asm__(OSTY_GC_SYMBOL("runtime.cihost.NowUTC"));
 void *runtime_cihost_NowUTC(void) { return NULL; }
 
-void *runtime_cihost_EmptyDiagnostics(void) __asm__(
-    "runtime.cihost.EmptyDiagnostics");
+void *runtime_cihost_EmptyDiagnostics(void) __asm__(OSTY_GC_SYMBOL("runtime.cihost.EmptyDiagnostics"));
 void *runtime_cihost_EmptyDiagnostics(void) {
   return runtime_cihost_empty_list();
 }
 
 void *
-runtime_cihost_EmptyPackages(void) __asm__("runtime.cihost.EmptyPackages");
+runtime_cihost_EmptyPackages(void) __asm__(OSTY_GC_SYMBOL("runtime.cihost.EmptyPackages"));
 void *runtime_cihost_EmptyPackages(void) { return runtime_cihost_empty_list(); }
 
-void *runtime_cihost_EmptyPackageResults(void) __asm__(
-    "runtime.cihost.EmptyPackageResults");
+void *runtime_cihost_EmptyPackageResults(void) __asm__(OSTY_GC_SYMBOL("runtime.cihost.EmptyPackageResults"));
 void *runtime_cihost_EmptyPackageResults(void) {
   return runtime_cihost_empty_list();
 }
 
 /* --- ptr returning, ptr args --- */
-void *runtime_cihost_DiagnosticSeverity(void *d) __asm__(
-    "runtime.cihost.DiagnosticSeverity");
+void *runtime_cihost_DiagnosticSeverity(void *d) __asm__(OSTY_GC_SYMBOL("runtime.cihost.DiagnosticSeverity"));
 void *runtime_cihost_DiagnosticSeverity(void *d) {
   (void)d;
   return runtime_cihost_empty_string();
 }
 
 void *runtime_cihost_Synthetic(void *severity, void *code,
-                               void *msg) __asm__("runtime.cihost.Synthetic");
+                               void *msg) __asm__(OSTY_GC_SYMBOL("runtime.cihost.Synthetic"));
 void *runtime_cihost_Synthetic(void *severity, void *code, void *msg) {
   (void)severity;
   (void)code;
@@ -30536,8 +30545,7 @@ void *runtime_cihost_Synthetic(void *severity, void *code, void *msg) {
   return NULL;
 }
 
-void *runtime_cihost_LoadRunnerState(void *root, void *manifest) __asm__(
-    "runtime.cihost.LoadRunnerState");
+void *runtime_cihost_LoadRunnerState(void *root, void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.LoadRunnerState"));
 void *runtime_cihost_LoadRunnerState(void *root, void *manifest) {
   (void)root;
   (void)manifest;
@@ -30546,7 +30554,7 @@ void *runtime_cihost_LoadRunnerState(void *root, void *manifest) {
 
 void *
 runtime_cihost_OstyFiles(void *root,
-                         void *packages) __asm__("runtime.cihost.OstyFiles");
+                         void *packages) __asm__(OSTY_GC_SYMBOL("runtime.cihost.OstyFiles"));
 void *runtime_cihost_OstyFiles(void *root, void *packages) {
   (void)root;
   (void)packages;
@@ -30555,7 +30563,7 @@ void *runtime_cihost_OstyFiles(void *root, void *packages) {
 
 void *
 runtime_cihost_CheckFormat(void *root,
-                           void *files) __asm__("runtime.cihost.CheckFormat");
+                           void *files) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckFormat"));
 void *runtime_cihost_CheckFormat(void *root, void *files) {
   (void)root;
   (void)files;
@@ -30564,7 +30572,7 @@ void *runtime_cihost_CheckFormat(void *root, void *files) {
 
 void *
 runtime_cihost_CheckLint(void *manifest, void *packages,
-                         void *results) __asm__("runtime.cihost.CheckLint");
+                         void *results) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckLint"));
 void *runtime_cihost_CheckLint(void *manifest, void *packages, void *results) {
   (void)manifest;
   (void)packages;
@@ -30572,22 +30580,19 @@ void *runtime_cihost_CheckLint(void *manifest, void *packages, void *results) {
   return NULL;
 }
 
-void *runtime_cihost_ManifestCoreOf(void *manifest) __asm__(
-    "runtime.cihost.ManifestCoreOf");
+void *runtime_cihost_ManifestCoreOf(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.ManifestCoreOf"));
 void *runtime_cihost_ManifestCoreOf(void *manifest) {
   (void)manifest;
   return NULL;
 }
 
-void *runtime_cihost_WorkspaceMembers(void *manifest) __asm__(
-    "runtime.cihost.WorkspaceMembers");
+void *runtime_cihost_WorkspaceMembers(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.WorkspaceMembers"));
 void *runtime_cihost_WorkspaceMembers(void *manifest) {
   (void)manifest;
   return runtime_cihost_empty_list();
 }
 
-void *runtime_cihost_DependencyCoreRows(void *manifest) __asm__(
-    "runtime.cihost.DependencyCoreRows");
+void *runtime_cihost_DependencyCoreRows(void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.DependencyCoreRows"));
 void *runtime_cihost_DependencyCoreRows(void *manifest) {
   (void)manifest;
   return runtime_cihost_empty_list();
@@ -30595,38 +30600,34 @@ void *runtime_cihost_DependencyCoreRows(void *manifest) {
 
 void *runtime_cihost_CheckWorkspaceMemberPaths(
     void *root,
-    void *members) __asm__("runtime.cihost.CheckWorkspaceMemberPaths");
+    void *members) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckWorkspaceMemberPaths"));
 void *runtime_cihost_CheckWorkspaceMemberPaths(void *root, void *members) {
   (void)root;
   (void)members;
   return runtime_cihost_empty_list();
 }
 
-void *runtime_cihost_CheckLockfile(void *root, void *manifest) __asm__(
-    "runtime.cihost.CheckLockfile");
+void *runtime_cihost_CheckLockfile(void *root, void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckLockfile"));
 void *runtime_cihost_CheckLockfile(void *root, void *manifest) {
   (void)root;
   (void)manifest;
   return NULL;
 }
 
-void *runtime_cihost_CheckReleaseLockfile(void *root, void *manifest) __asm__(
-    "runtime.cihost.CheckReleaseLockfile");
+void *runtime_cihost_CheckReleaseLockfile(void *root, void *manifest) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckReleaseLockfile"));
 void *runtime_cihost_CheckReleaseLockfile(void *root, void *manifest) {
   (void)root;
   (void)manifest;
   return runtime_cihost_empty_list();
 }
 
-void *runtime_cihost_ReadSnapshotHost(void *path) __asm__(
-    "runtime.cihost.ReadSnapshotHost");
+void *runtime_cihost_ReadSnapshotHost(void *path) __asm__(OSTY_GC_SYMBOL("runtime.cihost.ReadSnapshotHost"));
 void *runtime_cihost_ReadSnapshotHost(void *path) {
   (void)path;
   return NULL;
 }
 
-void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) __asm__(
-    "runtime.cihost.WriteSnapshotHost");
+void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) __asm__(OSTY_GC_SYMBOL("runtime.cihost.WriteSnapshotHost"));
 void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) {
   (void)path;
   (void)snapshot;
@@ -30635,7 +30636,7 @@ void *runtime_cihost_WriteSnapshotHost(void *path, void *snapshot) {
 
 void *runtime_cihost_NewSingleSnapshotHost(
     void *pkg, void *version,
-    void *edition) __asm__("runtime.cihost.NewSingleSnapshotHost");
+    void *edition) __asm__(OSTY_GC_SYMBOL("runtime.cihost.NewSingleSnapshotHost"));
 void *runtime_cihost_NewSingleSnapshotHost(void *pkg, void *version,
                                            void *edition) {
   (void)pkg;
@@ -30646,7 +30647,7 @@ void *runtime_cihost_NewSingleSnapshotHost(void *pkg, void *version,
 
 void *runtime_cihost_NewWorkspaceSnapshotHost(
     void *packages, void *version,
-    void *edition) __asm__("runtime.cihost.NewWorkspaceSnapshotHost");
+    void *edition) __asm__(OSTY_GC_SYMBOL("runtime.cihost.NewWorkspaceSnapshotHost"));
 void *runtime_cihost_NewWorkspaceSnapshotHost(void *packages, void *version,
                                               void *edition) {
   (void)packages;
@@ -30655,15 +30656,13 @@ void *runtime_cihost_NewWorkspaceSnapshotHost(void *packages, void *version,
   return NULL;
 }
 
-void *runtime_cihost_CapturePackageHost(void *pkg) __asm__(
-    "runtime.cihost.CapturePackageHost");
+void *runtime_cihost_CapturePackageHost(void *pkg) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CapturePackageHost"));
 void *runtime_cihost_CapturePackageHost(void *pkg) {
   (void)pkg;
   return runtime_cihost_empty_list();
 }
 
-void *runtime_cihost_CompareSnapshots(void *baseline, void *current) __asm__(
-    "runtime.cihost.CompareSnapshots");
+void *runtime_cihost_CompareSnapshots(void *baseline, void *current) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CompareSnapshots"));
 void *runtime_cihost_CompareSnapshots(void *baseline, void *current) {
   (void)baseline;
   (void)current;
@@ -30673,7 +30672,7 @@ void *runtime_cihost_CompareSnapshots(void *baseline, void *current) {
 /* --- Int arg --- */
 void *runtime_cihost_CheckPolicyFileSizes(
     void *root, void *files,
-    int64_t maxFileBytes) __asm__("runtime.cihost.CheckPolicyFileSizes");
+    int64_t maxFileBytes) __asm__(OSTY_GC_SYMBOL("runtime.cihost.CheckPolicyFileSizes"));
 void *runtime_cihost_CheckPolicyFileSizes(void *root, void *files,
                                           int64_t maxFileBytes) {
   (void)root;
@@ -30923,6 +30922,48 @@ int64_t osty_rt_audit_Char_len(const char *value) __asm__(
     OSTY_RT_AUDIT_SYMBOL("Char__len")) OSTY_RT_AUDIT_USED;
 int64_t osty_rt_audit_Char_len(const char *value) {
   return osty_rt_strings_ByteLen(value);
+}
+
+/* Char.isWhitespace(self) -> Bool — ASCII subset only (stdlib's
+ * `pub fn isWhitespace(self) -> Bool { false }` placeholder body
+ * reaches the linker as an extern reference under the production path;
+ * provide a real shim so install-self + cmd/osty-native-checker can link
+ * without going through stage0's "list all declines" stub mode). Full
+ * Unicode whitespace would need ICU — out of scope for the bootstrap
+ * runtime.
+ *
+ * Whitespace codepoints recognised: space (U+0020), tab (U+0009),
+ * newline (U+000A), carriage return (U+000D), form feed (U+000C),
+ * vertical tab (U+000B), no-break space (U+00A0). Anything else
+ * (including most Unicode whitespace) returns false. */
+bool osty_rt_audit_Char_isWhitespace(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isWhitespace")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isWhitespace(int32_t codepoint) {
+  switch (codepoint) {
+  case 0x09: /* tab */
+  case 0x0A: /* lf */
+  case 0x0B: /* vt */
+  case 0x0C: /* ff */
+  case 0x0D: /* cr */
+  case 0x20: /* space */
+  case 0xA0: /* nbsp */
+    return true;
+  default:
+    return false;
+  }
+}
+
+/* Char.toLower(self) -> Char — ASCII A-Z → a-z. Anything else passes
+ * through unchanged. Mirrors the same "ASCII subset" limitation as
+ * `Char__isWhitespace` above; production stdlib eventually wants full
+ * Unicode lowering via ICU. */
+int32_t osty_rt_audit_Char_toLower(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__toLower")) OSTY_RT_AUDIT_USED;
+int32_t osty_rt_audit_Char_toLower(int32_t codepoint) {
+  if (codepoint >= 'A' && codepoint <= 'Z') {
+    return codepoint + ('a' - 'A');
+  }
+  return codepoint;
 }
 
 /* std.strings.fromChar(c) — same semantics as Char.toString. */
