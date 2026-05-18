@@ -3775,17 +3775,22 @@ func hasPoisonedTypeArg(t Type) bool {
 // still has the fully-syntactic source form, so a fresh round-trip
 // through `lowerType` produces a non-poisoned IR shape.
 func (l *lowerer) recoverFnDeclReturnType(id *ast.Ident) Type {
-	if id == nil || l.res == nil {
+	if id == nil {
+		traceFnDeclRecovery("", "", "", "<nil>", nil, "nil-ident")
+		return nil
+	}
+	if l.res == nil {
+		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "nil-resolver")
 		return nil
 	}
 	sym := l.res.RefsByID[id.ID]
 	if sym == nil || sym.Decl == nil {
-		traceFnDeclRecovery(id.Name, "", "", "", nil, "no-symbol-or-decl")
+		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "no-symbol-or-decl")
 		return nil
 	}
 	fn, ok := sym.Decl.(*ast.FnDecl)
 	if !ok || fn == nil || fn.ReturnType == nil {
-		traceFnDeclRecovery(id.Name, sym.Name, "", "", nil, "wrong-decl-kind-or-nil-return")
+		traceFnDeclRecovery(id.Name, sym.Name, "", "<nil>", nil, "wrong-decl-kind-or-nil-return")
 		return nil
 	}
 	ret := l.lowerType(fn.ReturnType)

@@ -282,8 +282,8 @@ func TestLowerNamedTypeAcceptsResolverNameMatch(t *testing.T) {
 
 // TestRecoverFnDeclReturnTypeTraceDefaultSilent locks the
 // off-by-default behaviour of the OSTY_IR_TRACE_FN_DECL_RECOVERY
-// env-gated diagnostic: without the env var set the trace writes
-// nothing.
+// env-gated diagnostic: without the env var set even the
+// nil-resolver early-return path emits nothing.
 func TestRecoverFnDeclReturnTypeTraceDefaultSilent(t *testing.T) {
 	prev := fnDeclRecoveryTraceWriter
 	defer func() { fnDeclRecoveryTraceWriter = prev }()
@@ -292,19 +292,27 @@ func TestRecoverFnDeclReturnTypeTraceDefaultSilent(t *testing.T) {
 
 	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "")
 
+	// nil-resolver case — would have produced a status line if
+	// the env gate were broken.
 	l := &lowerer{}
 	l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
+
+	// Non-nil resolver with no RefsByID entry — exercises the
+	// `no-symbol-or-decl` path.
+	l2 := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
+	l2.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
+
 	if buf.Len() != 0 {
 		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
 	}
 }
 
-// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbolStatus
-// exercises the env-on path with a nil resolver: `recoverFnDeclReturnType`
-// records `status=no-symbol-or-decl` because RefsByID lookup
-// short-circuits when l.res is nil, but the trace must still fire
-// so a fresh-clone bisection sees the no-data signal explicitly.
-func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbolStatus(t *testing.T) {
+// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver locks
+// the env-on nil-resolver case: `Lower(...)` permits a nil
+// resolver and this diagnostic is meant to produce an explicit
+// no-data status so env-enabled bisections do not silently omit
+// recovery attempts.
+func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver(t *testing.T) {
 	prev := fnDeclRecoveryTraceWriter
 	defer func() { fnDeclRecoveryTraceWriter = prev }()
 	var buf bytes.Buffer
@@ -312,19 +320,45 @@ func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbolStatus(t *testing.T) {
 
 	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
 
-	// Skip the trace by passing a nil-resolver lowerer — the trace
-	// is meant to fire from every dispatch path, but the early
-	// `l.res == nil` guard short-circuits before we record the
-	// no-symbol status. The trace is exercised end-to-end via the
-	// install-self bisection scripts in the PR description; this
-	// unit test just locks the env-var gate.
 	l := &lowerer{}
 	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
-	// The early `l.res == nil` return bypasses the trace. Verify
-	// the gate's `OSTY_IR_TRACE_FN_DECL_RECOVERY="1"` value at
-	// least reaches `fnDeclRecoveryTraceEnabled()`.
-	if !fnDeclRecoveryTraceEnabled() {
-		t.Fatalf("env var set but fnDeclRecoveryTraceEnabled() = false")
+
+	got := buf.String()
+	for _, want := range []string{
+		`ident="anything"`,
+		`status=nil-resolver`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("nil-resolver trace missing %q\nfull output:\n%s", want, got)
+		}
+	}
+}
+
+// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol exercises
+// the env-on `no-symbol-or-decl` path with a real but empty
+// resolver. Without this, "trace enabled but no symbol" was
+// indistinguishable from "trace never ran" — the very case the
+// trace was meant to surface.
+func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol(t *testing.T) {
+	prev := fnDeclRecoveryTraceWriter
+	defer func() { fnDeclRecoveryTraceWriter = prev }()
+	var buf bytes.Buffer
+	fnDeclRecoveryTraceWriter = &buf
+
+	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
+
+	l := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
+	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything", ID: ast.NodeID(42)})
+
+	got := buf.String()
+	for _, want := range []string{
+		`ident="anything"`,
+		`status=no-symbol-or-decl`,
+		`astReturnType=<nil>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no-symbol trace missing %q\nfull output:\n%s", want, got)
+		}
 	}
 }
 
