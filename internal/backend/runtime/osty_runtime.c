@@ -30966,6 +30966,64 @@ int32_t osty_rt_audit_Char_toLower(int32_t codepoint) {
   return codepoint;
 }
 
+/* Char.toUpper(self) -> Char — ASCII a-z → A-Z, pass-through otherwise.
+ * Sibling of `Char__toLower`. Bootstrap subset; ICU handles full
+ * Unicode case mapping in production. */
+int32_t osty_rt_audit_Char_toUpper(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__toUpper")) OSTY_RT_AUDIT_USED;
+int32_t osty_rt_audit_Char_toUpper(int32_t codepoint) {
+  if (codepoint >= 'a' && codepoint <= 'z') {
+    return codepoint - ('a' - 'A');
+  }
+  return codepoint;
+}
+
+/* Char.isUpper(self) -> Bool — ASCII A-Z only. */
+bool osty_rt_audit_Char_isUpper(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isUpper")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isUpper(int32_t codepoint) {
+  return codepoint >= 'A' && codepoint <= 'Z';
+}
+
+/* Char.isLower(self) -> Bool — ASCII a-z only. */
+bool osty_rt_audit_Char_isLower(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isLower")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isLower(int32_t codepoint) {
+  return codepoint >= 'a' && codepoint <= 'z';
+}
+
+/* Char.isDigit(self) -> Bool — ASCII 0-9 only. */
+bool osty_rt_audit_Char_isDigit(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isDigit")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isDigit(int32_t codepoint) {
+  return codepoint >= '0' && codepoint <= '9';
+}
+
+/* Char.isAlpha(self) -> Bool — ASCII letter test. */
+bool osty_rt_audit_Char_isAlpha(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isAlpha")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isAlpha(int32_t codepoint) {
+  return (codepoint >= 'A' && codepoint <= 'Z') ||
+         (codepoint >= 'a' && codepoint <= 'z');
+}
+
+/* Char.isAlphanumeric(self) -> Bool — `isAlpha || isDigit`. */
+bool osty_rt_audit_Char_isAlphanumeric(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__isAlphanumeric")) OSTY_RT_AUDIT_USED;
+bool osty_rt_audit_Char_isAlphanumeric(int32_t codepoint) {
+  return (codepoint >= 'A' && codepoint <= 'Z') ||
+         (codepoint >= 'a' && codepoint <= 'z') ||
+         (codepoint >= '0' && codepoint <= '9');
+}
+
+/* Char.toInt(self) -> Int — total scalar conversion. Codepoints are
+ * stored as i32 already; widen to i64 for the Osty `Int` ABI. */
+int64_t osty_rt_audit_Char_toInt(int32_t codepoint) __asm__(
+    OSTY_RT_AUDIT_SYMBOL("Char__toInt")) OSTY_RT_AUDIT_USED;
+int64_t osty_rt_audit_Char_toInt(int32_t codepoint) {
+  return (int64_t)codepoint;
+}
+
 /* std.strings.fromChar(c) — same semantics as Char.toString. */
 void *osty_rt_audit_strings_fromChar(int32_t codepoint) __asm__(
     OSTY_RT_AUDIT_SYMBOL("std.strings.fromChar")) OSTY_RT_AUDIT_USED;
