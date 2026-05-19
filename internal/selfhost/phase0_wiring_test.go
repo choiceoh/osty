@@ -1118,10 +1118,18 @@ func TestVerifySelfRebuildStage1IgnoresStaleInTreeSelfBinary(t *testing.T) {
 		t.Fatalf("read verify-self-rebuild: %v", err)
 	}
 	text := string(src)
+	// PR #1935 ("make stage0 bootstrap explicit") replaced the
+	// implicit `OSTY_STAGE0_FALLBACK=1` env-var signal with an
+	// explicit `--bootstrap-stage0` CLI flag on the driver invocation.
+	// The two remaining env vars (`OSTY_SELF_REGISTRY_OFFLINE=1` +
+	// `OSTY_STAGE0_LIST_ALL_DECLINES=1`) are still required for the
+	// stage1 stale-binary recovery path, and the new flag carries the
+	// stage0 bootstrap opt-in that the env var used to.
 	for _, needle := range []string{
 		`rm -f "$toolchain_dir/.osty/out/debug/llvm/osty-self"`,
 		`rm -f "$toolchain_dir/.osty/out/release/llvm/osty-self"`,
-		"OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1",
+		"OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_LIST_ALL_DECLINES=1",
+		"--bootstrap-stage0",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("verify-self-rebuild missing stage1 stale self-binary guard %q", needle)
