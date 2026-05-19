@@ -3859,8 +3859,12 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			}
 		case "sorted", "reversed", "slice":
 			return recvT
-		case "indexOf", "lastIndexOf":
+		case "indexOf":
 			// IntrinsicListIndexOf returns Int? per mir.go:494.
+			// `lastIndexOf` is intentionally not covered — List only
+			// registers `indexOf` (mir.go:7174) and check_env.osty.
+			// Recovering a non-existent method would mask an invalid
+			// call in checker-skipped contexts; let it fall through.
 			return &ir.OptionalType{Inner: ir.TInt}
 		case "toSet":
 			// IntrinsicListToSet constructs Set<elem> per mir.go:496.

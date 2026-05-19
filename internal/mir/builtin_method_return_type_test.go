@@ -180,18 +180,19 @@ func TestBuiltinMethodReturnTypeResultMethodCoverage(t *testing.T) {
 // `*bodyState.recoveredMethodReturnType` arm for List<T> intrinsic
 // methods whose return type is fully determined by the receiver:
 //
-//   - `indexOf` / `lastIndexOf` → Option<Int> (per
-//     mir.go::IntrinsicListIndexOf which produces an `Int?` dest)
+//   - `indexOf` → Option<Int> (per `IntrinsicListIndexOf` which
+//     produces an `Int?` dest, mir.go:494)
 //   - `toSet` → Set<T> (per IntrinsicListToSet)
 //
 // Recovery uses `bs.l.listElementType(recvT)` so a poisoned MIR temp
 // produced by a checker-skipped interpolation (`"{xs.indexOf(needle)}"`)
 // still gets a usable type for downstream lowering.
 //
-// The test runs through a real `bodyState` constructed from a tiny
-// module so the lowerer's element-type helpers are wired. We don't try
-// to hit a runtime — just verify the recovery function returns the
-// expected ir.Type for each method.
+// `lastIndexOf` is intentionally absent — List's intrinsic dispatch
+// (`stdlibIntrinsicForMethod`, lower.go:7174) and `toolchain/check_env.osty`
+// only register `indexOf`. Recovering it would mask an invalid call.
+// `TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil` locks that
+// negative arm.
 func TestRecoveredMethodReturnTypeListCollectionMethods(t *testing.T) {
 	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
 	bs := newRecoveryTestBodyState()
@@ -200,7 +201,6 @@ func TestRecoveredMethodReturnTypeListCollectionMethods(t *testing.T) {
 		want   ir.Type
 	}{
 		{"indexOf", &ir.OptionalType{Inner: ir.TInt}},
-		{"lastIndexOf", &ir.OptionalType{Inner: ir.TInt}},
 		{"toSet", &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}},
 		{"len", ir.TInt},
 		{"isEmpty", ir.TBool},
@@ -249,14 +249,27 @@ func TestRecoveredMethodReturnTypeSetCollectionMethods(t *testing.T) {
 	}
 }
 
-// newRecoveryTestBodyState builds a minimal `*bodyState` with the
-// lowerer plumbing required by `bs.l.listElementType` and
-// `bs.l.setElementType`. The lowerer's stdlib / module state are left
-// empty — the helpers under test only need the receiver type's
-// argument list to extract the element type.
+// newRecoveryTestBodyState returns a `*bodyState` wired with a bare
+// `*lowerer`. `listElementType` / `setElementType` only read the
+// receiver type's argument list, so the lowerer's stdlib / module
+// state are intentionally left zero-valued — no module init is needed
+// to exercise the recovery helpers under test.
 func newRecoveryTestBodyState() *bodyState {
 	l := &lowerer{}
 	return &bodyState{l: l}
+}
+
+// TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil locks the
+// negative arm noted in TestRecoveredMethodReturnTypeListCollectionMethods:
+// `List.lastIndexOf` is not a registered intrinsic on List (only on
+// Bytes / String), so recovery must return nil and let the upstream
+// checker surface the unknown-method diagnostic.
+func TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	if got := bs.recoveredMethodReturnType(listInt, "lastIndexOf"); got != nil {
+		t.Fatalf("recoveredMethodReturnType(List<Int>, \"lastIndexOf\") = %v, want nil (not-a-List-method)", got)
+	}
 }
 
 // TestBuiltinMethodReturnTypeOptionUncoveredMethodReturnsNil locks the
