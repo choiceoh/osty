@@ -3735,14 +3735,26 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 					return ir.TBool
 				case "count":
 					return ir.TInt
-				case "take", "replace", "or", "orElse", "filter":
+				case "toString":
+					return ir.TString
+				case "toList":
+					return &ir.NamedType{Name: "List", Args: []ir.Type{nt.Args[0]}, Builtin: true}
+				case "okOr":
+					// `okOr(self, msg: String) -> Result<T, Error>`
+					// per internal/stdlib/modules/option.osty:213.
+					// `okOrElse<E>(..., f: fn() -> E) -> Result<T, E>`
+					// stays uncovered because the error arm depends on
+					// the closure's inferred return type.
+					return builtinResultType(nt.Args[0], builtinErrorType())
+				case "take", "replace", "or", "orElse", "filter", "inspect":
 					// All return the same Option<T> shape — they
 					// either yield the receiver itself (take/replace
-					// hand back the previous value) or another
-					// Option<T> with the same inner type
-					// (or/orElse/filter). Reconstructing the type from
-					// nt.Args keeps `Builtin: true` so downstream
-					// recovery treats the result as a builtin Option.
+					// hand back the previous value, inspect hands back
+					// the original) or another Option<T> with the same
+					// inner type (or/orElse/filter). Reconstructing
+					// the type from nt.Args keeps `Builtin: true` so
+					// downstream recovery treats the result as a
+					// builtin Option.
 					return &ir.NamedType{Name: nt.Name, Args: nt.Args, Builtin: true}
 				}
 			}
@@ -3759,10 +3771,17 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 					return ir.TBool
 				case "count":
 					return ir.TInt
+				case "toString":
+					return ir.TString
+				case "toList":
+					return &ir.NamedType{Name: "List", Args: []ir.Type{nt.Args[0]}, Builtin: true}
 				case "ok":
 					return &ir.OptionalType{Inner: nt.Args[0]}
 				case "err":
 					return &ir.OptionalType{Inner: nt.Args[1]}
+				case "inspect", "inspectErr":
+					// Both hand back the original Result<T, E> verbatim.
+					return &ir.NamedType{Name: nt.Name, Args: nt.Args, Builtin: true}
 				}
 			}
 		case "List", "Map", "Set":
@@ -3787,9 +3806,15 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TBool
 		case "count":
 			return ir.TInt
+		case "toString":
+			return ir.TString
 		case "unwrap", "unwrapOr", "unwrapOrElse", "expect":
 			return optionInnerType(recvT)
-		case "take", "replace", "or", "orElse", "filter":
+		case "toList":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{optionInnerType(recvT)}, Builtin: true}
+		case "okOr":
+			return builtinResultType(optionInnerType(recvT), builtinErrorType())
+		case "take", "replace", "or", "orElse", "filter", "inspect":
 			// Mirror the Option/Maybe handling in
 			// builtinMethodReturnType: these all keep the same
 			// Option<T> shape, so a poisoned MIR temp can recover

@@ -46,9 +46,10 @@ func TestBuiltinMethodReturnTypeOptionMaybeMethodCoverage(t *testing.T) {
 			}
 		})
 	}
-	// take / replace / or / orElse / filter all keep the same
-	// Option<T> shape — verify the Inner type is preserved verbatim.
-	for _, m := range []string{"take", "replace", "or", "orElse", "filter"} {
+	// take / replace / or / orElse / filter / inspect all keep the
+	// same Option<T> shape — verify the Inner type is preserved
+	// verbatim.
+	for _, m := range []string{"take", "replace", "or", "orElse", "filter", "inspect"} {
 		t.Run(m, func(t *testing.T) {
 			got := builtinMethodReturnType(option, m)
 			if got == nil {
@@ -60,6 +61,39 @@ func TestBuiltinMethodReturnTypeOptionMaybeMethodCoverage(t *testing.T) {
 			}
 		})
 	}
+	// toString → String, toList → List<T>, okOr → Result<T, Error>.
+	t.Run("toString", func(t *testing.T) {
+		got := builtinMethodReturnType(option, "toString")
+		if got != ir.TString {
+			t.Fatalf("builtinMethodReturnType(Option<Int>, \"toString\") = %v, want String", got)
+		}
+	})
+	t.Run("toList", func(t *testing.T) {
+		got := builtinMethodReturnType(option, "toList")
+		nt, ok := got.(*ir.NamedType)
+		if !ok || nt.Name != "List" || len(nt.Args) != 1 || nt.Args[0] != ir.TInt {
+			t.Fatalf("builtinMethodReturnType(Option<Int>, \"toList\") = %v, want List<Int>", got)
+		}
+	})
+	t.Run("okOr", func(t *testing.T) {
+		got := builtinMethodReturnType(option, "okOr")
+		nt, ok := got.(*ir.NamedType)
+		if !ok || nt.Name != "Result" || len(nt.Args) != 2 || nt.Args[0] != ir.TInt {
+			t.Fatalf("builtinMethodReturnType(Option<Int>, \"okOr\") = %v, want Result<Int, Error>", got)
+		}
+		errArg, ok := nt.Args[1].(*ir.NamedType)
+		if !ok || errArg.Name != "Error" {
+			t.Fatalf("builtinMethodReturnType(Option<Int>, \"okOr\").Args[1] = %v, want Error", nt.Args[1])
+		}
+	})
+	// `okOrElse<E>` is generic in the error arm — recovery deliberately
+	// stays nil because the type depends on the closure's inferred
+	// return.
+	t.Run("okOrElse-uncovered", func(t *testing.T) {
+		if got := builtinMethodReturnType(option, "okOrElse"); got != nil {
+			t.Fatalf("builtinMethodReturnType(Option<Int>, \"okOrElse\") = %v, want nil (generic in E)", got)
+		}
+	})
 }
 
 // TestBuiltinMethodReturnTypeResultMethodCoverage exercises the
@@ -115,6 +149,31 @@ func TestBuiltinMethodReturnTypeResultMethodCoverage(t *testing.T) {
 	} else if ot, ok := got.(*ir.OptionalType); !ok || ot.Inner != ir.TString {
 		t.Fatalf("builtinMethodReturnType(Result, \"err\") = %v, want Option<String>", got)
 	}
+	// inspect / inspectErr hand back the same Result<T, E> shape.
+	for _, m := range []string{"inspect", "inspectErr"} {
+		t.Run(m, func(t *testing.T) {
+			got := builtinMethodReturnType(intStr, m)
+			if got == nil {
+				t.Fatalf("builtinMethodReturnType(Result, %q) = nil, want Result<Int, String>", m)
+			}
+			nt, ok := got.(*ir.NamedType)
+			if !ok || nt.Name != "Result" || len(nt.Args) != 2 || nt.Args[0] != ir.TInt || nt.Args[1] != ir.TString {
+				t.Fatalf("builtinMethodReturnType(Result, %q) = %v, want Result<Int, String>", m, got)
+			}
+		})
+	}
+	t.Run("toString", func(t *testing.T) {
+		if got := builtinMethodReturnType(intStr, "toString"); got != ir.TString {
+			t.Fatalf("builtinMethodReturnType(Result, \"toString\") = %v, want String", got)
+		}
+	})
+	t.Run("toList", func(t *testing.T) {
+		got := builtinMethodReturnType(intStr, "toList")
+		nt, ok := got.(*ir.NamedType)
+		if !ok || nt.Name != "List" || len(nt.Args) != 1 || nt.Args[0] != ir.TInt {
+			t.Fatalf("builtinMethodReturnType(Result, \"toList\") = %v, want List<Int>", got)
+		}
+	})
 }
 
 // TestBuiltinMethodReturnTypeOptionUncoveredMethodReturnsNil locks the
