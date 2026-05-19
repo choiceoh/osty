@@ -218,7 +218,7 @@ fn frontWireBuildTelemetry(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> 
         if !frontWireDiagIsError(d.severity) {
             continue
         }
-        let bucket = frontWireDiagBucket(d.code)
+        let bucket = frontWireDiagBucket(d)
         byContext.update(bucket, |n| (n ?? 0) + 1)
         let detail = frontWireDiagDetail(d, m)
         if detail == "" {
@@ -233,23 +233,35 @@ fn frontWireBuildTelemetry(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> 
 fn frontWireDiagIsError(severity: DiagnosticSeverity) -> Bool {
     severity == SeverityError
 }
-fn frontWireDiagBucket(code: String) -> String {
-    let trimmed = strings.trimSpace(code)
-    if trimmed == "" {
-        return "<error>"
+/// frontWireDiagBucket mirrors `selfhostDiagnosticBucket`
+/// (`internal/selfhost/check_telemetry.go`): use the trimmed
+/// diagnostic code when non-empty, otherwise fall back to the
+/// severity label (`"error"` for the error path that reaches this
+/// helper). Returning the severity label here matches the Go-side
+/// behaviour byte-for-byte — emitting `<error>` instead would only
+/// happen if even the severity tag were unavailable, which never
+/// occurs after the `frontWireDiagIsError` guard above.
+fn frontWireDiagBucket(d: CheckDiagnostic) -> String {
+    let trimmed = strings.trimSpace(d.code)
+    if trimmed != "" {
+        return trimmed
     }
-    trimmed
+    diagnosticSeverityName(d.severity)
 }
+/// frontWireDiagDetail mirrors `selfhostDiagnosticDetail`: trim the
+/// message, and when it is blank fall back to the severity label
+/// rather than dropping the row entirely (Go-side aggregation keeps
+/// the count under the severity-named detail key).
 fn frontWireDiagDetail(d: CheckDiagnostic, m: FrontWireMapper) -> String {
-    let detail = strings.trimSpace(d.message)
-    if detail == "" {
-        return ""
+    let mut base = strings.trimSpace(d.message)
+    if base == "" {
+        base = diagnosticSeverityName(d.severity)
     }
     let suffix = frontWireDiagPosSuffix(d, m)
     if suffix == "" {
-        return detail
+        return base
     }
-    detail + " " + suffix
+    base + " " + suffix
 }
 fn frontWireDiagPosSuffix(d: CheckDiagnostic, m: FrontWireMapper) -> String {
     if m.identity {

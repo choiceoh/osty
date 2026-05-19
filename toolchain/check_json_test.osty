@@ -312,7 +312,7 @@ fn testCheckJsonTelemetrySkipsNonErrorSeverities() {
 // every diagnostic is non-error.
 // The diagnostics list itself still surfaces (omitempty drops
 // empty list only).
-fn testCheckJsonTelemetryEmptyCodeBucketsAsAngleError() {
+fn testCheckJsonTelemetryEmptyCodeFallsBackToSeverityLabel() {
     let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 1}
     let nodes: List<FrontCheckedNode> = []
     let bindings: List<FrontCheckedBinding> = []
@@ -321,11 +321,31 @@ fn testCheckJsonTelemetryEmptyCodeBucketsAsAngleError() {
     let diag = CheckDiagnostic {code: "", severity: SeverityError, message: "boom", start: 0, end: 0, notes: []}
     let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: [diag]}
     let out = frontCheckResultToWireJson(result)
-    testing.assert(stringsContainsJson(out, "\"errorsByContext\":\{\"<error>\":1\}"))
-    testing.assert(stringsContainsJson(out, "\"errorDetails\":\{\"<error>\":\{\"boom\":1\}\}"))
+    testing.assert(stringsContainsJson(out, "\"errorsByContext\":\{\"error\":1\}"))
+    testing.assert(stringsContainsJson(out, "\"errorDetails\":\{\"error\":\{\"boom\":1\}\}"))
+    testing.assert(!stringsContainsJson(out, "<error>"))
 }
-// Diagnostic with blank code rolls up into the `<error>` bucket
-// (matches selfhostDiagnosticBucket fallback).
+// Blank diagnostic code falls back to the severity label
+// (`"error"` for the error path) — matches
+// `selfhostDiagnosticBucket`. The `<error>` literal would only
+// appear if even the severity tag were absent, which never
+// happens here.
+fn testCheckJsonTelemetryBlankMessageFallsBackToSeverityLabel() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 1}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diag = CheckDiagnostic {code: "E0700", severity: SeverityError, message: "", start: 0, end: 0, notes: []}
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: [diag]}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"errorsByContext\":\{\"E0700\":1\}"))
+    testing.assert(stringsContainsJson(out, "\"errorDetails\":\{\"E0700\":\{\"error\":1\}\}"))
+}
+// Blank message: `selfhostDiagnosticDetail` falls back to the
+// severity label rather than dropping the row. The detail
+// histogram must still carry a "error" → 1 row under the
+// `E0700` bucket.
 fn testCheckJsonTelemetryAppendsPositionSuffixWhenLexed() {
     let src = "fn main() \{ let x: Int = \"hello\" \}"
     let out = frontCheckSourceToWireJson(src)
