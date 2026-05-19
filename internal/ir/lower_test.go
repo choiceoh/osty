@@ -103,49 +103,59 @@ func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
 	}
 }
 
-// TestLowerNamedTypeRejectsResolverNameMismatch locks the
-// defensive guard added to `lowerNamedType` for the
-// FrontCheckResult<String> class of resolver TypeRefsByID
-// mismappings. The bug: in multi-file packages the resolver
-// occasionally records the wrong `*resolve.Symbol` against an
-// `*ast.NamedType` node's ID — e.g. the `List` head ident in
-// `hintTupleElems`'s return type signature
-// (toolchain/inspect_hint.osty) resolves to the
-// `FrontCheckResult` struct symbol (toolchain/check.osty) instead
-// of `List`, producing a downstream `FrontCheckResult__len`
-// undefined symbol at install-self link.
+// TestLowerNamedTypeUsesPointerKeyedLookupAcrossFiles locks the
+// structural fix for the FrontCheckResult<String> class of
+// `TypeRefsByID` mismappings (originally masked by the defensive
+// `resolverSymbolMatchesSourceName` guard added in PR #1919, now
+// removed). Bug shape: in multi-file packages, cross-file recovery
+// paths such as `recoverFnDeclReturnType` follow `sym.Decl` into a
+// foreign file's AST and then call `l.lowerType(fn.ReturnType)` to
+// lower a NamedType node that belongs to the foreign file. The
+// foreign nt's `NodeID` is local to its file's AST, so the lookup
+// `l.res.TypeRefsByID[nt.ID]` against the lowerer's *current* file
+// resolves to whatever unrelated node happens to share that ID in
+// the current file — producing the wrong-name symbol downstream.
 //
-// The fix: when the resolver returns a symbol whose name doesn't
-// match the source path's last component AND the source is bare
-// (no package qualifier), `lowerNamedType` skips the resolver
-// path and falls back to source-name-based resolution, which
-// correctly classifies `List<X>`, `Map<K,V>`, etc. as builtin
-// containers via the name table at the bottom of the function.
+// Fix: the lowerer additionally carries `typeRefByPtr`, a pointer-
+// keyed shadow of every file's `TypeRefsByID` built once at
+// `LowerPackage` time. `typeRef(nt)` consults `typeRefByPtr` first
+// so foreign-file NamedTypes route to the symbol the resolver
+// actually recorded for them.
 //
-// This test simulates the exact bug shape by hand-building a
-// `resolve.Result` whose `TypeRefsByID` maps the `List` AST
-// node's ID to a `FrontCheckResult` struct symbol. With the
-// guard in place, `lowerNamedType` returns
-// `&NamedType{Name: "List", Args: [String], Builtin: true}`
-// instead of `&NamedType{Name: "FrontCheckResult", ...}`.
-func TestLowerNamedTypeRejectsResolverNameMismatch(t *testing.T) {
-	// Simulate the resolver's TypeRefsByID returning a wrong
-	// `FrontCheckResult` symbol for a `List` AST node.
+// This test simulates the cross-file shape: two `*ast.NamedType`
+// nodes that happen to share the same `NodeID` (42) but belong to
+// different files (one is `List`, the other is `FrontCheckResult`).
+// The current-file `res.TypeRefsByID` only knows about the local
+// `FrontCheckResult` mapping; the package-wide `typeRefByPtr`
+// disambiguates by node identity so lowering the `List` node still
+// produces a List builtin instead of the wrong `FrontCheckResult`.
+func TestLowerNamedTypeUsesPointerKeyedLookupAcrossFiles(t *testing.T) {
+	// Foreign-file List nt (shares NodeID with the current file's
+	// FrontCheckResult nt, which is the bug shape).
 	listAST := &ast.NamedType{
 		ID:   ast.NodeID(42),
 		Path: []string{"List"},
 		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 	}
-	wrongSym := &resolve.Symbol{
+	currentFileWrongSym := &resolve.Symbol{
 		Name: "FrontCheckResult",
 		Kind: resolve.SymStruct,
 		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
 	}
+	correctListSym := &resolve.Symbol{Name: "List", Kind: resolve.SymBuiltin}
 	l := &lowerer{
 		res: &resolve.Result{
+			// Current file's ID-keyed map carries the *wrong*
+			// FrontCheckResult symbol for ID=42 — this is the
+			// cross-file collision the bug exploited.
 			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
-				listAST.ID: wrongSym,
+				listAST.ID: currentFileWrongSym,
 			},
+		},
+		// Package-wide pointer map routes the actual List
+		// node-pointer to the correct List symbol.
+		typeRefByPtr: map[*ast.NamedType]*resolve.Symbol{
+			listAST: correctListSym,
 		},
 	}
 	got := l.lowerNamedType(listAST)
@@ -154,121 +164,38 @@ func TestLowerNamedTypeRejectsResolverNameMismatch(t *testing.T) {
 		t.Fatalf("lowerNamedType returned %T, want *NamedType", got)
 	}
 	if nt.Name != "List" {
-		t.Errorf("guard failed: NamedType.Name = %q, want %q (resolver returned wrong symbol but bare source name is List)", nt.Name, "List")
+		t.Errorf("pointer-keyed lookup failed: NamedType.Name = %q, want %q (current-file ID-keyed map carried wrong FrontCheckResult sym but the pointer-keyed map should win)", nt.Name, "List")
 	}
 	if !nt.Builtin {
 		t.Errorf("List<String> should be marked Builtin: true; got %+v", nt)
 	}
-	if len(nt.Args) != 1 {
-		t.Fatalf("List<String> should have 1 arg; got %d", len(nt.Args))
-	}
-	if nt.Args[0] != TString {
-		t.Errorf("List<String> arg[0] = %v, want TString", nt.Args[0])
+	if len(nt.Args) != 1 || nt.Args[0] != TString {
+		t.Errorf("List<String> args = %+v, want [TString]", nt.Args)
 	}
 }
 
-// TestLowerNamedTypeGuardRejectionEmitsTrace locks the
-// observability guarantee Copilot review #1919 asked for: when the
-// IR-layer guard rejects a resolver-returned symbol, the env-gated
-// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD` trace must fire so the
-// underlying resolver `TypeRefsByID` mismapping stays observable
-// rather than being silently masked.
-func TestLowerNamedTypeGuardRejectionEmitsTrace(t *testing.T) {
-	prev := lowerNamedTypeGuardTraceWriter
-	defer func() { lowerNamedTypeGuardTraceWriter = prev }()
-	var buf bytes.Buffer
-	lowerNamedTypeGuardTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD", "1")
-
-	listAST := &ast.NamedType{
-		ID:   ast.NodeID(44),
-		Path: []string{"List"},
-		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
-	}
-	wrongSym := &resolve.Symbol{
-		Name: "FrontCheckResult",
-		Kind: resolve.SymStruct,
-		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
-	}
-	l := &lowerer{
-		res: &resolve.Result{
-			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
-				listAST.ID: wrongSym,
-			},
-		},
-	}
-	_ = l.lowerNamedType(listAST)
-
-	got := buf.String()
-	for _, want := range []string{
-		`sourceName="List"`,
-		`symName="FrontCheckResult"`,
-		`pkg=""`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("guard-reject trace missing %q\nfull output:\n%s", want, got)
-		}
-	}
-}
-
-// TestLowerNamedTypeGuardTraceDefaultSilent locks the
-// off-by-default behaviour of the guard trace: without
-// OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD set, even a rejection
-// emits no stderr noise (production `osty build` runs see nothing).
-func TestLowerNamedTypeGuardTraceDefaultSilent(t *testing.T) {
-	prev := lowerNamedTypeGuardTraceWriter
-	defer func() { lowerNamedTypeGuardTraceWriter = prev }()
-	var buf bytes.Buffer
-	lowerNamedTypeGuardTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD", "")
-
-	listAST := &ast.NamedType{
-		ID:   ast.NodeID(45),
-		Path: []string{"List"},
-		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
-	}
-	wrongSym := &resolve.Symbol{
-		Name: "FrontCheckResult",
-		Kind: resolve.SymStruct,
-		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
-	}
-	l := &lowerer{
-		res: &resolve.Result{
-			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
-				listAST.ID: wrongSym,
-			},
-		},
-	}
-	_ = l.lowerNamedType(listAST)
-
-	if buf.Len() != 0 {
-		t.Fatalf("guard trace writer received output despite env off: %q", buf.String())
-	}
-}
-
-// TestLowerNamedTypeAcceptsResolverNameMatch locks the
-// positive-case half of the guard: when the resolver-returned
-// symbol's name DOES match the source path's last component, the
-// resolver-driven classification (Builtin / Generic / TypeAlias)
-// continues to work as before.
-func TestLowerNamedTypeAcceptsResolverNameMatch(t *testing.T) {
+// TestLowerNamedTypeFallsBackToResWhenPointerMapAbsent locks the
+// degraded path the lowerer still supports: when `typeRefByPtr` is
+// nil (e.g. single-file `Lower` with no resolve.Result, or a
+// hand-built lowerer in tests), `typeRef` falls back to the
+// classic `res.TypeRefsByID[nt.ID]` lookup. The fallback exists so
+// existing call sites (LowerFnDecl with a partial res, stdlib
+// injection, etc.) continue to work without populating the
+// pointer map.
+func TestLowerNamedTypeFallsBackToResWhenPointerMapAbsent(t *testing.T) {
 	listAST := &ast.NamedType{
 		ID:   ast.NodeID(43),
 		Path: []string{"List"},
 		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 	}
-	rightSym := &resolve.Symbol{
-		Name: "List",
-		Kind: resolve.SymBuiltin,
-	}
+	rightSym := &resolve.Symbol{Name: "List", Kind: resolve.SymBuiltin}
 	l := &lowerer{
 		res: &resolve.Result{
 			TypeRefsByID: map[ast.NodeID]*resolve.Symbol{
 				listAST.ID: rightSym,
 			},
 		},
+		// typeRefByPtr deliberately nil — exercise the fallback.
 	}
 	got := l.lowerNamedType(listAST)
 	nt, ok := got.(*NamedType)
@@ -276,7 +203,56 @@ func TestLowerNamedTypeAcceptsResolverNameMatch(t *testing.T) {
 		t.Fatalf("lowerNamedType returned %T, want *NamedType", got)
 	}
 	if nt.Name != "List" || !nt.Builtin {
-		t.Errorf("resolver-name-match path failed: got %+v, want List builtin", nt)
+		t.Errorf("ID-keyed fallback failed: got %+v, want List builtin", nt)
+	}
+}
+
+// TestLowerNamedTypeRespectsResolverBypassWhenResIsNil locks the
+// invariant `lowerStdlibType` depends on: setting `l.res = nil`
+// must bypass *all* resolver-driven lookup, including the new
+// pointer-keyed `typeRefByPtr` shadow. Otherwise a stdlib stub
+// nt that happens to be registered in `typeRefByPtr` (e.g. when
+// the outer lowerer was hydrated from a stdlib module's
+// `*resolve.Result`) would still receive a resolver answer, and
+// the stub fallback's "pure AST-shape" contract would be broken.
+//
+// The simulated shape: `typeRefByPtr` carries a wrong sym for
+// the stub nt (the stdlib module's view of the world), and
+// `lowerStdlibType` nils out `l.res`. Even with `typeRefByPtr`
+// non-nil, `lowerNamedType` must fall through to source-name
+// classification, which correctly tags `List<String>` as a
+// builtin container.
+func TestLowerNamedTypeRespectsResolverBypassWhenResIsNil(t *testing.T) {
+	stubAST := &ast.NamedType{
+		ID:   ast.NodeID(50),
+		Path: []string{"List"},
+		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
+	}
+	wrongSym := &resolve.Symbol{
+		Name: "FrontCheckResult",
+		Kind: resolve.SymStruct,
+		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
+	}
+	l := &lowerer{
+		// res deliberately nil — mirrors `lowerStdlibType`'s
+		// temporary bypass.
+		res: nil,
+		// typeRefByPtr carries a wrong symbol for the stub. The
+		// bypass must skip it.
+		typeRefByPtr: map[*ast.NamedType]*resolve.Symbol{
+			stubAST: wrongSym,
+		},
+	}
+	got := l.lowerNamedType(stubAST)
+	nt, ok := got.(*NamedType)
+	if !ok {
+		t.Fatalf("lowerNamedType returned %T, want *NamedType", got)
+	}
+	if nt.Name != "List" {
+		t.Errorf("bypass failed: NamedType.Name = %q, want %q (l.res=nil must skip both res.TypeRefsByID and typeRefByPtr)", nt.Name, "List")
+	}
+	if !nt.Builtin {
+		t.Errorf("List<String> should be marked Builtin: true; got %+v", nt)
 	}
 }
 
