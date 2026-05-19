@@ -3725,21 +3725,36 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 		case "Option", "Maybe":
 			if len(nt.Args) >= 1 {
 				switch method {
-				case "unwrap", "unwrapOr":
+				case "unwrap", "unwrapOr", "unwrapOrElse", "expect", "getOr":
 					return nt.Args[0]
-				case "isSome", "isNone":
+				case "isSome", "isNone", "contains":
 					return ir.TBool
+				case "count":
+					return ir.TInt
+				case "take", "replace", "or", "orElse", "filter":
+					// All return the same Option<T> shape — they
+					// either yield the receiver itself (take/replace
+					// hand back the previous value) or another
+					// Option<T> with the same inner type
+					// (or/orElse/filter). Reconstructing the type from
+					// nt.Args keeps `Builtin: true` so downstream
+					// recovery treats the result as a builtin Option.
+					return &ir.NamedType{Name: nt.Name, Args: nt.Args, Builtin: true}
 				}
 			}
 		case "Result":
 			if len(nt.Args) >= 2 {
 				switch method {
-				case "unwrap", "unwrapOr":
+				case "unwrap", "unwrapOr", "unwrapOrElse", "expect":
 					return nt.Args[0]
-				case "unwrapErr":
+				case "unwrapErr", "expectErr":
 					return nt.Args[1]
 				case "isOk", "isErr":
 					return ir.TBool
+				case "ok":
+					return &ir.OptionalType{Inner: nt.Args[0]}
+				case "err":
+					return &ir.OptionalType{Inner: nt.Args[1]}
 				}
 			}
 		case "List", "Map", "Set":
@@ -3760,10 +3775,18 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 	}
 	if _, ok := recvT.(*ir.OptionalType); ok {
 		switch method {
-		case "isSome", "isNone":
+		case "isSome", "isNone", "contains":
 			return ir.TBool
-		case "unwrap", "unwrapOr":
+		case "count":
+			return ir.TInt
+		case "unwrap", "unwrapOr", "unwrapOrElse", "expect", "getOr":
 			return optionInnerType(recvT)
+		case "take", "replace", "or", "orElse", "filter":
+			// Mirror the Option/Maybe handling in
+			// builtinMethodReturnType: these all keep the same
+			// Option<T> shape, so a poisoned MIR temp can recover
+			// via the receiver's OptionalType verbatim.
+			return recvT
 		}
 	}
 	switch bs.l.stdlibReceiverName(recvT) {
