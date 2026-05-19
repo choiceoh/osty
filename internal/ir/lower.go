@@ -38,6 +38,7 @@ func LowerFnDecl(pkgName string, fn *ast.FnDecl, res *resolve.Result, chk *check
 		res:          res,
 		chk:          chk,
 		typeRefByPtr: buildSingleFileTypeRefMap(res),
+		refByPtr:     buildSingleFileRefMap(res),
 	}
 	out := l.lowerFnDecl(fn)
 	return out, l.issues
@@ -58,6 +59,7 @@ func LowerLetDecl(pkgName string, ld *ast.LetDecl, res *resolve.Result, chk *che
 		res:          res,
 		chk:          chk,
 		typeRefByPtr: buildSingleFileTypeRefMap(res),
+		refByPtr:     buildSingleFileRefMap(res),
 	}
 	out := l.lowerLetDecl(ld)
 	return out, l.issues
@@ -83,6 +85,7 @@ func Lower(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resul
 		res:          res,
 		chk:          chk,
 		typeRefByPtr: buildSingleFileTypeRefMap(res),
+		refByPtr:     buildSingleFileRefMap(res),
 	}
 	return l.run()
 }
@@ -111,14 +114,15 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 	}
 	mod := &Module{Package: pkgName}
 	var issues []error
-	// Build the package-wide pointer-keyed `TypeRefsByID` shadow
-	// once so every per-file lowerer shares the same view. Cross-
-	// file recovery paths (`recoverFnDeclReturnType` etc.) reach
-	// foreign-file `*ast.NamedType` nodes whose `NodeID` collides
-	// with unrelated nodes in the lowerer's current file; the
-	// pointer-keyed map disambiguates them by node identity rather
-	// than ID.
+	// Build the package-wide pointer-keyed `TypeRefsByID` /
+	// `RefsByID` shadows once so every per-file lowerer shares the
+	// same view. Cross-file recovery paths (`recoverFnDeclReturnType`
+	// and siblings) reach foreign-file `*ast.NamedType` /
+	// `*ast.Ident` nodes whose `NodeID` collides with unrelated
+	// nodes in the lowerer's current file; the pointer-keyed maps
+	// disambiguate them by node identity rather than ID.
 	typeRefByPtr := buildPkgTypeRefMap(pkg)
+	refByPtr := buildPkgRefMap(pkg)
 	for i, pf := range pkg.Files {
 		if pf == nil {
 			continue
@@ -140,6 +144,7 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 			res:          res,
 			chk:          chk,
 			typeRefByPtr: typeRefByPtr,
+			refByPtr:     refByPtr,
 		}
 		fileMod, fileIssues := l.run()
 		if i == 0 {
@@ -195,6 +200,17 @@ type lowerer struct {
 	// `LowerPackage` and per-file `Lower` from each file's
 	// `pf.TypeRefIdents` / `pf.TypeRefsByID` pair.
 	typeRefByPtr map[*ast.NamedType]*resolve.Symbol
+
+	// refByPtr is the `RefsByID` twin of `typeRefByPtr`. Same
+	// rationale: `RefsByID` is keyed by file-local `NodeID`, so a
+	// recovery path that follows a `sym.Decl` into a foreign file
+	// and then walks the foreign body / signature for `*ast.Ident`
+	// references collides on shared IDs across files. The bridge
+	// already pairs each file's `*ast.Ident` with the symbol it
+	// resolves to (via `pf.RefIdents` + `pf.RefsByID`); we shadow
+	// that with pointer-identity here so cross-file walks read the
+	// right symbol regardless of the lowerer's current `res`.
+	refByPtr map[*ast.Ident]*resolve.Symbol
 }
 
 // ==== Top level ====
@@ -1019,6 +1035,72 @@ func buildSingleFileTypeRefMap(res *resolve.Result) map[*ast.NamedType]*resolve.
 	return out
 }
 
+// ref returns the resolver symbol bound to id, preferring the
+// pointer-keyed `refByPtr` shadow over the ID-keyed
+// `res.RefsByID` so cross-file recovery paths (a `sym.Decl` walk
+// that lands in a foreign file's AST and then encounters a
+// foreign-file `*ast.Ident`) do not collide on shared `NodeID`s
+// with unrelated idents in the lowerer's current file. The
+// `l.res == nil` short-circuit honours `lowerStdlibType`'s "bypass
+// the resolver entirely" contract, mirroring `typeRef`.
+func (l *lowerer) ref(id *ast.Ident) *resolve.Symbol {
+	if id == nil || l.res == nil {
+		return nil
+	}
+	if l.refByPtr != nil {
+		if sym, ok := l.refByPtr[id]; ok {
+			return sym
+		}
+	}
+	return l.res.RefsByID[id.ID]
+}
+
+// buildPkgRefMap is the `*ast.Ident` twin of `buildPkgTypeRefMap`:
+// walks every file's `RefIdents` once and pairs each resolved
+// ident's pointer with the symbol the bridge recorded for it.
+// Used by `LowerPackage` so cross-file `sym.Decl` walks read the
+// foreign ident's resolver answer rather than colliding on
+// node-ID inside the lowerer's current file.
+func buildPkgRefMap(pkg *resolve.Package) map[*ast.Ident]*resolve.Symbol {
+	if pkg == nil {
+		return nil
+	}
+	out := map[*ast.Ident]*resolve.Symbol{}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		for _, id := range pf.RefIdents {
+			if id == nil {
+				continue
+			}
+			if sym := pf.RefsByID[id.ID]; sym != nil {
+				out[id] = sym
+			}
+		}
+	}
+	return out
+}
+
+// buildSingleFileRefMap is the single-file analogue of
+// `buildPkgRefMap`. Same shape, fed directly from a
+// `*resolve.Result` rather than a Package.
+func buildSingleFileRefMap(res *resolve.Result) map[*ast.Ident]*resolve.Symbol {
+	if res == nil {
+		return nil
+	}
+	out := map[*ast.Ident]*resolve.Symbol{}
+	for _, id := range res.RefIdents {
+		if id == nil {
+			continue
+		}
+		if sym := res.RefsByID[id.ID]; sym != nil {
+			out[id] = sym
+		}
+	}
+	return out
+}
+
 // primitiveByName maps a scalar type name to the IR singleton.
 func primitiveByName(name string) *PrimType {
 	switch name {
@@ -1265,7 +1347,7 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		// in the constructor-only branch above to avoid promoting
 		// `let f = helper; f` style indirect-call boilerplate.
 		if id, ok := e.(*ast.Ident); ok && id != nil && l.res != nil {
-			if sym := l.res.RefsByID[id.ID]; sym != nil {
+			if sym := l.ref(id); sym != nil {
 				switch sym.Kind {
 				case resolve.SymLet, resolve.SymParam:
 					return true
@@ -1373,7 +1455,7 @@ func (l *lowerer) freeFnReturnTypeFromAST(id *ast.Ident) Type {
 	if l == nil || id == nil || l.res == nil {
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
+	sym := l.ref(id)
 	if sym == nil {
 		return nil
 	}
@@ -1530,7 +1612,7 @@ func (l *lowerer) resolveExprStaticType(e ast.Expr) Type {
 	}
 	switch x := e.(type) {
 	case *ast.Ident:
-		sym := l.res.RefsByID[x.ID]
+		sym := l.ref(x)
 		if sym == nil {
 			return nil
 		}
@@ -1697,7 +1779,7 @@ func (l *lowerer) stdModuleFnReturnTypeFromAST(fx *ast.FieldExpr) Type {
 	if !ok || id == nil {
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
+	sym := l.ref(id)
 	if sym == nil || sym.Kind != resolve.SymPackage {
 		return nil
 	}
@@ -1738,7 +1820,7 @@ func (l *lowerer) enumVariantCallReturnTypeFromAST(fx *ast.FieldExpr) Type {
 	if !ok || id == nil {
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
+	sym := l.ref(id)
 	if sym == nil || sym.Kind != resolve.SymEnum {
 		return nil
 	}
@@ -1760,7 +1842,7 @@ func (l *lowerer) useAliasFnReturnTypeFromAST(fx *ast.FieldExpr) Type {
 	if !ok || id == nil {
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
+	sym := l.ref(id)
 	if sym == nil {
 		return nil
 	}
@@ -2623,7 +2705,7 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	out := &Ident{Name: id.Name, SpanV: nodeSpan(id), T: ErrTypeVal}
 	var sym *resolve.Symbol
 	if l.res != nil {
-		if s := l.res.RefsByID[id.ID]; s != nil {
+		if s := l.ref(id); s != nil {
 			sym = s
 			out.Kind = identKind(s)
 		}
@@ -2783,10 +2865,7 @@ func (l *lowerer) selfReceiverType(recv *ast.Receiver) Type {
 }
 
 func (l *lowerer) symbol(id *ast.Ident) *resolve.Symbol {
-	if l.res == nil || id == nil {
-		return nil
-	}
-	return l.res.RefsByID[id.ID]
+	return l.ref(id)
 }
 
 func identKind(sym *resolve.Symbol) IdentKind {
@@ -3403,7 +3482,7 @@ func (l *lowerer) resolveCalleeFnType(callee Expr, astCall *ast.CallExpr) *FnTyp
 		return nil
 	}
 	if l.res != nil && l.res.RefsByID != nil {
-		if sym := l.res.RefsByID[id.ID]; sym != nil && sym.Decl != nil {
+		if sym := l.ref(id); sym != nil && sym.Decl != nil {
 			if fn, ok := sym.Decl.(*ast.FnDecl); ok && fn != nil {
 				return l.fnTypeFromAST(fn)
 			}
@@ -3807,7 +3886,7 @@ func (l *lowerer) recoverFnDeclReturnType(id *ast.Ident) Type {
 		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "nil-resolver")
 		return nil
 	}
-	sym := l.res.RefsByID[id.ID]
+	sym := l.ref(id)
 	if sym == nil || sym.Decl == nil {
 		traceFnDeclRecovery(id.Name, "", "", "<nil>", nil, "no-symbol-or-decl")
 		return nil

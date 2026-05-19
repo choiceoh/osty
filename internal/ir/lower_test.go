@@ -256,6 +256,63 @@ func TestLowerNamedTypeRespectsResolverBypassWhenResIsNil(t *testing.T) {
 	}
 }
 
+// TestLowerRefByPtrTakesPrecedenceOverIDLookup locks the
+// `RefsByID` twin of `TestLowerNamedTypeUsesPointerKeyedLookupAcrossFiles`.
+// Bug shape: `recoverFnDeclReturnType` (and similar recovery
+// paths) follow a `sym.Decl` into a foreign file's AST and then
+// reach `*ast.Ident` nodes via `l.res.RefsByID[id.ID]`. The
+// foreign id's `NodeID` is local to its file's AST, so the
+// lookup against the lowerer's *current* file `RefsByID`
+// resolves to whatever unrelated ident shares that ID in the
+// current file. The package-wide `refByPtr` map disambiguates
+// by node identity so foreign-file idents route to the symbol
+// the resolver actually recorded for them.
+//
+// Test setup: a foreign `*ast.Ident` registered in `refByPtr`
+// with the correct sym (`helper`), while the current-file
+// `RefsByID` carries a wrong sym (`someUnrelatedFn`) for the
+// same `NodeID`. `l.ref(id)` must return the pointer-keyed
+// answer.
+func TestLowerRefByPtrTakesPrecedenceOverIDLookup(t *testing.T) {
+	id := &ast.Ident{ID: ast.NodeID(99), Name: "helper"}
+	wrongSym := &resolve.Symbol{Name: "someUnrelatedFn", Kind: resolve.SymFn}
+	correctSym := &resolve.Symbol{Name: "helper", Kind: resolve.SymFn}
+	l := &lowerer{
+		res: &resolve.Result{
+			RefsByID: map[ast.NodeID]*resolve.Symbol{
+				id.ID: wrongSym,
+			},
+		},
+		refByPtr: map[*ast.Ident]*resolve.Symbol{
+			id: correctSym,
+		},
+	}
+	got := l.ref(id)
+	if got != correctSym {
+		t.Fatalf("ref returned %+v, want %+v (pointer-keyed map must win over ID-keyed)", got, correctSym)
+	}
+}
+
+// TestLowerRefRespectsResolverBypassWhenResIsNil mirrors the
+// `typeRef` bypass invariant: `l.res = nil` must short-circuit
+// both the pointer-keyed and ID-keyed lookups, so stdlib-stub-
+// style paths that nil out the resolver still receive nil
+// rather than a stale resolver answer leaking through
+// `refByPtr`.
+func TestLowerRefRespectsResolverBypassWhenResIsNil(t *testing.T) {
+	id := &ast.Ident{ID: ast.NodeID(100), Name: "helper"}
+	wrongSym := &resolve.Symbol{Name: "wrong", Kind: resolve.SymFn}
+	l := &lowerer{
+		res: nil,
+		refByPtr: map[*ast.Ident]*resolve.Symbol{
+			id: wrongSym,
+		},
+	}
+	if got := l.ref(id); got != nil {
+		t.Fatalf("ref returned %+v, want nil (l.res=nil must skip pointer map too)", got)
+	}
+}
+
 // TestRecoverFnDeclReturnTypeTraceDefaultSilent locks the
 // off-by-default behaviour of the OSTY_IR_TRACE_FN_DECL_RECOVERY
 // env-gated diagnostic: without the env var set even the
