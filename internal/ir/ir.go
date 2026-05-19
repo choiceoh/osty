@@ -1180,7 +1180,17 @@ type UseDecl struct {
 	GoPath       string
 	RuntimePath  string
 	GoBody       []Decl
-	SpanV        Span
+	// Imports holds the cross-pkg fn signatures the consumer's checker
+	// resolved from this use-decl's import surface — the general
+	// `use <dep> as <alias>` analogue of GoBody's inline FFI body.
+	// Populated by `ir.lowerUseDecl` from `check.Result.ImportSurfaces`
+	// when present; MIR's `useDeclFnType` consults this when the
+	// receiver is a use-alias and the call's IR-level Type is poisoned,
+	// recovering the proper return type so cross-pkg calls don't leak
+	// through to `lir_proto` as void. Empty when no import surface is
+	// available (legacy paths, FFI-only uses).
+	Imports []Decl
+	SpanV   Span
 }
 
 func (*UseDecl) declNode()          {}

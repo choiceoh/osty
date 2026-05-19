@@ -4126,11 +4126,30 @@ func stdlibFreeFnParamTypes(qualifier, name string) []ir.Type {
 // useDeclFnType reports the inline signature for `use X { fn name(...) -> R }`
 // imports. Runtime FFI declarations use the same GoBody storage as the legacy
 // Go FFI bridge, so this gives MIR a single recovery path for both forms.
+// Also consults `use.Imports` for general cross-pkg imports
+// (`use <dep> as <alias>`) populated by `ir.lowerUseDecl` from the
+// consumer's checker import surfaces, so cross-pkg call sites with
+// poisoned IR-level Type recover their return types instead of leaking
+// through to `lir_proto` as void — closes the void-leak loop
+// documented in `docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`
+// §4 and the design in `docs/llvm-selfhost-plan-cross-pkg-fn-sig-propagation-design.md`.
 func useDeclFnType(use *ir.UseDecl, name string) *ir.FnType {
 	if use == nil || name == "" {
 		return nil
 	}
-	for _, d := range use.GoBody {
+	if sig := matchUseDeclFn(use.GoBody, name); sig != nil {
+		return sig
+	}
+	return matchUseDeclFn(use.Imports, name)
+}
+
+// matchUseDeclFn walks a UseDecl-attached `[]Decl` slice (GoBody or
+// Imports) and returns the first FnDecl matching `name` as an
+// `*ir.FnType` shape so callers can read params + return verbatim.
+// Cloned params/return so consumers can mutate without disturbing the
+// IR decl.
+func matchUseDeclFn(decls []ir.Decl, name string) *ir.FnType {
+	for _, d := range decls {
 		fn, ok := d.(*ir.FnDecl)
 		if !ok || fn == nil || fn.Name != name {
 			continue

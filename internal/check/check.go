@@ -63,6 +63,18 @@ type Result struct {
 	// surface for consumers that want to leave AST-keyed maps behind.
 	SemanticDB *semanticdb.DB
 
+	// ImportSurfaces holds the cross-pkg import data the checker consumed
+	// for this file/package, keyed by the use-alias each surface
+	// resolves to. Populated by host_boundary when the structured
+	// PackageCheckInput.Imports was non-empty; nil when running on a
+	// single-file source with no cross-pkg deps. The IR lowerer
+	// (`internal/ir/lower.go::lowerUseDecl`) copies the alias-matching
+	// surface's pub-fn signatures into `ir.UseDecl.Imports` so MIR's
+	// `useDeclFnType` can recover return types for poisoned cross-pkg
+	// call sites — closing the void-leak loop documented in
+	// `docs/llvm-selfhost-plan-cross-pkg-link-measurement.md` §4.
+	ImportSurfaces []api.PackageCheckImport
+
 	// inspectSource is the single-file source used to preserve the legacy
 	// Inspect(file, result) helper without reintroducing Go-side inference
 	// replay. Package/workspace callers should use the native package inspect

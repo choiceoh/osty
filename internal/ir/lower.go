@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -6118,7 +6119,205 @@ func (l *lowerer) lowerUseDecl(u *ast.UseDecl) Decl {
 			out.GoBody = append(out.GoBody, lowered)
 		}
 	}
+	// Populate UseDecl.Imports from the consumer's import surfaces so
+	// MIR's `useDeclFnType` can recover cross-pkg return types when
+	// the call's IR-level Type is poisoned. Aliased to use-decl's
+	// resolved alias; FFI uses (GoBody / IsGoFFI / IsRuntimeFFI) take
+	// their own path and don't need this seed.
+	if !out.IsGoFFI && !out.IsRuntimeFFI && out.Alias != "" && l.chk != nil {
+		for i := range l.chk.ImportSurfaces {
+			surface := &l.chk.ImportSurfaces[i]
+			if surface.Alias != out.Alias {
+				continue
+			}
+			for _, fn := range surface.Functions {
+				if fnDecl := l.lowerImportedFn(&fn); fnDecl != nil {
+					out.Imports = append(out.Imports, fnDecl)
+				}
+			}
+		}
+	}
 	return out
+}
+
+// lowerImportedFn converts one cross-pkg import-surface function into
+// a minimal `*ir.FnDecl` carrying just the name and signature shape
+// (params + return type) so MIR's `useDeclFnType` can read it back.
+//
+// We do NOT lower the body — the consumer doesn't have one and the
+// dep's body lives in its own IR module. Param types come from the
+// surface's `ParamTypeReprs` (the structural form). The legacy
+// `ParamTypes []string` fallback is intentionally NOT parsed — those
+// strings are pre-monomorph, generics-bearing renderings (e.g.
+// "List<T>", "Map<K, V>") that would need the consumer's type-arg
+// substitution context to round-trip into IR shapes. Callers feeding
+// only legacy strings will see ErrTypeVal slots; in practice all
+// production paths through `arenaBuildImportedFn` populate both
+// fields, so this is a documentation-only limitation.
+//
+// Skips functions registered with a non-empty Owner (those are
+// method-form alias-prefixed registrations the surface arena walker
+// emits alongside the free-fn form per
+// `import_surface_arena.go:225-229`). Only the free-fn form gets a
+// lowered `FnDecl` here so cross-pkg method-call dispatch keeps
+// going through the receiver-type method lookup in MIR.
+func (l *lowerer) lowerImportedFn(fn *api.PackageCheckFn) *FnDecl {
+	if fn == nil || fn.Name == "" || fn.Owner != "" {
+		return nil
+	}
+	params := make([]*Param, 0, len(fn.ParamNames))
+	for i, name := range fn.ParamNames {
+		paramTy := importedParamType(fn.ParamTypeReprs, i)
+		// `?`-prefixed names mark trailing defaults (see
+		// `selfhostImportFnParamNames` + check.osty::paramDefaultCount).
+		// MIR's signature recovery cares about the bare name, so strip
+		// the marker before the FnDecl materializes.
+		bareName := name
+		if len(bareName) > 0 && bareName[0] == '?' {
+			bareName = bareName[1:]
+		}
+		params = append(params, &Param{Name: bareName, Type: paramTy})
+	}
+	retTy := importedReturnType(fn.ReturnTypeRepr, fn.ReturnType)
+	return &FnDecl{
+		Name:   fn.Name,
+		Params: params,
+		Return: retTy,
+	}
+}
+
+// importedParamType returns the param type at `index` in the
+// structural `ParamTypeReprs` slice, or ErrTypeVal when the index is
+// out of range or the repr at that position is malformed. The legacy
+// `ParamTypes []string` slice is intentionally not parsed — see
+// `lowerImportedFn` for the rationale.
+func importedParamType(reprs []api.TypeRepr, index int) Type {
+	if index < 0 || index >= len(reprs) {
+		return ErrTypeVal
+	}
+	repr := reprs[index]
+	if t := lowerImportedTypeRepr(&repr); t != nil {
+		return t
+	}
+	return ErrTypeVal
+}
+
+// importedReturnType picks the function's return type — preferring
+// the structural ReturnTypeRepr, falling back to the legacy
+// ReturnType string for the well-defined sentinels ("", "()") that
+// `selfhostInstallImportSurfaces` already treats as Unit. Other
+// legacy strings reach IR as ErrTypeVal for the same reason
+// `importedParamType` returns it.
+func importedReturnType(repr *api.TypeRepr, legacy string) Type {
+	if repr != nil {
+		if t := lowerImportedTypeRepr(repr); t != nil {
+			return t
+		}
+	}
+	if legacy == "" || legacy == "()" {
+		return TUnit
+	}
+	return ErrTypeVal
+}
+
+// lowerImportedTypeRepr converts an `api.TypeRepr` (the structured
+// type description shared with the selfhost JSON wire format) into an
+// `ir.Type`. Best-effort: unknown kinds fall back to ErrTypeVal so
+// the caller can decide whether to drop the FnDecl or carry a
+// partial signature.
+func lowerImportedTypeRepr(repr *api.TypeRepr) Type {
+	if repr == nil {
+		return nil
+	}
+	switch repr.Kind {
+	case "primitive":
+		switch repr.Name {
+		case "Int":
+			return TInt
+		case "Int8":
+			return TInt8
+		case "Int16":
+			return TInt16
+		case "Int32":
+			return TInt32
+		case "Int64":
+			return TInt64
+		case "Float32":
+			return TFloat32
+		case "Float64":
+			return TFloat64
+		case "Bool":
+			return TBool
+		case "String":
+			return TString
+		case "Char":
+			return TChar
+		case "Byte":
+			return TByte
+		case "Bytes":
+			return TBytes
+		case "()":
+			return TUnit
+		}
+		return ErrTypeVal
+	case "named":
+		// Builtin generic shapes get the Builtin flag for downstream
+		// recovery (Option/Result/List/Map/Set). Unknown nameds are
+		// split into Package + Name via `splitQualifiedTypeName` so
+		// the IR invariant (`NamedType.String()` and lookups elsewhere
+		// rely on the two fields being separated) holds for qualified
+		// import-surface names like "dep.Foo".
+		pkg, base := splitQualifiedTypeName(repr.Name)
+		nt := &NamedType{Package: pkg, Name: base}
+		if len(repr.Args) > 0 {
+			for i := range repr.Args {
+				nt.Args = append(nt.Args, lowerImportedTypeRepr(&repr.Args[i]))
+			}
+		}
+		// Builtin tag keys on the unqualified base name — qualified
+		// shapes like "dep.List" are user types, not the prelude
+		// `List`.
+		if pkg == "" {
+			switch base {
+			case "Option", "Maybe", "Result", "List", "Map", "Set":
+				nt.Builtin = true
+			}
+		}
+		return nt
+	case "optional":
+		// `api.TypeRepr` carries the optional's inner type in
+		// `Return`, not `Args` (see `internal/selfhost/api/types.go:49`
+		// + `TypeRepr.String()` which dereferences `tr.Return` for the
+		// optional rendering). A missing Return defaults the inner to
+		// ErrTypeVal so the wrapper still surfaces as Optional.
+		if repr.Return != nil {
+			return &OptionalType{Inner: lowerImportedTypeRepr(repr.Return)}
+		}
+		return &OptionalType{Inner: ErrTypeVal}
+	case "unit":
+		return TUnit
+	case "tuple":
+		if len(repr.Args) == 0 {
+			return TUnit
+		}
+		elems := make([]Type, 0, len(repr.Args))
+		for i := range repr.Args {
+			elems = append(elems, lowerImportedTypeRepr(&repr.Args[i]))
+		}
+		return &TupleType{Elems: elems}
+	case "fn":
+		params := make([]Type, 0, len(repr.Args))
+		for i := range repr.Args {
+			params = append(params, lowerImportedTypeRepr(&repr.Args[i]))
+		}
+		var ret Type = TUnit
+		if repr.Return != nil {
+			ret = lowerImportedTypeRepr(repr.Return)
+		}
+		paramNames := append([]string(nil), repr.ParamNames...)
+		return &FnType{Params: params, ParamNames: paramNames, Return: ret}
+	}
+	return ErrTypeVal
 }
 
 func (l *lowerer) lowerInterfaceDecl(id *ast.InterfaceDecl) Decl {
