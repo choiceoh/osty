@@ -25,8 +25,7 @@ import (
 const Env = "OSTY_NATIVE_LIRPROTO_BIN"
 
 // Request is the single JSON payload the binary consumes via stdin.
-// Mirrors `llvmgen.LIRProtoRequest` so the Go runner can forward
-// its arg untouched.
+// Mirrors the JSON shape consumed by `cmd/osty-native-lirproto`.
 type Request struct {
 	PackageName string `json:"packageName,omitempty"`
 	SourcePath  string `json:"sourcePath,omitempty"`

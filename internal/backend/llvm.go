@@ -187,32 +187,10 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
 	warnings := append([]error(nil), entry.IRIssues...)
-	// Phase-7 gate. OSTY_LLVM_LIR_PROTO=1 selects the LIR Proto path
-	// at this dispatcher entry. The dispatcher invokes the registered
-	// LIRProtoRunner (defaults to a "not-wired" stub returning
-	// ErrLIRProtoNotWired); on success the runner's bytes are
-	// returned directly. Any non-nil error is treated as a structured
-	// fall-back signal: warning attached, continue with whichever
-	// legacy path the existing dispatcher would have chosen
-	// (native-owned fast path or MIR-direct). Flipping the gate on
-	// stays safe before a real runner lands — production output is
-	// unchanged but the selection is visible in build logs.
-	if llvmabi.LIRProtoSelected() {
-		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s", entry.PackageName, entry.SourcePath)
-		req := llvmabi.LIRProtoRequest{
-			PackageName: entry.PackageName,
-			SourcePath:  entry.SourcePath,
-			Source:      entry.Source,
-			Target:      target,
-		}
-		if out, err := llvmabi.InvokeLIRProtoRunner(req); err == nil && out != nil {
-			traceLLVMDispatch("lir-proto-runner covered package=%s source=%s", entry.PackageName, entry.SourcePath)
-			return out, warnings, nil
-		} else {
-			traceLLVMDispatch("lir-proto-runner declined package=%s source=%s — falling back: %v", entry.PackageName, entry.SourcePath, err)
-			warnings = append(warnings, err)
-		}
-	}
+	// MIR → LLVM IR is delegated to the native-owned subprocess
+	// (`osty-native-llvmgen` → `nativelirproto`), which routes through
+	// the self-hosted LIR Proto pipeline. There is no separate host-side
+	// env gate anymore.
 	opts := llvmabi.Options{
 		PackageName: entry.PackageName,
 		SourcePath:  entry.SourcePath,
@@ -244,9 +222,9 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
 		case ok:
 			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
-			// Carry both the outer warnings (entry IRIssues + Phase-7
-			// gate) and the native-owned path's warnings forward so
-			// neither is silently dropped.
+			// Carry both the outer warnings (entry IRIssues) and the
+			// native-owned path's warnings forward so neither is
+			// silently dropped.
 			return out, append(warnings, nativeWarnings...), nil
 		default:
 			traceLLVMDispatch("%s declined package=%s source=%s reasons=[%s]", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, joinErrors(nativeWarnings))
