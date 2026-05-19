@@ -176,6 +176,89 @@ func TestBuiltinMethodReturnTypeResultMethodCoverage(t *testing.T) {
 	})
 }
 
+// TestRecoveredMethodReturnTypeListCollectionMethods exercises the
+// `*bodyState.recoveredMethodReturnType` arm for List<T> intrinsic
+// methods whose return type is fully determined by the receiver:
+//
+//   - `indexOf` / `lastIndexOf` → Option<Int> (per
+//     mir.go::IntrinsicListIndexOf which produces an `Int?` dest)
+//   - `toSet` → Set<T> (per IntrinsicListToSet)
+//
+// Recovery uses `bs.l.listElementType(recvT)` so a poisoned MIR temp
+// produced by a checker-skipped interpolation (`"{xs.indexOf(needle)}"`)
+// still gets a usable type for downstream lowering.
+//
+// The test runs through a real `bodyState` constructed from a tiny
+// module so the lowerer's element-type helpers are wired. We don't try
+// to hit a runtime — just verify the recovery function returns the
+// expected ir.Type for each method.
+func TestRecoveredMethodReturnTypeListCollectionMethods(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	cases := []struct {
+		method string
+		want   ir.Type
+	}{
+		{"indexOf", &ir.OptionalType{Inner: ir.TInt}},
+		{"lastIndexOf", &ir.OptionalType{Inner: ir.TInt}},
+		{"toSet", &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}},
+		{"len", ir.TInt},
+		{"isEmpty", ir.TBool},
+		{"contains", ir.TBool},
+		{"toString", ir.TString},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			got := bs.recoveredMethodReturnType(listInt, tc.method)
+			if got == nil {
+				t.Fatalf("recoveredMethodReturnType(List<Int>, %q) = nil, want %v", tc.method, tc.want)
+			}
+			if got.String() != tc.want.String() {
+				t.Fatalf("recoveredMethodReturnType(List<Int>, %q) = %v, want %v", tc.method, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveredMethodReturnTypeSetCollectionMethods covers Set<T>'s
+// `toList` recovery (per IntrinsicSetToList) alongside the existing
+// `len`/`isEmpty`/`contains`/`toString` set.
+func TestRecoveredMethodReturnTypeSetCollectionMethods(t *testing.T) {
+	setStr := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TString}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	cases := []struct {
+		method string
+		want   ir.Type
+	}{
+		{"toList", &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}},
+		{"len", ir.TInt},
+		{"isEmpty", ir.TBool},
+		{"contains", ir.TBool},
+		{"toString", ir.TString},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			got := bs.recoveredMethodReturnType(setStr, tc.method)
+			if got == nil {
+				t.Fatalf("recoveredMethodReturnType(Set<String>, %q) = nil, want %v", tc.method, tc.want)
+			}
+			if got.String() != tc.want.String() {
+				t.Fatalf("recoveredMethodReturnType(Set<String>, %q) = %v, want %v", tc.method, got, tc.want)
+			}
+		})
+	}
+}
+
+// newRecoveryTestBodyState builds a minimal `*bodyState` with the
+// lowerer plumbing required by `bs.l.listElementType` and
+// `bs.l.setElementType`. The lowerer's stdlib / module state are left
+// empty — the helpers under test only need the receiver type's
+// argument list to extract the element type.
+func newRecoveryTestBodyState() *bodyState {
+	l := &lowerer{}
+	return &bodyState{l: l}
+}
+
 // TestBuiltinMethodReturnTypeOptionUncoveredMethodReturnsNil locks the
 // "no recovery" branch for two distinct categories of Option calls:
 //
