@@ -1,8 +1,6 @@
 package ir
 
 import (
-	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
@@ -256,168 +254,60 @@ func TestLowerNamedTypeRespectsResolverBypassWhenResIsNil(t *testing.T) {
 	}
 }
 
-// TestRecoverFnDeclReturnTypeTraceDefaultSilent locks the
-// off-by-default behaviour of the OSTY_IR_TRACE_FN_DECL_RECOVERY
-// env-gated diagnostic: without the env var set even the
-// nil-resolver early-return path emits nothing.
-func TestRecoverFnDeclReturnTypeTraceDefaultSilent(t *testing.T) {
-	prev := fnDeclRecoveryTraceWriter
-	defer func() { fnDeclRecoveryTraceWriter = prev }()
-	var buf bytes.Buffer
-	fnDeclRecoveryTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "")
-
-	// nil-resolver case — would have produced a status line if
-	// the env gate were broken.
-	l := &lowerer{}
-	l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
-
-	// Non-nil resolver with no RefsByID entry — exercises the
-	// `no-symbol-or-decl` path.
-	l2 := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
-	l2.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
-
-	if buf.Len() != 0 {
-		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
-	}
-}
-
-// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver locks
-// the env-on nil-resolver case: `Lower(...)` permits a nil
-// resolver and this diagnostic is meant to produce an explicit
-// no-data status so env-enabled bisections do not silently omit
-// recovery attempts.
-func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNilResolver(t *testing.T) {
-	prev := fnDeclRecoveryTraceWriter
-	defer func() { fnDeclRecoveryTraceWriter = prev }()
-	var buf bytes.Buffer
-	fnDeclRecoveryTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
-
-	l := &lowerer{}
-	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything"})
-
-	got := buf.String()
-	for _, want := range []string{
-		`ident="anything"`,
-		`status=nil-resolver`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("nil-resolver trace missing %q\nfull output:\n%s", want, got)
-		}
-	}
-}
-
-// TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol exercises
-// the env-on `no-symbol-or-decl` path with a real but empty
-// resolver. Without this, "trace enabled but no symbol" was
-// indistinguishable from "trace never ran" — the very case the
-// trace was meant to surface.
-func TestRecoverFnDeclReturnTypeTraceEnabledEmitsNoSymbol(t *testing.T) {
-	prev := fnDeclRecoveryTraceWriter
-	defer func() { fnDeclRecoveryTraceWriter = prev }()
-	var buf bytes.Buffer
-	fnDeclRecoveryTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_FN_DECL_RECOVERY", "1")
-
-	l := &lowerer{res: &resolve.Result{RefsByID: map[ast.NodeID]*resolve.Symbol{}}}
-	_ = l.recoverFnDeclReturnType(&ast.Ident{Name: "anything", ID: ast.NodeID(42)})
-
-	got := buf.String()
-	for _, want := range []string{
-		`ident="anything"`,
-		`status=no-symbol-or-decl`,
-		`astReturnType=<nil>`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("no-symbol trace missing %q\nfull output:\n%s", want, got)
-		}
-	}
-}
-
-// TestLowerCallReturnTypeTraceDefaultSilent locks the off-by-default
-// behaviour of the OSTY_IR_TRACE_CALL_RETURN_TYPES env-gated trace:
-// without the env var set the trace writes nothing.
-func TestLowerCallReturnTypeTraceDefaultSilent(t *testing.T) {
-	prev := callReturnTypeTraceWriter
-	defer func() { callReturnTypeTraceWriter = prev }()
-	var buf bytes.Buffer
-	callReturnTypeTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_CALL_RETURN_TYPES", "")
-
-	call := &ast.CallExpr{
-		ID: 7,
-		Fn: &ast.Ident{Name: "make_string"},
-	}
-	file := &ast.File{
-		Stmts: []ast.Stmt{&ast.LetStmt{
-			Pattern: &ast.IdentPat{Name: "s"},
-			Value:   call,
-		}},
-	}
-	chk := &check.Result{
-		NativeCheckResult: &api.CheckResult{
-			TypedNodes: []api.CheckedNode{{
-				NodeID: int(call.ID),
-				Kind:   "Call",
-				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
-			}},
+// TestLowerRefByPtrTakesPrecedenceOverIDLookup locks the
+// `RefsByID` twin of `TestLowerNamedTypeUsesPointerKeyedLookupAcrossFiles`.
+// Bug shape: `recoverFnDeclReturnType` (and similar recovery
+// paths) follow a `sym.Decl` into a foreign file's AST and then
+// reach `*ast.Ident` nodes via `l.res.RefsByID[id.ID]`. The
+// foreign id's `NodeID` is local to its file's AST, so the
+// lookup against the lowerer's *current* file `RefsByID`
+// resolves to whatever unrelated ident shares that ID in the
+// current file. The package-wide `refByPtr` map disambiguates
+// by node identity so foreign-file idents route to the symbol
+// the resolver actually recorded for them.
+//
+// Test setup: a foreign `*ast.Ident` registered in `refByPtr`
+// with the correct sym (`helper`), while the current-file
+// `RefsByID` carries a wrong sym (`someUnrelatedFn`) for the
+// same `NodeID`. `l.ref(id)` must return the pointer-keyed
+// answer.
+func TestLowerRefByPtrTakesPrecedenceOverIDLookup(t *testing.T) {
+	id := &ast.Ident{ID: ast.NodeID(99), Name: "helper"}
+	wrongSym := &resolve.Symbol{Name: "someUnrelatedFn", Kind: resolve.SymFn}
+	correctSym := &resolve.Symbol{Name: "helper", Kind: resolve.SymFn}
+	l := &lowerer{
+		res: &resolve.Result{
+			RefsByID: map[ast.NodeID]*resolve.Symbol{
+				id.ID: wrongSym,
+			},
+		},
+		refByPtr: map[*ast.Ident]*resolve.Symbol{
+			id: correctSym,
 		},
 	}
-	Lower("main", file, nil, chk)
-	if buf.Len() != 0 {
-		t.Fatalf("trace writer received output despite env var off: %q", buf.String())
+	got := l.ref(id)
+	if got != correctSym {
+		t.Fatalf("ref returned %+v, want %+v (pointer-keyed map must win over ID-keyed)", got, correctSym)
 	}
 }
 
-// TestLowerCallReturnTypeTraceEnabledRecordsSource exercises the
-// trace's happy path: with OSTY_IR_TRACE_CALL_RETURN_TYPES=1 each
-// `CallExpr` lowering emits one line carrying the callee text,
-// the recovery source label, and the resulting type. The minimal
-// scenario uses a `make_string()` CallExpr whose checker-typed
-// node returns String, so the trace must report
-// `source=checker-typed-node` and `resultType=String`.
-func TestLowerCallReturnTypeTraceEnabledRecordsSource(t *testing.T) {
-	prev := callReturnTypeTraceWriter
-	defer func() { callReturnTypeTraceWriter = prev }()
-	var buf bytes.Buffer
-	callReturnTypeTraceWriter = &buf
-
-	t.Setenv("OSTY_IR_TRACE_CALL_RETURN_TYPES", "1")
-
-	call := &ast.CallExpr{
-		ID: 7,
-		Fn: &ast.Ident{Name: "make_string"},
-	}
-	file := &ast.File{
-		Stmts: []ast.Stmt{&ast.LetStmt{
-			Pattern: &ast.IdentPat{Name: "s"},
-			Value:   call,
-		}},
-	}
-	chk := &check.Result{
-		NativeCheckResult: &api.CheckResult{
-			TypedNodes: []api.CheckedNode{{
-				NodeID: int(call.ID),
-				Kind:   "Call",
-				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
-			}},
+// TestLowerRefRespectsResolverBypassWhenResIsNil mirrors the
+// `typeRef` bypass invariant: `l.res = nil` must short-circuit
+// both the pointer-keyed and ID-keyed lookups, so stdlib-stub-
+// style paths that nil out the resolver still receive nil
+// rather than a stale resolver answer leaking through
+// `refByPtr`.
+func TestLowerRefRespectsResolverBypassWhenResIsNil(t *testing.T) {
+	id := &ast.Ident{ID: ast.NodeID(100), Name: "helper"}
+	wrongSym := &resolve.Symbol{Name: "wrong", Kind: resolve.SymFn}
+	l := &lowerer{
+		res: nil,
+		refByPtr: map[*ast.Ident]*resolve.Symbol{
+			id: wrongSym,
 		},
 	}
-	Lower("main", file, nil, chk)
-	got := buf.String()
-	for _, want := range []string{
-		`callee=<ident:make_string>`,
-		`source=checker-typed-node`,
-		`resultType=String`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("trace missing field %q\nfull output:\n%s", want, got)
-		}
+	if got := l.ref(id); got != nil {
+		t.Fatalf("ref returned %+v, want nil (l.res=nil must skip pointer map too)", got)
 	}
 }
 
