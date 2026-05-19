@@ -318,6 +318,7 @@ type EmitTarget struct {
 	BinaryName       string
 	FeaturesKey      string
 	LinkLibrariesKey string
+	BootstrapStage0  bool
 }
 
 // NewEmitTarget builds a normalized key for the Emit query.
@@ -338,6 +339,14 @@ func NewEmitTarget(lower LowerKey, name backend.Name, mode backend.EmitMode, lay
 // names that should be forwarded to the backend link step.
 func (t EmitTarget) WithLinkLibraries(libraries []string) EmitTarget {
 	t.LinkLibrariesKey = LinkLibrariesKey(libraries)
+	return t.normalized()
+}
+
+// WithBootstrapStage0 returns a copy of t that allows the backend's
+// bootstrap-only stage0 recovery path. Normal production query targets leave
+// this false.
+func (t EmitTarget) WithBootstrapStage0(enabled bool) EmitTarget {
+	t.BootstrapStage0 = enabled
 	return t.normalized()
 }
 
@@ -845,11 +854,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					Profile: target.Profile,
 					Target:  target.Target,
 				},
-				Emit:          target.Emit,
-				Entry:         lowered.Entry,
-				BinaryName:    target.BinaryName,
-				Features:      target.Features(),
-				LinkLibraries: target.LinkLibraries(),
+				Emit:            target.Emit,
+				Entry:           lowered.Entry,
+				BinaryName:      target.BinaryName,
+				Features:        target.Features(),
+				LinkLibraries:   target.LinkLibraries(),
+				BootstrapStage0: target.BootstrapStage0,
 			})
 			return EmitResult{Result: result, Err: err}
 		},

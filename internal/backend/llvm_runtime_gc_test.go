@@ -159,12 +159,13 @@ int main(void) {
 }
 
 func TestBundledRuntimeListReserveBacktraceIsOptional(t *testing.T) {
+	runtimeSource := strings.ReplaceAll(bundledRuntimeSource, "\r\n", "\n")
 	for _, want := range []string{
 		"#ifndef OSTY_RT_HAS_BACKTRACE\n#define OSTY_RT_HAS_BACKTRACE 0\n#endif",
-		"#if OSTY_RT_HAS_BACKTRACE\n        void *bt[32];",
-		"#endif\n        osty_rt_abort(\"list allocation request exceeds 1G elements\");",
+		"#if OSTY_RT_HAS_BACKTRACE\n    void *bt[32];",
+		"#endif\n    osty_rt_abort(\"list allocation request exceeds 1G elements\");",
 	} {
-		if !strings.Contains(bundledRuntimeSource, want) {
+		if !strings.Contains(runtimeSource, want) {
 			t.Fatalf("bundled runtime source missing %q", want)
 		}
 	}

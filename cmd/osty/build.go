@@ -52,6 +52,8 @@ func runBuild(args []string, flags cliFlags) {
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	fs.BoolVar(&force, "force", false, "ignore the build cache; rebuild every input")
+	var bootstrapStage0 bool
+	fs.BoolVar(&bootstrapStage0, "bootstrap-stage0", false, "internal: allow the install-self bootstrap stage0 emitter when osty-self is missing")
 	var aiRepairModeName string
 	registerAIRepairCommandFlags(fs, &flags.aiRepair, &aiRepairModeName)
 	var backendName string
@@ -157,9 +159,9 @@ func runBuild(args []string, flags cliFlags) {
 	featSet := featureSet(resolved)
 	var emitResult *backend.Result
 	if m.Workspace != nil {
-		emitResult = buildWorkspace(root, m, flags, deps, resolved, featSet, backendID, emitMode)
+		emitResult = buildWorkspace(root, m, flags, deps, resolved, featSet, backendID, emitMode, bootstrapStage0)
 	} else {
-		emitResult = buildPackage(root, m, flags, deps, resolved, featSet, backendID, emitMode)
+		emitResult = buildPackage(root, m, flags, deps, resolved, featSet, backendID, emitMode, bootstrapStage0)
 	}
 
 	// Step 6: record the build fingerprint under .osty/cache/ so the
@@ -305,7 +307,7 @@ func cachedArtifactsExist(root string, artifacts map[string]string) bool {
 // targets to vendored packages resolve. When the root manifest declares
 // a binary entry point, it is additionally emitted through the selected
 // backend.
-func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
+func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, bootstrapStage0 bool) *backend.Result {
 	ws, err := resolve.NewWorkspace(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
@@ -336,7 +338,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 			return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
 				WorkspaceRoot: seeded.Root,
 				Dir:           rootDir,
-			}, resolved, feats, backendID, emitMode)
+			}, resolved, feats, backendID, emitMode, bootstrapStage0)
 		}
 	}
 	return nil
@@ -348,7 +350,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 // so `use` references to vendored external deps resolve through the
 // DepProvider. The zero-dep path uses the same native package loader without
 // workspace state.
-func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
+func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, bootstrapStage0 bool) *backend.Result {
 	if deps != nil {
 		ws, err := resolve.NewWorkspace(dir)
 		if err != nil {
@@ -370,7 +372,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 			return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
 				WorkspaceRoot: seeded.Root,
 				Dir:           rootDir,
-			}, resolved, feats, backendID, emitMode)
+			}, resolved, feats, backendID, emitMode, bootstrapStage0)
 		}
 		return nil
 	}
@@ -398,7 +400,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 	}
 	return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
 		Dir: seeded.Dir,
-	}, resolved, feats, backendID, emitMode)
+	}, resolved, feats, backendID, emitMode, bootstrapStage0)
 }
 
 func seedBuildWorkspaceEngine(ws *resolve.Workspace) (*ostyquery.Engine, ostyquery.SeededWorkspace) {
@@ -449,17 +451,17 @@ func resDiags(res *resolve.PackageResult) []*diag.Diagnostic {
 	return res.Diags
 }
 
-func emitAndBuildViaQuery(root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
+func emitAndBuildViaQuery(root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, bootstrapStage0 bool) *backend.Result {
 	profileName, triple := resolvedKey(resolved)
 	binName := buildBinaryNameForEmit(m, resolved, triple, emitMode)
-	emitResult := emitViaQuery("build", root, m, eng, lower, resolved, feats, backendID, emitMode, binName)
+	emitResult := emitViaQuery("build", root, m, eng, lower, resolved, feats, backendID, emitMode, binName, bootstrapStage0)
 	if emitResult == nil {
 		return nil
 	}
 	return finishBuildEmitResult(backendID, emitMode, emitResult, profileName)
 }
 
-func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, binName string) *backend.Result {
+func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, binName string, bootstrapStage0 bool) *backend.Result {
 	commandName := "osty " + command
 	// Library-only manifest (`[lib]` without `[bin]`): currently the cmd/osty
 	// build pipeline only knows how to emit binaries, so a library crate's
@@ -542,7 +544,8 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 	lower.SourcePath = entryAbs
 	lower.EntryPath = entryAbs
 	target := ostyquery.NewEmitTarget(lower, backendID, emitMode, layout, binName, features).
-		WithLinkLibraries(linkLibraries)
+		WithLinkLibraries(linkLibraries).
+		WithBootstrapStage0(bootstrapStage0)
 	emitted := eng.Queries.Emit.Get(eng.DB, target)
 	if emitted.Err != nil {
 		exitBackendEmitError(command, emitted.Result, emitted.Err)

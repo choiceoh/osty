@@ -153,6 +153,10 @@ type Request struct {
 	BinaryName    string
 	Features      []string
 	LinkLibraries []string
+	// BootstrapStage0 allows the emergency Go-side stage0 emitter to
+	// participate when bootstrapping osty-self from source. Normal
+	// production builds leave this false and stay on the self-hosted path.
+	BootstrapStage0 bool
 	// ExtraObjects is a list of absolute paths to additional object
 	// files that should be linked alongside the main package's
 	// object when `Emit == EmitBinary`. Used by cmd/osty's cross-

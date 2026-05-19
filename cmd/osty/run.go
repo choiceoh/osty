@@ -173,7 +173,7 @@ func runRun(args []string, cliF cliFlags) {
 	emitResult := emitViaQuery("run", root, m, eng, ostyquery.LowerKey{
 		WorkspaceRoot: seeded.Root,
 		Dir:           rootDir,
-	}, resolved, featureSet(resolved), backendID, emitMode, binName)
+	}, resolved, featureSet(resolved), backendID, emitMode, binName, false)
 	if emitResult == nil {
 		fmt.Fprintf(os.Stderr, "osty run: backend did not produce a runnable artifact\n")
 		os.Exit(1)

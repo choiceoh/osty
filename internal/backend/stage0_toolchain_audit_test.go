@@ -1278,7 +1278,6 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 	if stage0AuditFixedPointFullEnabled() {
 		t.Logf("fp-verify (full): launching produced binary as `install-self` — this can take >10 min")
 		runCmd := exec.Command(binPath, "install-self")
-		runCmd.Env = append(os.Environ(), "OSTY_STAGE0_FALLBACK=1")
 		runOut, runErr := runCmd.CombinedOutput()
 		if runErr != nil {
 			t.Logf("fp-verify (full): produced binary install-self FAILED: %v", runErr)

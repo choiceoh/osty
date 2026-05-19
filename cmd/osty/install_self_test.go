@@ -29,28 +29,6 @@ func TestInstallSelfUsageMessage(t *testing.T) {
 	}
 }
 
-func TestInstallSelfSourceBootstrapFollowsStage0FallbackParser(t *testing.T) {
-	for _, tc := range []struct {
-		value string
-		want  bool
-	}{
-		{"1", true},
-		{"true", true},
-		{"yes", true},
-		{"on", true},
-		{"0", false},
-		{"false", false},
-		{"", false},
-	} {
-		t.Run(tc.value, func(t *testing.T) {
-			t.Setenv("OSTY_STAGE0_FALLBACK", tc.value)
-			if got := installSelfSourceBootstrapRequested(); got != tc.want {
-				t.Fatalf("installSelfSourceBootstrapRequested() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // fakeOstyBin builds a minimal Go shim that pretends to be the
 // `osty` binary for the duration of the test. It accepts any
 // arguments and writes a synthetic osty-self binary into the
@@ -96,6 +74,10 @@ func fakeOstyBinName(base string) string {
 		return base + ".exe"
 	}
 	return base
+}
+
+func fakeExePath(dir, base string) string {
+	return filepath.Join(dir, fakeOstyBinName(base))
 }
 
 func fakeSelfhostBin(t *testing.T, body string) string {
@@ -294,7 +276,7 @@ func main() { os.Exit(7) }
 `), 0o644); err != nil {
 		t.Fatalf("write fake osty: %v", err)
 	}
-	bin := filepath.Join(dir, fakeOstyBinName("fake-osty-fail"))
+	bin := fakeExePath(dir, "fake-osty-fail")
 	out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput()
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -306,11 +288,9 @@ func main() { os.Exit(7) }
 }
 
 // TestRunInstallSelfPrintsBootstrapHintOnFailure exercises the
-// fresh-clone diagnostic added in B1: when `install-self` fails
-// without `OSTY_STAGE0_FALLBACK` already set, the user gets
-// pointed at the three workflow options (registry / OSTY_SELF_BIN /
-// stage0) instead of having to read the resolver source to figure
-// out what's wrong.
+// fresh-clone diagnostic: when the internal source bootstrap fails, the
+// user is pointed at the prebuilt osty-self options instead of env-var
+// bootstrap toggles.
 func TestRunInstallSelfPrintsBootstrapHintOnFailure(t *testing.T) {
 	ostyBin := buildOstyBinaryForTest(t)
 
@@ -327,8 +307,9 @@ func TestRunInstallSelfPrintsBootstrapHintOnFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "toolchain", "main.osty"), []byte("// stub\n"), 0o644); err != nil {
 		t.Fatalf("main.osty: %v", err)
 	}
-	stub := filepath.Join(t.TempDir(), "stub-osty")
-	src := stub + ".go"
+	stubDir := t.TempDir()
+	stub := fakeExePath(stubDir, "stub-osty")
+	src := filepath.Join(stubDir, "stub-osty.go")
 	if err := os.WriteFile(src, []byte(`package main
 import "os"
 func main() { os.Exit(1) }
@@ -341,61 +322,23 @@ func main() { os.Exit(1) }
 
 	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", stub)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "OSTY_STAGE0_FALLBACK=", "OSTY_SELF_REGISTRY_OFFLINE=1") // explicitly unset
+	cmd.Env = append(os.Environ(), "OSTY_SELF_REGISTRY_OFFLINE=1")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected install-self to fail\n%s", out)
 	}
 	got := string(out)
 	for _, want := range []string{
-		"hint: bootstrap from a fresh clone",
+		"hint: install-self tried the internal source bootstrap path",
 		"OSTY_SELF_REGISTRY_URL",
 		"OSTY_SELF_BIN",
-		"OSTY_STAGE0_FALLBACK=1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
 	}
-}
-
-// TestRunInstallSelfSuppressesHintWhenStage0Set confirms the new
-// diagnostic does not double-up on users who have already opted
-// into the stage0 path.
-func TestRunInstallSelfSuppressesHintWhenStage0Set(t *testing.T) {
-	ostyBin := buildOstyBinaryForTest(t)
-
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte("[package]\nname = \"fake\"\n"), 0o644); err != nil {
-		t.Fatalf("osty.toml: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "toolchain"), 0o755); err != nil {
-		t.Fatalf("toolchain mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "toolchain", "main.osty"), []byte("// stub\n"), 0o644); err != nil {
-		t.Fatalf("main.osty: %v", err)
-	}
-	stub := filepath.Join(t.TempDir(), "stub-osty")
-	src := stub + ".go"
-	if err := os.WriteFile(src, []byte(`package main
-import "os"
-func main() { os.Exit(1) }
-`), 0o644); err != nil {
-		t.Fatalf("write stub: %v", err)
-	}
-	if out, err := exec.Command("go", "build", "-o", stub, src).CombinedOutput(); err != nil {
-		t.Fatalf("build stub: %v\n%s", err, out)
-	}
-
-	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", stub)
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "OSTY_STAGE0_FALLBACK=1", "OSTY_SELF_REGISTRY_OFFLINE=1")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected install-self to fail\n%s", out)
-	}
-	if strings.Contains(string(out), "hint: bootstrap from a fresh clone") {
-		t.Errorf("hint should be suppressed when stage0 already set:\n%s", out)
+	if strings.Contains(got, "OSTY_STAGE0_FALLBACK") || strings.Contains(got, "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP") {
+		t.Errorf("output should not mention removed bootstrap env vars:\n%s", got)
 	}
 }
 
@@ -570,7 +513,7 @@ func main() {}
 `), 0o644); err != nil {
 		t.Fatalf("write fake osty: %v", err)
 	}
-	bin := filepath.Join(dir, fakeOstyBinName("fake-osty-noop"))
+	bin := fakeExePath(dir, "fake-osty-noop")
 	out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput()
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, out)

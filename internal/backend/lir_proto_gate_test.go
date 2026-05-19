@@ -28,7 +28,7 @@ const lirProtoGateSrc = `fn main() {
 func TestLLVMDispatchAppendsLIRProtoFallbackWarning(t *testing.T) {
 	req := newBackendRequest(t, EmitLLVMIR, lirProtoGateSrc)
 	t.Setenv(llvmabi.LIRProtoEnvVar, "1")
-	_, warnings, _ := generateLLVMIR(req.Entry, "arm64-apple-macosx", req.Features, req.Emit)
+	_, warnings, _ := generateLLVMIR(req.Entry, "arm64-apple-macosx", req.Features, req.Emit, false)
 	found := false
 	for _, w := range warnings {
 		if errors.Is(w, llvmabi.ErrLIRProtoNotWired) {
@@ -48,7 +48,7 @@ func TestLLVMDispatchAppendsLIRProtoFallbackWarning(t *testing.T) {
 func TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff(t *testing.T) {
 	req := newBackendRequest(t, EmitLLVMIR, lirProtoGateSrc)
 	t.Setenv(llvmabi.LIRProtoEnvVar, "")
-	_, warnings, _ := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
+	_, warnings, _ := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit, false)
 	for _, w := range warnings {
 		if errors.Is(w, llvmabi.ErrLIRProtoNotWired) {
 			t.Fatalf("warnings unexpectedly include ErrLIRProtoNotWired with gate off: %s", joinLirProtoWarnings(warnings))
