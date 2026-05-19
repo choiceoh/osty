@@ -19,20 +19,29 @@
 //   FrontCheckInstantiation.resultType / typeArgs / typeArgIds carry
 //   over directly.
 //
-// Non-goals for this serializer:
+// Position handling (M4 brick A):
 //
-//   - Byte-for-byte parity with the Go-built target on non-empty
-//     inputs. The Go bridge in `internal/selfhost/check_adapter.go`
-//     converts token indices to byte offsets, stamps display
-//     line/column positions, computes SHA256 stable IDs
-//     (EnsureStableIDs), and accumulates ErrorsByContext / ErrorDetails
-//     telemetry. None of that happens here — `start` / `end` stay as
-//     token indices, stable-id fields stay empty (Go-side `omitempty`
-//     drops them on decode), and the summary stays
-//     `{assignments, accepted, errors}` only.
-//   - Custom escape behaviour. Strings get the minimal JSON-required
-//     escape set (`\`, `"`, `\n`, `\r`, `\t` + control 0x00–0x1F as
-//     `\u00XX`). UTF-8 multi-byte sequences pass through unchanged.
+//   The shared entry `frontCheckSourceToWireJson(source)` now lexes the
+//   input, builds a rune→byte table, and threads a `FrontWireMapper`
+//   into the serializers so every `start`/`end` field carries the same
+//   byte offset the Go adapter
+//   (`internal/selfhost/check_adapter.go::checkNodeOffsets`) emits.
+//   Diagnostics additionally get the `startLine`/`startColumn`/
+//   `endLine`/`endColumn` fields from `FrontLexToken.start.line` etc.
+//
+//   The legacy entry `frontCheckResultToWireJson(result)` keeps the
+//   pre-M4 behaviour (token indices, no line/column) by passing an
+//   identity mapper. Callers that already constructed a
+//   `FrontCheckResult` outside the lex chain still get a stable output.
+//
+// Remaining M4 work (separate bricks):
+//
+//   - sha256 stable IDs (`EnsureStableIDs`): unique `id` / `nodeKey` /
+//     `typeKey` per record.
+//   - `errorsByContext` / `errorDetails` summary telemetry.
+//
+//   Both are independent of byte-offset conversion; punted to follow-up
+//   PRs.
 use std.strings as strings
 /// frontCheckSourceToWireJson is the single cross-pkg entry the
 /// LLVM-built native checker calls. Owning the lex + parse + check +
@@ -41,76 +50,202 @@ use std.strings as strings
 /// String-in / String-out hop — well within the cross-pkg free-fn
 /// dispatch arm landed by PR #1886.
 pub fn frontCheckSourceToWireJson(source: String) -> String {
-    frontCheckResultToWireJson(frontendCheckSourceStructured(source))
+    let lexed = ostyLexSource(source)
+    let result = frontendCheckLexedSourceStructured(lexed)
+    frontCheckResultToWireJsonForLexed(result, lexed)
 }
 /// frontCheckResultToWireJson serialises a `FrontCheckResult` into the
-/// JSON wire format. Exposed so toolchain callers that already hold a
-/// result (tests, dump CLIs) can skip the re-lex pass.
+/// JSON wire format using token indices as start/end (no byte-offset
+/// conversion, no display line/column). Preserved for callers that hold
+/// a result without the lex stream — toolchain tests etc.
 pub fn frontCheckResultToWireJson(result: FrontCheckResult) -> String {
+    frontCheckResultToWireJsonInner(result, frontWireMapperIdentity())
+}
+/// frontCheckResultToWireJsonForLexed serialises a `FrontCheckResult`
+/// using the lex stream to convert token indices into byte offsets and
+/// stamp display line/column on every diagnostic. Mirrors the Go-side
+/// `internal/selfhost/check_adapter.go::adaptCheckResultFromRuneStream`
+/// pipeline.
+pub fn frontCheckResultToWireJsonForLexed(result: FrontCheckResult, lexed: OstyLexedSource) -> String {
+    frontCheckResultToWireJsonInner(result, frontWireMapperFromLexed(lexed))
+}
+fn frontCheckResultToWireJsonInner(result: FrontCheckResult, mapper: FrontWireMapper) -> String {
     let mut parts: List<String> = []
     parts.push("\"summary\":" + frontCheckSummaryToWireJson(result.summary))
-    parts.push("\"typedNodes\":" + frontCheckedNodesToWireJson(result.typedNodes))
-    parts.push("\"bindings\":" + frontCheckedBindingsToWireJson(result.bindings))
-    parts.push("\"symbols\":" + frontCheckedSymbolsToWireJson(result.symbols))
-    parts.push("\"instantiations\":" + frontCheckInstantiationsToWireJson(result.instantiations))
+    parts.push("\"typedNodes\":" + frontCheckedNodesToWireJson(result.typedNodes, mapper))
+    parts.push("\"bindings\":" + frontCheckedBindingsToWireJson(result.bindings, mapper))
+    parts.push("\"symbols\":" + frontCheckedSymbolsToWireJson(result.symbols, mapper))
+    parts.push("\"instantiations\":" + frontCheckInstantiationsToWireJson(result.instantiations, mapper))
     if result.diagnostics.len() > 0 {
-        parts.push("\"diagnostics\":" + checkDiagnosticsToWireJson(result.diagnostics))
+        parts.push("\"diagnostics\":" + checkDiagnosticsToWireJson(result.diagnostics, mapper))
     }
     "\{" + strings.join(parts, ",") + "\}"
 }
+// ---------------------------------------------------------------------
+// FrontWireMapper — token-index -> byte-offset + display-line/column.
+//
+// The identity mapper short-circuits the offset lookup so legacy
+// callers that pass byte offsets directly (or token indices that
+// happen to be the desired wire start/end) keep working unchanged.
+// ---------------------------------------------------------------------
+pub struct FrontWireMapper {
+    pub identity: Bool,
+    pub byteStart: List<Int>,
+    pub byteTotal: Int,
+    pub tokens: List<FrontLexToken>,
+}
+pub struct FrontWireRange {
+    pub start: Int,
+    pub end: Int,
+    pub startLine: Int,
+    pub startColumn: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+}
+pub fn frontWireMapperIdentity() -> FrontWireMapper {
+    let emptyStart: List<Int> = []
+    let emptyTokens: List<FrontLexToken> = []
+    FrontWireMapper {identity: true, byteStart: emptyStart, byteTotal: 0, tokens: emptyTokens}
+}
+pub fn frontWireMapperFromLexed(lexed: OstyLexedSource) -> FrontWireMapper {
+    let byteStart = frontWireBuildByteStart(lexed.source)
+    let byteTotal = if byteStart.len() == 0 {
+        0
+    } else {
+        byteStart[byteStart.len() - 1]
+    }
+    FrontWireMapper {identity: false, byteStart, byteTotal, tokens: lexed.stream.tokens}
+}
+fn frontWireBuildByteStart(source: String) -> List<Int> {
+    let mut byteStart: List<Int> = []
+    let mut off = 0
+    for ch in source.chars() {
+        byteStart.push(off)
+        off = off + frontWireUtf8ByteLen(ch.toInt())
+    }
+    byteStart.push(off)
+    byteStart
+}
+fn frontWireUtf8ByteLen(codepoint: Int) -> Int {
+    if codepoint < 0 {
+        return 1
+    }
+    if codepoint < 128 {
+        return 1
+    }
+    if codepoint < 2048 {
+        return 2
+    }
+    if codepoint < 65536 {
+        return 3
+    }
+    4
+}
+fn frontWireRuneToByte(m: FrontWireMapper, runeOff: Int) -> Int {
+    if runeOff <= 0 {
+        return 0
+    }
+    let len = m.byteStart.len()
+    if len == 0 {
+        return 0
+    }
+    if runeOff >= len {
+        return m.byteTotal
+    }
+    m.byteStart[runeOff]
+}
+fn frontWireMapperOffsets(m: FrontWireMapper, startToken: Int, endToken: Int) -> FrontWireRange {
+    if m.identity {
+        return FrontWireRange {start: startToken, end: endToken, startLine: 0, startColumn: 0, endLine: 0, endColumn: 0}
+    }
+    let tokensLen = m.tokens.len()
+    if tokensLen == 0 {
+        return FrontWireRange {start: 0, end: 0, startLine: 0, startColumn: 0, endLine: 0, endColumn: 0}
+    }
+    let mut startIdx = startToken
+    if startIdx < 0 {
+        startIdx = 0
+    }
+    if startIdx >= tokensLen {
+        startIdx = tokensLen - 1
+    }
+    let mut endIdx = endToken - 1
+    if endIdx < startIdx {
+        endIdx = startIdx
+    }
+    if endIdx >= tokensLen {
+        endIdx = tokensLen - 1
+    }
+    let startTok = m.tokens[startIdx]
+    let endTok = m.tokens[endIdx]
+    let startByte = frontWireRuneToByte(m, startTok.start.offset)
+    let mut endByte = frontWireRuneToByte(m, endTok.end.offset)
+    if endByte < startByte {
+        endByte = startByte
+    }
+    FrontWireRange {start: startByte, end: endByte, startLine: startTok.start.line, startColumn: startTok.start.column, endLine: endTok.end.line, endColumn: endTok.end.column}
+}
+// ---------------------------------------------------------------------
+// Serializer body — each item carries (start, end) explicitly so the
+// mapped + identity callers share the same emit path.
+// ---------------------------------------------------------------------
 fn frontCheckSummaryToWireJson(s: FrontCheckSummary) -> String {
     "\{\"assignments\":{s.assignments},\"accepted\":{s.accepted},\"errors\":{s.errors}\}"
 }
-fn frontCheckedNodesToWireJson(nodes: List<FrontCheckedNode>) -> String {
+fn frontCheckedNodesToWireJson(nodes: List<FrontCheckedNode>, m: FrontWireMapper) -> String {
     if nodes.len() == 0 {
         return "[]"
     }
     let mut items: List<String> = []
     for n in nodes {
-        items.push(frontCheckedNodeToWireJson(n))
+        let r = frontWireMapperOffsets(m, n.start, n.end)
+        items.push(frontCheckedNodeBodyJson(n, r.start, r.end))
     }
     "[" + strings.join(items, ",") + "]"
 }
-fn frontCheckedNodeToWireJson(n: FrontCheckedNode) -> String {
-    "\{\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"start\":{n.start},\"end\":{n.end}\}"
+fn frontCheckedNodeBodyJson(n: FrontCheckedNode, start: Int, end: Int) -> String {
+    "\{\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"start\":{start},\"end\":{end}\}"
 }
-fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>) -> String {
+fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>, m: FrontWireMapper) -> String {
     if bindings.len() == 0 {
         return "[]"
     }
     let mut items: List<String> = []
     for b in bindings {
-        items.push(frontCheckedBindingToWireJson(b))
+        let r = frontWireMapperOffsets(m, b.start, b.end)
+        items.push(frontCheckedBindingBodyJson(b, r.start, r.end))
     }
     "[" + strings.join(items, ",") + "]"
 }
-fn frontCheckedBindingToWireJson(b: FrontCheckedBinding) -> String {
-    "\{\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{b.start},\"end\":{b.end}\}"
+fn frontCheckedBindingBodyJson(b: FrontCheckedBinding, start: Int, end: Int) -> String {
+    "\{\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
 }
-fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>) -> String {
+fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>, m: FrontWireMapper) -> String {
     if symbols.len() == 0 {
         return "[]"
     }
     let mut items: List<String> = []
     for s in symbols {
-        items.push(frontCheckedSymbolToWireJson(s))
+        let r = frontWireMapperOffsets(m, s.start, s.end)
+        items.push(frontCheckedSymbolBodyJson(s, r.start, r.end))
     }
     "[" + strings.join(items, ",") + "]"
 }
-fn frontCheckedSymbolToWireJson(s: FrontCheckedSymbol) -> String {
-    "\{\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"start\":{s.start},\"end\":{s.end}\}"
+fn frontCheckedSymbolBodyJson(s: FrontCheckedSymbol, start: Int, end: Int) -> String {
+    "\{\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"start\":{start},\"end\":{end}\}"
 }
-fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>) -> String {
+fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>, m: FrontWireMapper) -> String {
     if insts.len() == 0 {
         return "[]"
     }
     let mut items: List<String> = []
     for i in insts {
-        items.push(frontCheckInstantiationToWireJson(i))
+        let r = frontWireMapperOffsets(m, i.start, i.end)
+        items.push(frontCheckInstantiationBodyJson(i, r.start, r.end))
     }
     "[" + strings.join(items, ",") + "]"
 }
-fn frontCheckInstantiationToWireJson(i: FrontCheckInstantiation) -> String {
+fn frontCheckInstantiationBodyJson(i: FrontCheckInstantiation, start: Int, end: Int) -> String {
     let mut typeArgsParts: List<String> = []
     for ta in i.typeArgs {
         typeArgsParts.push(frontTypeReprToWireJson(ta))
@@ -124,20 +259,33 @@ fn frontCheckInstantiationToWireJson(i: FrontCheckInstantiation) -> String {
         }
         out = out + ",\"typeArgIds\":[" + strings.join(typeArgIdsParts, ",") + "]"
     }
-    out + ",\"resultType\":" + frontTypeReprToWireJson(i.resultType) + ",\"resultTypeId\":{i.resultTypeId},\"start\":{i.start},\"end\":{i.end}\}"
+    out + ",\"resultType\":" + frontTypeReprToWireJson(i.resultType) + ",\"resultTypeId\":{i.resultTypeId},\"start\":{start},\"end\":{end}\}"
 }
-fn checkDiagnosticsToWireJson(diags: List<CheckDiagnostic>) -> String {
+fn checkDiagnosticsToWireJson(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> String {
     if diags.len() == 0 {
         return "[]"
     }
     let mut items: List<String> = []
     for d in diags {
-        items.push(checkDiagnosticToWireJson(d))
+        let r = frontWireMapperOffsets(m, d.start, d.end)
+        items.push(checkDiagnosticBodyJson(d, r))
     }
     "[" + strings.join(items, ",") + "]"
 }
-fn checkDiagnosticToWireJson(d: CheckDiagnostic) -> String {
-    let mut out = "\{\"code\":" + frontJsonString(d.code) + ",\"severity\":" + frontJsonString(diagnosticSeverityName(d.severity)) + ",\"message\":" + frontJsonString(d.message) + ",\"start\":{d.start},\"end\":{d.end}"
+fn checkDiagnosticBodyJson(d: CheckDiagnostic, r: FrontWireRange) -> String {
+    let mut out = "\{\"code\":" + frontJsonString(d.code) + ",\"severity\":" + frontJsonString(diagnosticSeverityName(d.severity)) + ",\"message\":" + frontJsonString(d.message) + ",\"start\":{r.start},\"end\":{r.end}"
+    if r.startLine > 0 {
+        out = out + ",\"startLine\":{r.startLine}"
+    }
+    if r.startColumn > 0 {
+        out = out + ",\"startColumn\":{r.startColumn}"
+    }
+    if r.endLine > 0 {
+        out = out + ",\"endLine\":{r.endLine}"
+    }
+    if r.endColumn > 0 {
+        out = out + ",\"endColumn\":{r.endColumn}"
+    }
     if d.notes.len() > 0 {
         let mut notesParts: List<String> = []
         for n in d.notes {

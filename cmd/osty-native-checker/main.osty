@@ -4,19 +4,33 @@
 // std.json.* 호출이 stage0 fallback 에서 막힘 (cf.
 // docs/llvm-selfhost-plan-pr2-attempt.md). 우회로: primitive
 // strings.indexOf / strings.slice 만 사용한 naive "source" field 추출.
-// L1 corpus 의 escape-free fixture (예: `{"source":"fn main(){}"}`) 가정.
+// L1 corpus 의 escape-free + single-line fixture
+// (예: `{"source":"fn main(){}"}`) 만 정확히 처리한다.
 //
-// 정확성 한계 (입력 파싱):
-// - "source" key 의 `\"` escape, value 안 `\"` escape 미처리
-// - newline / unicode 미처리
-// - 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
+// 정확성 한계 (입력 파싱) — 모두 std.json wall 이 풀려야 해소 가능:
+//
+//   1. `io.readLine()` 만 호출: stdin 의 첫 줄만 읽는다. 보기 좋게
+//      줄바꿈된 JSON request 는 첫 줄에 `"source"` 가 없으면 빈
+//      문자열로 fallback (false-success 위험).
+//   2. value 안 escape (`\"`, `\n`, `\\` 등) 미처리: closing quote 를
+//      첫 `"` 로 인식해서 source body 가 잘못 잘리거나 값이 raw escape
+//      sequence 로 검사된다.
+//   3. JSON 공백 비허용: 정확한 substring `"source":"` 만 일치. 표준
+//      JSON 의 `"source": "..."` (콜론 뒤 공백) 형식은 매치 실패 →
+//      빈 문자열 fallback.
+//   4. 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지.
+//   5. `CheckRequest` 의 `package` 모드 (`{"package":{...}}`) 미인지:
+//      각 파일이 `source` 필드를 가지므로 첫 file 의 source 만 검사된다.
+//      `package` 모드 지원은 진짜 JSON parser 필요.
 //
 // 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
 // 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON
-// 와이어 모양으로 직렬화한다. byte parity 가 아니라 *semantic*
-// correctness 가 목표: token-index 기반 start/end + sha256 안정 ID
-// 누락 등은 Go-built target 의 adapter (internal/selfhost/check_adapter.go)
-// 만의 정책이라 LLVM-built 측이 굳이 복제하지 않는다.
+// 와이어 모양으로 직렬화한다. M4 brick A 까지 wired: `start` / `end` 가
+// UTF-8 byte offset (rune→byte 변환), diagnostic 마다 `startLine` /
+// `startColumn` / `endLine` / `endColumn` 부착. 남은 M4 brick (sha256
+// `EnsureStableIDs`, `errorsByContext` / `errorDetails` telemetry) 은
+// Go-built adapter (internal/selfhost/check_adapter.go) 측 정책으로
+// 별도 brick 에서 포팅 예정.
 use std.io
 use std.strings
 use toolchain as tc
