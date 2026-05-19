@@ -59,6 +59,10 @@ const selfForwardArgsEnv = "OSTY_SELF_REBUILD_FORWARD_ARGS"
 // self-hosted LIR Proto lowering. Use "0" to disable.
 const selfLowerTimeoutEnv = "OSTY_LIRPROTO_SELF_TIMEOUT"
 
+// selfTimeoutCompatMaxBytesEnv bounds the legacy stage0 retry after a
+// MIR JSON timeout. Use "0" to disable timeout compatibility retries.
+const selfTimeoutCompatMaxBytesEnv = "OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES"
+
 // selfSourceCompatMaxBytesEnv bounds the legacy source retry used
 // only when an older osty-self cannot handle MIR JSON directly.
 // Use "0" to disable the size guard.
@@ -117,11 +121,11 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		args = append(args, "--target="+req.Target)
 	}
 
-	resp, declineReason, err := runSelfLower(selfBin, args)
+	resp, declineReason, err := runSelfLower(selfBin, args, stagedPath)
 	if err != nil || !resp.Declined {
 		return resp, err
 	}
-	if command == "lir-proto-lower-mir-json" && isMIRJSONFallbackReason(declineReason) {
+	if command == "lir-proto-lower-mir-json" && shouldAttemptMIRJSONFallback(declineReason, stagedPath) {
 		return lowerLegacyMIRJSON(req, selfBin)
 	}
 	return resp, nil
@@ -143,13 +147,13 @@ func lowerSourceCompat(selfBin string, req nativelirproto.Request) (nativelirpro
 	if req.Target != "" {
 		args = append(args, "--target="+req.Target)
 	}
-	resp, _, err := runSelfLower(selfBin, args)
+	resp, _, err := runSelfLower(selfBin, args, sourcePath)
 	return resp, err
 }
 
-func runSelfLower(selfBin string, args []string) (nativelirproto.Response, string, error) {
+func runSelfLower(selfBin string, args []string, stagedPath string) (nativelirproto.Response, string, error) {
 	ctx := context.Background()
-	timeout := selfLowerTimeout(args)
+	timeout := selfLowerTimeout(args, stagedPath)
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -195,7 +199,7 @@ func runSelfLower(selfBin string, args []string) (nativelirproto.Response, strin
 	return nativelirproto.Response{LLVMIR: ir}, "", nil
 }
 
-func selfLowerTimeout(args []string) time.Duration {
+func selfLowerTimeout(args []string, stagedPath string) time.Duration {
 	if len(args) == 0 {
 		return 0
 	}
@@ -212,7 +216,38 @@ func selfLowerTimeout(args []string) time.Duration {
 			return d
 		}
 	}
-	return 20 * time.Second
+	timeout := 20 * time.Second
+	if args[0] == "lir-proto-lower-mir-json" {
+		timeout += mirJSONSizeTimeoutBudget(stagedInputSize(stagedPath))
+	}
+	return timeout
+}
+
+func mirJSONSizeTimeoutBudget(size int64) time.Duration {
+	if size <= 0 {
+		return 0
+	}
+	const mib = int64(1 << 20)
+	chunks := size / mib
+	if chunks == 0 {
+		return 0
+	}
+	budget := time.Duration(chunks) * 5 * time.Second
+	if budget > 3*time.Minute {
+		return 3 * time.Minute
+	}
+	return budget
+}
+
+func stagedInputSize(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return 0
+	}
+	return info.Size()
 }
 
 func normalizeSelfHostedLLVMIR(ir string) string {
@@ -234,10 +269,23 @@ func isInvalidSelfHostedIR(msg string) bool {
 	return strings.Contains(msg, "produced invalid IR")
 }
 
-func isMIRJSONFallbackReason(msg string) bool {
-	return isUnsupportedSelfCommand(msg) ||
-		isInvalidSelfHostedIR(msg) ||
-		strings.Contains(msg, "timed out")
+func isSelfHostedTimeout(msg string) bool {
+	return strings.Contains(msg, "timed out")
+}
+
+func shouldAttemptMIRJSONFallback(msg, stagedPath string) bool {
+	if isUnsupportedSelfCommand(msg) || isInvalidSelfHostedIR(msg) {
+		return true
+	}
+	if !isSelfHostedTimeout(msg) {
+		return false
+	}
+	max := timeoutCompatMaxBytes()
+	if max <= 0 {
+		return false
+	}
+	size := stagedInputSize(stagedPath)
+	return size > 0 && size <= max
 }
 
 func validateSelfHostedLLVMIR(ir string) string {
@@ -364,6 +412,19 @@ func sourceCompatMaxBytes() int {
 			return 0
 		}
 		var n int
+		if _, err := fmt.Sscanf(raw, "%d", &n); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 1 << 20
+}
+
+func timeoutCompatMaxBytes() int64 {
+	if raw := os.Getenv(selfTimeoutCompatMaxBytesEnv); raw != "" {
+		if raw == "0" {
+			return 0
+		}
+		var n int64
 		if _, err := fmt.Sscanf(raw, "%d", &n); err == nil && n >= 0 {
 			return n
 		}

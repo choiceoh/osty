@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/ir"
@@ -578,6 +579,71 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONTimesOut(t *testing.T) {
 	args := readCapturedArgs(t, captureArgs)
 	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
 		t.Fatalf("first args = %v, want MIR JSON attempt before compat", args)
+	}
+}
+
+func TestRunMIRPayloadSkipsTimeoutCompatWhenPayloadExceedsGuard(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(selfLowerTimeoutEnv, "100ms")
+	t.Setenv(selfTimeoutCompatMaxBytesEnv, "1")
+	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "3000")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+			"padding":     strings.Repeat("x", 2048),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want timeout decline: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "lir-proto-lower-mir-json timed out") {
+		t.Fatalf("Error = %q, want MIR JSON timeout", resp.Error)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("args = %v, want only MIR JSON attempt", args)
+	}
+}
+
+func TestSelfLowerTimeoutScalesWithMirJSONSize(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "small.mir.json")
+	large := filepath.Join(dir, "large.mir.json")
+	if err := os.WriteFile(small, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write small payload: %v", err)
+	}
+	if err := os.WriteFile(large, bytes.Repeat([]byte{'x'}, 3<<20), 0o644); err != nil {
+		t.Fatalf("write large payload: %v", err)
+	}
+
+	if got := selfLowerTimeout([]string{"lir-proto-lower-mir-json", small}, small); got != 20*time.Second {
+		t.Fatalf("small MIR timeout = %s, want 20s", got)
+	}
+	if got := selfLowerTimeout([]string{"lir-proto-lower-mir-json", large}, large); got != 35*time.Second {
+		t.Fatalf("large MIR timeout = %s, want 35s", got)
+	}
+	if got := selfLowerTimeout([]string{"lir-proto-lower", large}, large); got != 20*time.Second {
+		t.Fatalf("source timeout = %s, want 20s", got)
 	}
 }
 
