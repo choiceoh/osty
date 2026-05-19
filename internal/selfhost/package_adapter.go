@@ -3,6 +3,7 @@ package selfhost
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -456,7 +457,7 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 				owner:         fn.Owner,
 				receiverTy:    receiverTy,
 				retTy:         retTy,
-				paramNames:    append([]string(nil), fn.ParamNames...),
+				paramNames:    selfhostImportFnParamNames(fn.ParamNames, fn.ParamDefaults, len(paramTys)),
 				paramTys:      paramTys,
 				generics:      append([]string(nil), fn.Generics...),
 				genericBounds: selfhostMaterializeBounds(env, fn.GenericBounds),
@@ -466,6 +467,70 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			}
 		}
 	}
+}
+
+// selfhostImportFnParamNames returns the param-names slice the checker
+// records on imported function signatures, synthesizing the `?`-prefix
+// default-arg marker from the parallel `ParamDefaults` bool slice when
+// the caller did not pre-encode it.
+//
+// `paramDefaultCount` (mirror of toolchain/check.osty) discovers trailing
+// defaults by scanning param names for the `?` prefix and resetting on
+// the first non-`?` name — only the trailing contiguous run counts. The
+// arena-walking import surface (import_surface_arena.go::arenaBuildImportedFn)
+// pre-encodes the prefix and also fills `ParamDefaults` as parallel data —
+// the two representations agree there.
+//
+// User-supplied import surfaces (Go-side tests and external probes that
+// build `PackageCheckFn` directly) often fill only `ParamDefaults` and
+// leave the names bare or omit them entirely. Silent loss of the trailing
+// defaults at the import boundary surfaced as a spurious E0701 arity
+// error at the call site. This helper restores symmetry between the two
+// encodings:
+//
+//   - When `ParamNames` is shorter than the parameter count (or nil),
+//     placeholder `arg<idx>` names are synthesized up to `paramArity`
+//     so `paramDefaultCount` has something to scan.
+//   - Only the *trailing contiguous run* of `true` entries in
+//     `ParamDefaults` receives a synthesized `?` prefix. The language
+//     spec (LANG_SPEC v0.5 §3) only allows trailing default params, so
+//     any non-trailing `true` entry is rejected input — silently ignored
+//     here rather than misleading `paramDefaultCount` (which would reset
+//     to 0 on the first bare name and discard a mid-list `?` anyway).
+//   - Pre-encoded `?`-prefix names survive unchanged (no double prefix).
+func selfhostImportFnParamNames(paramNames []string, paramDefaults []bool, paramArity int) []string {
+	out := append([]string(nil), paramNames...)
+	target := paramArity
+	if len(out) > target {
+		target = len(out)
+	}
+	if len(paramDefaults) > target {
+		target = len(paramDefaults)
+	}
+	for len(out) < target {
+		out = append(out, fmt.Sprintf("arg%d", len(out)))
+	}
+	if len(paramDefaults) == 0 {
+		return out
+	}
+	// Walk the defaults slice from the tail back to the first `false`
+	// (or before the head). Everything in that suffix is a legitimate
+	// trailing default and earns a `?` prefix; non-trailing trues —
+	// which would violate LANG_SPEC v0.5 §3 anyway — stay bare.
+	trailingStart := len(paramDefaults)
+	for i := len(paramDefaults) - 1; i >= 0; i-- {
+		if !paramDefaults[i] {
+			break
+		}
+		trailingStart = i
+	}
+	for i := trailingStart; i < len(paramDefaults) && i < len(out); i++ {
+		if strings.HasPrefix(out[i], "?") {
+			continue
+		}
+		out[i] = "?" + out[i]
+	}
+	return out
 }
 
 // selfhostSetCheckFieldExported bridges the checked-in generated.go shape
