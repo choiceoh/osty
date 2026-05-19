@@ -220,7 +220,7 @@ verify-selfhost:
     go test {{test_flags}} -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner
 
 verify-self-rebuild: build-all
-    bash scripts/verify-self-rebuild {{bin}}
+    bash scripts/verify-self-rebuild --reuse-stage1 {{bin}}
 
 verify-self-rebuild-fast: build-all
     bash scripts/verify-self-rebuild --skip-gates --reuse-stage1 {{bin}}
