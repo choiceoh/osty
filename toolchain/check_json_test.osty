@@ -1,0 +1,169 @@
+// check_json_test.osty — focused fixtures for the wire JSON serializer
+// exposed by `toolchain/check_json.osty`. The native checker
+// subprocess contract depends on the exact field-name mapping +
+// optional-field omission + escape pass; a regression here is hard to
+// diagnose without these checks, so each test pins one slice of the
+// behaviour.
+use std.testing
+use std.strings as strings
+fn testCheckJsonEmptySourceMatchesGoStub() {
+    let out = frontCheckSourceToWireJson("")
+    testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
+}
+fn testCheckJsonEmptyResultMatchesGoStub() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
+}
+fn testCheckJsonSummaryCarriesRealCounts() {
+    let summary = FrontCheckSummary {assignments: 3, accepted: 2, errors: 1}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"assignments\":3"))
+    testing.assert(stringsContainsJson(out, "\"accepted\":2"))
+    testing.assert(stringsContainsJson(out, "\"errors\":1"))
+}
+fn testCheckJsonTypeReprPrimitiveAndOptional() {
+    let intRepr = FrontTypeRepr {kind: "primitive", name: "Int", path: "", args: [], ret: None, paramNames: []}
+    let optInt = FrontTypeRepr {kind: "optional", name: "", path: "", args: [], ret: Some(intRepr), paramNames: []}
+    let node = FrontCheckedNode {node: 1, nodeId: 1, kind: "ident", typeRepr: optInt, typeId: 42, start: 5, end: 10}
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: [node], bindings, symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"type\":"))
+    testing.assert(stringsContainsJson(out, "\"kind\":\"optional\""))
+    testing.assert(stringsContainsJson(out, "\"return\":"))
+    testing.assert(stringsContainsJson(out, "\"kind\":\"primitive\""))
+    testing.assert(stringsContainsJson(out, "\"name\":\"Int\""))
+    testing.assert(!stringsContainsJson(out, "\"args\":[]"))
+    testing.assert(!stringsContainsJson(out, "\"path\":\"\""))
+    testing.assert(!stringsContainsJson(out, "\"param_names\":[]"))
+}
+// type field name (the FrontCheckedNode field is `typeRepr`).
+// optional uses `"return"` (mirrors Go-side TypeRepr.Return JSON tag),
+// not the Osty field name `ret`.
+// empty name / path / args / paramNames are omitted on the optional.
+fn testCheckJsonFnTypeUsesParamNamesJsonKey() {
+    let strRepr = FrontTypeRepr {kind: "primitive", name: "String", path: "", args: [], ret: None, paramNames: []}
+    let unitRepr = FrontTypeRepr {kind: "tuple", name: "", path: "", args: [], ret: None, paramNames: []}
+    let fnRepr = FrontTypeRepr {kind: "fn", name: "", path: "", args: [strRepr], ret: Some(unitRepr), paramNames: ["msg"]}
+    let binding = FrontCheckedBinding {node: 7, nodeId: 7, bindingId: 0, name: "log", typeRepr: fnRepr, typeId: 9, mutable: false, start: 0, end: 3}
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let nodes: List<FrontCheckedNode> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings: [binding], symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"param_names\":[\"msg\"]"))
+    testing.assert(stringsContainsJson(out, "\"mutable\":false"))
+    testing.assert(stringsContainsJson(out, "\"name\":\"log\""))
+}
+// Osty field `paramNames` must serialize as `param_names`.
+fn testCheckJsonMutableBindingSerializesTrue() {
+    let intRepr = FrontTypeRepr {kind: "primitive", name: "Int", path: "", args: [], ret: None, paramNames: []}
+    let binding = FrontCheckedBinding {node: 3, nodeId: 3, bindingId: 0, name: "x", typeRepr: intRepr, typeId: 1, mutable: true, start: 0, end: 1}
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let nodes: List<FrontCheckedNode> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings: [binding], symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"mutable\":true"))
+}
+fn testCheckJsonDiagnosticsOmittedWhenEmpty() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(!stringsContainsJson(out, "\"diagnostics\""))
+}
+// Matches Go-side `Diagnostics []... json:"diagnostics,omitempty"`.
+fn testCheckJsonDiagnosticEmittedWithSeverityName() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 1}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diag = CheckDiagnostic {code: "E0700", severity: SeverityError, message: "type mismatch", start: 4, end: 8, notes: ["expected Int", "found String"]}
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: [diag]}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"diagnostics\":["))
+    testing.assert(stringsContainsJson(out, "\"code\":\"E0700\""))
+    testing.assert(stringsContainsJson(out, "\"severity\":\"error\""))
+    testing.assert(stringsContainsJson(out, "\"message\":\"type mismatch\""))
+    testing.assert(stringsContainsJson(out, "\"notes\":[\"expected Int\",\"found String\"]"))
+}
+fn testCheckJsonEscapeBackslashQuoteWhitespaceControls() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 1}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let payload = "\\\"\n\r\t\u{0008}\u{000c}\u{0001}"
+    let diag = CheckDiagnostic {code: "E0700", severity: SeverityError, message: payload, start: 0, end: 0, notes: []}
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: [diag]}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"message\":\"\\\\\\\"\\n\\r\\t\\b\\f\\u0001\""))
+}
+// Cover: backslash, double-quote, newline, carriage return, tab,
+// backspace (U+0008), form feed (U+000C), and an other-control
+// (U+0001) that falls into the generic `\u00XX` branch.
+fn testCheckJsonEscapePassesUnicodeThrough() {
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 1}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let insts: List<FrontCheckInstantiation> = []
+    let diag = CheckDiagnostic {code: "E0700", severity: SeverityError, message: "한글 \u{1F600}", start: 0, end: 0, notes: []}
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: insts, diagnostics: [diag]}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"message\":\"한글 \u{1F600}\""))
+}
+// Non-ASCII code points (한 글자 한국어 + emoji) must pass through
+// verbatim so the input encoding round-trips.
+fn testCheckJsonInstantiationOmitsEmptyTypeArgIds() {
+    let strRepr = FrontTypeRepr {kind: "primitive", name: "String", path: "", args: [], ret: None, paramNames: []}
+    let resultRepr = FrontTypeRepr {kind: "primitive", name: "Int", path: "", args: [], ret: None, paramNames: []}
+    let typeArgIds: List<Int> = []
+    let inst = FrontCheckInstantiation {node: 11, nodeId: 11, instantiationId: 0, callee: "id", typeArgs: [strRepr], typeArgIds, resultType: resultRepr, resultTypeId: 7, start: 0, end: 5}
+    let summary = FrontCheckSummary {assignments: 0, accepted: 0, errors: 0}
+    let nodes: List<FrontCheckedNode> = []
+    let bindings: List<FrontCheckedBinding> = []
+    let symbols: List<FrontCheckedSymbol> = []
+    let diags: List<CheckDiagnostic> = []
+    let result = FrontCheckResult {summary, typedNodes: nodes, bindings, symbols, instantiations: [inst], diagnostics: diags}
+    let out = frontCheckResultToWireJson(result)
+    testing.assert(stringsContainsJson(out, "\"callee\":\"id\""))
+    testing.assert(stringsContainsJson(out, "\"typeArgs\":[\{\"kind\":\"primitive\",\"name\":\"String\"\}]"))
+    testing.assert(stringsContainsJson(out, "\"resultType\":\{\"kind\":\"primitive\",\"name\":\"Int\"\}"))
+    testing.assert(!stringsContainsJson(out, "\"typeArgIds\""))
+}
+// Empty `typeArgIds` matches the Go-side `omitempty` tag and gets
+// dropped from the wire output.
+// Thin wrapper on `std.strings.contains` — keeps the assertion sites
+// readable as plain booleans, matching the convention used by
+// `check_diag_test.osty`.
+fn stringsContainsJson(haystack: String, needle: String) -> Bool {
+    strings.contains(haystack, needle)
+}

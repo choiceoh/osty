@@ -1,19 +1,25 @@
-// PR2: stdin → manual naive JSON parse → stub CheckResult JSON echo.
+// PR3-G semantic-correctness step: stdin → manual naive JSON parse →
+// real `tc.frontCheckSourceToWireJson` → stdout.
 //
-// std.json.* 호출이 stage0 fallback 에서 막힘 (cf. docs/llvm-selfhost-plan-
-// pr2-attempt.md). 우회로: primitive strings.indexOf / strings.slice 만 사용
-// 한 naive "source" field 추출. L1 corpus 의 escape-free fixture (예:
-// `{"source":"fn main(){}"}`) 가정.
+// std.json.* 호출이 stage0 fallback 에서 막힘 (cf.
+// docs/llvm-selfhost-plan-pr2-attempt.md). 우회로: primitive
+// strings.indexOf / strings.slice 만 사용한 naive "source" field 추출.
+// L1 corpus 의 escape-free fixture (예: `{"source":"fn main(){}"}`) 가정.
 //
-// 정확성 한계:
+// 정확성 한계 (입력 파싱):
 // - "source" key 의 `\"` escape, value 안 `\"` escape 미처리
 // - newline / unicode 미처리
 // - 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
-// PR3 의 진짜 checker 호출 + L2/L3 corpus 진행 시 std.json 으로 교체.
+//
+// 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
+// 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON
+// 와이어 모양으로 직렬화한다. byte parity 가 아니라 *semantic*
+// correctness 가 목표: token-index 기반 start/end + sha256 안정 ID
+// 누락 등은 Go-built target 의 adapter (internal/selfhost/check_adapter.go)
+// 만의 정책이라 LLVM-built 측이 굳이 복제하지 않는다.
 use std.io
 use std.strings
 use toolchain as tc
-
 fn naiveExtractSource(text: String) -> String {
     let openMarker = "\"source\":\""
     if let Some(i) = strings.indexOf(text, openMarker) {
@@ -25,18 +31,8 @@ fn naiveExtractSource(text: String) -> String {
     }
     ""
 }
-
-fn emptyCheckResultJson() -> String {
-    "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}"
-}
-
 fn main() {
     let input = io.readLine()
-    let _source = naiveExtractSource(input)
-    // PR3-E/F smoke: cross-pkg method-call dispatch (PR #1886 narrow
-    // exception + PR #1889 [lib] scaffold 의 결합). `use toolchain as tc`
-    // 의 fn 등록 path 활성 검증.
-    let _typeRepr = tc.frontInvalidTypeRepr()
-    // 진짜 checker 호출은 추가 brick 의 작업.
-    println(emptyCheckResultJson())
+    let source = naiveExtractSource(input)
+    println(tc.frontCheckSourceToWireJson(source))
 }

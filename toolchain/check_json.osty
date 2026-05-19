@@ -1,0 +1,283 @@
+// check_json.osty — wire-format JSON serializer for FrontCheckResult.
+//
+// Bridges the toolchain checker output to the JSON shape consumed by
+// `internal/selfhost/api/types.go::CheckResult`. The LLVM-built
+// `cmd/osty-native-checker/main.osty` calls `tc.frontCheckSourceToWireJson`
+// instead of the prior stub `emptyCheckResultJson` so the binary now
+// emits structurally-correct output for any input the toolchain checker
+// accepts. Empty-source fixtures keep byte parity with the Go-built
+// target because no records are produced — the stub already matched
+// that case (cf. cmd/osty-native-checker/README.md M2 partial entry).
+//
+// Field-name mapping (Osty struct field -> JSON tag):
+//
+//   FrontTypeRepr.ret              -> "return"
+//   FrontTypeRepr.paramNames       -> "param_names"
+//   FrontCheckedNode.typeRepr      -> "type"
+//   FrontCheckedBinding.typeRepr   -> "type"
+//   FrontCheckedSymbol.typeRepr    -> "type"
+//   FrontCheckInstantiation.resultType / typeArgs / typeArgIds carry
+//   over directly.
+//
+// Non-goals for this serializer:
+//
+//   - Byte-for-byte parity with the Go-built target on non-empty
+//     inputs. The Go bridge in `internal/selfhost/check_adapter.go`
+//     converts token indices to byte offsets, stamps display
+//     line/column positions, computes SHA256 stable IDs
+//     (EnsureStableIDs), and accumulates ErrorsByContext / ErrorDetails
+//     telemetry. None of that happens here — `start` / `end` stay as
+//     token indices, stable-id fields stay empty (Go-side `omitempty`
+//     drops them on decode), and the summary stays
+//     `{assignments, accepted, errors}` only.
+//   - Custom escape behaviour. Strings get the minimal JSON-required
+//     escape set (`\`, `"`, `\n`, `\r`, `\t` + control 0x00–0x1F as
+//     `\u00XX`). UTF-8 multi-byte sequences pass through unchanged.
+use std.strings as strings
+/// frontCheckSourceToWireJson is the single cross-pkg entry the
+/// LLVM-built native checker calls. Owning the lex + parse + check +
+/// serialize chain in one toolchain function keeps the
+/// `cmd/osty-native-checker -> toolchain` boundary down to a single
+/// String-in / String-out hop — well within the cross-pkg free-fn
+/// dispatch arm landed by PR #1886.
+pub fn frontCheckSourceToWireJson(source: String) -> String {
+    frontCheckResultToWireJson(frontendCheckSourceStructured(source))
+}
+/// frontCheckResultToWireJson serialises a `FrontCheckResult` into the
+/// JSON wire format. Exposed so toolchain callers that already hold a
+/// result (tests, dump CLIs) can skip the re-lex pass.
+pub fn frontCheckResultToWireJson(result: FrontCheckResult) -> String {
+    let mut parts: List<String> = []
+    parts.push("\"summary\":" + frontCheckSummaryToWireJson(result.summary))
+    parts.push("\"typedNodes\":" + frontCheckedNodesToWireJson(result.typedNodes))
+    parts.push("\"bindings\":" + frontCheckedBindingsToWireJson(result.bindings))
+    parts.push("\"symbols\":" + frontCheckedSymbolsToWireJson(result.symbols))
+    parts.push("\"instantiations\":" + frontCheckInstantiationsToWireJson(result.instantiations))
+    if result.diagnostics.len() > 0 {
+        parts.push("\"diagnostics\":" + checkDiagnosticsToWireJson(result.diagnostics))
+    }
+    "\{" + strings.join(parts, ",") + "\}"
+}
+fn frontCheckSummaryToWireJson(s: FrontCheckSummary) -> String {
+    "\{\"assignments\":{s.assignments},\"accepted\":{s.accepted},\"errors\":{s.errors}\}"
+}
+fn frontCheckedNodesToWireJson(nodes: List<FrontCheckedNode>) -> String {
+    if nodes.len() == 0 {
+        return "[]"
+    }
+    let mut items: List<String> = []
+    for n in nodes {
+        items.push(frontCheckedNodeToWireJson(n))
+    }
+    "[" + strings.join(items, ",") + "]"
+}
+fn frontCheckedNodeToWireJson(n: FrontCheckedNode) -> String {
+    "\{\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"start\":{n.start},\"end\":{n.end}\}"
+}
+fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>) -> String {
+    if bindings.len() == 0 {
+        return "[]"
+    }
+    let mut items: List<String> = []
+    for b in bindings {
+        items.push(frontCheckedBindingToWireJson(b))
+    }
+    "[" + strings.join(items, ",") + "]"
+}
+fn frontCheckedBindingToWireJson(b: FrontCheckedBinding) -> String {
+    "\{\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{b.start},\"end\":{b.end}\}"
+}
+fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>) -> String {
+    if symbols.len() == 0 {
+        return "[]"
+    }
+    let mut items: List<String> = []
+    for s in symbols {
+        items.push(frontCheckedSymbolToWireJson(s))
+    }
+    "[" + strings.join(items, ",") + "]"
+}
+fn frontCheckedSymbolToWireJson(s: FrontCheckedSymbol) -> String {
+    "\{\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"start\":{s.start},\"end\":{s.end}\}"
+}
+fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>) -> String {
+    if insts.len() == 0 {
+        return "[]"
+    }
+    let mut items: List<String> = []
+    for i in insts {
+        items.push(frontCheckInstantiationToWireJson(i))
+    }
+    "[" + strings.join(items, ",") + "]"
+}
+fn frontCheckInstantiationToWireJson(i: FrontCheckInstantiation) -> String {
+    let mut typeArgsParts: List<String> = []
+    for ta in i.typeArgs {
+        typeArgsParts.push(frontTypeReprToWireJson(ta))
+    }
+    let typeArgsJson = "[" + strings.join(typeArgsParts, ",") + "]"
+    let mut out = "\{\"node\":{i.node},\"nodeId\":{i.nodeId},\"instantiationId\":{i.instantiationId},\"callee\":" + frontJsonString(i.callee) + ",\"typeArgs\":" + typeArgsJson
+    if i.typeArgIds.len() > 0 {
+        let mut typeArgIdsParts: List<String> = []
+        for tid in i.typeArgIds {
+            typeArgIdsParts.push("{tid}")
+        }
+        out = out + ",\"typeArgIds\":[" + strings.join(typeArgIdsParts, ",") + "]"
+    }
+    out + ",\"resultType\":" + frontTypeReprToWireJson(i.resultType) + ",\"resultTypeId\":{i.resultTypeId},\"start\":{i.start},\"end\":{i.end}\}"
+}
+fn checkDiagnosticsToWireJson(diags: List<CheckDiagnostic>) -> String {
+    if diags.len() == 0 {
+        return "[]"
+    }
+    let mut items: List<String> = []
+    for d in diags {
+        items.push(checkDiagnosticToWireJson(d))
+    }
+    "[" + strings.join(items, ",") + "]"
+}
+fn checkDiagnosticToWireJson(d: CheckDiagnostic) -> String {
+    let mut out = "\{\"code\":" + frontJsonString(d.code) + ",\"severity\":" + frontJsonString(diagnosticSeverityName(d.severity)) + ",\"message\":" + frontJsonString(d.message) + ",\"start\":{d.start},\"end\":{d.end}"
+    if d.notes.len() > 0 {
+        let mut notesParts: List<String> = []
+        for n in d.notes {
+            notesParts.push(frontJsonString(n))
+        }
+        out = out + ",\"notes\":[" + strings.join(notesParts, ",") + "]"
+    }
+    out + "\}"
+}
+fn frontTypeReprToWireJson(repr: FrontTypeRepr) -> String {
+    let mut parts: List<String> = []
+    parts.push("\"kind\":" + frontJsonString(repr.kind))
+    if repr.name.len() > 0 {
+        parts.push("\"name\":" + frontJsonString(repr.name))
+    }
+    if repr.path.len() > 0 {
+        parts.push("\"path\":" + frontJsonString(repr.path))
+    }
+    if repr.args.len() > 0 {
+        let mut argParts: List<String> = []
+        for a in repr.args {
+            argParts.push(frontTypeReprToWireJson(a))
+        }
+        parts.push("\"args\":[" + strings.join(argParts, ",") + "]")
+    }
+    match repr.ret {
+        Some(inner) -> parts.push("\"return\":" + frontTypeReprToWireJson(inner)),
+        None -> {
+            let _ = repr
+        },
+    }
+    if repr.paramNames.len() > 0 {
+        let mut nameParts: List<String> = []
+        for n in repr.paramNames {
+            nameParts.push(frontJsonString(n))
+        }
+        parts.push("\"param_names\":[" + strings.join(nameParts, ",") + "]")
+    }
+    "\{" + strings.join(parts, ",") + "\}"
+}
+fn frontJsonString(s: String) -> String {
+    "\"" + frontJsonEscape(s) + "\""
+}
+fn frontJsonBool(b: Bool) -> String {
+    if b {
+        "true"
+    } else {
+        "false"
+    }
+}
+/// frontJsonEscape applies the minimum escape set required by RFC 8259
+/// §7. Backslash and the double-quote get their canonical short forms,
+/// the four whitespace controls map to `\n` / `\r` / `\t` / `\b` / `\f`,
+/// and any remaining Unicode code point below U+0020 is emitted as
+/// `\u00XX`. Other code points — including code points outside the BMP
+/// or beyond ASCII — pass through unchanged so the input encoding
+/// round-trips. The walk iterates `strings.split(s, "")` so each step
+/// is one code point (matching `s.chars()` semantics), not one UTF-8
+/// byte.
+fn frontJsonEscape(s: String) -> String {
+    let units = strings.split(s, "")
+    let total = units.len()
+    let mut out = ""
+    let mut i = 0
+    for i < total {
+        let unit = units[i]
+        if unit == "\\" {
+            out = out + "\\\\"
+        } else if unit == "\"" {
+            out = out + "\\\""
+        } else if unit == "\n" {
+            out = out + "\\n"
+        } else if unit == "\r" {
+            out = out + "\\r"
+        } else if unit == "\t" {
+            out = out + "\\t"
+        } else if unit == "\u{0008}" {
+            out = out + "\\b"
+        } else if unit == "\u{000c}" {
+            out = out + "\\f"
+        } else if frontJsonIsControlUnit(unit) {
+            out = out + "\\u00" + frontJsonHexByte(unit)
+        } else {
+            out = out + unit
+        }
+        i = i + 1
+    }
+    out
+}
+fn frontJsonIsControlUnit(unit: String) -> Bool {
+    let chars = unit.chars()
+    if chars.len() == 0 {
+        return false
+    }
+    let v = chars[0].toInt()
+    v >= 0 && v < 32
+}
+fn frontJsonHexByte(unit: String) -> String {
+    let chars = unit.chars()
+    if chars.len() == 0 {
+        return "00"
+    }
+    let v = chars[0].toInt()
+    let hi = (v / 16) % 16
+    let lo = v % 16
+    frontJsonHexDigit(hi) + frontJsonHexDigit(lo)
+}
+fn frontJsonHexDigit(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    } else if n == 1 {
+        return "1"
+    } else if n == 2 {
+        return "2"
+    } else if n == 3 {
+        return "3"
+    } else if n == 4 {
+        return "4"
+    } else if n == 5 {
+        return "5"
+    } else if n == 6 {
+        return "6"
+    } else if n == 7 {
+        return "7"
+    } else if n == 8 {
+        return "8"
+    } else if n == 9 {
+        return "9"
+    } else if n == 10 {
+        return "a"
+    } else if n == 11 {
+        return "b"
+    } else if n == 12 {
+        return "c"
+    } else if n == 13 {
+        return "d"
+    } else if n == 14 {
+        return "e"
+    } else if n == 15 {
+        return "f"
+    }
+    "0"
+}
