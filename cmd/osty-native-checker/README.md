@@ -9,7 +9,7 @@ matching responsibilities, built from disjoint sources.
 | target | command | source | status |
 |---|---|---|---|
 | Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + manual naive parser | **walking skeleton** (stub CheckResult) |
+| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **semantic correctness** (real checker, structural JSON parity; non-empty input still misses byte-offset / stable-ID adapter work) |
 
 ## Why two targets
 
@@ -18,7 +18,7 @@ under the plan tracked in [docs/llvm-selfhost-plan.md](../../docs/llvm-selfhost-
 The Go-built target remains the production checker until the LLVM-built one
 reaches behavior parity (plan §12 M3/M4).
 
-## Current state (2026-05-17)
+## Current state (2026-05-19)
 
 - ✓ **M1** — LLVM-built binary builds + runs (`--bootstrap-stage0`)
 - ✓ **M2 (partial)** — empty-source fixture byte-parity:
@@ -27,9 +27,19 @@ reaches behavior parity (plan §12 M3/M4).
   $ echo '{"source":""}' | ./.osty/out/debug/llvm/osty-native-checker-llvm
   diff: IDENTICAL
   ```
-- ⏳ **M3/M4** — multi-fixture / spec corpus / toolchain self-input parity
-  blocked by `SPEC_GAPS.md::cross-pkg-module-resolution` (see PR3-C step 3
-  design [docs/llvm-selfhost-plan-pr3-c-step3-design.md](../../docs/llvm-selfhost-plan-pr3-c-step3-design.md))
+- ✓ **M3 (semantic correctness)** — `main.osty` now routes through
+  `tc.frontCheckSourceToWireJson` (`toolchain/check_json.osty`) instead of
+  the prior `emptyCheckResultJson` stub, so non-empty inputs emit the real
+  checker summary, typed-node / binding / symbol / instantiation lists and
+  structured diagnostics in the same JSON shape as
+  `internal/selfhost/api/types.go::CheckResult`.
+- ⏳ **M4** — full byte-for-byte parity on non-empty inputs still pending:
+  the LLVM-built path keeps token indices in `start` / `end`, skips the
+  Go adapter's display line/column + span-ID + sha256 stable-ID stamping
+  (`internal/selfhost/check_adapter.go::EnsureStableIDs`), and does not
+  populate `errorsByContext` / `errorDetails` telemetry. Tracked under
+  `SPEC_GAPS.md::cross-pkg-module-resolution` (see PR3-C step 3 design
+  [docs/llvm-selfhost-plan-pr3-c-step3-design.md](../../docs/llvm-selfhost-plan-pr3-c-step3-design.md)).
 
 ## Build (LLVM-built)
 
@@ -63,10 +73,15 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 
 - `io.readLine()` 으로 stdin 한 줄만 (PR1c, [#1826](https://github.com/choiceoh/osty/pull/1826))
 - `strings.indexOf` + `strings.slice` 만 사용한 manual naive JSON source 추출 (PR2, [#1829](https://github.com/choiceoh/osty/pull/1829)):
-  - escape (`\"`, `\n`) 미처리
+  - 입력 측 escape (`\"`, `\n`) 미처리
   - 다른 key 가 `"source"` substring 포함 시 오인지
-- 진짜 checker 호출 (`elabFile` etc.) **부재** — `use toolchain.check` 가
-  cross-package wall (E0703/E0704) — PR3-C step 3 unlock 대기
+- 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
+  (`toolchain/check_json.osty`) 가 lex/parse/check 한 후 wire JSON 으로
+  직렬화. 단:
+  - `start` / `end` 가 token index (Go adapter 의 byte-offset 변환 미복제)
+  - `EnsureStableIDs` 의 sha256 stable ID 미스탬프 — `omitempty` 로 인해 누락만 발생, 잘못된 값은 아님
+  - `errorsByContext` / `errorDetails` summary telemetry 미산출
+  - 모두 `SPEC_GAPS.md::cross-pkg-module-resolution` trajectory 의 M4 byte parity 항목
 
 ## main.go vs main.osty co-existence
 
@@ -81,6 +96,8 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 | [#1826](https://github.com/choiceoh/osty/pull/1826) | **🎉 PR1c** 진짜 stdin (`std.io.readLine → osty_rt_io_read_line` MIR symbol rewrite) |
 | [#1829](https://github.com/choiceoh/osty/pull/1829) | **PR2** manual naive parser |
 | [#1842](https://github.com/choiceoh/osty/pull/1842) | **PR3-C-impl-go step 1+2** ResolvedSymbol.ImportPath post-processing |
-| (TBD) | PR3-C step 3 (옵션 c) 합의 후 cross-package method-call unlock |
+| [#1890](https://github.com/choiceoh/osty/pull/1890) | **PR3-E/F activation** — cross-pkg method-call dispatch arm |
+| (this branch) | **PR3-G semantic correctness** — `tc.frontCheckSourceToWireJson` (`toolchain/check_json.osty`) replaces stub `emptyCheckResultJson` |
+| (TBD) | M4 byte parity — port `internal/selfhost/check_adapter.go` (byte offsets + stable IDs + telemetry) to Osty |
 
 자세한 분기 결정 + 시도 결과 → `docs/llvm-selfhost-plan-pr*.md` 시리즈.
