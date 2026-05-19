@@ -51,7 +51,7 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if err := ValidateEmit(NameLLVM, req.Emit); err != nil {
 		return nil, err
 	}
-	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
+	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit, req.BootstrapStage0)
 	if genErr == nil {
 		return b.emitPrebuiltIR(ctx, req, irOut, warnings)
 	}
@@ -65,7 +65,7 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 // EmitLLVMIRText runs the LLVM lowering pipeline for one prepared entry and
 // returns the textual IR bytes directly, without creating artifact paths.
 func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []error, error) {
-	return generateLLVMIR(entry, target, features, EmitLLVMIR)
+	return generateLLVMIR(entry, target, features, EmitLLVMIR, false)
 }
 
 // TryEmitNativeOwnedLLVMIRText is retained as a compatibility probe while the
@@ -182,37 +182,15 @@ func (b LLVMBackend) preparePrebuiltIRResult(req Request, irOut []byte, warnings
 	}, nil
 }
 
-func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode) ([]byte, []error, error) {
+func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode, bootstrapStage0 bool) ([]byte, []error, error) {
 	if entry.IR == nil {
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
 	warnings := append([]error(nil), entry.IRIssues...)
-	// Phase-7 gate. OSTY_LLVM_LIR_PROTO=1 selects the LIR Proto path
-	// at this dispatcher entry. The dispatcher invokes the registered
-	// LIRProtoRunner (defaults to a "not-wired" stub returning
-	// ErrLIRProtoNotWired); on success the runner's bytes are
-	// returned directly. Any non-nil error is treated as a structured
-	// fall-back signal: warning attached, continue with whichever
-	// legacy path the existing dispatcher would have chosen
-	// (native-owned fast path or MIR-direct). Flipping the gate on
-	// stays safe before a real runner lands — production output is
-	// unchanged but the selection is visible in build logs.
-	if llvmabi.LIRProtoSelected() {
-		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s", entry.PackageName, entry.SourcePath)
-		req := llvmabi.LIRProtoRequest{
-			PackageName: entry.PackageName,
-			SourcePath:  entry.SourcePath,
-			Source:      entry.Source,
-			Target:      target,
-		}
-		if out, err := llvmabi.InvokeLIRProtoRunner(req); err == nil && out != nil {
-			traceLLVMDispatch("lir-proto-runner covered package=%s source=%s", entry.PackageName, entry.SourcePath)
-			return out, warnings, nil
-		} else {
-			traceLLVMDispatch("lir-proto-runner declined package=%s source=%s — falling back: %v", entry.PackageName, entry.SourcePath, err)
-			warnings = append(warnings, err)
-		}
-	}
+	// MIR → LLVM IR is delegated to the native-owned subprocess
+	// (`osty-native-llvmgen` → `nativelirproto`), which routes through
+	// the self-hosted LIR Proto pipeline. There is no separate host-side
+	// env gate anymore.
 	opts := llvmabi.Options{
 		PackageName: entry.PackageName,
 		SourcePath:  entry.SourcePath,
@@ -227,10 +205,10 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, llvmDispatchUnsupportedPreflight)
 	}
 	if capabilities.CanRoute(llvmDispatchNativeOwned) {
-		if Stage0FallbackEnabled() {
+		if bootstrapStage0 {
 			if nativeWarnings, missing := probeStage0BootstrapMissingOstySelf(); missing {
 				traceLLVMDispatch("stage0 fallback shortcut: osty-self missing before native MIR payload marshal package=%s source=%s", entry.PackageName, entry.SourcePath)
-				if out, stage0Warnings, handled := emitStage0FallbackForMissingOstySelf(entry, opts, nativeWarnings); handled {
+				if out, stage0Warnings, handled := emitStage0FallbackForMissingOstySelf(entry, opts, nativeWarnings, bootstrapStage0); handled {
 					return out, append(warnings, stage0Warnings...), nil
 				} else {
 					return renderStage0FallbackUnsupportedLLVMIR(entry, target, emit, append(warnings, stage0Warnings...), llvmDispatchNativeOwned)
@@ -244,9 +222,9 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
 		case ok:
 			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
-			// Carry both the outer warnings (entry IRIssues + Phase-7
-			// gate) and the native-owned path's warnings forward so
-			// neither is silently dropped.
+			// Carry both the outer warnings (entry IRIssues) and the
+			// native-owned path's warnings forward so neither is
+			// silently dropped.
 			return out, append(warnings, nativeWarnings...), nil
 		default:
 			traceLLVMDispatch("%s declined package=%s source=%s reasons=[%s]", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, joinErrors(nativeWarnings))
@@ -270,7 +248,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		traceLLVMDispatch("%s unsupported: %s %s (%s)", route, diag.Code, diag.Kind, row.Subject)
 		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
 	}
-	irOut, fallbackWarnings, genErr := emitLLVMFallback(route, entry, opts)
+	irOut, fallbackWarnings, genErr := emitLLVMFallback(route, entry, opts, bootstrapStage0)
 	warnings = append(warnings, fallbackWarnings...)
 	if genErr == nil {
 		traceLLVMDispatch("%s succeeded package=%s source=%s", route, entry.PackageName, entry.SourcePath)
@@ -289,12 +267,12 @@ func llvmFallbackDispatchRoute(opts llvmabi.Options, entry Entry) llvmDispatchRo
 // subprocess. The Go MIR emitter is gone, so MIR-direct emission rides the
 // same `tryNativeOwnedMIRPayloadLLVMIRText` boundary the native-owned route
 // uses. When the subprocess declines because `osty-self` is not built yet
-// (the canonical bootstrap symptom), an opt-in stage0 fallback can step in
-// and emit a small bootstrap-only subset; see
-// `docs/osty_self_bootstrap_design.md`. Without the env-var opt-in the
-// dispatcher still declines so production builds never silently route
-// through the bootstrap emitter.
-func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, []error, error) {
+// (the canonical bootstrap symptom), the install-self bootstrap path can step
+// in and emit a small bootstrap-only subset; see
+// `docs/osty_self_bootstrap_design.md`. Normal production builds pass
+// bootstrapStage0=false, so the dispatcher still declines instead of silently
+// routing through the bootstrap emitter.
+func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options, bootstrapStage0 bool) ([]byte, []error, error) {
 	if entry.MIR == nil {
 		return nil, nil, llvmabi.Unsupported("source-layout", "nil MIR module")
 	}
@@ -305,7 +283,7 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 	if ok {
 		return out, nativeWarnings, nil
 	}
-	if out, stage0Warnings, handled := emitStage0FallbackForMissingOstySelf(entry, opts, nativeWarnings); handled {
+	if out, stage0Warnings, handled := emitStage0FallbackForMissingOstySelf(entry, opts, nativeWarnings, bootstrapStage0); handled {
 		return out, stage0Warnings, nil
 	} else {
 		nativeWarnings = stage0Warnings
@@ -317,8 +295,8 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 	return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", detail)
 }
 
-func emitStage0FallbackForMissingOstySelf(entry Entry, opts llvmabi.Options, nativeWarnings []error) ([]byte, []error, bool) {
-	if !Stage0FallbackEnabled() || !ShouldUseStage0BootstrapFallback(nativeWarnings) {
+func emitStage0FallbackForMissingOstySelf(entry Entry, opts llvmabi.Options, nativeWarnings []error, bootstrapStage0 bool) ([]byte, []error, bool) {
+	if !bootstrapStage0 || !ShouldUseStage0BootstrapFallback(nativeWarnings) {
 		return nil, nativeWarnings, false
 	}
 	s0Out, s0Err := tryStage0Fallback(entry, opts)
@@ -326,8 +304,8 @@ func emitStage0FallbackForMissingOstySelf(entry Entry, opts llvmabi.Options, nat
 		nativeWarnings = append(nativeWarnings, errors.New("stage0 fallback: emitted MIR through bootstrap-only path"))
 		return s0Out, nativeWarnings, true
 	}
-	// Bootstrap path: when both `OSTY_STAGE0_FALLBACK=1` and
-	// `OSTY_STAGE0_LIST_ALL_DECLINES=1` are set, stage0 emits
+	// Bootstrap path: when install-self enables stage0 bootstrap and
+	// `OSTY_STAGE0_LIST_ALL_DECLINES=1` is set, stage0 emits
 	// partial IR + an aggregated declines error. Accept that
 	// partial IR so the chicken-and-egg `osty install-self` can
 	// produce an osty-self binary whose body covers the
@@ -336,10 +314,10 @@ func emitStage0FallbackForMissingOstySelf(entry Entry, opts llvmabi.Options, nat
 	// Without this branch, the very first build on a fresh
 	// clone fails hard the moment any toolchain function falls
 	// outside stage0's pattern set — even though the produced
-	// binary is good enough to run the smoke tests that
-	// exercise only the covered subset. Only fires when the
-	// caller has explicitly opted into both env vars, so
-	// production builds remain unaffected.
+	// binary is good enough to run the smoke tests that exercise
+	// only the covered subset. Only fires when the caller has
+	// explicitly opted into bootstrap mode, so production builds
+	// remain unaffected.
 	if len(s0Out) > 0 && stage0.IsListAllDeclines() {
 		nativeWarnings = append(nativeWarnings,
 			errors.New("stage0 fallback: partial IR with aggregated declines (OSTY_STAGE0_LIST_ALL_DECLINES=1)"),

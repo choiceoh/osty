@@ -349,57 +349,6 @@ func TestIsKnownRuntimeFFIPath(t *testing.T) {
 	}
 }
 
-func TestLIRProtoSelectedHonorsEnv(t *testing.T) {
-	old := getenv
-	t.Cleanup(func() { getenv = old })
-	cases := []struct {
-		env  string
-		want bool
-	}{
-		{"", false},
-		{"0", false},
-		{"false", false},
-		{"FALSE", false},
-		{"off", false},
-		{"no", false},
-		{"1", true},
-		{"true", true},
-		{"on", true},
-		{"yes", true},
-		{"anything-else", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.env, func(t *testing.T) {
-			getenv = func(string) string { return tc.env }
-			if got := LIRProtoSelected(); got != tc.want {
-				t.Errorf("LIRProtoSelected() = %v with env=%q, want %v", got, tc.env, tc.want)
-			}
-		})
-	}
-}
-
-func TestSetLIRProtoRunnerRegistersAndReverts(t *testing.T) {
-	stub := stubLIRProtoRunner{out: []byte("stub-bytes")}
-	prev := registeredLIRProtoRunner
-	t.Cleanup(func() { registeredLIRProtoRunner = prev })
-
-	SetLIRProtoRunner(stub)
-	got, err := InvokeLIRProtoRunner(LIRProtoRequest{})
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if string(got) != "stub-bytes" {
-		t.Errorf("Invoke returned %q, want stub-bytes", got)
-	}
-
-	// Setting nil reverts to the default not-wired stub.
-	SetLIRProtoRunner(nil)
-	_, err = InvokeLIRProtoRunner(LIRProtoRequest{})
-	if !errors.Is(err, ErrLIRProtoNotWired) {
-		t.Errorf("nil-revert should restore not-wired error, got %v", err)
-	}
-}
-
 func TestUnsupportedBackendErrorMessage(t *testing.T) {
 	if got := UnsupportedBackendErrorMessage(); got == "" {
 		t.Errorf("UnsupportedBackendErrorMessage returned empty")
@@ -423,13 +372,6 @@ func TestClangFailureMessageEmbedsAllParts(t *testing.T) {
 		}
 	}
 }
-
-type stubLIRProtoRunner struct {
-	out []byte
-	err error
-}
-
-func (s stubLIRProtoRunner) Run(LIRProtoRequest) ([]byte, error) { return s.out, s.err }
 
 func contains(args []string, want string) bool {
 	for _, a := range args {

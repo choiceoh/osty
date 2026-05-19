@@ -1,30 +1,11 @@
 package backend
 
 import (
-	"os"
 	"strings"
 
 	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/llvmabi"
 )
-
-// Stage0FallbackEnv is the env-var name that opts a build into the
-// stage0 bootstrap fallback emitter. The dispatcher consults it when the
-// native LIR Proto subprocess declined because `osty-self` is missing, or
-// because the only available `osty-self` is itself a stage0 partial binary
-// that trapped in a declined function.
-const Stage0FallbackEnv = "OSTY_STAGE0_FALLBACK"
-
-// Stage0FallbackEnabled reports whether the stage0 fallback emitter
-// should be considered when the LIR Proto subprocess declines due to
-// `osty-self` not being built yet.
-func Stage0FallbackEnabled() bool {
-	switch strings.TrimSpace(os.Getenv(Stage0FallbackEnv)) {
-	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
-		return true
-	}
-	return false
-}
 
 // tryStage0Fallback invokes the stage0 emitter with the entry's MIR.
 // Indirection so tests can stub it without touching the live emitter.

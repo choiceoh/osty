@@ -443,9 +443,9 @@ build_self_binary() {
 	snapshot_binaries "$before"
 	log "$label: build toolchain package with $driver"
 	local forward_args
-	printf -v forward_args 'build\n--backend=llvm\n--emit\nbinary\n--force\n%s' "$toolchain_dir"
+	printf -v forward_args 'build\n--bootstrap-stage0\n--backend=llvm\n--emit\nbinary\n--force\n%s' "$toolchain_dir"
 	if [[ "$label" == "stage1" && -z "$host_guard" ]]; then
-		OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+		OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --bootstrap-stage0 --backend=llvm --emit binary --force "$toolchain_dir"
 	elif [[ -n "$host_guard" ]]; then
 		OSTY_SELF_REBUILD_HOST_BIN="$host_guard" OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
 	else

@@ -26,40 +26,11 @@ func withStage0MissingOstySelfProbe(t *testing.T, fn func() ([]error, bool)) {
 	t.Cleanup(func() { probeStage0BootstrapMissingOstySelf = old })
 }
 
-func TestStage0FallbackDisabledByDefault(t *testing.T) {
-	if Stage0FallbackEnabled() {
-		t.Fatalf("OSTY_STAGE0_FALLBACK must default to off; saw enabled")
-	}
-}
-
-func TestStage0FallbackEnabledRespectsEnvVar(t *testing.T) {
-	cases := []struct {
-		value string
-		want  bool
-	}{
-		{"", false},
-		{"0", false},
-		{"false", false},
-		{"off", false},
-		{"1", true},
-		{"true", true},
-		{"TRUE", true},
-		{"On", true},
-		{"yes", true},
-	}
-	for _, c := range cases {
-		c := c
-		t.Run(c.value, func(t *testing.T) {
-			t.Setenv(Stage0FallbackEnv, c.value)
-			if got := Stage0FallbackEnabled(); got != c.want {
-				t.Fatalf("Stage0FallbackEnabled with %q = %v, want %v", c.value, got, c.want)
-			}
-		})
-	}
+func emitLLVMIRTextWithStage0Bootstrap(entry Entry, target string, features []string) ([]byte, []error, error) {
+	return generateLLVMIR(entry, target, features, EmitLLVMIR, true)
 }
 
 func TestGenerateLLVMIRShortCircuitsNativeMIRMarshalWhenStage0FreshClone(t *testing.T) {
-	t.Setenv(Stage0FallbackEnv, "1")
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
 }
@@ -79,7 +50,7 @@ func TestGenerateLLVMIRShortCircuitsNativeMIRMarshalWhenStage0FreshClone(t *test
 		return []byte("; stage0 shortcut IR for test\n"), nil
 	})
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	got, warnings, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
@@ -92,7 +63,6 @@ func TestGenerateLLVMIRShortCircuitsNativeMIRMarshalWhenStage0FreshClone(t *test
 }
 
 func TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing(t *testing.T) {
-	t.Setenv(Stage0FallbackEnv, "1")
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
@@ -111,7 +81,7 @@ func TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing(t *testing.T) {
 		return []byte("; stage0 fallback IR for test\n"), nil
 	})
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	got, warnings, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
@@ -127,7 +97,6 @@ func TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing(t *testing.T) {
 }
 
 func TestEmitLLVMFallbackUsesStage0WhenPartialOstySelfDeclines(t *testing.T) {
-	t.Setenv(Stage0FallbackEnv, "1")
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
@@ -146,7 +115,7 @@ func TestEmitLLVMFallbackUsesStage0WhenPartialOstySelfDeclines(t *testing.T) {
 		return []byte("; stage0 fallback after partial osty-self\n"), nil
 	})
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	got, warnings, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
@@ -161,12 +130,9 @@ func TestEmitLLVMFallbackUsesStage0WhenPartialOstySelfDeclines(t *testing.T) {
 	}
 }
 
-func TestEmitLLVMFallbackSkipsStage0WhenEnvNotSet(t *testing.T) {
-	// No env var set — stage0 must not be reached even when the
+func TestEmitLLVMFallbackSkipsStage0ByDefault(t *testing.T) {
+	// Strict default mode must not reach stage0 even when the
 	// native subprocess declined with the osty-self signal.
-	if v := Stage0FallbackEnabled(); v {
-		t.Fatalf("env should be unset before this test")
-	}
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
 }
@@ -175,7 +141,7 @@ func TestEmitLLVMFallbackSkipsStage0WhenEnvNotSet(t *testing.T) {
 		return nil, false, []error{errors.New("osty-self not found")}, nil
 	})
 	withStage0FallbackOverride(t, func(Entry, llvmabi.Options) ([]byte, error) {
-		t.Fatal("stage0 fallback must not run without OSTY_STAGE0_FALLBACK")
+		t.Fatal("stage0 fallback must not run without bootstrap mode")
 		return nil, nil
 	})
 
@@ -186,9 +152,8 @@ func TestEmitLLVMFallbackSkipsStage0WhenEnvNotSet(t *testing.T) {
 }
 
 func TestEmitLLVMFallbackSkipsStage0WhenDeclineNotOstySelf(t *testing.T) {
-	// Env var set, but the decline reason is unrelated — stage0
+	// Bootstrap mode is set, but the decline reason is unrelated — stage0
 	// should NOT run; the dispatcher should pass the decline up.
-	t.Setenv(Stage0FallbackEnv, "1")
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
@@ -202,15 +167,14 @@ func TestEmitLLVMFallbackSkipsStage0WhenDeclineNotOstySelf(t *testing.T) {
 		return nil, nil
 	})
 
-	_, _, err := EmitLLVMIRText(req.Entry, "", nil)
+	_, _, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err == nil {
 		t.Fatal("expected ErrLLVMNotImplemented when stage0 is not eligible")
 	}
 }
 
 func TestEmitLLVMFallbackBubblesUpStage0Decline(t *testing.T) {
-	// Env on, native declined with osty-self-missing, stage0 declines too.
-	t.Setenv(Stage0FallbackEnv, "1")
+	// Bootstrap mode on, native declined with osty-self-missing, stage0 declines too.
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
@@ -224,7 +188,7 @@ func TestEmitLLVMFallbackBubblesUpStage0Decline(t *testing.T) {
 		return nil, stage0Reason
 	})
 
-	_, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	_, warnings, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err == nil {
 		t.Fatal("expected ErrLLVMNotImplemented when stage0 also declines")
 	}
@@ -234,8 +198,7 @@ func TestEmitLLVMFallbackBubblesUpStage0Decline(t *testing.T) {
 }
 
 func TestEmitLLVMFallbackPrefersNativeWhenItCovers(t *testing.T) {
-	// Env on but native subprocess succeeds — stage0 must not run.
-	t.Setenv(Stage0FallbackEnv, "1")
+	// Bootstrap mode on but native subprocess succeeds — stage0 must not run.
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
@@ -249,7 +212,7 @@ func TestEmitLLVMFallbackPrefersNativeWhenItCovers(t *testing.T) {
 		return nil, nil
 	})
 
-	got, _, err := EmitLLVMIRText(req.Entry, "", nil)
+	got, _, err := emitLLVMIRTextWithStage0Bootstrap(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
@@ -280,11 +243,11 @@ func findWarning(warnings []error, sub string) bool {
 // just EmitLLVMIRText) to catch regressions in the binary / object
 // branches.
 func TestStage0FallbackSurvivesBinaryEmitPath(t *testing.T) {
-	t.Setenv(Stage0FallbackEnv, "1")
 	withStage0MissingOstySelfProbe(t, func() ([]error, bool) { return nil, false })
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitBinary, `fn main() {}`)
+	req.BootstrapStage0 = true
 
 	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
 		return nil, false, []error{errors.New("osty-self not found")}, nil

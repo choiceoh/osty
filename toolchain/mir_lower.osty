@@ -25,9 +25,9 @@
 //
 // Every emitted function now carries a real lowered body; the returned
 // MIR is fed straight through `mir.Validate` / the MIR emitter. The
-// Phase-7 self-host runner (`internal/llvmgen/lir_proto_runner.go`)
-// is the eventual production caller of this lowerer; today it returns
-// `ErrLIRProtoNotWired` and production still uses Go's `mir.Lower`.
+// production LLVM path lowers this MIR via the native toolchain
+// (`osty-native-llvmgen` → `osty-native-lirproto` → `osty-self
+// lir-proto-lower`), not the Go `mir.Lower` package.
 //
 // Type representation: MIR operates on name-level type strings
 // (`MirLocal.typ: String` etc.), so this lowerer emits MIR-facing

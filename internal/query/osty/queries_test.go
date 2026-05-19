@@ -568,7 +568,7 @@ func TestEmitQueryWritesLLVMIRArtifact(t *testing.T) {
 		backend.Layout{Root: root, Profile: "debug"},
 		"",
 		nil,
-	)
+	).WithBootstrapStage0(true)
 
 	emitted := eng.Queries.Emit.Get(eng.DB, target)
 	if emitted.Err != nil {

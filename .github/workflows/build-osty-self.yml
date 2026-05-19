@@ -172,15 +172,14 @@ jobs:
           else
             # Missing seed is a recoverable condition (first round, or
             # a deliberately-cleared release). Surface it but let the
-            # build try `OSTY_STAGE0_FALLBACK=1` so the matrix can
+            # build try its internal source bootstrap so the matrix can
             # still produce *something* for the maintainer to inspect.
-            echo "Seed not available at $seed_url — falling through to stage0 fallback for this run." >&2
-            echo "OSTY_STAGE0_FALLBACK=1" >> "$GITHUB_ENV"
+            echo "Seed not available at $seed_url — falling through to source bootstrap for this run." >&2
           fi
 
       - name: Install self-host artifact into cache
         # Drives toolchain → osty-self build using the seed we just
-        # placed (or stage0 fallback if no seed). The cache layout is
+        # placed (or source bootstrap if no seed). The cache layout is
         # the local `.osty/cache/self-host/<sha>-<triple>/` tree.
         env:
           OSTY_BUILD_FLAGS: ${{ env.OSTY_BUILD_FLAGS }}
