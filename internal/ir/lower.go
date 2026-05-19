@@ -33,7 +33,12 @@ func LowerFnDecl(pkgName string, fn *ast.FnDecl, res *resolve.Result, chk *check
 	if fn == nil {
 		return nil, nil
 	}
-	l := &lowerer{pkgName: pkgName, res: res, chk: chk}
+	l := &lowerer{
+		pkgName:      pkgName,
+		res:          res,
+		chk:          chk,
+		typeRefByPtr: buildSingleFileTypeRefMap(res),
+	}
 	out := l.lowerFnDecl(fn)
 	return out, l.issues
 }
@@ -48,7 +53,12 @@ func LowerLetDecl(pkgName string, ld *ast.LetDecl, res *resolve.Result, chk *che
 	if ld == nil {
 		return nil, nil
 	}
-	l := &lowerer{pkgName: pkgName, res: res, chk: chk}
+	l := &lowerer{
+		pkgName:      pkgName,
+		res:          res,
+		chk:          chk,
+		typeRefByPtr: buildSingleFileTypeRefMap(res),
+	}
 	out := l.lowerLetDecl(ld)
 	return out, l.issues
 }
@@ -67,7 +77,13 @@ func LowerLetDecl(pkgName string, ld *ast.LetDecl, res *resolve.Result, chk *che
 // The returned Module is always non-nil — it just contains ErrorStmt /
 // ErrorExpr nodes in positions that failed.
 func Lower(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) (*Module, []error) {
-	l := &lowerer{pkgName: pkgName, file: file, res: res, chk: chk}
+	l := &lowerer{
+		pkgName:      pkgName,
+		file:         file,
+		res:          res,
+		chk:          chk,
+		typeRefByPtr: buildSingleFileTypeRefMap(res),
+	}
 	return l.run()
 }
 
@@ -95,6 +111,14 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 	}
 	mod := &Module{Package: pkgName}
 	var issues []error
+	// Build the package-wide pointer-keyed `TypeRefsByID` shadow
+	// once so every per-file lowerer shares the same view. Cross-
+	// file recovery paths (`recoverFnDeclReturnType` etc.) reach
+	// foreign-file `*ast.NamedType` nodes whose `NodeID` collides
+	// with unrelated nodes in the lowerer's current file; the
+	// pointer-keyed map disambiguates them by node identity rather
+	// than ID.
+	typeRefByPtr := buildPkgTypeRefMap(pkg)
 	for i, pf := range pkg.Files {
 		if pf == nil {
 			continue
@@ -110,7 +134,13 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 			TypeRefIdents: pf.TypeRefIdents,
 			FileScope:     pf.FileScope,
 		}
-		l := &lowerer{pkgName: pkgName, file: file, res: res, chk: chk}
+		l := &lowerer{
+			pkgName:      pkgName,
+			file:         file,
+			res:          res,
+			chk:          chk,
+			typeRefByPtr: typeRefByPtr,
+		}
 		fileMod, fileIssues := l.run()
 		if i == 0 {
 			mod.SpanV = fileMod.SpanV
@@ -150,6 +180,21 @@ type lowerer struct {
 
 	// native caches structured selfhost checker facts for this lowering pass.
 	native nativeCheckCache
+
+	// typeRefByPtr is a pointer-keyed shadow of `res.TypeRefsByID`.
+	// `TypeRefsByID` is per-file and keyed by `ast.NodeID`, which is
+	// only unique within one `*ast.File`. When the lowerer crosses
+	// into a foreign file's AST (e.g. via
+	// `recoverFnDeclReturnType`'s `sym.Decl.(*ast.FnDecl).ReturnType`
+	// walk), the ID-keyed lookup against the current file's
+	// `res.TypeRefsByID` collides with whatever node happens to
+	// share the same `NodeID` in the current file. The
+	// pointer-keyed map keys by the `*ast.NamedType` itself, so
+	// foreign-file NamedTypes route to the correct symbol regardless
+	// of the lowerer's "current file" context. Populated by
+	// `LowerPackage` and per-file `Lower` from each file's
+	// `pf.TypeRefIdents` / `pf.TypeRefsByID` pair.
+	typeRefByPtr map[*ast.NamedType]*resolve.Symbol
 }
 
 // ==== Top level ====
@@ -834,19 +879,13 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 
 	// Consult the resolver for the head symbol so we can classify
 	// builtins vs user declarations vs generic parameters. The
-	// `resolverSymbolMatchesSourceName` guard rejects answers whose
-	// `Name` doesn't match the source's bare ident (a `TypeRefsByID`
-	// mismapping that has been observed in multi-file packages —
-	// see the helper's doc and PR #1919); rejected lookups fall
-	// through to source-name-based classification at the bottom of
-	// the function. Each rejection is also logged through the
-	// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD` env-gated trace so the
-	// underlying resolver bug stays observable.
+	// pointer-keyed `typeRef` lookup is safe across files (see
+	// `typeRefByPtr`), so the previous defensive name-match guard
+	// added in PR #1919 is no longer needed — cross-file leaks via
+	// `recoverFnDeclReturnType` and siblings used to surface as
+	// wrong-name symbols here, but the package-wide pointer map
+	// disambiguates them by node identity.
 	sym := l.typeRef(nt)
-	if sym != nil && !resolverSymbolMatchesSourceName(sym, pkg, name, nt.Path) {
-		traceLowerNamedTypeGuardReject(name, sym.Name, pkg)
-		sym = nil
-	}
 	if sym != nil {
 		symName := sym.Name
 		if pkg != "" && len(nt.Path) > 0 && symName == nt.Path[0] {
@@ -887,92 +926,6 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 	return &NamedType{Package: pkg, Name: name, Args: args}
 }
 
-// resolverSymbolMatchesSourceName guards `lowerNamedType`'s
-// resolver-driven path against `TypeRefsByID` mismappings that
-// have been observed in multi-file packages — for example, the
-// `List` head ident in `hintTupleElems`'s return type signature
-// (toolchain/inspect_hint.osty) resolves to the `FrontCheckResult`
-// symbol (toolchain/check.osty) instead of `List`, producing a
-// downstream `FrontCheckResult__len` undefined symbol at
-// install-self link. See PR #1916 / #1917 / #1918 for the three
-// stages of the bisection that pinpointed this site.
-//
-// The guard accepts the resolver-returned symbol when either:
-//
-//   - the source is **bare** (no package qualifier) AND the
-//     symbol's `Name` matches the source path's last component.
-//     Bare paths must round-trip through the resolver under their
-//     source name; anything else is a TypeRefsByID mismapping.
-//   - the source is **package-qualified** (`pkg != ""`).
-//     Cross-package type references legitimately route through
-//     arbitrarily-named symbols (e.g. `use foo as bar` +
-//     `bar.Baz` resolves through package alias machinery), so
-//     trust the resolver in that path.
-//
-// When the guard rejects, `lowerNamedType` skips the resolver
-// path and falls through to the source-name-based builtin /
-// generic-name resolution at the bottom of the function, which
-// correctly classifies `List` / `Map` / `Set` / `Option` /
-// `Result` as builtin containers and everything else as a user-
-// named type. Each rejection is also logged through
-// `traceLowerNamedTypeGuardReject` (env-gated) so the underlying
-// resolver `TypeRefsByID` bug remains observable for follow-up
-// investigation rather than silently masked.
-func resolverSymbolMatchesSourceName(sym *resolve.Symbol, pkg, name string, path []string) bool {
-	if sym == nil {
-		return false
-	}
-	if pkg == "" {
-		return sym.Name == name
-	}
-	// Package-qualified path: trust the resolver. Cross-package
-	// type references legitimately route through arbitrarily-named
-	// symbols, so accepting the resolver answer avoids false-
-	// positives on legitimate aliases. The `path` parameter is
-	// retained on the signature for parity with the qualified-path
-	// caller — future tightening of this branch can use it to
-	// require `sym.Name == path[0]` instead of the unconditional
-	// trust, but doing so today would regress on the
-	// `pub use std.X as Y` rename machinery.
-	_ = path
-	return true
-}
-
-// ==== lowerNamedType guard-reject trace (env-gated diagnostic) ====
-//
-// `OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD=1` enables a stderr line
-// each time `resolverSymbolMatchesSourceName` rejects a resolver-
-// returned symbol. Used so the underlying resolver `TypeRefsByID`
-// bug (`List` AST node → `FrontCheckResult` symbol etc.) remains
-// observable when the IR-layer guard masks its downstream
-// FrontCheckResult__len failure mode.
-
-var lowerNamedTypeGuardTraceWriter io.Writer = os.Stderr
-
-func lowerNamedTypeGuardTraceEnabled() bool {
-	switch os.Getenv("OSTY_IR_TRACE_LOWER_NAMED_TYPE_GUARD") {
-	case "", "0", "false", "off":
-		return false
-	default:
-		return true
-	}
-}
-
-// traceLowerNamedTypeGuardReject records each guard rejection
-// (source name vs resolver-returned symbol name mismatch).
-// `sourceName` is the source path's last component, `symName` is
-// the rejected resolver answer, `pkg` is the source path's
-// package prefix (empty for bare).
-func traceLowerNamedTypeGuardReject(sourceName, symName, pkg string) {
-	if !lowerNamedTypeGuardTraceEnabled() {
-		return
-	}
-	fmt.Fprintf(lowerNamedTypeGuardTraceWriter,
-		"ir lowerNamedType guard reject: sourceName=%q symName=%q pkg=%q\n",
-		sourceName, symName, pkg,
-	)
-}
-
 // joinDottedPath joins a non-empty string slice with '.'.
 func joinDottedPath(parts []string) string {
 	switch len(parts) {
@@ -989,10 +942,73 @@ func joinDottedPath(parts []string) string {
 }
 
 func (l *lowerer) typeRef(nt *ast.NamedType) *resolve.Symbol {
-	if l.res == nil || nt == nil {
+	if nt == nil {
+		return nil
+	}
+	// Prefer the pointer-keyed map when populated: it is immune to
+	// `NodeID` collisions across files, so foreign-file NamedTypes
+	// reached via `sym.Decl` walks (see `recoverFnDeclReturnType`)
+	// resolve to the correct symbol even though the lowerer's
+	// current `res` covers a different file.
+	if l.typeRefByPtr != nil {
+		if sym, ok := l.typeRefByPtr[nt]; ok {
+			return sym
+		}
+	}
+	if l.res == nil {
 		return nil
 	}
 	return l.res.TypeRefsByID[nt.ID]
+}
+
+// buildPkgTypeRefMap assembles a pointer-keyed `*ast.NamedType` →
+// `*resolve.Symbol` map from every file in pkg. The map short-
+// circuits the ID-keyed lookup against the lowerer's current
+// `res.TypeRefsByID`, which fails when a foreign-file recovery
+// (`recoverFnDeclReturnType` and siblings) reaches a NamedType
+// whose `NodeID` collides with an unrelated node in the lowerer's
+// current file. Each `pf` carries `TypeRefIdents` as the canonical
+// list of resolved NamedTypes alongside `TypeRefsByID`; we walk
+// that slice once and pair every node pointer with the symbol
+// recorded for it.
+func buildPkgTypeRefMap(pkg *resolve.Package) map[*ast.NamedType]*resolve.Symbol {
+	if pkg == nil {
+		return nil
+	}
+	out := map[*ast.NamedType]*resolve.Symbol{}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		for _, nt := range pf.TypeRefIdents {
+			if nt == nil {
+				continue
+			}
+			if sym := pf.TypeRefsByID[nt.ID]; sym != nil {
+				out[nt] = sym
+			}
+		}
+	}
+	return out
+}
+
+// buildSingleFileTypeRefMap is the single-file analogue of
+// `buildPkgTypeRefMap`. Same shape, fed directly from a
+// `*resolve.Result` rather than a Package.
+func buildSingleFileTypeRefMap(res *resolve.Result) map[*ast.NamedType]*resolve.Symbol {
+	if res == nil {
+		return nil
+	}
+	out := map[*ast.NamedType]*resolve.Symbol{}
+	for _, nt := range res.TypeRefIdents {
+		if nt == nil {
+			continue
+		}
+		if sym := res.TypeRefsByID[nt.ID]; sym != nil {
+			out[nt] = sym
+		}
+	}
+	return out
 }
 
 // primitiveByName maps a scalar type name to the IR singleton.
