@@ -207,6 +207,55 @@ func TestLowerNamedTypeFallsBackToResWhenPointerMapAbsent(t *testing.T) {
 	}
 }
 
+// TestLowerNamedTypeRespectsResolverBypassWhenResIsNil locks the
+// invariant `lowerStdlibType` depends on: setting `l.res = nil`
+// must bypass *all* resolver-driven lookup, including the new
+// pointer-keyed `typeRefByPtr` shadow. Otherwise a stdlib stub
+// nt that happens to be registered in `typeRefByPtr` (e.g. when
+// the outer lowerer was hydrated from a stdlib module's
+// `*resolve.Result`) would still receive a resolver answer, and
+// the stub fallback's "pure AST-shape" contract would be broken.
+//
+// The simulated shape: `typeRefByPtr` carries a wrong sym for
+// the stub nt (the stdlib module's view of the world), and
+// `lowerStdlibType` nils out `l.res`. Even with `typeRefByPtr`
+// non-nil, `lowerNamedType` must fall through to source-name
+// classification, which correctly tags `List<String>` as a
+// builtin container.
+func TestLowerNamedTypeRespectsResolverBypassWhenResIsNil(t *testing.T) {
+	stubAST := &ast.NamedType{
+		ID:   ast.NodeID(50),
+		Path: []string{"List"},
+		Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
+	}
+	wrongSym := &resolve.Symbol{
+		Name: "FrontCheckResult",
+		Kind: resolve.SymStruct,
+		Decl: &ast.StructDecl{Name: "FrontCheckResult"},
+	}
+	l := &lowerer{
+		// res deliberately nil — mirrors `lowerStdlibType`'s
+		// temporary bypass.
+		res: nil,
+		// typeRefByPtr carries a wrong symbol for the stub. The
+		// bypass must skip it.
+		typeRefByPtr: map[*ast.NamedType]*resolve.Symbol{
+			stubAST: wrongSym,
+		},
+	}
+	got := l.lowerNamedType(stubAST)
+	nt, ok := got.(*NamedType)
+	if !ok {
+		t.Fatalf("lowerNamedType returned %T, want *NamedType", got)
+	}
+	if nt.Name != "List" {
+		t.Errorf("bypass failed: NamedType.Name = %q, want %q (l.res=nil must skip both res.TypeRefsByID and typeRefByPtr)", nt.Name, "List")
+	}
+	if !nt.Builtin {
+		t.Errorf("List<String> should be marked Builtin: true; got %+v", nt)
+	}
+}
+
 // TestRecoverFnDeclReturnTypeTraceDefaultSilent locks the
 // off-by-default behaviour of the OSTY_IR_TRACE_FN_DECL_RECOVERY
 // env-gated diagnostic: without the env var set even the

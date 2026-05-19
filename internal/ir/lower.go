@@ -945,6 +945,17 @@ func (l *lowerer) typeRef(nt *ast.NamedType) *resolve.Symbol {
 	if nt == nil {
 		return nil
 	}
+	// `l.res == nil` is the "bypass the resolver entirely" signal
+	// (see `lowerStdlibType`, which sets it temporarily so stdlib
+	// stub nodes lower via pure AST-shape classification). Honour
+	// that contract by skipping the pointer-keyed map too —
+	// otherwise a stdlib stub nt that happens to be registered in
+	// `typeRefByPtr` (e.g. when the outer lowerer was built from a
+	// stdlib `*resolve.Result`) would still receive a resolver
+	// answer.
+	if l.res == nil {
+		return nil
+	}
 	// Prefer the pointer-keyed map when populated: it is immune to
 	// `NodeID` collisions across files, so foreign-file NamedTypes
 	// reached via `sym.Decl` walks (see `recoverFnDeclReturnType`)
@@ -954,9 +965,6 @@ func (l *lowerer) typeRef(nt *ast.NamedType) *resolve.Symbol {
 		if sym, ok := l.typeRefByPtr[nt]; ok {
 			return sym
 		}
-	}
-	if l.res == nil {
-		return nil
 	}
 	return l.res.TypeRefsByID[nt.ID]
 }
