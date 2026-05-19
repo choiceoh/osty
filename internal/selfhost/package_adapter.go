@@ -3,6 +3,7 @@ package selfhost
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -456,7 +457,7 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 				owner:         fn.Owner,
 				receiverTy:    receiverTy,
 				retTy:         retTy,
-				paramNames:    append([]string(nil), fn.ParamNames...),
+				paramNames:    selfhostImportFnParamNames(fn.ParamNames, fn.ParamDefaults),
 				paramTys:      paramTys,
 				generics:      append([]string(nil), fn.Generics...),
 				genericBounds: selfhostMaterializeBounds(env, fn.GenericBounds),
@@ -466,6 +467,45 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			}
 		}
 	}
+}
+
+// selfhostImportFnParamNames returns the param-names slice the checker
+// records on imported function signatures, synthesizing the `?`-prefix
+// default-arg marker from the parallel `ParamDefaults` bool slice when
+// the caller did not pre-encode it.
+//
+// `paramDefaultCount` (generated.go::paramDefaultCount, mirror of
+// toolchain/check.osty) discovers trailing defaults by scanning param
+// names for the `?` prefix. The arena-walking import surface
+// (import_surface_arena.go::arenaBuildImportedFn) pre-encodes the prefix
+// and also fills `ParamDefaults` as parallel data — the two
+// representations agree there.
+//
+// User-supplied import surfaces (Go-side tests and external probes that
+// build `PackageCheckFn` directly) often fill only `ParamDefaults` and
+// leave the names bare, which silently dropped the trailing defaults on
+// the import boundary and surfaced as a spurious E0701 arity error at
+// the call site. Synthesizing the prefix here keeps both encodings
+// equivalent for downstream lookup while still preserving any
+// `?`-prefix the caller pre-encoded (no double prefixing).
+func selfhostImportFnParamNames(paramNames []string, paramDefaults []bool) []string {
+	out := append([]string(nil), paramNames...)
+	if len(paramDefaults) == 0 {
+		return out
+	}
+	for i := range out {
+		if i >= len(paramDefaults) {
+			break
+		}
+		if !paramDefaults[i] {
+			continue
+		}
+		if strings.HasPrefix(out[i], "?") {
+			continue
+		}
+		out[i] = "?" + out[i]
+	}
+	return out
 }
 
 // selfhostSetCheckFieldExported bridges the checked-in generated.go shape
