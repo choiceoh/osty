@@ -140,6 +140,44 @@ sha256_file() {
 	fi
 }
 
+normalized_sha256_file() {
+	local path="$1"
+	if command -v python3 >/dev/null 2>&1; then
+		python3 - "$path" <<'PY' && return
+import hashlib
+import struct
+import sys
+
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+
+LC_UUID = 0x1B
+LC_CODE_SIGNATURE = 0x1D
+MH_MAGIC_64 = 0xFEEDFACF
+
+if len(data) >= 32 and struct.unpack_from("<I", data, 0)[0] == MH_MAGIC_64:
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    off = 32
+    for _ in range(ncmds):
+        if off + 8 > len(data):
+            break
+        cmd, cmdsize = struct.unpack_from("<II", data, off)
+        if cmdsize < 8 or off + cmdsize > len(data):
+            break
+        if cmd == LC_UUID and cmdsize >= 24:
+            data[off + 8:off + 24] = b"\0" * 16
+        elif cmd == LC_CODE_SIGNATURE and cmdsize >= 16:
+            dataoff, datasize = struct.unpack_from("<II", data, off + 8)
+            if dataoff <= len(data) and dataoff + datasize <= len(data):
+                data[dataoff:dataoff + datasize] = b"\0" * datasize
+        off += cmdsize
+
+print(hashlib.sha256(data).hexdigest())
+PY
+	fi
+	sha256_file "$path"
+}
+
 snapshot_binaries() {
 	local out="$1"
 	: >"$out"
@@ -619,9 +657,17 @@ build_self_binary_with_host_mir_backend "$stage2" "stage3" "$stage3"
 smoke_self_driver "$stage3" "stage3"
 
 if ! cmp -s "$stage2" "$stage3"; then
+	stage2_norm="$(normalized_sha256_file "$stage2")"
+	stage3_norm="$(normalized_sha256_file "$stage3")"
+	if [[ "$stage2_norm" == "$stage3_norm" ]]; then
+		log "byte parity OK (Mach-O UUID/signature normalized): $stage2_norm"
+		exit 0
+	fi
 	printf 'self-rebuild: byte parity failed\n' >&2
 	printf '  osty-self-2 %s  %s\n' "$(sha256_file "$stage2")" "$stage2" >&2
 	printf '  osty-self-3 %s  %s\n' "$(sha256_file "$stage3")" "$stage3" >&2
+	printf '  normalized osty-self-2 %s\n' "$stage2_norm" >&2
+	printf '  normalized osty-self-3 %s\n' "$stage3_norm" >&2
 	exit 1
 fi
 

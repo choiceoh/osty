@@ -1071,6 +1071,41 @@ func TestMirValidatorReturnMismatchDiagnosticIsBootstrapSafe(t *testing.T) {
 	}
 }
 
+func TestMirValidatorHotContextStringsAvoidInterpolation(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_validator.osty"))
+	if err != nil {
+		t.Fatalf("read mir_validator.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		`mirValidateIndexCtx("aggregateRV.fields[", fi, "]")`,
+		`mirValidateIndexCtx("call.args[", ai, "]")`,
+		`mirValidateIndexCtx("intrinsic.args[", ai, "]")`,
+		`mirValidateIndexedChildCtx(ctx, "projections", pi)`,
+		`mirValidateChildCtx(ctx, "place")`,
+		`prefix + mirIntToString(idx) + suffix`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir_validator.osty missing bootstrap-safe context helper use %q", needle)
+		}
+	}
+	for _, forbidden := range []string{
+		`"aggregateRV.fields[{fi}]"`,
+		`"call.args[{ai}]"`,
+		`"intrinsic.args[{ai}]"`,
+		`"{ctx}.place"`,
+		`"{ctx}.projections[{pi}]"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("mir_validator.osty reintroduced hot-path interpolation %q", forbidden)
+		}
+	}
+}
+
 func TestVerifySelfRebuildStage1IgnoresStaleInTreeSelfBinary(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -1088,6 +1123,30 @@ func TestVerifySelfRebuildStage1IgnoresStaleInTreeSelfBinary(t *testing.T) {
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("verify-self-rebuild missing stage1 stale self-binary guard %q", needle)
+		}
+	}
+}
+
+func TestVerifySelfRebuildNormalizesMachORandomLinkMetadata(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "scripts", "verify-self-rebuild"))
+	if err != nil {
+		t.Fatalf("read verify-self-rebuild: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"normalized_sha256_file()",
+		"LC_UUID = 0x1B",
+		"LC_CODE_SIGNATURE = 0x1D",
+		`data[off + 8:off + 24] = b"\0" * 16`,
+		`data[dataoff:dataoff + datasize] = b"\0" * datasize`,
+		"byte parity OK (Mach-O UUID/signature normalized)",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("verify-self-rebuild missing Mach-O parity normalization guard %q", needle)
 		}
 	}
 }
