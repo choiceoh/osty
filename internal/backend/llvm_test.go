@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -246,6 +247,12 @@ func TestClangLinkLibraryArgs(t *testing.T) {
 func TestClangPlatformRuntimeLinkArgs(t *testing.T) {
 	t.Parallel()
 
+	hostWant := []string{"-lm"}
+	if runtime.GOOS == "darwin" {
+		hostWant = []string{"-lm", "-framework", "Security", "-framework", "CoreFoundation"}
+	} else if runtime.GOOS == "windows" {
+		hostWant = []string{"-ladvapi32"}
+	}
 	cases := []struct {
 		name   string
 		target string
@@ -265,6 +272,11 @@ func TestClangPlatformRuntimeLinkArgs(t *testing.T) {
 			name:   "linux",
 			target: "x86_64-unknown-linux-gnu",
 			want:   []string{"-lm"},
+		},
+		{
+			name:   "host",
+			target: "",
+			want:   hostWant,
 		},
 	}
 	for _, tt := range cases {

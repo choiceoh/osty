@@ -1296,14 +1296,12 @@ func runStage0AuditFixedPointVerify(t *testing.T, module *mir.Module, clangPath 
 // the audit doesn't burn iterations on link errors that aren't
 // actually stage0 bugs (Keychain frameworks, zlib, libm).
 func stage0AuditPlatformLinkArgs() []string {
-	args := []string{"-pthread", "-lz"}
 	switch runtime.GOOS {
 	case "windows":
-		args = append(args, "-ladvapi32")
+		return []string{"-ladvapi32"}
 	case "darwin":
-		args = append(args, "-lm", "-framework", "Security", "-framework", "CoreFoundation")
+		return []string{"-pthread", "-lz", "-lm", "-framework", "Security", "-framework", "CoreFoundation"}
 	default:
-		args = append(args, "-lm")
+		return []string{"-pthread", "-lz", "-lm"}
 	}
-	return args
 }

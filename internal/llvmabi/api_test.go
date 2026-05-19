@@ -201,6 +201,15 @@ func TestClangLinkBinaryArgsOmitsPthreadOnWindows(t *testing.T) {
 	if strings.Contains(got, "-pthread") {
 		t.Errorf("link args should not include -pthread on windows: %s", got)
 	}
+	if !strings.Contains(got, "-Wl,/subsystem:console") {
+		t.Errorf("link args missing Windows console subsystem: %s", got)
+	}
+	if !strings.Contains(got, "-Wl,/stack:67108864") {
+		t.Errorf("link args missing Windows selfhost stack reserve: %s", got)
+	}
+	if strings.Contains(got, "import-instr-limit") {
+		t.Errorf("link args should not pass ELF LLD import tuning to lld-link: %s", got)
+	}
 }
 
 func TestClangCompileObjectArgsNoLTOProfilesDropLTO(t *testing.T) {

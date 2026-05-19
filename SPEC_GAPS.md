@@ -298,14 +298,16 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    진짜 production capability 확장 path: generated.go 직접 수정 — 옵션 c' (narrow exception 한도 확대) / γ (deep type-propagation fix) / frozen seed regen 모델 재고 셋 중 선택.
 
-   **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 OSTY_STDLIB_BODY_LOWER=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
+   **🎉 2026-05-17 source bootstrap UNLOCK**: `OSTY_STAGE0_FALLBACK=1 .bin/osty install-self` **통과**! `osty-self` binary 가 `.osty/cache/self-host/<hash>-darwin-arm64/osty-self` 에 install. 조합:
    - stage0 100% (PR #1858)
    - execWith / execInputWith C wrappers (PR #1861)
-   - `OSTY_STDLIB_BODY_LOWER=1` 활성 → execOutput body lower + tyToRepr 의 monomorph cover
+   - execOutput C wrapper 경유 → `OSTY_STDLIB_BODY_LOWER=1` 없이 source bootstrap 가능
 
    plan §10.1 R2 (stage0 cover) **완전 종결**.
 
-   **2026-05-17 execOutput C wrapper (이 PR)**: `osty_rt_os_exec_output(int64_t exit_code, void *stdout, void *stderr, bool timed_out)` C wrapper + `rewriteStdlibSymbolToRuntime` 매핑 `std.os.execOutput → osty_rt_os_exec_output` 추가. ExecOutput struct ABI = `{i64, ptr, ptr, i1}` (stage0KnownStdlibStructLayout 와 일치). 효과: source bootstrap 명령에서 `OSTY_STDLIB_BODY_LOWER=1` flag **의존성 제거** — `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 .bin/osty install-self` 만으로 통과. minimum-flag combination 으로 source bootstrap path 안정화. PR #1861 의 PR1c 옵션 1 패턴 확장 — 위 §"옵션 5 next wall" 의 첫 path ("C wrapper") 채택.
+   **2026-05-17 execOutput C wrapper (이 PR)**: `osty_rt_os_exec_output(int64_t exit_code, void *stdout, void *stderr, bool timed_out)` C wrapper + `rewriteStdlibSymbolToRuntime` 매핑 `std.os.execOutput → osty_rt_os_exec_output` 추가. ExecOutput struct ABI = `{i64, ptr, ptr, i1}` (stage0KnownStdlibStructLayout 와 일치). 효과: source bootstrap 명령에서 `OSTY_STDLIB_BODY_LOWER=1` flag **의존성 제거** — `OSTY_STAGE0_FALLBACK=1 .bin/osty install-self` 만으로 통과. minimum-flag combination 으로 source bootstrap path 안정화. PR #1861 의 PR1c 옵션 1 패턴 확장 — 위 §"옵션 5 next wall" 의 첫 path ("C wrapper") 채택.
+
+   **2026-05-19 source-bootstrap opt-in collapse**: `OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP` is retired. `OSTY_STAGE0_FALLBACK=1` is now the single explicit opt-in for fresh-clone source bootstrap; `osty install-self` attempts the source build directly when cache/registry lookup fails under that env.
 
    **2026-05-17 R3 trajectory brick 진척** (PR #1873 + #1874 + brick 3a 시도):
    - **Brick 1 (PR #1873)**: `builtinMethodReturnType` 의 PrimInt/PrimByte case 에 `__IntMethods` fan-out cover (abs/min/max/clamp/signum/pow + wrapping*/saturating*/checked*/toString). MIR generator 의 type-propagation gap 의 일부 해소 — recoverOperandType 의 MethodCall path 가 더 많은 receiver type 에서 retrun type 추정 가능.
@@ -327,7 +329,7 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    세 path 모두 깊은 작업. cross-package import (struct literal + type / method / field) 전체가 single root cause.
 
-   **2026-05-17 옵션 5 (source bootstrap) 시도 — next layer wall**: stage0 100% 통과 후 `OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 osty install-self` 시도 시 link 단계에서:
+   **2026-05-17 옵션 5 (source bootstrap) 시도 — next layer wall**: stage0 100% 통과 후 `OSTY_STAGE0_FALLBACK=1 osty install-self` 시도 시 link 단계에서:
    ```
    Undefined symbols for architecture arm64:
      "_std.os.execInputWith", referenced from: _selfRebuildWriteString

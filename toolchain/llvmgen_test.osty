@@ -77,6 +77,8 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     testing.assert(!(llvmTestStrings.contains(link, "-target")))
     let linkWin = llvmTestStrings.join(llvmClangLinkBinaryArgs("x86_64-pc-windows-msvc", ["/tmp/main.o"], "/tmp/app.exe"), " ")
     testing.assert(!(llvmTestStrings.contains(linkWin, "-pthread")))
+    testing.assert(llvmTestStrings.contains(linkWin, "-Wl,/subsystem:console"))
+    testing.assert(!(llvmTestStrings.contains(linkWin, "import-instr-limit")))
     let linkPosix = llvmTestStrings.join(llvmClangLinkBinaryArgs("aarch64-unknown-linux-gnu", ["/tmp/main.o"], "/tmp/app"), " ")
     assertLlvmContains(linkPosix, "-pthread")
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")

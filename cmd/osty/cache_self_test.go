@@ -55,7 +55,7 @@ func TestCacheSelfPathPrintsCanonicalLocation(t *testing.T) {
 		t.Fatalf("cache-self: %v\n%s", err, out)
 	}
 	got := strings.TrimSpace(string(out))
-	if !strings.Contains(got, ".osty/cache/self-host/") {
+	if !strings.Contains(filepath.ToSlash(got), ".osty/cache/self-host/") {
 		t.Errorf("path missing canonical prefix: %s", got)
 	}
 	if !strings.HasSuffix(got, selfhostcache.BinaryName()) {

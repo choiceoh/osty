@@ -2020,7 +2020,12 @@ pub fn llvmClangLinkBinaryArgs(target: String, objectPaths: List<String>, binary
     }
     args.push("-O3")
     args.push("-flto=thin")
-    args.push("-Wl,-mllvm,-import-instr-limit=500")
+    if target.contains("windows") {
+        args.push("-Wl,/subsystem:console")
+        args.push("-Wl,/stack:67108864")
+    } else {
+        args.push("-Wl,-mllvm,-import-instr-limit=500")
+    }
     for objectPath in objectPaths {
         args.push(objectPath)
     }

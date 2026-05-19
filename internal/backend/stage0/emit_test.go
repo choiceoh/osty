@@ -4138,17 +4138,14 @@ func TestStage0P27PrintFamilyAndAbortIntrinsics(t *testing.T) {
 	)
 	got := emit(t, trivialMainFn(), fn)
 	for _, want := range []string{
-		"@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"",
-		"@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"",
-		"@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"",
-		"@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"",
-		"@stderr = external global ptr",
-		"declare i32 @fprintf(ptr, ptr, ...)",
+		"declare ptr @osty_rt_int_to_string(i64)",
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
 		"declare void @osty_rt_panic(ptr)",
-		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.print.int, i64 %n)",
-		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %msg)",
-		"load ptr, ptr @stderr",
-		"call i32 (ptr, ptr, ...) @fprintf",
+		"call ptr @osty_rt_int_to_string(i64 %n)",
+		"call void @osty_rt_io_write(ptr %stage0.print.int.0, i1 false, i1 false)",
+		"call void @osty_rt_io_write(ptr %msg, i1 true, i1 false)",
+		"call void @osty_rt_io_write(ptr %msg, i1 false, i1 true)",
+		"call void @osty_rt_io_write(ptr %stage0.print.int.1, i1 true, i1 true)",
 		"call void @osty_rt_panic(ptr @.str.0)",
 		"ret void",
 	} {
@@ -5251,11 +5248,13 @@ func TestStage0P27WhileVoidIntrinsics(t *testing.T) {
 	got := emit(t, trivialMainFn(), fn)
 	for _, want := range []string{
 		"declare void @osty_rt_list_push_i64(ptr, i64)",
-		"@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"",
+		"declare ptr @osty_rt_int_to_string(i64)",
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
 		"define i64 @pushWhileCounting(ptr %items, i64 %n)",
 		"body.2:",
 		"call void @osty_rt_list_push_i64(ptr %items, i64",
-		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64",
+		"call ptr @osty_rt_int_to_string(i64",
+		"call void @osty_rt_io_write(ptr %stage0.print.int.0, i1 true, i1 false)",
 		"ret i64",
 	} {
 		if !strings.Contains(got, want) {

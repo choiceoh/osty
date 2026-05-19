@@ -25,6 +25,15 @@
 #endif
 #endif
 
+#if defined(_WIN32)
+#ifndef _CRT_RAND_S
+#define _CRT_RAND_S 1
+#endif
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS 1
+#endif
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -127,8 +136,8 @@
 #include <io.h>
 #include <process.h>
 #include <signal.h> /* sig_atomic_t for SIGURG TLS flag */
-#include <wincred.h>
 #include <windows.h>
+#include <wincred.h>
 #define OSTY_RT_TLS __declspec(thread)
 typedef HANDLE osty_rt_thread_t;
 typedef SRWLOCK osty_rt_mu_t;
@@ -27823,6 +27832,221 @@ static int osty_rt_fs_copy_dir_posix(const char *from, const char *to) {
 }
 #endif
 
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static int osty_rt_fs_win32_errno(DWORD code) {
+  switch (code) {
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
+    return ENOENT;
+  case ERROR_DIRECTORY:
+    return ENOTDIR;
+  case ERROR_ACCESS_DENIED:
+  case ERROR_SHARING_VIOLATION:
+  case ERROR_LOCK_VIOLATION:
+    return EACCES;
+  case ERROR_INVALID_NAME:
+  case ERROR_BAD_PATHNAME:
+    return EINVAL;
+  default:
+    return EIO;
+  }
+}
+
+static int osty_rt_fs_set_win32_errno(DWORD code) {
+  errno = osty_rt_fs_win32_errno(code);
+  return -1;
+}
+
+static int64_t osty_rt_fs_win32_filetime_unix_sec(FILETIME ft) {
+  ULARGE_INTEGER raw;
+  const uint64_t windows_unix_epoch_delta_100ns = 116444736000000000ULL;
+
+  raw.LowPart = ft.dwLowDateTime;
+  raw.HighPart = ft.dwHighDateTime;
+  if (raw.QuadPart < windows_unix_epoch_delta_100ns) {
+    return 0;
+  }
+  return (int64_t)((raw.QuadPart - windows_unix_epoch_delta_100ns) /
+                   10000000ULL);
+}
+
+static int osty_rt_fs_collect_path_win32(const char *path, DWORD attrs,
+                                         uint64_t size, FILETIME mtime,
+                                         osty_rt_fs_path_vec *out,
+                                         bool snapshot) {
+  bool is_dir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  bool is_link = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+  char *display =
+      osty_rt_strndup(path == NULL ? "" : path,
+                      strlen(path == NULL ? "" : path),
+                      "runtime.fs.walk.path.win32");
+  char *stored = NULL;
+
+  osty_rt_fs_normalize_slashes(display);
+  if (snapshot) {
+    char kind = is_dir ? 'D' : (is_link ? 'L' : 'F');
+    stored = osty_rt_fs_snapshot_row(
+        kind, display, is_dir ? 0 : (int64_t)size,
+        osty_rt_fs_win32_filetime_unix_sec(mtime));
+    free(display);
+  } else {
+    stored = display;
+  }
+  osty_rt_fs_path_vec_push_take(out, stored);
+  return is_dir && !is_link ? 1 : 0;
+}
+
+static int osty_rt_fs_walk_dir_children_win32(const char *dir_path,
+                                              osty_rt_fs_path_vec *out,
+                                              bool snapshot) {
+  char *pattern = osty_rt_fs_join_path(dir_path, "*", false);
+  WIN32_FIND_DATAA data;
+  HANDLE find = FindFirstFileA(pattern, &data);
+
+  free(pattern);
+  if (find == INVALID_HANDLE_VALUE) {
+    DWORD code = GetLastError();
+    if (code == ERROR_FILE_NOT_FOUND) {
+      return 0;
+    }
+    return osty_rt_fs_set_win32_errno(code);
+  }
+
+  for (;;) {
+    const char *name = data.cFileName;
+    if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
+      DWORD attrs = data.dwFileAttributes;
+      bool is_dir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      uint64_t size =
+          ((uint64_t)data.nFileSizeHigh << 32U) | (uint64_t)data.nFileSizeLow;
+      char *child = osty_rt_fs_join_path(dir_path, name, false);
+      char *visible = child;
+      int recurse;
+
+      if (is_dir) {
+        visible = osty_rt_fs_join_path(child, "", false);
+      }
+      recurse = osty_rt_fs_collect_path_win32(
+          visible, attrs, size, data.ftLastWriteTime, out, snapshot);
+      if (visible != child) {
+        free(visible);
+      }
+      if (recurse > 0) {
+        if (osty_rt_fs_walk_dir_children_win32(child, out, snapshot) != 0) {
+          DWORD code = GetLastError();
+          free(child);
+          FindClose(find);
+          if (errno == 0 && code != ERROR_SUCCESS) {
+            return osty_rt_fs_set_win32_errno(code);
+          }
+          return -1;
+        }
+      }
+      free(child);
+    }
+
+    if (!FindNextFileA(find, &data)) {
+      DWORD code = GetLastError();
+      FindClose(find);
+      if (code == ERROR_NO_MORE_FILES) {
+        return 0;
+      }
+      return osty_rt_fs_set_win32_errno(code);
+    }
+  }
+}
+
+static int osty_rt_fs_walk_root_win32(const char *root,
+                                      osty_rt_fs_path_vec *out,
+                                      bool snapshot) {
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  DWORD attrs;
+  uint64_t size;
+
+  if (!GetFileAttributesExA(root, GetFileExInfoStandard, &data)) {
+    return osty_rt_fs_set_win32_errno(GetLastError());
+  }
+  attrs = data.dwFileAttributes;
+  size = ((uint64_t)data.nFileSizeHigh << 32U) | (uint64_t)data.nFileSizeLow;
+  if ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    (void)osty_rt_fs_collect_path_win32(root, attrs, size, data.ftLastWriteTime,
+                                       out, snapshot);
+    return 0;
+  }
+  return osty_rt_fs_walk_dir_children_win32(root, out, snapshot);
+}
+
+static int osty_rt_fs_copy_dir_win32(const char *from, const char *to) {
+  DWORD attrs = GetFileAttributesA(from);
+  char *pattern;
+  WIN32_FIND_DATAA data;
+  HANDLE find;
+
+  if (attrs == INVALID_FILE_ATTRIBUTES) {
+    return osty_rt_fs_set_win32_errno(GetLastError());
+  }
+  if ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    osty_rt_fs_set_last_error_literal("source is not a directory");
+    errno = 0;
+    return -1;
+  }
+  if (osty_rt_fs_mkdir_p(to) != 0) {
+    return -1;
+  }
+
+  pattern = osty_rt_fs_join_path(from, "*", false);
+  find = FindFirstFileA(pattern, &data);
+  free(pattern);
+  if (find == INVALID_HANDLE_VALUE) {
+    DWORD code = GetLastError();
+    if (code == ERROR_FILE_NOT_FOUND) {
+      return 0;
+    }
+    return osty_rt_fs_set_win32_errno(code);
+  }
+
+  for (;;) {
+    const char *name = data.cFileName;
+    if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
+      char *src = osty_rt_fs_join_path(from, name, false);
+      char *dst = osty_rt_fs_join_path(to, name, false);
+      bool is_dir = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      int rc = 0;
+
+      if (is_dir) {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+          rc = osty_rt_fs_mkdir_p(dst);
+        } else {
+          rc = osty_rt_fs_copy_dir_win32(src, dst);
+        }
+      } else {
+        void *err = osty_rt_fs_copy(src, dst);
+        rc = err == NULL ? 0 : -1;
+      }
+      free(src);
+      free(dst);
+      if (rc != 0) {
+        DWORD code = GetLastError();
+        FindClose(find);
+        if (errno == 0 && code != ERROR_SUCCESS) {
+          return osty_rt_fs_set_win32_errno(code);
+        }
+        return -1;
+      }
+    }
+
+    if (!FindNextFileA(find, &data)) {
+      DWORD code = GetLastError();
+      FindClose(find);
+      if (code == ERROR_NO_MORE_FILES) {
+        return 0;
+      }
+      return osty_rt_fs_set_win32_errno(code);
+    }
+  }
+}
+#endif
+
 static bool osty_rt_fs_glob_has_wildcard(const char *pattern) {
   if (pattern == NULL) {
     return false;
@@ -28302,6 +28526,11 @@ void *osty_rt_fs_walk(const char *root) {
     osty_rt_fs_path_vec_free(&vec);
     return NULL;
   }
+#elif defined(OSTY_RT_PLATFORM_WIN32)
+  if (osty_rt_fs_walk_root_win32(root, &vec, false) != 0) {
+    osty_rt_fs_path_vec_free(&vec);
+    return NULL;
+  }
 #else
   osty_rt_fs_path_vec_free(&vec);
   osty_rt_fs_set_last_error_literal("walk is not supported on this platform");
@@ -28341,6 +28570,25 @@ void *osty_rt_fs_glob(const char *pattern) {
   osty_rt_fs_path_vec_init(&candidates);
 #if defined(OSTY_RT_PLATFORM_POSIX)
   if (osty_rt_fs_walk_root_posix(root, &candidates, false) != 0) {
+    int err = errno;
+    if (err == ENOENT || err == ENOTDIR) {
+      osty_rt_fs_path_vec_free(&candidates);
+      free(root);
+      void *out =
+          osty_rt_fs_path_vec_to_list(&matches, "runtime.fs.glob.entry");
+      osty_rt_fs_path_vec_free(&matches);
+      osty_rt_fs_clear_last_error();
+      errno = 0;
+      return out;
+    }
+    osty_rt_fs_path_vec_free(&candidates);
+    osty_rt_fs_path_vec_free(&matches);
+    free(root);
+    errno = err;
+    return NULL;
+  }
+#elif defined(OSTY_RT_PLATFORM_WIN32)
+  if (osty_rt_fs_walk_root_win32(root, &candidates, false) != 0) {
     int err = errno;
     if (err == ENOENT || err == ENOTDIR) {
       osty_rt_fs_path_vec_free(&candidates);
@@ -28398,6 +28646,11 @@ void *osty_rt_fs_watch(const char *root) {
   osty_rt_fs_path_vec_init(&vec);
 #if defined(OSTY_RT_PLATFORM_POSIX)
   if (osty_rt_fs_walk_root_posix(root, &vec, true) != 0) {
+    osty_rt_fs_path_vec_free(&vec);
+    return NULL;
+  }
+#elif defined(OSTY_RT_PLATFORM_WIN32)
+  if (osty_rt_fs_walk_root_win32(root, &vec, true) != 0) {
     osty_rt_fs_path_vec_free(&vec);
     return NULL;
   }
@@ -28487,6 +28740,12 @@ void *osty_rt_fs_copy_dir(const char *from, const char *to) {
   osty_rt_fs_clear_last_error();
 #if defined(OSTY_RT_PLATFORM_POSIX)
   if (osty_rt_fs_copy_dir_posix(from, to) != 0) {
+    return osty_rt_fs_error_message("failed to copy directory",
+                                    "runtime.fs.copy_dir.error");
+  }
+  return NULL;
+#elif defined(OSTY_RT_PLATFORM_WIN32)
+  if (osty_rt_fs_copy_dir_win32(from, to) != 0) {
     return osty_rt_fs_error_message("failed to copy directory",
                                     "runtime.fs.copy_dir.error");
   }
@@ -31107,9 +31366,10 @@ osty_rt_stage0_init_stderr_global(void) {
 /* Captured process argv. Populated once before main() runs via a
  * platform-specific initialiser (`.init_array` on glibc/musl,
  * `__attribute__((constructor))` + Apple's `_NSGetArg{c,v}` on
- * macOS). `std.env.args` reads from here so a stage0-produced
- * binary can route argv into toolchain CLI dispatch instead of
- * falling through to the unsupported-command banner.
+ * macOS) or lazily from the CRT on Windows. `std.env.args` reads
+ * from here so a stage0-produced binary can route argv into
+ * toolchain CLI dispatch instead of falling through to the
+ * unsupported-command banner.
  *
  * Both globals default to 0/NULL; if the platform-specific
  * initialiser fails to run (or the host isn't covered below),
@@ -31117,6 +31377,16 @@ osty_rt_stage0_init_stderr_global(void) {
  * the pre-capture stub. */
 static int osty_rt_saved_argc;
 static char **osty_rt_saved_argv;
+
+#if defined(_WIN32)
+extern int __argc;
+extern char **__argv;
+
+static void osty_rt_audit_capture_argv_windows(void) {
+  osty_rt_saved_argc = __argc;
+  osty_rt_saved_argv = __argv;
+}
+#endif
 
 #if defined(__APPLE__)
 /* macOS exposes the captured argv via dyld-provided indirection.
@@ -31163,6 +31433,11 @@ void *osty_rt_audit_env_args(void) __asm__(OSTY_RT_AUDIT_SYMBOL("std.env.args"))
     OSTY_RT_AUDIT_USED;
 void *osty_rt_audit_env_args(void) {
   void *list = osty_rt_list_new();
+#if defined(_WIN32)
+  if (osty_rt_saved_argv == NULL) {
+    osty_rt_audit_capture_argv_windows();
+  }
+#endif
   if (list == NULL || osty_rt_saved_argv == NULL) {
     return list;
   }

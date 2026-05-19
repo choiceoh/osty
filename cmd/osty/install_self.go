@@ -5,15 +5,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
-
-const installSelfAllowSourceBootstrapEnv = "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP"
 
 // runInstallSelf orchestrates the bootstrap "build osty-self →
 // promote into cache" sequence. It:
@@ -93,6 +94,12 @@ func runInstallSelf(args []string, _ cliFlags) {
 	}
 
 	resolvedSelf, _, resolveErr := selfhostcache.ResolveBinaryWithFetch(context.Background(), root, selfhostcache.EnvFetcher())
+	if resolveErr != nil && force {
+		if bootstrapSelf, err := findLocalSelfhostBootstrap(root); err == nil {
+			resolvedSelf = bootstrapSelf
+			resolveErr = nil
+		}
+	}
 	if resolveErr == nil {
 		if !force {
 			if resolvedSelf != cachedPath {
@@ -106,21 +113,29 @@ func runInstallSelf(args []string, _ cliFlags) {
 			fmt.Printf("up-to-date:  %s\n", cachedPath)
 			return
 		}
-	} else if !installSelfSourceBootstrapAllowed() {
+	} else if !installSelfSourceBootstrapRequested() {
 		fmt.Fprintf(os.Stderr, "osty install-self: no osty-self bootstrap source available: %v\n", resolveErr)
-		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
-			printInstallSelfBootstrapHint()
-		} else {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "stage0 fallback is enabled, but a full source bootstrap currently requires opt-in because it can exceed memory/time limits before the emergency emitter is reached.")
-		}
-		fmt.Fprintf(os.Stderr, "to attempt the heavy source bootstrap anyway, set %s=1.\n", installSelfAllowSourceBootstrapEnv)
+		printInstallSelfBootstrapHint()
 		os.Exit(1)
 	}
 
-	builtBin, err := buildOstySelf(context.Background(), hostOsty, root, tcAbs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", err)
+	builtBin := ""
+	var buildErr error
+	if force && resolveErr == nil {
+		builtBin, buildErr = buildOstySelfWithSelfhost(context.Background(), resolvedSelf, hostOsty, root, tcAbs)
+		if buildErr != nil && !installSelfSourceBootstrapRequested() {
+			fmt.Fprintf(os.Stderr, "osty install-self: selfhost build: %v\n", buildErr)
+			os.Exit(1)
+		}
+		if buildErr != nil {
+			fmt.Fprintf(os.Stderr, "osty install-self: selfhost build failed; retrying source bootstrap: %v\n", buildErr)
+		}
+	}
+	if builtBin == "" {
+		builtBin, buildErr = buildOstySelf(context.Background(), hostOsty, root, tcAbs)
+	}
+	if buildErr != nil {
+		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", buildErr)
 		// The chicken-egg: a fresh clone has no osty-self in cache,
 		// no in-tree build, and (by default) no registry URL. The
 		// host osty's LLVM backend forks `osty-self lir-proto-lower`
@@ -131,7 +146,7 @@ func runInstallSelf(args []string, _ cliFlags) {
 		// emergency path but not yet for the full toolchain. Surface
 		// the workflow options so the user does not have to hunt
 		// through the resolver chain in the dark.
-		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
+		if os.Getenv(backend.Stage0FallbackEnv) == "" {
 			printInstallSelfBootstrapHint()
 		}
 
@@ -144,16 +159,8 @@ func runInstallSelf(args []string, _ cliFlags) {
 	fmt.Printf("installed:   %s\n", cachedPath)
 }
 
-// buildOstySelf invokes the host `osty` binary with the standard
-// build flags used by the self-rebuild ratchet. Returns the absolute
-// path to the produced osty-self binary.
-func installSelfSourceBootstrapAllowed() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(installSelfAllowSourceBootstrapEnv))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+func installSelfSourceBootstrapRequested() bool {
+	return backend.Stage0FallbackEnabled()
 }
 
 func printInstallSelfBootstrapHint() {
@@ -165,6 +172,9 @@ func printInstallSelfBootstrapHint() {
 	fmt.Fprintln(os.Stderr, "    (subset coverage; see docs/osty_self_bootstrap_design.md).")
 }
 
+// buildOstySelf invokes the host `osty` binary with the standard
+// build flags used by the self-rebuild ratchet. Returns the absolute
+// path to the produced osty-self binary.
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
 	// Forward env vars set by the user (OSTY_STAGE0_FALLBACK,
@@ -177,7 +187,7 @@ func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (st
 	// behaviour of the covered code paths. Users wanting strict mode
 	// can still override by setting OSTY_STAGE0_LIST_ALL_DECLINES=0.
 	cmd.Env = os.Environ()
-	if os.Getenv("OSTY_STAGE0_FALLBACK") != "" && os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES") == "" {
+	if backend.Stage0FallbackEnabled() && os.Getenv("OSTY_STAGE0_LIST_ALL_DECLINES") == "" {
 		cmd.Env = append(cmd.Env, "OSTY_STAGE0_LIST_ALL_DECLINES=1")
 	}
 	cmd.Dir = root
@@ -186,6 +196,231 @@ func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (st
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("osty build toolchain/: %w", err)
 	}
+	return findBuiltOstySelf(root, toolchainDir)
+}
+
+func findLocalSelfhostBootstrap(root string) (string, error) {
+	cacheRoot := filepath.Join(root, selfhostcache.CacheDirName)
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		return "", err
+	}
+	type candidate struct {
+		path    string
+		modTime int64
+	}
+	candidates := []candidate{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(cacheRoot, entry.Name(), selfhostcache.BinaryName())
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			path:    path,
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime > candidates[j].modTime
+	})
+	if len(candidates) == 0 {
+		return "", selfhostcache.ErrNotCached
+	}
+	return candidates[0].path, nil
+}
+
+const installSelfTryDirectBuildEnv = "OSTY_INSTALL_SELF_TRY_DIRECT_BUILD"
+
+func buildOstySelfWithSelfhost(ctx context.Context, selfOsty, hostOsty, root, toolchainDir string) (string, error) {
+	if installSelfTryDirectBuildRequested() {
+		return buildOstySelfWithSelfhostCommand(ctx, selfOsty, root, toolchainDir)
+	}
+	return buildOstySelfWithSelfhostMIRDriver(ctx, selfOsty, hostOsty, root, toolchainDir)
+}
+
+func installSelfTryDirectBuildRequested() bool {
+	raw := strings.TrimSpace(os.Getenv(installSelfTryDirectBuildEnv))
+	return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes") || strings.EqualFold(raw, "on")
+}
+
+func buildOstySelfWithSelfhostCommand(ctx context.Context, selfOsty, root, toolchainDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, selfOsty, "build", "--backend", "llvm", "--emit", "binary", "--force", toolchainDir)
+	cmd.Env = os.Environ()
+	cmd.Dir = root
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("osty-self build toolchain/: %w", err)
+	}
+	return findBuiltOstySelf(root, toolchainDir)
+}
+
+func buildOstySelfWithSelfhostMIRDriver(ctx context.Context, selfOsty, hostOsty, root, toolchainDir string) (string, error) {
+	if hostOsty == "" {
+		return "", errors.New("host osty binary is required to build the selfhost MIR driver")
+	}
+	outDir := filepath.Join(toolchainDir, ".osty", "out", "debug", "llvm")
+	workDir := filepath.Join(outDir, "selfhost-mir-driver-pkg")
+	bundlePath := filepath.Join(workDir, "main.osty")
+	manifestPath := filepath.Join(workDir, "osty.toml")
+	binaryPath := filepath.Join(outDir, selfhostcache.BinaryName())
+
+	if err := os.RemoveAll(workDir); err != nil {
+		return "", fmt.Errorf("clean selfhost MIR driver work dir: %w", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir selfhost MIR driver work dir: %w", err)
+	}
+	source, err := selfhostMIRDriverBundleSource(root)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(bundlePath, []byte(source), 0o644); err != nil {
+		return "", fmt.Errorf("write selfhost MIR driver bundle: %w", err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(selfhostMIRDriverManifest()), 0o644); err != nil {
+		return "", fmt.Errorf("write selfhost MIR driver manifest: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", workDir)
+	cmd.Env = installSelfEnvWith(os.Environ(),
+		selfhostcache.SelfBinEnv, selfOsty,
+		"OSTY_SELF_REGISTRY_OFFLINE", "1",
+	)
+	cmd.Dir = root
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("host build selfhost MIR driver: %w", err)
+	}
+	candidate, err := findBuiltOstySelf(root, workDir)
+	if err != nil {
+		return "", fmt.Errorf("host build selfhost MIR driver: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
+		return "", fmt.Errorf("mkdir selfhost binary dir: %w", err)
+	}
+	if err := copySelfhostBinary(candidate, binaryPath); err != nil {
+		return "", err
+	}
+	return findBuiltOstySelf(root, toolchainDir)
+}
+
+func selfhostMIRDriverManifest() string {
+	return strings.TrimLeft(`
+[package]
+name = "selfhost-mir-driver"
+version = "0.1.0"
+edition = "0.3"
+
+[bin]
+name = "osty-self"
+path = "main.osty"
+
+[capabilities]
+runtime = true
+`, "\n")
+}
+
+func selfhostMIRDriverBundleSource(root string) (string, error) {
+	parts := []string{"use std.env", "use std.fs", "use std.os", "use std.process", "use std.strings", ""}
+	for _, rel := range selfhostMIRDriverSourceFiles() {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read selfhost source %s: %w", path, err)
+		}
+		parts = append(parts, "// ---- "+filepath.ToSlash(rel)+" ----")
+		parts = append(parts, selfhostStripDriverImports(string(src)))
+		parts = append(parts, "")
+	}
+	parts = append(parts, "fn main() {", "    selfhostMirDriverMain()", "}", "")
+	return strings.Join(parts, "\n"), nil
+}
+
+func selfhostMIRDriverSourceFiles() []string {
+	return []string{
+		"toolchain/mir.osty",
+		"toolchain/mir_validator.osty",
+		"toolchain/mir_json.osty",
+		"scripts/selfhost_mir_support.osty",
+		"toolchain/lir_proto.osty",
+		"toolchain/selfhost_mir_driver.osty",
+	}
+}
+
+func selfhostStripDriverImports(src string) string {
+	src = strings.ReplaceAll(src, "\r\n", "\n")
+	src = strings.ReplaceAll(src, "\r", "\n")
+	lines := strings.Split(src, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		switch line {
+		case "use std.env", "use std.fs", "use std.os", "use std.process", "use std.strings", "use std.strings as strings":
+			continue
+		default:
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func installSelfEnvWith(env []string, pairs ...string) []string {
+	out := append([]string{}, env...)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		key, value := pairs[i], pairs[i+1]
+		prefix := key + "="
+		replaced := false
+		for j, item := range out {
+			eq := strings.IndexByte(item, '=')
+			if eq < 0 {
+				continue
+			}
+			existing := item[:eq]
+			if existing == key || (os.PathSeparator == '\\' && strings.EqualFold(existing, key)) {
+				out[j] = prefix + value
+				replaced = true
+			}
+		}
+		if !replaced {
+			out = append(out, prefix+value)
+		}
+	}
+	return out
+}
+
+func copySelfhostBinary(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open selfhost MIR driver binary: %w", err)
+	}
+	defer in.Close()
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("create selfhost MIR driver binary: %w", err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("copy selfhost MIR driver binary: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close selfhost MIR driver binary: %w", err)
+	}
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replace old selfhost MIR driver binary: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("install selfhost MIR driver binary: %w", err)
+	}
+	return nil
+}
+
+func findBuiltOstySelf(root, toolchainDir string) (string, error) {
 	for _, candidate := range []string{
 		filepath.Join(toolchainDir, ".osty", "out", "debug", "llvm", selfhostcache.BinaryName()),
 		filepath.Join(toolchainDir, ".osty", "out", "release", "llvm", selfhostcache.BinaryName()),

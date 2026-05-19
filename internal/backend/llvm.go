@@ -584,6 +584,9 @@ func clangCompileCObjectArgs(target, profile, sourcePath, objectPath string) []s
 // Windows OS component. Empty triples mean "host"; the caller passes
 // the runtime.GOOS-derived default in that case.
 func isWindowsTarget(target string) bool {
+	if target == "" {
+		return runtime.GOOS == "windows"
+	}
 	return strings.Contains(target, "windows")
 }
 

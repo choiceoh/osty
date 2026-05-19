@@ -19,7 +19,7 @@
   - PR-G1 scaffold ([#1902](https://github.com/choiceoh/osty/pull/1902)) — backend.Request.ExtraObjects link plumbing
 - **남은 unlock 후보**:
   1. **declined messages 그대로** — `term.branch i1, got %Option.Int` + `assign.dest <error>`. brick 11/12 머지 후 PR #1898 같은 외부 fix wave 가 추가로 cover 확장해야 osty-self runtime 에 반영. Chicken-and-egg: 우리 변경이 binary 에 들어가지만 stage0 cover gap 으로 wrong code emit
-  2. **doctor SEGFAULT** — `osty-self --selfhost-doctor` exit 139. main baseline issue, R3 무관
+  2. **doctor direct smoke** — 2026-05-19 Windows/clang path now dispatches `osty-self --selfhost-doctor` directly and exits 0 after runtime argv capture + self-rebuild file/link portability fixes.
   3. **PR-G2~G3 (link plumbing 활성화)** — PR #1902 scaffold 후 multi-file dep 의 .o link 활성. cross-pkg fn call 의 진짜 link wall 해소
 - **합의 없이 자율 진행 가능**: §6.
 
@@ -38,8 +38,6 @@ diff <(echo "$LLVM_OUT") <(echo "$GO_OUT") && echo IDENTICAL
 
 # 🎉 source bootstrap UNLOCK 재현 (osty-self install, PR #1863)
 OSTY_STAGE0_FALLBACK=1 \
-  OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 \
-  OSTY_STDLIB_BODY_LOWER=1 \
   .bin/osty install-self
 
 # stage0 audit (현재 100.0% — 8240/8241, PR #1858 머지 후)
