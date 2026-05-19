@@ -3725,9 +3725,13 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 		case "Option", "Maybe":
 			if len(nt.Args) >= 1 {
 				switch method {
-				case "unwrap", "unwrapOr", "unwrapOrElse", "expect", "getOr":
+				case "unwrap", "unwrapOr", "unwrapOrElse", "expect":
 					return nt.Args[0]
-				case "isSome", "isNone", "contains":
+				case "isSome", "isNone", "isSomeAnd", "isNoneOr", "contains":
+					// `isSomeAnd` / `isNoneOr` take a `fn(T) -> Bool`
+					// closure but yield Bool regardless of the closure
+					// body, so the dest type is fully determined by
+					// the receiver shape.
 					return ir.TBool
 				case "count":
 					return ir.TInt
@@ -3749,8 +3753,12 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 					return nt.Args[0]
 				case "unwrapErr", "expectErr":
 					return nt.Args[1]
-				case "isOk", "isErr":
+				case "isOk", "isErr", "isOkAnd", "isErrAnd", "contains", "containsErr":
+					// Closure-accepting `isOkAnd` / `isErrAnd` still
+					// yield Bool regardless of the closure body.
 					return ir.TBool
+				case "count":
+					return ir.TInt
 				case "ok":
 					return &ir.OptionalType{Inner: nt.Args[0]}
 				case "err":
@@ -3775,11 +3783,11 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 	}
 	if _, ok := recvT.(*ir.OptionalType); ok {
 		switch method {
-		case "isSome", "isNone", "contains":
+		case "isSome", "isNone", "isSomeAnd", "isNoneOr", "contains":
 			return ir.TBool
 		case "count":
 			return ir.TInt
-		case "unwrap", "unwrapOr", "unwrapOrElse", "expect", "getOr":
+		case "unwrap", "unwrapOr", "unwrapOrElse", "expect":
 			return optionInnerType(recvT)
 		case "take", "replace", "or", "orElse", "filter":
 			// Mirror the Option/Maybe handling in
