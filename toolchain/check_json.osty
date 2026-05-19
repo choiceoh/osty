@@ -191,9 +191,12 @@ fn frontJsonBool(b: Bool) -> String {
 /// frontJsonEscape applies the minimum escape set required by RFC 8259
 /// §7. Backslash and the double-quote get their canonical short forms,
 /// the four whitespace controls map to `\n` / `\r` / `\t` / `\b` / `\f`,
-/// and any remaining byte below U+0020 is emitted as `\u00XX`. All
-/// other bytes — including UTF-8 multi-byte continuations — pass
-/// through unchanged so the input encoding round-trips.
+/// and any remaining Unicode code point below U+0020 is emitted as
+/// `\u00XX`. Other code points — including code points outside the BMP
+/// or beyond ASCII — pass through unchanged so the input encoding
+/// round-trips. The walk iterates `strings.split(s, "")` so each step
+/// is one code point (matching `s.chars()` semantics), not one UTF-8
+/// byte.
 fn frontJsonEscape(s: String) -> String {
     let units = strings.split(s, "")
     let total = units.len()
