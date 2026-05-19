@@ -70,8 +70,9 @@ pub fn frontCheckResultToWireJsonForLexed(result: FrontCheckResult, lexed: OstyL
     frontCheckResultToWireJsonInner(result, frontWireMapperFromLexed(lexed))
 }
 fn frontCheckResultToWireJsonInner(result: FrontCheckResult, mapper: FrontWireMapper) -> String {
+    let telemetry = frontWireBuildTelemetry(result.diagnostics, mapper)
     let mut parts: List<String> = []
-    parts.push("\"summary\":" + frontCheckSummaryToWireJson(result.summary))
+    parts.push("\"summary\":" + frontCheckSummaryToWireJson(result.summary, telemetry))
     parts.push("\"typedNodes\":" + frontCheckedNodesToWireJson(result.typedNodes, mapper))
     parts.push("\"bindings\":" + frontCheckedBindingsToWireJson(result.bindings, mapper))
     parts.push("\"symbols\":" + frontCheckedSymbolsToWireJson(result.symbols, mapper))
@@ -186,11 +187,114 @@ fn frontWireMapperOffsets(m: FrontWireMapper, startToken: Int, endToken: Int) ->
     FrontWireRange {start: startByte, end: endByte, startLine: startTok.start.line, startColumn: startTok.start.column, endLine: endTok.end.line, endColumn: endTok.end.column}
 }
 // ---------------------------------------------------------------------
+// FrontWireTelemetry — errorsByContext + errorDetails aggregation,
+// matching the Go-side `internal/selfhost/check_telemetry.go::
+// selfhostDiagnosticTelemetry` shape. Buckets every severity-error
+// diagnostic by stable code (or `<error>` fallback) and tracks the
+// detail histogram per bucket. When the mapper carries lex tokens
+// each detail line ends with `@L<line>:C<col>` (file column stays
+// empty for stdin callers like cmd/osty-native-checker).
+//
+// `byContext` and `details` use string keys and need stable sort
+// order on the wire — Go's encoding/json sorts map keys
+// lexicographically, so the emit pass walks `keys().sorted()` rather
+// than relying on the underlying Map iteration order.
+// ---------------------------------------------------------------------
+pub struct FrontWireTelemetry {
+    pub byContext: Map<String, Int>,
+    pub details: Map<String, Map<String, Int>>,
+}
+fn frontWireBuildTelemetry(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> FrontWireTelemetry {
+    let mut byContext: Map<String, Int> = {:}
+    let mut details: Map<String, Map<String, Int>> = {:}
+    for d in diags {
+        if !frontWireDiagIsError(d.severity) {
+            continue
+        }
+        let bucket = frontWireDiagBucket(d.code)
+        byContext.update(bucket, |n| (n ?? 0) + 1)
+        let detail = frontWireDiagDetail(d, m)
+        if detail == "" {
+            continue
+        }
+        let mut bucketDetails = details.get(bucket) ?? {:}
+        bucketDetails.update(detail, |n| (n ?? 0) + 1)
+        details.insert(bucket, bucketDetails)
+    }
+    FrontWireTelemetry {byContext, details}
+}
+fn frontWireDiagIsError(severity: DiagnosticSeverity) -> Bool {
+    severity == SeverityError
+}
+fn frontWireDiagBucket(code: String) -> String {
+    let trimmed = strings.trimSpace(code)
+    if trimmed == "" {
+        return "<error>"
+    }
+    trimmed
+}
+fn frontWireDiagDetail(d: CheckDiagnostic, m: FrontWireMapper) -> String {
+    let detail = strings.trimSpace(d.message)
+    if detail == "" {
+        return ""
+    }
+    let suffix = frontWireDiagPosSuffix(d, m)
+    if suffix == "" {
+        return detail
+    }
+    detail + " " + suffix
+}
+fn frontWireDiagPosSuffix(d: CheckDiagnostic, m: FrontWireMapper) -> String {
+    if m.identity {
+        return ""
+    }
+    let tokensLen = m.tokens.len()
+    if tokensLen == 0 {
+        return ""
+    }
+    let startToken = d.start
+    if startToken < 0 || startToken >= tokensLen {
+        return ""
+    }
+    let tok = m.tokens[startToken]
+    let line = tok.start.line
+    let col = tok.start.column
+    if line <= 0 || col <= 0 {
+        return ""
+    }
+    "@L{line}:C{col}"
+}
+// ---------------------------------------------------------------------
 // Serializer body — each item carries (start, end) explicitly so the
 // mapped + identity callers share the same emit path.
 // ---------------------------------------------------------------------
-fn frontCheckSummaryToWireJson(s: FrontCheckSummary) -> String {
-    "\{\"assignments\":{s.assignments},\"accepted\":{s.accepted},\"errors\":{s.errors}\}"
+fn frontCheckSummaryToWireJson(s: FrontCheckSummary, t: FrontWireTelemetry) -> String {
+    let mut out = "\{\"assignments\":{s.assignments},\"accepted\":{s.accepted},\"errors\":{s.errors}"
+    if t.byContext.len() > 0 {
+        out = out + ",\"errorsByContext\":" + frontWireIntMapJson(t.byContext)
+    }
+    if t.details.len() > 0 {
+        out = out + ",\"errorDetails\":" + frontWireDetailMapJson(t.details)
+    }
+    out + "\}"
+}
+fn frontWireIntMapJson(m: Map<String, Int>) -> String {
+    let keys = m.keys().sorted()
+    let mut entries: List<String> = []
+    for k in keys {
+        let v = m.get(k) ?? 0
+        entries.push(frontJsonString(k) + ":{v}")
+    }
+    "\{" + strings.join(entries, ",") + "\}"
+}
+fn frontWireDetailMapJson(m: Map<String, Map<String, Int>>) -> String {
+    let keys = m.keys().sorted()
+    let mut entries: List<String> = []
+    for k in keys {
+        let inner = m.get(k) ?? {:}
+        entries.push(frontJsonString(k) + ":" + frontWireIntMapJson(inner))
+    }
+    "\{" + strings.join(entries, ",") + "\}"
 }
 fn frontCheckedNodesToWireJson(nodes: List<FrontCheckedNode>, m: FrontWireMapper) -> String {
     if nodes.len() == 0 {
