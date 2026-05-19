@@ -933,6 +933,8 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 		"lirCoerceTargetIsPayloadEnum(l, destTypeName)",
 		"fn lirAppendRenderedLirBlocks(renderedBlocks: List<String>, blocks: List<LirBlock>, pos: Int)",
 		"lirAppendRenderedLirBlocks(renderedBlocks, blockLowerer.extraBlocks, 0)",
+		"fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLocal)",
+		"lirLowerMirListGetSafe(l, instr, destLoc)",
 		"fn lirBinaryAddIsStringConcat(rv: MirRValue, hintName: String, hint: LirType) -> Bool",
 		"left = lirCoerceValueToType(l, left, rv.arg.typ, \"String\", lirPtrType(), \"string concat left\")",
 		"fn lirBinaryIsStringComparison(rv: MirRValue) -> Bool",

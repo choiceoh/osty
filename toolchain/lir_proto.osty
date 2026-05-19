@@ -5757,6 +5757,13 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.get expects (list, idx)", "list.get")
         return
     }
+    if instr.hasDest {
+        let destLoc = mirFunctionLocal(l.fn_, instr.dest.local)
+        if destLoc.id >= 0 && (lirIsOptionTypeName(destLoc.typ) || lirStringHasQuestionSuffix(destLoc.typ)) {
+            lirLowerMirListGetSafe(l, instr, destLoc)
+            return
+        }
+    }
     let elemName = lirListElemTypeName(instr.args[0].typ)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.get")
@@ -5775,6 +5782,95 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     lirEmitContainerCall(l, instr, llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString), recv.elemLir, [lirPtrType(), lirIntType(64)], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)], recv.elemTypeName, "list.get")
+}
+// `List.get(i) -> T?` safe form. The checker registers
+// `List.get` with return type `Option<T>` (toolchain/check_env.osty:2062)
+// but the MIR `IntrinsicListGet` intrinsic doc keeps the `Dest is T`
+// shape that matches `list[i]` subscript indexing. Disambiguate at
+// lowering time by inspecting the destination local's type: when it
+// resolves to `Option<T>` (or the `T?` sugar form), route through
+// this bounds-guarded path; otherwise stick with the unsafe
+// abort-on-OOB call.
+//
+// Pattern mirrors `lirLowerMirBytesGet` (bytes.get) +
+// `lirLowerMirListFirstOrLast`: len(list) → `idx >= 0 && idx < len`
+// in-range gate → cut into some/none/end aux blocks. PR #1925 found
+// an architecture limitation that swallowed the `extraBlocks`
+// produced by `lirCutBlockCondBr`/`lirCutBlockBr` (the entry/none
+// setup vanished from rendered IR); PR #1926 fixed it via
+// `lirAppendRenderedLirBlocks` so the safe-get can finally land.
+fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLocal) {
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.get", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.get idx")
+    if idx.value == "" {
+        return
+    }
+    let elemType = if llvmListUsesTypedRuntime(recv.elemLir.llvm) {
+        recv.elemLir
+    } else {
+        let composite = lirLowerMirType(l, recv.elemTypeName)
+        if lirTypeIsZero(composite) || lirTypeIsVoid(composite) {
+            lirLowerError(l, LirDiagUnsupported, "list.get composite element type `" + recv.elemTypeName + "` has no MIR layout", "list.get")
+            return
+        }
+        composite
+    }
+    let optType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(optType) {
+        lirLowerError(l, LirDiagUnsupported, "list.get destination type `" + loc.typ + "` is not implemented", "list.get")
+        return
+    }
+    let lenSym = llvmListRuntimeLenSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(lenSym))
+    let lenReg = lirFresh(l)
+    l.instrs.push(lirCall(lenReg, lirIntType(64), "@" + lenSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
+    let nonNeg = lirFresh(l)
+    l.instrs.push(lirBinary(nonNeg, "icmp sge", lirIntType(64), idx.value, "0"))
+    let beforeEnd = lirFresh(l)
+    l.instrs.push(lirBinary(beforeEnd, "icmp slt", lirIntType(64), idx.value, lenReg))
+    let inRange = lirFresh(l)
+    l.instrs.push(lirBinary(inRange, "and", lirIntType(1), nonNeg, beforeEnd))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, optType, 0))
+    let someLabel = lirFreshAuxLabel(l, "list.get.some")
+    let noneLabel = lirFreshAuxLabel(l, "list.get.none")
+    let endLabel = lirFreshAuxLabel(l, "list.get.end")
+    lirCutBlockCondBr(l, inRange, someLabel, noneLabel, someLabel)
+    let elemReg = if llvmListUsesTypedRuntime(recv.elemLir.llvm) {
+        let getSym = llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString)
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, recv.elemLir, [lirPtrType(), lirIntType(64)], false))
+        let dest = lirFresh(l)
+        l.instrs.push(lirCall(dest, recv.elemLir, "@" + getSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
+        dest
+    } else {
+        let slot = lirFresh(l)
+        l.instrs.push(lirAlloca(slot, elemType, 0))
+        let sizeReg = lirEmitSizeOf(l, elemType)
+        let getBytesSym = mirRtListSymbol("get_bytes_v1")
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getBytesSym, lirVoidType(), [lirPtrType(), lirIntType(64), lirPtrType(), lirIntType(64)], false))
+        l.instrs.push(lirCall("", lirVoidType(), "@" + getBytesSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+        let dest = lirFresh(l)
+        l.instrs.push(lirLoad(dest, elemType, slot, 0))
+        dest
+    }
+    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirEmitOptionSomeStruct(l, optType, lirOperand(elemType, elemReg))
+    } else {
+        let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
+        lirEmitOptionSome(l, optType, payloadI64)
+    }
+    l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = noneLabel
+    let noneValue = lirEmitOptionNone(l, optType)
+    l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "list.get result")
 }
 // Composite-element List.get via the bytes-v1 runtime: alloca a slot
 // of the element type, ask the runtime to memcpy into it, load the
