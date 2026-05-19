@@ -5759,9 +5759,16 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     if instr.hasDest {
         let destLoc = mirFunctionLocal(l.fn_, instr.dest.local)
-        if destLoc.id >= 0 && (lirIsOptionTypeName(destLoc.typ) || lirStringHasQuestionSuffix(destLoc.typ)) {
-            lirLowerMirListGetSafe(l, instr, destLoc)
-            return
+        if destLoc.id >= 0 {
+            let effectiveTypeName = if mirPlaceHasProjections(instr.dest) {
+                lirMirProjectionLeafType(instr.dest.projections)
+            } else {
+                destLoc.typ
+            }
+            if effectiveTypeName != "" && (lirIsOptionTypeName(effectiveTypeName) || lirStringHasQuestionSuffix(effectiveTypeName)) {
+                lirLowerMirListGetSafe(l, instr, effectiveTypeName)
+                return
+            }
         }
     }
     let elemName = lirListElemTypeName(instr.args[0].typ)
@@ -5786,11 +5793,13 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
 // `List.get(i) -> T?` safe form. The checker registers
 // `List.get` with return type `Option<T>` (toolchain/check_env.osty:2062)
 // but the MIR `IntrinsicListGet` intrinsic doc keeps the `Dest is T`
-// shape that matches `list[i]` subscript indexing. Disambiguate at
-// lowering time by inspecting the destination local's type: when it
-// resolves to `Option<T>` (or the `T?` sugar form), route through
-// this bounds-guarded path; otherwise stick with the unsafe
-// abort-on-OOB call.
+// shape that matches `list[i]` subscript indexing — note that subscript
+// actually lowers to `IndexProj` in MIR (toolchain/mir_lower.osty:2251)
+// so the dest-type gate here only fires for the surface `.get` form.
+// When the destination is projected (e.g. `holder.item = xs.get(i)`)
+// the caller passes the projection leaf type, not the root local type,
+// so the safe path builds the right `Option<T>` aggregate before
+// handing off to `lirStoreMirResult`'s projection-aware store.
 //
 // Pattern mirrors `lirLowerMirBytesGet` (bytes.get) +
 // `lirLowerMirListFirstOrLast`: len(list) → `idx >= 0 && idx < len`
@@ -5799,7 +5808,7 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
 // produced by `lirCutBlockCondBr`/`lirCutBlockBr` (the entry/none
 // setup vanished from rendered IR); PR #1926 fixed it via
 // `lirAppendRenderedLirBlocks` so the safe-get can finally land.
-fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLocal) {
+fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, optTypeName: String) {
     let recv = lirLowerMirContainerReceiver(l, instr, "list.get", "list.elem")
     if !(recv.ok) {
         return
@@ -5818,9 +5827,9 @@ fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLoc
         }
         composite
     }
-    let optType = lirLowerMirType(l, loc.typ)
+    let optType = lirLowerMirType(l, optTypeName)
     if lirTypeIsZero(optType) {
-        lirLowerError(l, LirDiagUnsupported, "list.get destination type `" + loc.typ + "` is not implemented", "list.get")
+        lirLowerError(l, LirDiagUnsupported, "list.get destination type `" + optTypeName + "` is not implemented", "list.get")
         return
     }
     let lenSym = llvmListRuntimeLenSymbol()
@@ -5856,7 +5865,8 @@ fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLoc
         l.instrs.push(lirLoad(dest, elemType, slot, 0))
         dest
     }
-    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
+    let widenedPayload = lirAggregateHasWidenedPayload(l.out, optType)
+    let someValue = if widenedPayload {
         lirEmitOptionSomeStruct(l, optType, lirOperand(elemType, elemReg))
     } else {
         let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
@@ -5865,12 +5875,26 @@ fn lirLowerMirListGetSafe(l: LirMirFunctionLowerer, instr: MirInstr, loc: MirLoc
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = noneLabel
-    let noneValue = lirEmitOptionNone(l, optType)
+    let noneValue = if widenedPayload {
+        // Symmetric to the widened Some arm: the i64-payload helper
+        // (`lirEmitOptionNone`) rejects widened `{ i64, %Struct }`
+        // shapes, so route through the struct-payload constructor
+        // with a `zeroinitializer` placeholder — None carries no
+        // meaningful payload.
+        let structRef = lirOptionResultPayloadStructRef(l.out, optType.llvm)
+        if structRef == "" {
+            lirLowerError(l, LirDiagUnsupported, "list.get could not extract struct typedef from `" + optType.llvm + "`", "list.get.none")
+            return
+        }
+        lirEmitAlgebraicStruct(l, optType, 1, lirOperand(lirAggregateType(structRef), "zeroinitializer"), "Option.None")
+    } else {
+        lirEmitOptionNone(l, optType)
+    }
     l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
-    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "list.get result")
+    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), optTypeName, "list.get result")
 }
 // Composite-element List.get via the bytes-v1 runtime: alloca a slot
 // of the element type, ask the runtime to memcpy into it, load the
