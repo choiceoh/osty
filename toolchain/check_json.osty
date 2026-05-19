@@ -308,7 +308,10 @@ fn frontCheckedNodesToWireJson(nodes: List<FrontCheckedNode>, m: FrontWireMapper
     "[" + strings.join(items, ",") + "]"
 }
 fn frontCheckedNodeBodyJson(n: FrontCheckedNode, start: Int, end: Int) -> String {
-    "\{\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"start\":{start},\"end\":{end}\}"
+    let typeKey = frontWireStableTypeKey(n.typeRepr)
+    let nodeKey = frontWireStableNodeKey("", n.kind, start, end)
+    let id = frontWireStableID("typed-node", [nodeKey, n.kind, typeKey])
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>, m: FrontWireMapper) -> String {
     if bindings.len() == 0 {
@@ -322,7 +325,10 @@ fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>, m: FrontW
     "[" + strings.join(items, ",") + "]"
 }
 fn frontCheckedBindingBodyJson(b: FrontCheckedBinding, start: Int, end: Int) -> String {
-    "\{\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
+    let typeKey = frontWireStableTypeKey(b.typeRepr)
+    let nodeKey = frontWireStableNodeKey("", "binding:" + b.name, start, end)
+    let id = frontWireStableID("binding", [nodeKey, b.name, frontWireBoolText(b.mutable), typeKey])
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>, m: FrontWireMapper) -> String {
     if symbols.len() == 0 {
@@ -336,7 +342,11 @@ fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>, m: FrontWire
     "[" + strings.join(items, ",") + "]"
 }
 fn frontCheckedSymbolBodyJson(s: FrontCheckedSymbol, start: Int, end: Int) -> String {
-    "\{\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"start\":{start},\"end\":{end}\}"
+    let typeKey = frontWireStableTypeKey(s.typeRepr)
+    let kindTag = "symbol:" + s.kind + ":" + s.owner + ":" + s.name
+    let nodeKey = frontWireStableNodeKey("", kindTag, start, end)
+    let id = frontWireStableID("symbol", [nodeKey, s.kind, s.owner, s.name, typeKey])
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>, m: FrontWireMapper) -> String {
     if insts.len() == 0 {
@@ -351,11 +361,21 @@ fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>, m: F
 }
 fn frontCheckInstantiationBodyJson(i: FrontCheckInstantiation, start: Int, end: Int) -> String {
     let mut typeArgsParts: List<String> = []
+    let mut typeArgKeys: List<String> = []
     for ta in i.typeArgs {
         typeArgsParts.push(frontTypeReprToWireJson(ta))
+        typeArgKeys.push(frontWireStableTypeKey(ta))
     }
     let typeArgsJson = "[" + strings.join(typeArgsParts, ",") + "]"
-    let mut out = "\{\"node\":{i.node},\"nodeId\":{i.nodeId},\"instantiationId\":{i.instantiationId},\"callee\":" + frontJsonString(i.callee) + ",\"typeArgs\":" + typeArgsJson
+    let resultTypeKey = frontWireStableTypeKey(i.resultType)
+    let kindTag = "instantiation:" + i.callee
+    let nodeKey = frontWireStableNodeKey("", kindTag, start, end)
+    let mut idParts: List<String> = [nodeKey, i.callee, resultTypeKey]
+    for k in typeArgKeys {
+        idParts.push(k)
+    }
+    let id = frontWireStableID("instantiation", idParts)
+    let mut out = "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{i.node},\"nodeId\":{i.nodeId},\"instantiationId\":{i.instantiationId},\"callee\":" + frontJsonString(i.callee) + ",\"typeArgs\":" + typeArgsJson
     if i.typeArgIds.len() > 0 {
         let mut typeArgIdsParts: List<String> = []
         for tid in i.typeArgIds {
@@ -363,7 +383,14 @@ fn frontCheckInstantiationBodyJson(i: FrontCheckInstantiation, start: Int, end: 
         }
         out = out + ",\"typeArgIds\":[" + strings.join(typeArgIdsParts, ",") + "]"
     }
-    out + ",\"resultType\":" + frontTypeReprToWireJson(i.resultType) + ",\"resultTypeId\":{i.resultTypeId},\"start\":{start},\"end\":{end}\}"
+    if typeArgKeys.len() > 0 {
+        let mut typeArgKeyParts: List<String> = []
+        for k in typeArgKeys {
+            typeArgKeyParts.push(frontJsonString(k))
+        }
+        out = out + ",\"typeArgKeys\":[" + strings.join(typeArgKeyParts, ",") + "]"
+    }
+    out + ",\"resultType\":" + frontTypeReprToWireJson(i.resultType) + ",\"resultTypeId\":{i.resultTypeId},\"resultTypeKey\":" + frontJsonString(resultTypeKey) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn checkDiagnosticsToWireJson(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> String {
     if diags.len() == 0 {
