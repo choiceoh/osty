@@ -13,10 +13,12 @@
 //
 // 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
 // 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON
-// 와이어 모양으로 직렬화한다. byte parity 가 아니라 *semantic*
-// correctness 가 목표: token-index 기반 start/end + sha256 안정 ID
-// 누락 등은 Go-built target 의 adapter (internal/selfhost/check_adapter.go)
-// 만의 정책이라 LLVM-built 측이 굳이 복제하지 않는다.
+// 와이어 모양으로 직렬화한다. M4 brick A 까지 wired: `start` / `end` 가
+// UTF-8 byte offset (rune→byte 변환), diagnostic 마다 `startLine` /
+// `startColumn` / `endLine` / `endColumn` 부착. 남은 M4 brick (sha256
+// `EnsureStableIDs`, `errorsByContext` / `errorDetails` telemetry) 은
+// Go-built adapter (internal/selfhost/check_adapter.go) 측 정책으로
+// 별도 brick 에서 포팅 예정.
 use std.io
 use std.strings
 use toolchain as tc

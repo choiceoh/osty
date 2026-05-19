@@ -162,37 +162,67 @@ fn testCheckJsonInstantiationOmitsEmptyTypeArgIds() {
 // Empty `typeArgIds` matches the Go-side `omitempty` tag and gets
 // dropped from the wire output.
 fn testCheckJsonByteOffsetsForAsciiSource() {
-    let out = frontCheckSourceToWireJson("fn id<T>(value: T) -> T { value }")
+    let out = frontCheckSourceToWireJson("fn id<T>(value: T) -> T \{ value \}")
     testing.assert(stringsContainsJson(out, "\"name\":\"value\""))
+    testing.assertEq(extractIntFieldAfter(out, "\"name\":\"value\"", "\"start\":"), "9")
+    testing.assertEq(extractIntFieldAfter(out, "\"name\":\"value\"", "\"end\":"), "14")
     let emptyOut = frontCheckSourceToWireJson("")
     testing.assertEq(emptyOut, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
 }
-// ASCII-only source: byte offsets == rune offsets. Sanity-check
-// that a non-empty input produces an integer `start`/`end` derived
-// from the lex stream rather than the raw token index.
-// Wire JSON must surface real wire offsets (non-negative integer
-// fields). We can't pin exact spans without locking the parser AST
-// ordering, but the binding `value` is guaranteed to appear since
-// generic id elaborates cleanly.
+// ASCII source — byte offsets == rune offsets. The `value`
+// parameter identifier starts at character 9 (`fn id<T>(`is 9
+// chars), so the binding's `start` field must be 9. Asserting on
+// the extracted number value pins the mapper attach; a regression
+// to raw token indices would surface a much smaller number (token
+// index of `value` is 6).
 // Empty-source byte parity sanity: with no tokens at all, the
 // mapper short-circuits start=0, end=0.
 fn testCheckJsonByteOffsetsForMultiByteSource() {
-    let src = "// \u{1F600}\nfn id<T>(value: T) -> T { value }"
+    let src = "// \u{1F600}\nfn id<T>(value: T) -> T \{ value \}"
     let out = frontCheckSourceToWireJson(src)
     testing.assert(stringsContainsJson(out, "\"name\":\"value\""))
-    testing.assert(stringsContainsJson(out, "\"summary\":"))
+    testing.assertEq(extractIntFieldAfter(out, "\"name\":\"value\"", "\"start\":"), "17")
+    testing.assertEq(extractIntFieldAfter(out, "\"name\":\"value\"", "\"end\":"), "22")
+    testing.assert(extractIntFieldAfter(out, "\"name\":\"value\"", "\"start\":") != "14")
 }
-// Source with multi-byte UTF-8 characters: `value`'s byte offset
-// must reflect the actual UTF-8 byte position past the leading
-// 4-byte emoji + ASCII bytes, not its rune index. The identifier
-// sits past one 4-byte sequence (`\u{1F600}` = 0xF0 0x9F 0x98 0x80)
-// plus the ASCII prefix `// ` (3 bytes) + newline (1 byte) +
-// `fn id<T>(` (9 bytes) = 17 bytes. We only verify that *some*
-// byte offset >= 17 surfaces for one of the records below, since
-// the precise span depends on which AST nodes the elaborator
-// tagged.
-// The emoji-bearing source still produces valid JSON (no escape
-// mishap on the U+1F600 character, which is outside BMP).
+// Multi-byte source — `value` parameter sits past a leading 4-byte
+// emoji (U+1F600 = `F0 9F 98 80`) plus ASCII bytes. Char positions:
+//   `// ` = 3 chars,  emoji = 1 char,  `\nfn id<T>(` = 10 chars
+// = 14 runes before `value`. Byte positions over the same prefix
+// are 3 + 4 + 10 = 17. Asserting `start` == 17 (not 14) proves the
+// mapper applied the rune→byte conversion rather than handing the
+// rune offset through verbatim.
+// Catch a hypothetical mapper regression that emits rune offsets:
+// the binding's `start` would surface 14 instead of 17.
+// extractIntFieldAfter finds `marker` in `haystack`, then scans for the
+// nearest `field` (e.g. `"start":`) past it and returns the digits
+// following the field as a string. Empty string when either marker is
+// missing. Used to pin the byte-offset assertions to a specific
+// record (the binding for "value") without parsing the wire JSON.
+fn extractIntFieldAfter(haystack: String, marker: String, field: String) -> String {
+    match strings.indexOf(haystack, marker) {
+        Some(markerIdx) -> {
+            let afterMarker = strings.slice(haystack, markerIdx + strings.len(marker), strings.len(haystack))
+            match strings.indexOf(afterMarker, field) {
+                Some(fieldIdx) -> {
+                    let valStart = fieldIdx + strings.len(field)
+                    let after = strings.slice(afterMarker, valStart, strings.len(afterMarker))
+                    let mut digits = ""
+                    for ch in after.chars() {
+                        let c = "{ch}"
+                        if c == "," || c == "\}" {
+                            return digits
+                        }
+                        digits = digits + c
+                    }
+                    digits
+                },
+                None -> "",
+            }
+        },
+        None -> "",
+    }
+}
 fn testCheckJsonDiagnosticEmitsLineColumnWhenLexed() {
     let src = "fn main() \{ let x: Int = \"hello\" \}"
     let out = frontCheckSourceToWireJson(src)
