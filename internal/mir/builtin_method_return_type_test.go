@@ -176,6 +176,102 @@ func TestBuiltinMethodReturnTypeResultMethodCoverage(t *testing.T) {
 	})
 }
 
+// TestRecoveredMethodReturnTypeListCollectionMethods exercises the
+// `*bodyState.recoveredMethodReturnType` arm for List<T> intrinsic
+// methods whose return type is fully determined by the receiver:
+//
+//   - `indexOf` → Option<Int> (per `IntrinsicListIndexOf` which
+//     produces an `Int?` dest, mir.go:494)
+//   - `toSet` → Set<T> (per IntrinsicListToSet)
+//
+// Recovery uses `bs.l.listElementType(recvT)` so a poisoned MIR temp
+// produced by a checker-skipped interpolation (`"{xs.indexOf(needle)}"`)
+// still gets a usable type for downstream lowering.
+//
+// `lastIndexOf` is intentionally absent — List's intrinsic dispatch
+// (`stdlibIntrinsicForMethod`, lower.go:7174) and `toolchain/check_env.osty`
+// only register `indexOf`. Recovering it would mask an invalid call.
+// `TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil` locks that
+// negative arm.
+func TestRecoveredMethodReturnTypeListCollectionMethods(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	cases := []struct {
+		method string
+		want   ir.Type
+	}{
+		{"indexOf", &ir.OptionalType{Inner: ir.TInt}},
+		{"toSet", &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}},
+		{"len", ir.TInt},
+		{"isEmpty", ir.TBool},
+		{"contains", ir.TBool},
+		{"toString", ir.TString},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			got := bs.recoveredMethodReturnType(listInt, tc.method)
+			if got == nil {
+				t.Fatalf("recoveredMethodReturnType(List<Int>, %q) = nil, want %v", tc.method, tc.want)
+			}
+			if got.String() != tc.want.String() {
+				t.Fatalf("recoveredMethodReturnType(List<Int>, %q) = %v, want %v", tc.method, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveredMethodReturnTypeSetCollectionMethods covers Set<T>'s
+// `toList` recovery (per IntrinsicSetToList) alongside the existing
+// `len`/`isEmpty`/`contains`/`toString` set.
+func TestRecoveredMethodReturnTypeSetCollectionMethods(t *testing.T) {
+	setStr := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TString}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	cases := []struct {
+		method string
+		want   ir.Type
+	}{
+		{"toList", &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}},
+		{"len", ir.TInt},
+		{"isEmpty", ir.TBool},
+		{"contains", ir.TBool},
+		{"toString", ir.TString},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			got := bs.recoveredMethodReturnType(setStr, tc.method)
+			if got == nil {
+				t.Fatalf("recoveredMethodReturnType(Set<String>, %q) = nil, want %v", tc.method, tc.want)
+			}
+			if got.String() != tc.want.String() {
+				t.Fatalf("recoveredMethodReturnType(Set<String>, %q) = %v, want %v", tc.method, got, tc.want)
+			}
+		})
+	}
+}
+
+// newRecoveryTestBodyState returns a `*bodyState` wired with a bare
+// `*lowerer`. `listElementType` / `setElementType` only read the
+// receiver type's argument list, so the lowerer's stdlib / module
+// state are intentionally left zero-valued — no module init is needed
+// to exercise the recovery helpers under test.
+func newRecoveryTestBodyState() *bodyState {
+	l := &lowerer{}
+	return &bodyState{l: l}
+}
+
+// TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil locks the
+// negative arm noted in TestRecoveredMethodReturnTypeListCollectionMethods:
+// `List.lastIndexOf` is not a registered intrinsic on List (only on
+// Bytes / String), so recovery must return nil and let the upstream
+// checker surface the unknown-method diagnostic.
+func TestRecoveredMethodReturnTypeListLastIndexOfReturnsNil(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	bs := newRecoveryTestBodyState()
+	if got := bs.recoveredMethodReturnType(listInt, "lastIndexOf"); got != nil {
+		t.Fatalf("recoveredMethodReturnType(List<Int>, \"lastIndexOf\") = %v, want nil (not-a-List-method)", got)
+	}
+}
+
 // TestBuiltinMethodReturnTypeOptionUncoveredMethodReturnsNil locks the
 // "no recovery" branch for two distinct categories of Option calls:
 //

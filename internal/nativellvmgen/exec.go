@@ -43,6 +43,17 @@ type PackageInput struct {
 	// dep are still emitted so `declare`s in the consumer's IR get
 	// resolved.
 	LibraryMode bool `json:"libraryMode,omitempty"`
+	// PackageName is the dep's declared package name (from its
+	// `osty.toml::[package] name`). When set together with
+	// LibraryMode, the subprocess rewrites every exported function's
+	// LLVM symbol from `<fn>` to `<PackageName>.<fn>` so cross-pkg
+	// callers — which mangle via
+	// `internal/mir/lower.go::qualifiedSymbol` as
+	// `<use.RawPath>.<fn>` — find a matching `define` at link time.
+	// Empty PackageName falls back to the historical bare-name
+	// emission (no rename) for backwards compatibility with callers
+	// that haven't filled the field yet.
+	PackageName string `json:"packageName,omitempty"`
 }
 
 type PackageFile struct {
@@ -190,6 +201,7 @@ func RequestFromPackage(entryPath string, pkg *resolve.Package) (Request, error)
 		Package: &PackageInput{
 			Files:             files,
 			RuntimeCapability: pkg.RuntimeCapability,
+			PackageName:       pkg.Name,
 		},
 	}, nil
 }

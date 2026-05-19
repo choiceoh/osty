@@ -3859,6 +3859,18 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			}
 		case "sorted", "reversed", "slice":
 			return recvT
+		case "indexOf":
+			// IntrinsicListIndexOf returns Int? per mir.go:494.
+			// `lastIndexOf` is intentionally not covered — List only
+			// registers `indexOf` (mir.go:7174) and check_env.osty.
+			// Recovering a non-existent method would mask an invalid
+			// call in checker-skipped contexts; let it fall through.
+			return &ir.OptionalType{Inner: ir.TInt}
+		case "toSet":
+			// IntrinsicListToSet constructs Set<elem> per mir.go:496.
+			if !isPoisonType(elemT) {
+				return &ir.NamedType{Name: "Set", Args: []ir.Type{elemT}, Builtin: true}
+			}
 		case "len":
 			return ir.TInt
 		case "isEmpty", "contains":
@@ -3867,6 +3879,7 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TString
 		}
 	case "Set":
+		elemT := bs.l.setElementType(recvT)
 		switch method {
 		case "len":
 			return ir.TInt
@@ -3874,6 +3887,11 @@ func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.
 			return ir.TBool
 		case "toString":
 			return ir.TString
+		case "toList":
+			// IntrinsicSetToList materialises List<elem> per mir.go:559.
+			if !isPoisonType(elemT) {
+				return &ir.NamedType{Name: "List", Args: []ir.Type{elemT}, Builtin: true}
+			}
 		}
 	}
 	return nil
