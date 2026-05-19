@@ -41,7 +41,7 @@ native-only through the LLVM backend.
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method, generic free-fn + generic struct/enum monomorphization with Itanium-mangled specializations (`ir.Monomorphize`, invoked from `backend.PrepareEntry`; fn symbols use `_Z…`, nominal types use `_ZTS…`) |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
-| Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths |
+| Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths; LLVM binary emit can opt into sibling-package `.o` linking via `OSTY_CROSS_PKG_LINK` (experimental — see **LLVM workspace link** below) |
 | `osty test` | native backend harness — discovers `test*` functions, compiles each through the LLVM backend, runs in parallel by default with a seeded shuffled order (`--seed`, `--serial`, `--jobs`), reports per-test wall time and an `ok/FAIL` summary; assertions are intercepted by the LLVM generator and on failure quote the original source text of every argument alongside the source location. `assertEq`/`assertNe` additionally render the runtime value of each side when it is an `Int`, `Float`, `Bool`, or `String`; `assertTrue`/`assertFalse`/`expectOk`/`expectError` quote the condition expression. `benchmark`/`snapshot` and ToString-protocol structural diff for `List`/`Map`/struct/enum values are not implemented yet |
 | API doc generator (`internal/docgen`, `osty doc`) | done — checked-in generated Go package, HTML + markdown, field docs, cross-refs, `--check`, `--verify-examples`, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
@@ -372,6 +372,14 @@ If you prefer a prebuilt binary for speed:
 go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
 export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
 ```
+
+## LLVM workspace link (experimental)
+
+For manifest-driven **`osty build`** with `--backend llvm` emitting a **binary**, cross-package callees are normally lowered as unresolved `declare`s and fail at link time unless definitions are visible to the linker. Setting **`OSTY_CROSS_PKG_LINK=1`** (or `true`, `yes`, or `on`, case-insensitive) asks the CLI to compile each **other** workspace member package as a **library** object (skips emitting `main`, avoiding `_main` collisions), collect the `.o` paths, append them on `backend.Request.ExtraObjects`, and pass them to the final `clang` link.
+
+The path is **default off** so production matches the pre–PR-G2 baseline: compiling every sibling package can stall the LIR Proto subprocess on very large trees, and cross-package dispatch is still tracked under [`SPEC_GAPS.md`](./SPEC_GAPS.md) (`cross-pkg-module-resolution`) and the LLVM self-host plan.
+
+Behavior (workspace resolve + native-owned LLVM IR + binary emit only), stderr warnings on failed dep compiles without aborting the consumer build, and operational caveats are documented in [`ARCHITECTURE.md`](./ARCHITECTURE.md) under **LLVM binary link: cross-package dependency objects**; the implementation is [`cmd/osty/cross_pkg_deps.go`](./cmd/osty/cross_pkg_deps.go).
 
 ## Runtime GC
 
