@@ -239,7 +239,7 @@ fn mirValidateBlock(func: MirFunction, bb: MirBasicBlock) -> List<String> {
         let mut seenVals: List<Int> = []
         let mut ci = 0
         for c in bb.termCases {
-            let rErrs = mirValidateBlockRef(func, bb, c.target, "switchInt.cases[{ci}]")
+            let rErrs = mirValidateBlockRef(func, bb, c.target, mirValidateIndexCtx("switchInt.cases[", ci, "]"))
             for e in rErrs {
                 errs.push(e)
             }
@@ -288,7 +288,7 @@ fn mirValidateInstr(func: MirFunction, bb: MirBasicBlock, idx: Int, instr: MirIn
         }
         let mut ai = 0
         for op in instr.args {
-            let oErrs = mirValidateOperand(func, bb, op, "call.args[{ai}]")
+            let oErrs = mirValidateOperand(func, bb, op, mirValidateIndexCtx("call.args[", ai, "]"))
             for e in oErrs {
                 errs.push(e)
             }
@@ -308,7 +308,7 @@ fn mirValidateInstr(func: MirFunction, bb: MirBasicBlock, idx: Int, instr: MirIn
         }
         let mut ai = 0
         for op in instr.args {
-            let oErrs = mirValidateOperand(func, bb, op, "intrinsic.args[{ai}]")
+            let oErrs = mirValidateOperand(func, bb, op, mirValidateIndexCtx("intrinsic.args[", ai, "]"))
             for e in oErrs {
                 errs.push(e)
             }
@@ -415,7 +415,7 @@ fn mirValidateRValue(func: MirFunction, bb: MirBasicBlock, rv: MirRValue) -> Lis
         }
         let mut fi = 0
         for op in rv.aggFields {
-            let oErrs = mirValidateOperand(func, bb, op, "aggregateRV.fields[{fi}]")
+            let oErrs = mirValidateOperand(func, bb, op, mirValidateIndexCtx("aggregateRV.fields[", fi, "]"))
             for e in oErrs {
                 errs.push(e)
             }
@@ -497,14 +497,14 @@ fn mirValidateOperand(func: MirFunction, bb: MirBasicBlock, op: MirOperand, ctx:
         errs.push("function \"{func.name}\" bb{bb.id} {ctx}: operand has empty typ")
     }
     if op.kind == MirOpCopy {
-        let pErrs = mirValidatePlace(func, bb, op.place, "{ctx}.place")
+        let pErrs = mirValidatePlace(func, bb, op.place, mirValidateChildCtx(ctx, "place"))
         for e in pErrs {
             errs.push(e)
         }
         return errs
     }
     if op.kind == MirOpMove {
-        let pErrs = mirValidatePlace(func, bb, op.place, "{ctx}.place")
+        let pErrs = mirValidatePlace(func, bb, op.place, mirValidateChildCtx(ctx, "place"))
         for e in pErrs {
             errs.push(e)
         }
@@ -527,7 +527,7 @@ fn mirValidatePlace(func: MirFunction, bb: MirBasicBlock, p: MirPlace, ctx: Stri
     }
     let mut pi = 0
     for proj in p.projections {
-        let projErrs = mirValidateProjection(func, bb, proj, "{ctx}.projections[{pi}]")
+        let projErrs = mirValidateProjection(func, bb, proj, mirValidateIndexedChildCtx(ctx, "projections", pi))
         for e in projErrs {
             errs.push(e)
         }
@@ -616,7 +616,7 @@ fn mirValidateTerm(func: MirFunction, bb: MirBasicBlock, t: MirTerm) -> List<Str
         let mut seenVals: List<Int> = []
         let mut ci = 0
         for c in t.cases {
-            let rErrs = mirValidateBlockRef(func, bb, c.target, "switchInt.cases[{ci}]")
+            let rErrs = mirValidateBlockRef(func, bb, c.target, mirValidateIndexCtx("switchInt.cases[", ci, "]"))
             for e in rErrs {
                 errs.push(e)
             }
@@ -649,4 +649,16 @@ fn mirValidateBlockRef(func: MirFunction, bb: MirBasicBlock, target: Int, ctx: S
         errs.push("function \"{func.name}\" bb{bb.id} {ctx}: target bb{target} out of range (blocks={blockCount})")
     }
     errs
+}
+
+fn mirValidateIndexCtx(prefix: String, idx: Int, suffix: String) -> String {
+    prefix + mirIntToString(idx) + suffix
+}
+
+fn mirValidateChildCtx(parent: String, child: String) -> String {
+    parent + "." + child
+}
+
+fn mirValidateIndexedChildCtx(parent: String, child: String, idx: Int) -> String {
+    parent + "." + child + "[" + mirIntToString(idx) + "]"
 }
