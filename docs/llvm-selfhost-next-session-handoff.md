@@ -297,27 +297,18 @@ audit 100% 는 checker bundle 만. backend 4048 함수의 stage0 cover 는 별�
 
 α' 자체는 dropped path (probe-only). 다음 trajectory 는 위 3 path 중 선택.
 
-### 10.2 인터-instr 블록 분할 렌더링 한계 (2026-05-19 측정)
+### 10.2 인터-instr 블록 분할 렌더링 한계 (2026-05-19 측정 / 해소)
 
-`xs.get(i)` 의 unsafe-get → safe Option-wrap 시도 중 **아키텍처적 한계** 발견 — 단일 세션 fix 불가:
+`xs.get(i)` 의 unsafe-get → safe Option-wrap 시도 중 발견했던 **아키텍처적 한계**. 후속 PR 두 개로 해소.
 
-**시도**: `toolchain/lir_proto.osty::lirLowerMirListGet` 의 시작에 sugar-aware gate 추가, dest 가 `Option<T>` 일 때 `lirLowerMirListGetSafe` 분기. `lirLowerMirListPop` (5881+) 와 동일 패턴 (len 호출 → oob 체크 → `lirCutBlockCondBr` → None/Some arm → merge).
+**원래 한계 (PR #1925 문서화)**: `lirCutBlockCondBr` / `lirCutBlockBr` 가 현재 블록을 `l.extraBlocks` (LirBlock 객체) 에 push 하지만, function 렌더링이 사용하는 `renderedBlocks: List<String>` 에는 안 추가됨. 결과적으로 인터-instr cut 으로 만든 entry/none/some 블록 setup 이 IR 출력에서 사라지고 end 블록만 살아남아 broken IR.
 
-**한계**: `lirCutBlockCondBr` / `lirCutBlockBr` 는 현재 블록을 `l.extraBlocks` 에 push 하지만, function 렌더링이 사용하는 `renderedBlocks: List<String>` 에는 추가 안 됨.
+**해소**:
 
-- `lirLowerMirFunctionBlocksInto` (line 2839) 의 인터-instr cut 경로는 final 블록 한 개만 `renderedBlocks.push(lirRenderBlockText(...))` (line 2855) 로 emit.
-- `blockLowerer.extraBlocks` 는 `next` (LirBlock 객체 리스트) 에는 append 되지만 `renderedFunctions` (실제 IR 출력 소스) 에는 안 들어감.
-- 결과적으로 entry 블록 setup (alloca, list_new, push, len call) 이 **사라지고** end 블록만 살아남아 invalid IR 생성.
+1. **Architecture fix** (PR #1926): `lirAppendRenderedLirBlocks(renderedBlocks, blockLowerer.extraBlocks, 0)` 를 `lirLowerMirFunctionBlocksInto` 에 추가 (`toolchain/lir_proto.osty:2887`). extra LirBlock 들이 final 앞에 `lirRenderBlockText` 로 변환되어 `renderedBlocks` 에 들어감. `lirBlockIsPopSentinel` 스킵 + `outFn.blocks` LirBlock 리스트와의 순서 일치 유지. Guard test = `TestLirProtoStage2SeedCoercionAndIndexStoreGuards`.
+2. **Safe `list.get` 본 구현** (이 PR): `lirLowerMirListGet` 시작에 dest-type sugar-aware gate 추가 — `lirIsOptionTypeName(destLoc.typ) || lirStringHasQuestionSuffix(destLoc.typ)` 일 때 `lirLowerMirListGetSafe` 로 분기. `lirLowerMirBytesGet` + `lirLowerMirListFirstOrLast` 패턴 (`len(list) → idx >= 0 && idx < len → some/none cut → merge`) 그대로. 일반 `list[i]` 경로 (dest = T, abort-on-OOB) 는 기존 path 유지.
 
-**검증**: 직접 staged MIR JSON 으로 `osty-self lir-proto-lower-mir-json` 실행 시 `define void @main()` 의 첫 (그리고 유일한 setup-bearing) 블록 라벨이 `entry.list.get.end.2` — 즉 end 블록이 entry 위치를 차지, 이전 instrs 는 `%t12 = load %Option.Int, ptr %t6` 등 미정의 SSA 참조로 broken.
-
-**시사 + 권장 next step**:
-
-- `lirLowerMirListPop` 도 같은 패턴이지만 install-self 의 test 들이 도달하지 않거나 (upstream type-leak 으로 차단), 같은 broken IR 을 생산하면서 fallback 에 가려졌을 가능성. **측정 spike 부터**: `osty-self lir-proto-lower-mir-json` 으로 pop-only fixture 돌려 production IR 확인 → pop 도 broken 인지 확인
-- 만약 pop 도 broken 이면 본격 architecture fix — `lirLowerMirFunctionBlocksInto` 가 `blockLowerer.extraBlocks` 의 LirBlock 들을 `lirRenderBlockText` 로 변환해 `renderedBlocks` 에 final 블록 **앞에** 삽입. 어느 쪽이든 architecture invariant 변경 (다른 lir_proto path 들이 같은 가정에 의존하는지 audit 필요)
-- 만약 pop 은 정상 IR 면 다른 path 가 pop 의 extraBlocks 를 render 함을 의미 — 그 path 추적해서 동일 mechanism 을 list.get safe 에 적용
-
-**관련 reverted 시도**: 본 측정 과정에서 `lirLowerMirListGet` 에 safe-get 분기 추가 + `lirLowerMirListGetSafe` helper 작성 → broken IR 확인 후 revert. 같은 helper 패턴 재시도는 architecture fix 먼저.
+**ABI 정합성**: 체커는 `List.get(index) -> Option<T>` 로 등록 (`toolchain/check_env.osty:2062`), MIR `IntrinsicListGet` 의 `Dest is T` 코멘트 (`internal/mir/mir.go:480`) 는 `list[i]` subscript 케이스 기준. 두 표면 (`list[i]` vs `list.get(i)`) 이 같은 intrinsic 으로 lowering 되므로 dest 타입으로 disambiguate. production go-side stage0 도 동일 dispatch (`internal/backend/llvm_list_get_safe_test.go` 의 `TestLLVMBackendBinaryRunsListSafeGet*` 가 Osty self-host 경로로 검증).
 
 ## 10. 본 doc 의 갱신 트리거
 
