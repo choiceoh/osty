@@ -1151,6 +1151,21 @@ func TestVerifySelfRebuildNormalizesMachORandomLinkMetadata(t *testing.T) {
 	}
 }
 
+func TestJustVerifySelfRebuildUsesCachedStage1Seed(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "justfile"))
+	if err != nil {
+		t.Fatalf("read justfile: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "verify-self-rebuild: build-all\n    bash scripts/verify-self-rebuild --reuse-stage1 {{bin}}") {
+		t.Fatalf("just verify-self-rebuild should use the cached stage1 seed, matching the production selfhost path")
+	}
+}
+
 func TestMirLowerVariantPayloadZeroSelectorIsRedundant(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
