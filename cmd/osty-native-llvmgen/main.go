@@ -9,6 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/nativelirproto"
 	"github.com/osty/osty/internal/nativellvmgen"
 	"github.com/osty/osty/internal/resolve"
@@ -50,6 +51,9 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	}
 	if req.Package != nil && req.Package.LibraryMode {
 		stripMainForLibraryMode(&entry)
+		if req.Package.PackageName != "" {
+			qualifyExportedSymbolsForLibraryMode(&entry, req.Package.PackageName)
+		}
 	}
 	ir, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(entry, "")
 	if err != nil {
@@ -198,6 +202,90 @@ func stripMainForLibraryMode(entry *backend.Entry) {
 			filtered = append(filtered, fn)
 		}
 		entry.MIR.Functions = filtered
+	}
+}
+
+// qualifyExportedSymbolsForLibraryMode rewrites every exported MIR
+// function's `Name` to `<packageName>.<oldName>` and patches every
+// `CallInstr` Callee.Symbol that targets one of the renamed functions
+// so internal dep-to-dep calls keep resolving after the rename.
+//
+// The cross-pkg consumer side of this dance lives in
+// `internal/mir/lower.go::qualifiedSymbol`, which mangles
+// `use <pkg> as <alias>; alias.fn(...)` to the LLVM symbol
+// `<use.RawPath>.<fn>` (use.RawPath == the dep's package name when
+// loaded by cmd/osty's path-dep workspace resolver). Without this
+// rename the dep's library `.o` exports `@frontInvalidTypeRepr` while
+// the consumer's `main.ll` references `@toolchain.frontInvalidTypeRepr`
+// — the link step fails with `undefined symbol: <pkg>.<fn>`.
+//
+// Non-exported (private) helpers stay bare so the package's internal
+// link layout is unchanged. The rename map is keyed on the *bare* old
+// name so a private helper that happens to share a name with an
+// exported function in another dep does not get accidentally renamed.
+//
+// `IndirectCall` callees do not carry symbols (they go through an
+// operand), so they are untouched. `FnConst` operands in argument
+// position carry an LLVM symbol though — those are rewritten too so a
+// closure-typed argument keeps pointing at the renamed callable.
+//
+// Scope: this measurement-doc PR pairs with the cross-pkg link wall
+// captured in `docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`
+// Path α. Documented as the surgical companion to
+// `stripMainForLibraryMode`.
+func qualifyExportedSymbolsForLibraryMode(entry *backend.Entry, packageName string) {
+	if entry == nil || entry.MIR == nil || packageName == "" {
+		return
+	}
+	renames := make(map[string]string)
+	for _, fn := range entry.MIR.Functions {
+		if fn == nil || !fn.Exported || fn.Name == "" {
+			continue
+		}
+		// `#[export("name")]` overrides the symbol verbatim
+		// (LANG_SPEC §19.6 / mir.go:143). Skip the rename for those
+		// — the user asked for an exact symbol name, so honoring it
+		// avoids breaking FFI consumers that expect the verbatim
+		// spelling.
+		if fn.ExportSymbol != "" {
+			continue
+		}
+		// `main` was already filtered by stripMainForLibraryMode; the
+		// belt-and-braces check here keeps the rename idempotent if
+		// the strip step is ever reordered.
+		if fn.Name == "main" {
+			continue
+		}
+		renames[fn.Name] = packageName + "." + fn.Name
+	}
+	if len(renames) == 0 {
+		return
+	}
+	for _, fn := range entry.MIR.Functions {
+		if fn == nil {
+			continue
+		}
+		if newName, ok := renames[fn.Name]; ok {
+			fn.Name = newName
+		}
+		for _, bb := range fn.Blocks {
+			if bb == nil {
+				continue
+			}
+			for _, instr := range bb.Instrs {
+				switch ix := instr.(type) {
+				case *mir.CallInstr:
+					if ix == nil {
+						continue
+					}
+					if ref, ok := ix.Callee.(*mir.FnRef); ok && ref != nil {
+						if newName, found := renames[ref.Symbol]; found {
+							ref.Symbol = newName
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
