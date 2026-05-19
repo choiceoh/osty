@@ -891,9 +891,10 @@ fn mirJsonSpan(value: MirJsonValue) -> Result<MirSpan, String> {
 }
 
 pub fn mirJsonParseModule(text: String) -> Result<MirModule, String> {
-    let mut m = mirModule("main")
-    mirJsonParseModuleInto(text, m)?
-    Ok(m)
+    match mirJsonParseValue(text) {
+        Ok(v) -> mirJsonModule(v),
+        Err(_) -> Err("mir-json: invalid JSON"),
+    }
 }
 
 pub fn mirJsonParseModuleInto(text: String, m: MirModule) -> Result<Bool, String> {
@@ -904,9 +905,16 @@ pub fn mirJsonParseModuleInto(text: String, m: MirModule) -> Result<Bool, String
 }
 
 fn mirJsonModule(value: MirJsonValue) -> Result<MirModule, String> {
-    let mut m = mirModule("main")
-    mirJsonModuleInto(value, m)?
-    Ok(m)
+    let obj = mirJsonObject(value, "module")?
+    let version = mirJsonIntField(obj, 7064748, "version", 1)?
+    if version != 0 && version != 1 {
+        return Err("mir-json: unsupported version")
+    }
+    let packageName = mirJsonStringField(obj, 11154812, "packageName", "main")?
+    let span = mirJsonSpanField(obj, 4020328, "span")?
+    let mut m = mirModule(packageName)
+    mirJsonModuleObjectInto(obj, m)?
+    Ok(MirModule {packageName, functions: m.functions, globals: m.globals, uses: m.uses, layouts: m.layouts, span})
 }
 
 fn mirJsonModuleInto(value: MirJsonValue, m: MirModule) -> Result<Bool, String> {
@@ -915,8 +923,10 @@ fn mirJsonModuleInto(value: MirJsonValue, m: MirModule) -> Result<Bool, String> 
     if version != 0 && version != 1 {
         return Err("mir-json: unsupported version")
     }
-    m.packageName = mirJsonStringField(obj, 11154812, "packageName", "main")?
-    m.span = mirJsonSpanField(obj, 4020328, "span")?
+    mirJsonModuleObjectInto(obj, m)
+}
+
+fn mirJsonModuleObjectInto(obj: List<MirJsonEntry>, m: MirModule) -> Result<Bool, String> {
     mirJsonLayoutsInto(match mirJsonObjectGetNamed(obj, 7067238, "layouts") {
         Some(v) -> v,
         None -> mirJsonEmptyObject(),
@@ -956,20 +966,25 @@ fn mirJsonModuleGlobals(items: List<MirJsonValue>, pos: Int, m: MirModule) -> Re
 
 fn mirJsonUse(value: MirJsonValue) -> Result<MirUse, String> {
     let obj = mirJsonObject(value, "use")?
-    let mut u = mirUse(mirJsonStringField(obj, 7060875, "rawPath", "")?, mirJsonStringField(obj, 5031372, "alias", "")?, mirJsonSpanField(obj, 4020328, "span")?)
-    u.isGoFFI = mirJsonBoolField(obj, 7047216, "isGoFFI", false)?
-    u.isRuntimeFFI = mirJsonBoolField(obj, 12170933, "isRuntimeFFI", false)?
-    u.goPath = mirJsonStringField(obj, 6043993, "goPath", "")?
-    u.runtimePath = mirJsonStringField(obj, 11161640, "runtimePath", "")?
-    Ok(u)
+    let rawPath = mirJsonStringField(obj, 7060875, "rawPath", "")?
+    let alias = mirJsonStringField(obj, 5031372, "alias", "")?
+    let span = mirJsonSpanField(obj, 4020328, "span")?
+    let isGoFFI = mirJsonBoolField(obj, 7047216, "isGoFFI", false)?
+    let isRuntimeFFI = mirJsonBoolField(obj, 12170933, "isRuntimeFFI", false)?
+    let goPath = mirJsonStringField(obj, 6043993, "goPath", "")?
+    let runtimePath = mirJsonStringField(obj, 11161640, "runtimePath", "")?
+    Ok(MirUse {rawPath, alias, isGoFFI, isRuntimeFFI, goPath, runtimePath, span})
 }
 
 fn mirJsonGlobal(value: MirJsonValue) -> Result<MirGlobal, String> {
     let obj = mirJsonObject(value, "global")?
-    let mut g = mirGlobal(mirJsonStringField(obj, 4019667, "name", "")?, mirJsonTypeField(obj, 4020804, "type")?, mirJsonBoolField(obj, 3012686, "mut", false)?, mirJsonSpanField(obj, 4020328, "span")?)
-    g.hasInit = mirJsonBoolField(obj, 7061762, "hasInit", false)?
-    g.initSymbol = mirJsonStringField(obj, 10135147, "initSymbol", "")?
-    Ok(g)
+    let name = mirJsonStringField(obj, 4019667, "name", "")?
+    let typ = mirJsonTypeField(obj, 4020804, "type")?
+    let mutable = mirJsonBoolField(obj, 3012686, "mut", false)?
+    let span = mirJsonSpanField(obj, 4020328, "span")?
+    let hasInit = mirJsonBoolField(obj, 7061762, "hasInit", false)?
+    let initSymbol = mirJsonStringField(obj, 10135147, "initSymbol", "")?
+    Ok(MirGlobal {name, typ, mutable, hasInit, initSymbol, span})
 }
 
 fn mirJsonFunction(value: MirJsonValue) -> Result<MirFunction, String> {
@@ -1078,10 +1093,14 @@ fn mirJsonInlineMode(value: Int) -> MirInlineMode {
 
 fn mirJsonLocal(value: MirJsonValue) -> Result<MirLocal, String> {
     let obj = mirJsonObject(value, "local")?
-    let mut l = mirLocal(mirJsonIntField(obj, 2005391, "id", 0)?, mirJsonStringField(obj, 4019667, "name", "")?, mirJsonTypeField(obj, 4020804, "type")?, mirJsonBoolField(obj, 3012686, "mut", false)?, mirJsonSpanField(obj, 4020328, "span")?)
-    l.isParam = mirJsonBoolField(obj, 7060589, "isParam", false)?
-    l.isReturn = mirJsonBoolField(obj, 8085801, "isReturn", false)?
-    Ok(l)
+    let id = mirJsonIntField(obj, 2005391, "id", 0)?
+    let name = mirJsonStringField(obj, 4019667, "name", "")?
+    let typ = mirJsonTypeField(obj, 4020804, "type")?
+    let mutable = mirJsonBoolField(obj, 3012686, "mut", false)?
+    let span = mirJsonSpanField(obj, 4020328, "span")?
+    let isParam = mirJsonBoolField(obj, 7060589, "isParam", false)?
+    let isReturn = mirJsonBoolField(obj, 8085801, "isReturn", false)?
+    Ok(MirLocal {id, name, typ, mutable, isParam, isReturn, span})
 }
 
 fn mirJsonBlock(value: MirJsonValue) -> Result<MirBasicBlock, String> {

@@ -538,6 +538,10 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirJsonLayouts(",
 				"fn mirJsonLayoutsInto(value: MirJsonValue, out: MirLayoutTable) -> Result<Bool, String>",
 				"fn mirJsonLayoutStructsInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutTable) -> Result<Bool, String>",
+				"fn mirJsonModuleObjectInto(obj: List<MirJsonEntry>, m: MirModule) -> Result<Bool, String>",
+				"Ok(MirUse {rawPath, alias, isGoFFI, isRuntimeFFI, goPath, runtimePath, span})",
+				"Ok(MirGlobal {name, typ, mutable, hasInit, initSymbol, span})",
+				"Ok(MirLocal {id, name, typ, mutable, isParam, isReturn, span})",
 			},
 		},
 	}
@@ -826,6 +830,89 @@ func TestMirGeneratorProjectionWriteTempsUseBlockQualifiedNames(t *testing.T) {
 	}
 }
 
+func TestMirLowerStage2SeedDiscardsStatementCalls(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_lower.osty"))
+	if err != nil {
+		t.Fatalf("read mir_lower.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"if s.exprValue.kind == HirExprCall",
+		"mirLowerCallExprInto(bs, s.exprValue, mirPlace(-1), hirTUnit())",
+		"if s.exprValue.kind == HirExprMethod",
+		"mirLowerMethodCallInto(bs, s.exprValue, mirPlace(-1), hirTUnit())",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir_lower.osty missing statement-call discard guard %q", needle)
+		}
+	}
+}
+
+func TestMirConstructorsAvoidProjectedScalarAssigns(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir.osty"))
+	if err != nil {
+		t.Fatalf("read mir.osty: %v", err)
+	}
+	text := string(src)
+	for _, needle := range []string{
+		"MirConst {kind: MirConstInt",
+		"MirProjection {kind: MirProjField",
+		"MirOperand {kind: MirOpCopy",
+		"MirRValue {kind: MirRVAggregate",
+		"MirRValue {kind: MirRVNullary",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("mir.osty missing direct constructor literal %q", needle)
+		}
+	}
+	for _, forbidden := range []string{
+		"let mut c = mirConstInvalid()",
+		"let mut p = mirProjInvalid()",
+		"let mut op = mirOperandInvalid()",
+		"let mut rv = mirRValueInvalid()",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("mir.osty reintroduced projected scalar constructor assignment %q", forbidden)
+		}
+	}
+}
+
+func TestMirJsonStage2SeedAvoidsProjectedScalarAssigns(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "mir_json.osty"))
+	if err != nil {
+		t.Fatalf("read mir_json.osty: %v", err)
+	}
+	text := string(src)
+	for _, forbidden := range []string{
+		"m.packageName =",
+		"m.span =",
+		"u.isGoFFI =",
+		"u.isRuntimeFFI =",
+		"u.goPath =",
+		"u.runtimePath =",
+		"g.hasInit =",
+		"g.initSymbol =",
+		"l.isParam =",
+		"l.isReturn =",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("mir_json.osty reintroduced projected scalar assignment %q", forbidden)
+		}
+	}
+}
+
 func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -858,6 +945,8 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 		"out = strings.replaceAll(out, \" \", \"\")",
 		"fn lirEncodedCStringByteLen(encoded: String) -> Int",
 		"lirEncodedCStringByteLen(encoded)",
+		"fn lirNoTypeParams() -> List<LirType>",
+		"fn lirNoOperands() -> List<LirOperand>",
 		`out = strings.replaceAll(out, "\\5C", "_")`,
 		`out = strings.replaceAll(out, "\\7B", "_")`,
 		`out = strings.replaceAll(out, "\\7D", "_")`,
@@ -870,21 +959,33 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 		"l.tempNames.push(name)",
 		`if !(loc.isParam) && typ.className == LirTypePtr`,
 		`l.prologue.push(lirStore(lirOperand(typ, "null"), slot, 0))`,
-			`value.typ.className == LirTypePtr && destType.className == LirTypeInt`,
-			`value.typ.className == LirTypeInt && destType.className == LirTypePtr`,
-			"value = lirCoerceValueToType(l, value, arg.typ, paramLocal.typ, paramType, \"direct call arg\")",
-			"fn lirRuntimePanicDecl() -> LirRuntimeDecl",
-			"lirRuntimeDeclWithAttrs(\"osty_rt_panic\", lirVoidType(), [lirPtrType()], false, lirRuntimePanicAttrs())",
-			"if kind == MirIntrinsicAbort",
-			"fn lirLowerMirAbort(l: LirMirFunctionLowerer, instr: MirInstr)",
-			"l.instrs.push(lirCallWithAttrs(\"\", lirVoidType(), \"@osty_rt_panic\", args, \"\", lirRuntimePanicAttrs()))",
-			"let fields: List<MirFieldLayout> = []",
-			"MirStructLayout {name: \"\", mangled: \"\", fields, size: 0, align: 0}",
-			"MirTupleLayout {key: \"\", mangled: \"\", fields}",
-		} {
+		`value.typ.className == LirTypePtr && destType.className == LirTypeInt`,
+		`value.typ.className == LirTypeInt && destType.className == LirTypePtr`,
+		"value = lirCoerceValueToType(l, value, arg.typ, paramLocal.typ, paramType, \"direct call arg\")",
+		"fn lirRuntimePanicDecl() -> LirRuntimeDecl",
+		"lirRuntimeDeclWithAttrs(\"osty_rt_panic\", lirVoidType(), [lirPtrType()], false, lirRuntimePanicAttrs())",
+		"if kind == MirIntrinsicAbort",
+		"fn lirLowerMirAbort(l: LirMirFunctionLowerer, instr: MirInstr)",
+		"l.instrs.push(lirCallWithAttrs(\"\", lirVoidType(), \"@osty_rt_panic\", args, \"\", lirRuntimePanicAttrs()))",
+		"let fields: List<MirFieldLayout> = []",
+		"MirStructLayout {name: \"\", mangled: \"\", fields, size: 0, align: 0}",
+		"MirTupleLayout {key: \"\", mangled: \"\", fields}",
+		"return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), lirNoTypeParams(), \"set.new\")",
+		"l.instrs.push(lirCall(listReg, lirPtrType(), \"@\" + newSym, lirNoOperands()))",
+		"fn lirLowerMirStdOsExecResultCall(l: LirMirFunctionLowerer, instr: MirInstr)",
+		"symbol == \"osty_rt_os_exec_with\" || symbol == \"osty_rt_os_exec_input_with\"",
+		"lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(instr.calleeSymbol, lirPtrType(), paramTypes, false))",
+		"let boxType = lirRawType(lirBraced(\"i64, ptr, ptr\"))",
+		"l.instrs.push(lirSelect(payloadI64, lirIntType(64), isOk, okPayloadI64, errPayloadI64))",
+		"let comma = lirFirstTopLevelComma(args)",
+		"strings.trim(strings.slice(args, 0, comma))",
+	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("lir_proto.osty missing stage2-seed LIR Proto guard %q", needle)
 		}
+	}
+	if strings.Contains(text, "strings.fromChar(ch)") {
+		t.Fatalf("lir_proto.osty reintroduced stage2-unsafe strings.fromChar(ch) in generic arg splitting")
 	}
 }
 

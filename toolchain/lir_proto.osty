@@ -153,6 +153,14 @@ pub fn lirOperand(typ: LirType, value: String) -> LirOperand {
 pub fn lirOperandInvalid() -> LirOperand {
     LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
 }
+fn lirNoTypeParams() -> List<LirType> {
+    let params: List<LirType> = []
+    return params
+}
+fn lirNoOperands() -> List<LirOperand> {
+    let args: List<LirOperand> = []
+    return args
+}
 pub fn lirOperandString(op: LirOperand) -> String {
     lirTypeString(op.typ) + " " + op.value
 }
@@ -2461,23 +2469,11 @@ fn lirOptionResultPayloadInner(name: String) -> String {
 // bracket depth so nested generics are not split mid-arg
 // ("Map<K, V>, Error" -> "Map<K, V>").
 fn lirSplitFirstGenericArg(args: String) -> String {
-    let mut depth = 0
-    let mut out = ""
-    let chars = strings.chars(args)
-    for ch in chars {
-        if ch == '<' {
-            depth = depth + 1
-            out = out + strings.fromChar(ch)
-        } else if ch == '>' {
-            depth = depth - 1
-            out = out + strings.fromChar(ch)
-        } else if ch == ',' && depth == 0 {
-            return strings.trim(out)
-        } else {
-            out = out + strings.fromChar(ch)
-        }
+    let comma = lirFirstTopLevelComma(args)
+    if comma < 0 {
+        return strings.trim(args)
     }
-    strings.trim(out)
+    strings.trim(strings.slice(args, 0, comma))
 }
 // `lirMirStructTypeRefByName` returns the LLVM type reference (`%Mangled`)
 // for a named struct in `mir.layouts.structs`, or "" when not found. Used
@@ -3035,7 +3031,15 @@ fn lirMirBlockTermKind(bb: MirBasicBlock) -> MirTermKind {
 // is `fn_.entry`. Production runs the same emit order
 // (LANG_SPEC §3.8.6 + RUNTIME_GC_DELTA §10.1).
 fn lirLowerError(l: LirMirFunctionLowerer, kind: LirDiagnosticKind, message: String, path: String) {
-    l.diagnostics.push(lirDiagnosticError(kind, message, path))
+    let fnPath = lirRenderedMirFunctionNameOrMain(l.fn_)
+    let diagPath = if path == "" {
+        fnPath
+    } else if fnPath == "" {
+        path
+    } else {
+        fnPath + "." + path
+    }
+    l.diagnostics.push(lirDiagnosticError(kind, message, diagPath))
 }
 fn lirRenderedMirFunctionName(fn_: MirFunction) -> String {
     if fn_.exportSymbol.len() != 0 {
@@ -3396,7 +3400,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                 } else if value.typ.className == LirTypeAggregate && destType.className == LirTypeAggregate {
                     let rebuilt = lirRebuildDefaultI64Aggregate(l, value, destType)
                     if rebuilt.value == "" {
-                        lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported", "assign")
+                        lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
                         return
                     }
                     value = rebuilt
@@ -3418,7 +3422,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                     l.instrs.push(lirStore(lirOperand(destType, "zeroinitializer"), voidSlot.slot, 0))
                     return
                 } else {
-                    lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported", "assign")
+                    lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
                     return
                 }
             } else {
@@ -3727,6 +3731,10 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerMirStdFsReadToStringCall(l, instr)
         return
     }
+    if lirIsStdOsExecResultSymbol(instr.calleeSymbol) {
+        lirLowerMirStdOsExecResultCall(l, instr)
+        return
+    }
     if lirTryLowerMirIntMethodIntrinsic(l, instr) {
         return
     }
@@ -3914,6 +3922,74 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         let loc = mirFunctionLocal(l.fn_, instr.dest.local)
         lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "cross-module call result")
     }
+}
+fn lirIsStdOsExecResultSymbol(symbol: String) -> Bool {
+    symbol == "osty_rt_os_exec_with" || symbol == "osty_rt_os_exec_input_with"
+}
+fn lirLowerMirStdOsExecResultCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if !instr.hasDest {
+        lirLowerError(l, LirDiagInvalidInput, "std.os exec call requires a destination", "call.std.os.exec")
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "std.os exec destination local out of range", "call.std.os.exec")
+        return
+    }
+    let resultType = lirLowerMirType(l, loc.typ)
+    if resultType.className != LirTypeAggregate {
+        lirLowerError(l, LirDiagUnsupported, "std.os exec destination must be Result<...>, got `" + loc.typ + "`", "call.std.os.exec")
+        return
+    }
+    if lirAggregateHasWidenedPayload(l.out, resultType) {
+        lirLowerError(l, LirDiagUnsupported, "std.os exec widened Result payload is not implemented", "call.std.os.exec")
+        return
+    }
+    let mut paramTypes: List<LirType> = []
+    let mut args: List<LirOperand> = []
+    for arg in instr.args {
+        let paramType = lirLowerMirType(l, arg.typ)
+        if lirTypeIsZero(paramType) {
+            lirLowerError(l, LirDiagUnsupported, "std.os exec arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", "call.std.os.exec")
+            return
+        }
+        let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
+        if value.value == "" {
+            return
+        }
+        paramTypes.push(paramType)
+        args.push(lirOperand(paramType, value.value))
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(instr.calleeSymbol, lirPtrType(), paramTypes, false))
+    let boxed = lirFresh(l)
+    l.instrs.push(lirCall(boxed, lirPtrType(), "@" + instr.calleeSymbol, args))
+    let boxType = lirRawType(lirBraced("i64, ptr, ptr"))
+    let zero = lirOperand(lirIntType(32), "0")
+    let tagPtr = lirFresh(l)
+    l.instrs.push(lirGep(tagPtr, boxType, boxed, [zero, lirOperand(lirIntType(32), "0")], true))
+    let tag = lirFresh(l)
+    l.instrs.push(lirLoad(tag, lirIntType(64), tagPtr, 8))
+    let okPtrSlot = lirFresh(l)
+    l.instrs.push(lirGep(okPtrSlot, boxType, boxed, [zero, lirOperand(lirIntType(32), "1")], true))
+    let okPayload = lirFresh(l)
+    l.instrs.push(lirLoad(okPayload, lirPtrType(), okPtrSlot, 8))
+    let errPtrSlot = lirFresh(l)
+    l.instrs.push(lirGep(errPtrSlot, boxType, boxed, [zero, lirOperand(lirIntType(32), "2")], true))
+    let errPayload = lirFresh(l)
+    l.instrs.push(lirLoad(errPayload, lirPtrType(), errPtrSlot, 8))
+    let okPayloadI64 = lirFresh(l)
+    l.instrs.push(lirCast(okPayloadI64, "ptrtoint", lirOperand(lirPtrType(), okPayload), lirIntType(64)))
+    let errPayloadI64 = lirFresh(l)
+    l.instrs.push(lirCast(errPayloadI64, "ptrtoint", lirOperand(lirPtrType(), errPayload), lirIntType(64)))
+    let isOk = lirFresh(l)
+    l.instrs.push(lirBinary(isOk, "icmp eq", lirIntType(64), tag, "0"))
+    let payloadI64 = lirFresh(l)
+    l.instrs.push(lirSelect(payloadI64, lirIntType(64), isOk, okPayloadI64, errPayloadI64))
+    let withTag = lirFresh(l)
+    l.instrs.push(lirInsertValue(withTag, resultType, "undef", lirOperand(lirIntType(64), tag), [0]))
+    let resultValue = lirFresh(l)
+    l.instrs.push(lirInsertValue(resultValue, resultType, withTag, lirOperand(lirIntType(64), payloadI64), [1]))
+    lirStoreMirResult(l, instr.dest, lirOperand(resultType, resultValue), loc.typ, "std.os exec result")
 }
 fn lirLowerMirStdFsReadToStringCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     if !instr.hasDest {
@@ -4447,7 +4523,7 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         return lirLowerMirMapRemove(l, instr)
     }
     if kind == MirIntrinsicSetNew {
-        return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), [], "set.new")
+        return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), lirNoTypeParams(), "set.new")
     }
     if kind == MirIntrinsicSetLen {
         return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "set.len")
@@ -4483,7 +4559,7 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         return lirLowerMirChanRecv(l, instr)
     }
     if kind == MirIntrinsicYield {
-        return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield")
+        return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), lirNoTypeParams(), "task.yield")
     }
     if kind == MirIntrinsicSleep {
         return lirLowerMirStringRuntimeCall(l, instr, mirRtThreadSleepSymbol(), lirVoidType(), [lirPtrType()], "task.sleep")
@@ -4543,7 +4619,7 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         return lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidHexSymbol(), mirRtBytesFromHexSymbol(), "bytes.fromHex")
     }
     if kind == MirIntrinsicIsCancelled {
-        return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled")
+        return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), lirNoTypeParams(), "cancel.isCancelled")
     }
     if kind == MirIntrinsicStringIndexOf {
         return lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf")
@@ -6365,9 +6441,9 @@ fn lirLowerMirCheckCancelled(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let symbol = mirRtCancelCheckCancelledSymbol()
     let rawType = lirRawType(lirBraced("i64, i64"))
-    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, rawType, [], false))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, rawType, lirNoTypeParams(), false))
     if !(instr.hasDest) {
-        l.instrs.push(lirCall("", rawType, "@" + symbol, []))
+        l.instrs.push(lirCall("", rawType, "@" + symbol, lirNoOperands()))
         return
     }
     let loc = mirFunctionLocal(l.fn_, instr.dest.local)
@@ -6381,7 +6457,7 @@ fn lirLowerMirCheckCancelled(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     lirLowerMirType(l, loc.typ)
     let dest = lirFresh(l)
-    l.instrs.push(lirCall(dest, rawType, "@" + symbol, []))
+    l.instrs.push(lirCall(dest, rawType, "@" + symbol, lirNoOperands()))
     let slot = lirMirLocalSlot(l, loc.id)
     if slot.slot == "" {
         lirLowerError(l, LirDiagLoweringBug, "cancel.check destination has no LIR slot", "cancel.check")
@@ -7032,8 +7108,8 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentT
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     lirCutBlockCondBr(l, isAbsentReg, absentLabel, presentLabel, absentLabel)
-    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(abortSym, lirVoidType(), [], false))
-    l.instrs.push(lirCall("", lirVoidType(), "@" + abortSym, []))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(abortSym, lirVoidType(), lirNoTypeParams(), false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + abortSym, lirNoOperands()))
     lirCutBlockUnreachable(l, presentLabel)
     let payloadI64 = lirFresh(l)
     l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
@@ -8142,9 +8218,9 @@ fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: S
         return lirOperandInvalid()
     }
     let newSym = llvmListRuntimeNewSymbol()
-    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(newSym, lirPtrType(), [], false))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(newSym, lirPtrType(), lirNoTypeParams(), false))
     let listReg = lirFresh(l)
-    l.instrs.push(lirCall(listReg, lirPtrType(), "@" + newSym, []))
+    l.instrs.push(lirCall(listReg, lirPtrType(), "@" + newSym, lirNoOperands()))
     let elemLir = lirContainerElemLaneType(elemName)
     if lirTypeIsZero(elemLir) {
         let elemType = lirLowerMirType(l, elemName)
