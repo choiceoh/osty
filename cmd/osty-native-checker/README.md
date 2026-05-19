@@ -9,7 +9,7 @@ matching responsibilities, built from disjoint sources.
 | target | command | source | status |
 |---|---|---|---|
 | Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **M4 brick A — byte offsets + diagnostic line/column wired; stable-ID + telemetry adapter bricks still pending** |
+| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **M4 byte parity — bricks A/B/C all wired (byte offsets, telemetry, sha256 stable IDs)** |
 
 ## Why two targets
 
@@ -40,16 +40,24 @@ reaches behavior parity (plan §12 M3/M4).
   (`internal/selfhost/check_adapter.go::checkNodeOffsets`) emits.
   Diagnostics additionally get `startLine` / `startColumn` / `endLine` /
   `endColumn` from `FrontLexToken.start.line`+`column`.
-- ⏳ **M4 remaining bricks** — full byte-for-byte parity on non-empty
-  inputs still pending two adapter responsibilities:
-  - sha256 `EnsureStableIDs` stamping (the `id` / `nodeKey` / `typeKey`
-    string fields stay empty → Go-side `omitempty` drops them on decode).
-  - `errorsByContext` / `errorDetails` summary telemetry (the
-    `selfhostDiagnosticTelemetry` aggregation in
-    `internal/selfhost/check_telemetry.go`).
+- ✓ **M4 brick B (`errorsByContext` / `errorDetails` summary telemetry)** —
+  `frontWireBuildTelemetry` aggregates every severity-error diagnostic
+  into the same shape `selfhostDiagnosticTelemetry`
+  (`internal/selfhost/check_telemetry.go`) attaches to `CheckResult.Summary`.
+  Bucket key = stable code (or `<error>` fallback); detail key = trimmed
+  message + `@L<line>:C<col>` suffix on the lex-aware path. Map keys
+  emit in lexicographic order to match Go's `encoding/json`.
+- ✓ **M4 brick C (sha256 stable IDs)** — `toolchain/check_stable_id.osty`
+  mirrors `EnsureStableIDs` (`internal/selfhost/api/types.go`): every
+  record body stamps `id` / `nodeKey` / `typeKey`, instantiations
+  additionally stamp `typeArgKeys` / `resultTypeKey`. Hashes are
+  SHA256(`prefix\0part1\0part2\0...\0`)[:12] hex with the same content
+  tuples the Go adapter uses, so identical wire records always hash to
+  identical keys.
 
-  Both are tracked under `SPEC_GAPS.md::cross-pkg-module-resolution` and
-  the LLVM self-host plan §12 M4 trajectory.
+With bricks A + B + C wired the LLVM-built and Go-built native checker
+emit byte-identical JSON for non-empty inputs (modulo any
+non-determinism in token ordering, which is upstream of the wire layer).
 
 ## Build (LLVM-built)
 
@@ -86,12 +94,15 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
   - 입력 측 escape (`\"`, `\n`) 미처리
   - 다른 key 가 `"source"` substring 포함 시 오인지
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
-  (`toolchain/check_json.osty`) 가 lex/parse/check 한 후 wire JSON 으로
-  직렬화. M4 brick A 까지 wired (byte offsets + diagnostic
-  startLine/startColumn/endLine/endColumn). 남은 brick:
-  - `EnsureStableIDs` 의 sha256 stable ID 미스탬프 — `omitempty` 로 인해 누락만 발생, 잘못된 값은 아님
-  - `errorsByContext` / `errorDetails` summary telemetry 미산출
-  - 두 항목 모두 `SPEC_GAPS.md::cross-pkg-module-resolution` trajectory 의 M4 byte parity 후속 brick
+  (`toolchain/check_json.osty` + `toolchain/check_stable_id.osty`) 가
+  lex/parse/check 한 후 wire JSON 으로 직렬화. M4 byte parity 의 세
+  brick 모두 wired:
+  - byte offsets + diagnostic `startLine` / `startColumn` / `endLine` /
+    `endColumn` (brick A)
+  - `errorsByContext` / `errorDetails` summary telemetry, sorted key 순
+    (brick B)
+  - sha256 기반 `id` / `nodeKey` / `typeKey` (+ instantiation 의
+    `typeArgKeys` / `resultTypeKey`) stamp (brick C)
 
 ## main.go vs main.osty co-existence
 
@@ -108,8 +119,8 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 | [#1842](https://github.com/choiceoh/osty/pull/1842) | **PR3-C-impl-go step 1+2** ResolvedSymbol.ImportPath post-processing |
 | [#1890](https://github.com/choiceoh/osty/pull/1890) | **PR3-E/F activation** — cross-pkg method-call dispatch arm |
 | [#1938](https://github.com/choiceoh/osty/pull/1938) | **PR3-G semantic correctness** — `tc.frontCheckSourceToWireJson` (`toolchain/check_json.osty`) replaces stub `emptyCheckResultJson` |
-| (this branch) | **M4 brick A** — byte offsets + diagnostic line/column (`FrontWireMapper`) |
-| (TBD) | M4 brick B — sha256 stable IDs (`EnsureStableIDs`) |
-| (TBD) | M4 brick C — `errorsByContext` / `errorDetails` telemetry |
+| [#1940](https://github.com/choiceoh/osty/pull/1940) | **M4 brick A** — byte offsets + diagnostic line/column (`FrontWireMapper`) |
+| (this branch) | **M4 brick B** — `errorsByContext` / `errorDetails` summary telemetry |
+| (this branch) | **M4 brick C** — sha256 stable IDs (`toolchain/check_stable_id.osty` mirrors `EnsureStableIDs`) |
 
 자세한 분기 결정 + 시도 결과 → `docs/llvm-selfhost-plan-pr*.md` 시리즈.

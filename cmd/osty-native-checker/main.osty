@@ -25,12 +25,20 @@
 //
 // 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
 // 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON
-// 와이어 모양으로 직렬화한다. M4 brick A 까지 wired: `start` / `end` 가
-// UTF-8 byte offset (rune→byte 변환), diagnostic 마다 `startLine` /
-// `startColumn` / `endLine` / `endColumn` 부착. 남은 M4 brick (sha256
-// `EnsureStableIDs`, `errorsByContext` / `errorDetails` telemetry) 은
-// Go-built adapter (internal/selfhost/check_adapter.go) 측 정책으로
-// 별도 brick 에서 포팅 예정.
+// 와이어 모양으로 직렬화한다. M4 byte-parity 의 세 brick 모두 wired:
+//
+//   - brick A — `start` / `end` 가 UTF-8 byte offset (rune→byte 변환),
+//     diagnostic 마다 `startLine` / `startColumn` / `endLine` /
+//     `endColumn` 부착 (`toolchain/check_json.osty::FrontWireMapper`).
+//   - brick B — `errorsByContext` / `errorDetails` summary telemetry
+//     (`frontWireBuildTelemetry`) 가 severity-error diagnostic 을
+//     code 별로 집계, detail 행에 `@L<line>:C<col>` suffix 부착.
+//   - brick C — sha256-기반 stable ID (`toolchain/check_stable_id.osty`)
+//     로 모든 record 가 `id` / `nodeKey` / `typeKey` (+ instantiation
+//     의 `typeArgKeys` / `resultTypeKey`) stamp.
+//
+// 위 셋이 다 적용됐으므로 비-empty input 도 Go-built target 과 동등한
+// 와이어 JSON 을 emit 한다 (token 순서가 안정적이라는 전제 하에).
 use std.io
 use std.strings
 use toolchain as tc

@@ -1,0 +1,72 @@
+// check_stable_id.osty — sha256-derived stable IDs for the wire check
+// result.
+//
+// Mirrors the Go-side `internal/selfhost/api/types.go::EnsureStableIDs`
+// pipeline:
+//
+//   - `frontWireStableID(prefix, parts)` returns `<prefix>:<24-hex>`
+//     where the hex value is the first 12 bytes of
+//     SHA256(`prefix\0part1\0part2\0...\0`).
+//   - `frontWireStableNodeKey(existing, kind, start, end)` matches
+//     `stableNodeKey` — falls back to `stableID("node", kind,
+//     itoa(start), itoa(end))` when the caller doesn't supply a
+//     precomputed key.
+//   - `frontWireStableTypeKey(repr)` matches `StableTypeKey` — walks
+//     the FrontTypeRepr tree (kind, name, path, args*, then
+//     `"return"`/inner if present) and returns `type:<24-hex>`.
+//
+// Toolchain already uses `std.bytes` (see `toolchain/lexer.osty:1`);
+// `std.crypto.sha256` is the same family of stdlib-bridged runtime
+// calls (`osty_runtime.c::osty_rt_crypto_sha256`).
+use std.bytes as bytes
+use std.crypto as crypto
+pub fn frontWireStableID(prefix: String, parts: List<String>) -> String {
+    let mut buf = bytes.fromString(prefix)
+    let zero = bytes.from([0])
+    buf = bytes.concat(buf, zero)
+    for part in parts {
+        buf = bytes.concat(buf, bytes.fromString(part))
+        buf = bytes.concat(buf, zero)
+    }
+    let digest = crypto.sha256(buf)
+    let head = bytes.slice(digest, 0, 12)
+    prefix + ":" + bytes.toHex(head)
+}
+pub fn frontWireStableNodeKey(existing: String, kind: String, start: Int, end: Int) -> String {
+    if existing != "" {
+        return existing
+    }
+    frontWireStableID("node", [kind, "{start}", "{end}"])
+}
+pub fn frontWireStableTypeKey(repr: FrontTypeRepr) -> String {
+    let mut parts: List<String> = []
+    parts.push(repr.kind)
+    parts.push(repr.name)
+    parts.push(repr.path)
+    for a in repr.args {
+        parts.push(frontWireStableTypeKey(a))
+    }
+    match repr.ret {
+        Some(inner) -> {
+            parts.push("return")
+            parts.push(frontWireStableTypeKey(inner))
+        },
+        None -> {
+            let _ = repr
+        },
+    }
+    frontWireStableID("type", parts)
+}
+pub fn frontWireStableTypeKeyOrExisting(existing: String, repr: FrontTypeRepr) -> String {
+    if existing != "" {
+        return existing
+    }
+    frontWireStableTypeKey(repr)
+}
+pub fn frontWireBoolText(b: Bool) -> String {
+    if b {
+        "true"
+    } else {
+        "false"
+    }
+}
