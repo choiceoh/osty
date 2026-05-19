@@ -59,6 +59,11 @@ const selfForwardArgsEnv = "OSTY_SELF_REBUILD_FORWARD_ARGS"
 // self-hosted LIR Proto lowering. Use "0" to disable.
 const selfLowerTimeoutEnv = "OSTY_LIRPROTO_SELF_TIMEOUT"
 
+// selfSourceCompatMaxBytesEnv bounds the legacy source retry used
+// only when an older osty-self cannot handle MIR JSON directly.
+// Use "0" to disable the size guard.
+const selfSourceCompatMaxBytesEnv = "OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES"
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -191,7 +196,12 @@ func runSelfLower(selfBin string, args []string) (nativelirproto.Response, strin
 }
 
 func selfLowerTimeout(args []string) time.Duration {
-	if len(args) == 0 || args[0] != "lir-proto-lower-mir-json" {
+	if len(args) == 0 {
+		return 0
+	}
+	switch args[0] {
+	case "lir-proto-lower-mir-json", "lir-proto-lower":
+	default:
 		return 0
 	}
 	if raw := os.Getenv(selfLowerTimeoutEnv); raw != "" {
@@ -254,6 +264,19 @@ func lowerLegacyMIRJSON(req nativelirproto.Request, selfBin string) (nativelirpr
 			return stage0Resp, nil
 		}
 		return nativelirproto.Response{Declined: true, Error: "legacy osty-self does not support MIR JSON requests"}, nil
+	}
+	if max := sourceCompatMaxBytes(); max > 0 && len([]byte(req.Source)) > max {
+		sourceResp := nativelirproto.Response{
+			Declined: true,
+			Error:    fmt.Sprintf("legacy source compat skipped: source is %d bytes, exceeds %d byte guard", len([]byte(req.Source)), max),
+		}
+		if !triedStage0 {
+			return sourceResp, nil
+		}
+		return nativelirproto.Response{
+			Declined: true,
+			Error:    combineDeclineErrors(stage0Resp.Error, sourceResp.Error),
+		}, nil
 	}
 	sourceReq := req
 	sourceReq.MIR = nil
@@ -333,6 +356,19 @@ func combineDeclineErrors(primary, secondary string) string {
 	default:
 		return primary + "; source compat: " + secondary
 	}
+}
+
+func sourceCompatMaxBytes() int {
+	if raw := os.Getenv(selfSourceCompatMaxBytesEnv); raw != "" {
+		if raw == "0" {
+			return 0
+		}
+		var n int
+		if _, err := fmt.Sscanf(raw, "%d", &n); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 1 << 20
 }
 
 // resolveOstySelfBin returns the path to the self-host `osty-self`

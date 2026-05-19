@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +33,9 @@ func TestBundledRuntimeFsToolingHelpers(t *testing.T) {
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
 	harnessPath := filepath.Join(dir, "runtime_fs_harness.c")
 	binaryPath := filepath.Join(dir, "runtime_fs_harness")
+	if runtime.GOOS == "windows" {
+		binaryPath += ".exe"
+	}
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
 	}
@@ -74,11 +79,31 @@ static void require_no_error(void *err, const char *label) {
     }
 }
 
+static void normalize_slashes(char *path) {
+    for (char *p = path; *p != '\0'; p++) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+}
+
 static int list_contains(void *list, const char *needle) {
+    char want[4096];
+    int wrote = snprintf(want, sizeof(want), "%s", needle);
+    if (wrote < 0 || (size_t)wrote >= sizeof(want)) {
+        fail("path too long");
+    }
+    normalize_slashes(want);
     int64_t n = osty_rt_list_len(list);
     for (int64_t i = 0; i < n; i++) {
         const char *item = osty_rt_list_get_string(list, i);
-        if (item != NULL && strcmp(item, needle) == 0) {
+        char got[4096];
+        wrote = snprintf(got, sizeof(got), "%s", item == NULL ? "" : item);
+        if (wrote < 0 || (size_t)wrote >= sizeof(got)) {
+            fail("path too long");
+        }
+        normalize_slashes(got);
+        if (strcmp(got, want) == 0) {
             return 1;
         }
     }
@@ -166,7 +191,7 @@ int main(int argc, char **argv) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got := string(runOutput); got != "ok\n" {
+	if got := strings.TrimSpace(string(runOutput)); got != "ok" {
 		t.Fatalf("runtime fs stdout = %q, want ok", got)
 	}
 }

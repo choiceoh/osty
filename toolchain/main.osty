@@ -69,52 +69,42 @@ fn selfRebuildCommandError(action: String, command: String, stdout: String, stde
     action + " failed: " + command + "\n" + msg
 }
 fn selfRebuildMkdirAll(path: String) -> String {
-    let out = match os.execWith("mkdir", ["-p", path], "", {:}, 0) {
-        Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
-            return "mkdir failed to start"
+    match fs.mkdirAll(path) {
+        Ok(_) -> "",
+        Err(_) -> {
+            "mkdir failed: " + path
         },
     }
-    if out.exitCode == 0 && !out.timedOut {
-        return ""
-    }
-    selfRebuildCommandError("mkdir", "mkdir -p " + path, out.stdout, out.stderr)
 }
 fn selfRebuildWriteString(path: String, contents: String) -> String {
-    let out = match os.execInputWith("sh", ["-c", "cat > \"$1\"", "osty-self-write", path], contents, "", {:}, 0) {
-        Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
-            return "write failed to start"
+    match fs.writeString(path, contents) {
+        Ok(_) -> "",
+        Err(_) -> {
+            "write failed: " + path
         },
     }
-    if out.exitCode == 0 && !out.timedOut {
-        return ""
-    }
-    selfRebuildCommandError("write", "cat > " + path, out.stdout, out.stderr)
 }
 fn selfRebuildToolchainSourcePaths(toolchainDir: String) -> Result<List<String>, String> {
-    let script = "cd \"$1\" && find . -type f -name '*.osty' ! -name '*_test.osty' ! -name 'ci.osty' ! -path './.osty/*' | sort"
-    let out = match os.execWith("sh", ["-c", script, "osty-self-list", toolchainDir], "", {:}, 0) {
-        Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
-            return Err("source list command failed to start")
+    let entries = match fs.walk(toolchainDir) {
+        Ok(paths) -> paths,
+        Err(_) -> {
+            return Err("source list walk failed: " + toolchainDir)
         },
     }
-    if out.exitCode != 0 || out.timedOut {
-        return Err(selfRebuildCommandError("source list", "find toolchain sources", out.stdout, out.stderr))
-    }
     let mut paths: List<String> = []
-    for line in strings.split(out.stdout, "\n") {
-        let trimmed = strings.trimSpace(line)
-        if trimmed != "" {
-            let rel = strings.trimPrefix(trimmed, "./")
-            paths.push(selfRebuildPath(toolchainDir, rel))
+    for path in entries {
+        if selfRebuildIsToolchainSource(path) {
+            paths.push(path)
         }
     }
     Ok(paths)
+}
+fn selfRebuildTempPath(name: String) -> String {
+    let tmp = env.get("TMP") ?? (env.get("TEMP") ?? "")
+    if tmp != "" {
+        return selfRebuildPath(tmp, name)
+    }
+    selfRebuildPath("/tmp", name)
 }
 fn currentExecutable() -> String {
     let args = env.args()
@@ -170,8 +160,7 @@ fn selfRebuildBundleSource(toolchainDir: String) -> String {
         if selfRebuildIsToolchainSource(path) {
             let src = match fs.readToString(path) {
                 Ok(s) -> s,
-                Err(e) -> {
-                    let _ = e
+                Err(_) -> {
                     eprint("osty-self rebuild: read source failed: " + path + "\n")
                     return ""
                 },
@@ -206,7 +195,7 @@ fn selfRebuildClangCompileRuntimeArgs(target: String, sourcePath: String, object
         args.push("-target")
         args.push(target)
     }
-    if !(strings.contains(target, "windows")) {
+    if !(selfRebuildIsWindowsTarget(target)) {
         args.push("-pthread")
     }
     args.push("-O3")
@@ -224,11 +213,29 @@ fn selfRebuildHostIsDarwin() -> Bool {
         Err(_) -> false,
     }
 }
+fn selfRebuildHostIsWindows() -> Bool {
+    match os.execWith("cmd", ["/C", "ver"], "", {:}, 0) {
+        Ok(_) -> true,
+        Err(_) -> false,
+    }
+}
+fn selfRebuildIsWindowsTarget(target: String) -> Bool {
+    if target == "" {
+        return selfRebuildHostIsWindows()
+    }
+    strings.contains(target, "windows")
+}
 fn selfRebuildIsDarwinTarget(target: String) -> Bool {
     if target == "" {
         return selfRebuildHostIsDarwin()
     }
     strings.contains(target, "darwin") || strings.contains(target, "apple")
+}
+fn selfRebuildBinaryName(target: String) -> String {
+    if selfRebuildIsWindowsTarget(target) {
+        return "osty-self.exe"
+    }
+    "osty-self"
 }
 fn selfRebuildClangLinkArgs(target: String, objectPath: String, runtimeObjectPath: String, binaryPath: String) -> List<String> {
     let mut args: List<String> = []
@@ -238,15 +245,19 @@ fn selfRebuildClangLinkArgs(target: String, objectPath: String, runtimeObjectPat
     }
     args.push("-O3")
     args.push("-flto=thin")
+    if selfRebuildIsWindowsTarget(target) {
+        args.push("-Wl,/subsystem:console")
+        args.push("-Wl,/stack:67108864")
+    }
     args.push(objectPath)
     args.push(runtimeObjectPath)
-    if !(strings.contains(target, "windows")) {
+    if !(selfRebuildIsWindowsTarget(target)) {
         args.push("-pthread")
         args.push("-lz")
     }
     args.push("-o")
     args.push(binaryPath)
-    if !(strings.contains(target, "windows")) {
+    if !(selfRebuildIsWindowsTarget(target)) {
         args.push("-lm")
     }
     if selfRebuildIsDarwinTarget(target) {
@@ -255,7 +266,7 @@ fn selfRebuildClangLinkArgs(target: String, objectPath: String, runtimeObjectPat
         args.push("-framework")
         args.push("CoreFoundation")
     }
-    if strings.contains(target, "windows") {
+    if selfRebuildIsWindowsTarget(target) {
         args.push("-ladvapi32")
     }
     args
@@ -263,8 +274,7 @@ fn selfRebuildClangLinkArgs(target: String, objectPath: String, runtimeObjectPat
 fn selfRebuildRunClang(action: String, args: List<String>) -> String {
     let out = match os.execWith("clang", args, "", {:}, 0) {
         Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
+        Err(_) -> {
             return "clang " + action + " failed to start"
         },
     }
@@ -281,8 +291,7 @@ fn selfRebuildRunSelfLower(exe: String, bundlePath: String, target: String) -> S
     }
     let out = match os.execWith(exe, args, "", {:}, 0) {
         Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
+        Err(_) -> {
             eprint("osty-self rebuild: self LIR Proto lower failed to start\n")
             return ""
         },
@@ -306,7 +315,7 @@ fn runSelfRebuild(args: List<String>) -> Int {
     let runtimeSourceInRepo = selfRebuildPath(repoRoot, "internal/backend/runtime/osty_runtime.c")
     let runtimeSourcePath = selfRebuildPath(runtimeDir, "osty_runtime.c")
     let runtimeObjectPath = selfRebuildPath(runtimeDir, "osty_runtime.o")
-    let binaryPath = selfRebuildPath(outDir, "osty-self")
+    let binaryPath = selfRebuildPath(outDir, selfRebuildBinaryName(target))
     let mkdirErr = selfRebuildMkdirAll(runtimeDir)
     if mkdirErr != "" {
         eprint("osty-self rebuild: " + mkdirErr + "\n")
@@ -337,8 +346,7 @@ fn runSelfRebuild(args: List<String>) -> Int {
     }
     let runtimeSource = match fs.readToString(runtimeSourceInRepo) {
         Ok(s) -> s,
-        Err(e) -> {
-            let _ = e
+        Err(_) -> {
             eprint("osty-self rebuild: read runtime source failed\n")
             return 1
         },
@@ -402,17 +410,16 @@ fn selfhostProbeError() -> String {
     ""
 }
 fn selfhostDoctorProbeError(exe: String) -> String {
-    let probePath = "/tmp/osty-self-doctor-probe.osty"
+    let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
     let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
     if writeErr != "" {
         return "write probe failed: " + writeErr
     }
     let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", {:}, 0) {
         Ok(o) -> o,
-        Err(e) -> {
-            let _ = e
-            return "lir-proto-lower probe failed to start"
-        },
+            Err(_) -> {
+                return "lir-proto-lower probe failed to start"
+            },
     }
     if out.exitCode != 0 || out.timedOut {
         let msg = strings.trimSpace(out.stderr + "\n" + out.stdout)
@@ -442,7 +449,7 @@ fn runSelfhostDoctor() -> Int {
         eprint("osty-self self-rebuild probe failed: executable not found\n")
         return 2
     }
-    let probePath = "/tmp/osty-self-doctor-probe.osty"
+    let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
     let mut probeError = ""
     let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
     if writeErr != "" {
@@ -450,8 +457,7 @@ fn runSelfhostDoctor() -> Int {
     } else {
         let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", {:}, 0) {
             Ok(o) -> o,
-            Err(e) -> {
-                let _ = e
+            Err(_) -> {
                 probeError = "lir-proto-lower probe failed to start"
                 os.execOutput(1, "", "", false)
             },

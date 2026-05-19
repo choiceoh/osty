@@ -549,8 +549,8 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONTimesOut(t *testing.T) {
 	}
 
 	t.Setenv(SelfBinEnv, bin)
-	t.Setenv(selfLowerTimeoutEnv, "10ms")
-	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "100")
+	t.Setenv(selfLowerTimeoutEnv, "500ms")
+	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "3000")
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
 
 	body, err := json.Marshal(nativelirproto.Request{
@@ -578,6 +578,80 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONTimesOut(t *testing.T) {
 	args := readCapturedArgs(t, captureArgs)
 	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
 		t.Fatalf("first args = %v, want MIR JSON attempt before compat", args)
+	}
+}
+
+func TestRunSourceLowerTimesOut(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(selfLowerTimeoutEnv, "100ms")
+	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "3000")
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; should not arrive\ndefine i64 @main() {\n  ret i64 1\n}\n")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		Source:      "fn main() -> Int { 1 }\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want timeout decline: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "lir-proto-lower timed out") {
+		t.Fatalf("Error = %q, want source lower timeout", resp.Error)
+	}
+}
+
+func TestRunMIRPayloadSkipsLargeLegacySourceCompat(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; source compat should not run\ndefine i64 @main() {\n  ret i64 9\n}\n")
+	t.Setenv(selfSourceCompatMaxBytesEnv, "8")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		Source:      strings.Repeat("fn x() {}\n", 4),
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want guarded decline: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "legacy source compat skipped") {
+		t.Fatalf("Error = %q, want source compat guard", resp.Error)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("args = %v, want only MIR JSON attempt", args)
 	}
 }
 

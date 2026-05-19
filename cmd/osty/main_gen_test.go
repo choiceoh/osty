@@ -252,10 +252,15 @@ func TestGenCLIMultiFilePackageEmitsLLVMIR(t *testing.T) {
 
 	got := runOstyCLI(t, "gen", "--emit", "llvm-ir", target)
 	if got.exit == 0 {
-		t.Fatal("osty gen should exit non-zero with Go MIR emitter removed")
+		for _, want := range []string{"define i64 @helper()", "define i64 @main()", "call i64 @helper()"} {
+			if !strings.Contains(got.stdout, want) {
+				t.Fatalf("stdout missing %q from self-hosted LLVM IR:\n%s", want, got.stdout)
+			}
+		}
+		return
 	}
 	if !strings.Contains(got.stdout, "LLVM000") || !strings.Contains(got.stdout, "backend skeleton") {
-		t.Fatalf("stdout should contain unsupported skeleton:\n%s", got.stdout)
+		t.Fatalf("stdout should contain unsupported skeleton when no osty-self is available:\n%s", got.stdout)
 	}
 }
 

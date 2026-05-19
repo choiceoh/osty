@@ -1,13 +1,27 @@
 package backend
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/llvmabi"
 )
+
+func stage0RuntimeTestBinaryPath(dir, name string) string {
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name)
+}
+
+func stage0RuntimeTestCStringGlobal(name, value string) string {
+	return fmt.Sprintf("@%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"", name, len(value)+1, value)
+}
 
 func TestBundledRuntimeStage0AuditAliasesLinkWithThinLTO(t *testing.T) {
 	parallelClangBackendTest(t)
@@ -17,7 +31,7 @@ func TestBundledRuntimeStage0AuditAliasesLinkWithThinLTO(t *testing.T) {
 	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
 	irPath := filepath.Join(dir, "stage0_audit_aliases.ll")
 	irObjectPath := filepath.Join(dir, "stage0_audit_aliases.o")
-	binaryPath := filepath.Join(dir, "stage0_audit_aliases")
+	binaryPath := stage0RuntimeTestBinaryPath(dir, "stage0_audit_aliases")
 
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
@@ -25,9 +39,8 @@ func TestBundledRuntimeStage0AuditAliasesLinkWithThinLTO(t *testing.T) {
 
 	ir := `@.path = private unnamed_addr constant [2 x i8] c".\00"
 @.missing = private unnamed_addr constant [26 x i8] c"stage0-alias-missing-path\00"
-@.fmt = private unnamed_addr constant [6 x i8] c"%lld\0A\00"
-@stderr = external global ptr
-@llvm.used = appending global [23 x ptr] [
+@.one = private unnamed_addr constant [2 x i8] c"1\00"
+@llvm.used = appending global [22 x ptr] [
   ptr @Char__toString,
   ptr @Char__len,
   ptr @std.strings.fromChar,
@@ -49,8 +62,7 @@ func TestBundledRuntimeStage0AuditAliasesLinkWithThinLTO(t *testing.T) {
   ptr @runtime.path.filepath.Base,
   ptr @runtime.path.filepath.Ext,
   ptr @__interp,
-  ptr @i64,
-  ptr @stderr
+  ptr @i64
 ], section "llvm.metadata"
 
 declare ptr @Char__toString(i32)
@@ -75,7 +87,7 @@ declare ptr @runtime.path.filepath.Base(ptr)
 declare ptr @runtime.path.filepath.Ext(ptr)
 declare ptr @__interp()
 declare ptr @i64()
-declare i32 @fprintf(ptr, ptr, ...)
+declare void @osty_rt_io_write(ptr, i1, i1)
 
 define i32 @main() {
 entry:
@@ -98,8 +110,7 @@ entry:
   %ext = call ptr @runtime.path.filepath.Ext(ptr @.path)
   %interp = call ptr @__interp()
   %type_name = call ptr @i64()
-  %stderr = load ptr, ptr @stderr
-  %printed = call i32 (ptr, ptr, ...) @fprintf(ptr %stderr, ptr @.fmt, i64 %len)
+  call void @osty_rt_io_write(ptr @.one, i1 true, i1 false)
   ret i32 0
 }
 `
@@ -125,8 +136,63 @@ entry:
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
 	}
-	if got, want := string(out), "1\n"; got != want {
+	if got, want := strings.TrimSpace(string(out)), "1"; got != want {
 		t.Fatalf("stage0 alias harness output = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimeStage0EnvArgsCapturesProcessArgv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
+	irPath := filepath.Join(dir, "stage0_env_args.ll")
+	irObjectPath := filepath.Join(dir, "stage0_env_args.o")
+	binaryPath := stage0RuntimeTestBinaryPath(dir, "stage0_env_args")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	ir := `declare ptr @std.env.args()
+declare i64 @osty_rt_list_len(ptr)
+
+define i32 @main() {
+entry:
+  %args = call ptr @std.env.args()
+  %len = call i64 @osty_rt_list_len(ptr %args)
+  %ok = icmp sge i64 %len, 3
+  br i1 %ok, label %good, label %bad
+
+good:
+  ret i32 0
+
+bad:
+  ret i32 42
+}
+`
+	if err := os.WriteFile(irPath, []byte(ir), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", irPath, err)
+	}
+
+	runClang := func(label string, args []string) {
+		t.Helper()
+		out, err := exec.Command("clang", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("clang %s failed: %v\n%s", label, err, out)
+		}
+	}
+
+	runClang("compile runtime", clangCompileCObjectArgs("", "", runtimePath, runtimeObjectPath))
+	runClang("compile stage0 env args IR", llvmabi.ClangCompileObjectArgs("", irPath, irObjectPath))
+	linkArgs := llvmabi.ClangLinkBinaryArgs("", []string{irObjectPath, runtimeObjectPath}, binaryPath)
+	linkArgs = append(linkArgs, clangPlatformRuntimeLinkArgs("")...)
+	runClang("link stage0 env args binary", linkArgs)
+
+	out, err := exec.Command(binaryPath, "alpha", "beta").CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q with argv failed: %v\n%s", binaryPath, err, out)
 	}
 }
 
@@ -138,7 +204,7 @@ func TestBundledRuntimeCIHostAliasesLinkWithHostObjects(t *testing.T) {
 	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
 	irPath := filepath.Join(dir, "cihost_aliases.ll")
 	irObjectPath := filepath.Join(dir, "cihost_aliases.o")
-	binaryPath := filepath.Join(dir, "cihost_aliases")
+	binaryPath := stage0RuntimeTestBinaryPath(dir, "cihost_aliases")
 
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
@@ -181,16 +247,21 @@ func TestBundledRuntimeStdOsExecWithReturnsResultBox(t *testing.T) {
 	runtimeObjectPath := filepath.Join(dir, bundledRuntimeObjectName)
 	irPath := filepath.Join(dir, "exec_with_result_box.ll")
 	irObjectPath := filepath.Join(dir, "exec_with_result_box.o")
-	binaryPath := filepath.Join(dir, "exec_with_result_box")
+	binaryPath := stage0RuntimeTestBinaryPath(dir, "exec_with_result_box")
 
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
 	}
 
+	execProgram := "cat"
+	if runtime.GOOS == "windows" {
+		execProgram = "more.com"
+	}
+
 	ir := `%Result = type { i64, ptr }
 %ExecOutput = type { i64, ptr, ptr, i1 }
 
-@.cat = private unnamed_addr constant [4 x i8] c"cat\00"
+` + stage0RuntimeTestCStringGlobal(".exec_program", execProgram) + `
 @.input = private unnamed_addr constant [6 x i8] c"probe\00"
 @.empty = private unnamed_addr constant [1 x i8] c"\00"
 
@@ -198,7 +269,7 @@ declare ptr @osty_rt_os_exec_input_with(ptr, ptr, ptr, ptr, ptr, i64)
 
 define i32 @main() {
 entry:
-  %res = call ptr @osty_rt_os_exec_input_with(ptr @.cat, ptr null, ptr @.input, ptr @.empty, ptr null, i64 0)
+  %res = call ptr @osty_rt_os_exec_input_with(ptr @.exec_program, ptr null, ptr @.input, ptr @.empty, ptr null, i64 0)
   %tagp = getelementptr inbounds %Result, ptr %res, i32 0, i32 0
   %tag = load i64, ptr %tagp
   %is_ok = icmp eq i64 %tag, 0

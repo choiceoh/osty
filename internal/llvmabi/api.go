@@ -201,8 +201,15 @@ func ClangLinkBinaryArgsForProfile(target, profile string, objectPaths []string,
 		// produce a (slightly less aggressively-inlined) binary instead of
 		// failing the bootstrap link outright.
 		if hasLLD() {
-			args = append(args, "-fuse-ld=lld", "-Wl,-mllvm,-import-instr-limit=500")
+			args = append(args, "-fuse-ld=lld")
+			if !isWindowsLLVMTarget(target) {
+				args = append(args, "-Wl,-mllvm,-import-instr-limit=500")
+			}
 		}
+	}
+	if isWindowsLLVMTarget(target) {
+		args = append(args, "-Wl,/subsystem:console")
+		args = append(args, "-Wl,/stack:67108864")
 	}
 	args = append(args, objectPaths...)
 	if !strings.Contains(target, "windows") {
@@ -224,6 +231,10 @@ func ProfileSkipsLTO(profile string) bool {
 		return true
 	}
 	return false
+}
+
+func isWindowsLLVMTarget(target string) bool {
+	return strings.Contains(target, "-windows-") || strings.Contains(target, "-pc-windows-") || strings.Contains(target, "windows")
 }
 
 func hasLLD() bool {

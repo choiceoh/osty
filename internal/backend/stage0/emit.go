@@ -203,24 +203,10 @@ func emitMIR(module *mir.Module, opts llvmabi.Options, requireMain bool) ([]byte
 	// declare, format strings, string literal globals, …).
 	mctx := newModuleCtx(module)
 
-	// Pre-scan for print-family intrinsics so printf/fprintf declares
-	// and format strings land in extraDecls before any function body.
+	// Pre-scan for print-family intrinsics so runtime print declares
+	// land in extraDecls before any function body.
 	needs := scanPrintNeeds(module, mctx)
-	if needs.int {
-		mctx.extraDecls.WriteString("@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
-		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
-	}
-	if needs.str {
-		mctx.extraDecls.WriteString("@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n")
-		mctx.extraDecls.WriteString("@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n")
-	}
-	if needs.stdout {
-		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
-	}
-	if needs.stderr {
-		mctx.extraDecls.WriteString("@stderr = external global ptr\n")
-		mctx.extraDecls.WriteString("declare i32 @fprintf(ptr, ptr, ...)\n")
-	}
+	emitPrintPrelude(mctx, needs)
 
 	listAll := listAllDeclinesEnabled()
 	if !listAll {
@@ -321,21 +307,7 @@ func emitMIR(module *mir.Module, opts llvmabi.Options, requireMain bool) ([]byte
 	mctx = newModuleCtx(module)
 	mctx.definedFnSyms = declareSuppressSet
 	// Re-do the print-needs prelude on the fresh context.
-	if needs.int {
-		mctx.extraDecls.WriteString("@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
-		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
-	}
-	if needs.str {
-		mctx.extraDecls.WriteString("@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n")
-		mctx.extraDecls.WriteString("@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n")
-	}
-	if needs.stdout {
-		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
-	}
-	if needs.stderr {
-		mctx.extraDecls.WriteString("@stderr = external global ptr\n")
-		mctx.extraDecls.WriteString("declare i32 @fprintf(ptr, ptr, ...)\n")
-	}
+	emitPrintPrelude(mctx, needs)
 
 	var fnBodies strings.Builder
 	emittedMain := false
@@ -1099,6 +1071,18 @@ type printNeeds struct {
 	str    bool
 	stdout bool
 	stderr bool
+}
+
+func emitPrintPrelude(mctx *moduleCtx, needs printNeeds) {
+	if mctx == nil {
+		return
+	}
+	if needs.int {
+		declareRuntimePrototype(mctx, "osty_rt_int_to_string", scalarString, []callArg{{ty: "i64"}})
+	}
+	if needs.stdout || needs.stderr {
+		declareVoidFunctionPrototype(mctx, "osty_rt_io_write", []callArg{{ty: "ptr"}, {ty: "i1"}, {ty: "i1"}})
+	}
 }
 
 func scanPrintNeeds(module *mir.Module, mctx *moduleCtx) printNeeds {
@@ -2028,36 +2012,37 @@ func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindin
 	if !ok {
 		return "", false
 	}
-	fmtGlobal, argTy, ok := printFormatFor(ii.Kind, ty)
+	line, ok := renderPrintRuntimeLine(mctx, ii.Kind, expr, ty)
 	if !ok {
 		return "", false
 	}
-	if isStderrPrintIntrinsic(ii.Kind) {
-		stderrReg := mctx.freshTempName("stderr")
-		// fprintf returns i32; capture into a named SSA so its result
-		// doesn't consume an anonymous slot (cluster-1 SSA collision).
-		fprintfDiscard := mctx.freshTempName("discard")
-		return prelude +
-			fmt.Sprintf("  %s = load ptr, ptr @stderr\n", stderrReg) +
-			fmt.Sprintf("  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", fprintfDiscard, stderrReg, fmtGlobal, argTy, expr), true
-	}
-	// printf returns i32 — same SSA-capture pattern.
-	printfDiscard := mctx.freshTempName("discard")
-	return prelude + fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", printfDiscard, fmtGlobal, argTy, expr), true
+	return prelude + line, true
 }
 
-func printFormatFor(kind mir.IntrinsicKind, ty scalarType) (string, string, bool) {
-	prefix := "@.fmt.stage0.print"
+func renderPrintRuntimeLine(mctx *moduleCtx, kind mir.IntrinsicKind, expr string, ty scalarType) (string, bool) {
+	if mctx == nil || expr == "" {
+		return "", false
+	}
+	declareVoidFunctionPrototype(mctx, "osty_rt_io_write", []callArg{{ty: "ptr"}, {ty: "i1"}, {ty: "i1"}})
+	newline := "false"
 	if kind == mir.IntrinsicPrintln || kind == mir.IntrinsicEprintln {
-		prefix = "@.fmt.stage0.println"
+		newline = "true"
+	}
+	toStderr := "false"
+	if isStderrPrintIntrinsic(kind) {
+		toStderr = "true"
 	}
 	switch ty {
-	case scalarInt:
-		return prefix + ".int", "i64", true
 	case scalarString:
-		return prefix + ".str", "ptr", true
+		return fmt.Sprintf("  call void @osty_rt_io_write(ptr %s, i1 %s, i1 %s)\n", expr, newline, toStderr), true
+	case scalarInt:
+		declareRuntimePrototype(mctx, "osty_rt_int_to_string", scalarString, []callArg{{ty: "i64"}})
+		textReg := mctx.freshTempName("print.int")
+		return fmt.Sprintf("  %s = call ptr @osty_rt_int_to_string(i64 %s)\n", textReg, expr) +
+			fmt.Sprintf("  call void @osty_rt_io_write(ptr %s, i1 %s, i1 %s)\n", textReg, newline, toStderr), true
+	default:
+		return "", false
 	}
-	return "", "", false
 }
 
 func resolveFixedScalarArgs(fn *mir.Function, ops []mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, want []scalarType) ([]callArg, string, bool) {
@@ -9102,19 +9087,11 @@ func emitWhilePrintIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mi
 	if !ok {
 		return false
 	}
-	fmtGlobal, argTy, ok := printFormatFor(ii.Kind, ty)
+	line, ok := renderPrintRuntimeLine(ctx.mctx, ii.Kind, expr, ty)
 	if !ok {
 		return false
 	}
-	if isStderrPrintIntrinsic(ii.Kind) {
-		stderrReg := ctx.mctx.freshTempName("stderr")
-		fprintfDiscard := ctx.mctx.freshTempName("discard")
-		fmt.Fprintf(out, "  %s = load ptr, ptr @stderr\n", stderrReg)
-		fmt.Fprintf(out, "  %s = call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", fprintfDiscard, stderrReg, fmtGlobal, argTy, expr)
-		return true
-	}
-	printfDiscard := ctx.mctx.freshTempName("discard")
-	fmt.Fprintf(out, "  %s = call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", printfDiscard, fmtGlobal, argTy, expr)
+	out.WriteString(line)
 	return true
 }
 
