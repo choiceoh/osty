@@ -422,7 +422,7 @@ osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
                        # inference rule applied (see LANG_SPEC_v0.5/02a-type-inference.md)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
-osty fmt FILE          # airepair + format to canonical style (see --check, --write, --engine)
+osty fmt FILE          # airepair + format to canonical style (see --check, --write)
 osty airepair FILE     # auto-fix common AI-authored syntax/idiom slips (legacy alias: repair)
 osty airepair triage DIR
 osty airepair learn DIR
@@ -469,10 +469,6 @@ default, so AI-authored syntax slips are normalized in one command.
 - `--airepair` — enable the default automatic AI repair pass
 - `--no-airepair` — disable the default automatic AI repair pass
   Legacy aliases: `--repair`, `--no-repair`
-- `--engine go|osty` — choose the formatter engine. `go` is the default
-  AST formatter; `osty` is a compatibility entry point that now shares the
-  same AST-backed formatting contract instead of maintaining a separate
-  token-heuristic printer.
 
 `airepair`-specific flags (after the subcommand):
 

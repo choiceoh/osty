@@ -1414,9 +1414,6 @@ func runFmt(args []string) {
 	}
 	var checkMode, writeMode, noAIRepair bool
 	repairMode := true
-	// Accepted but ignored — historical alias for the formatter engine
-	// selector. There is now only one engine (the self-host formatter).
-	var engineUnused string
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE is not already formatted")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
@@ -1425,9 +1422,7 @@ func runFmt(args []string) {
 	fs.BoolVar(&repairMode, "repair", true, "alias for --airepair")
 	fs.BoolVar(&noAIRepair, "no-airepair", false, "disable automatic AI repair before formatting")
 	fs.BoolVar(&noAIRepair, "no-repair", false, "alias for --no-airepair")
-	fs.StringVar(&engineUnused, "engine", "", "deprecated; the only engine is the self-host formatter")
 	_ = fs.Parse(args)
-	_ = engineUnused
 	if noAIRepair {
 		repairMode = false
 	}

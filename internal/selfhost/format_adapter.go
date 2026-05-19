@@ -30,7 +30,7 @@ func FormatSource(src []byte) ([]byte, []*diag.Diagnostic, error) {
 
 // FormatCheck reports whether FormatSource would change the original source
 // bytes. Raw-byte comparison is intentional so BOM/CRLF normalization counts
-// as a formatting change just like the public `osty fmt --engine=osty` path.
+// as a formatting change just like the public `osty fmt` path.
 func FormatCheck(src []byte) (FormatterCheckResult, []*diag.Diagnostic, error) {
 	normalized := normalizeFormatterInput(src)
 	formatted := ostyFormatSource(string(normalized))
