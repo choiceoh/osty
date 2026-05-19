@@ -2080,6 +2080,14 @@ pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
 /// mirLowerExprStmtInner handles expressions used as statements. The
 /// value is discarded; side effects survive via operand lowering.
 pub fn mirLowerExprStmtInner(bs: MirLowerBodyState, s: HirStmt) {
+    if s.exprValue.kind == HirExprCall {
+        mirLowerCallExprInto(bs, s.exprValue, mirPlace(-1), hirTUnit())
+        return
+    }
+    if s.exprValue.kind == HirExprMethod {
+        mirLowerMethodCallInto(bs, s.exprValue, mirPlace(-1), hirTUnit())
+        return
+    }
     let _ = mirLowerExprAsOperand(bs, s.exprValue)
 }
 /// mirLowerReturnStmt lowers `return` / `return value`. Values are

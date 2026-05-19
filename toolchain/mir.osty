@@ -336,72 +336,34 @@ pub fn mirConstInvalid() -> MirConst {
     MirConst {kind: MirConstInvalid, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ: ""}
 }
 pub fn mirConstInt(value: Int, typ: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstInt
-    c.intValue = value
-    c.typ = typ
-    c
+    MirConst {kind: MirConstInt, intValue: value, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ}
 }
 pub fn mirConstBool(value: Bool) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstBool
-    c.boolValue = value
-    c.typ = "Bool"
-    c
+    MirConst {kind: MirConstBool, intValue: 0, boolValue: value, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ: "Bool"}
 }
 pub fn mirConstFloat(text: String, typ: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstFloat
-    c.floatText = text
-    c.typ = typ
-    c
+    MirConst {kind: MirConstFloat, intValue: 0, boolValue: false, floatText: text, strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ}
 }
 pub fn mirConstString(value: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstString
-    c.strValue = value
-    c.typ = "String"
-    c
+    MirConst {kind: MirConstString, intValue: 0, boolValue: false, floatText: "", strValue: value, charValue: 0, byteValue: 0, fnSymbol: "", typ: "String"}
 }
 pub fn mirConstBytes(value: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstBytes
-    c.strValue = value
-    c.typ = "Bytes"
-    c
+    MirConst {kind: MirConstBytes, intValue: 0, boolValue: false, floatText: "", strValue: value, charValue: 0, byteValue: 0, fnSymbol: "", typ: "Bytes"}
 }
 pub fn mirConstChar(codePoint: Int) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstChar
-    c.charValue = codePoint
-    c.typ = "Char"
-    c
+    MirConst {kind: MirConstChar, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: codePoint, byteValue: 0, fnSymbol: "", typ: "Char"}
 }
 pub fn mirConstByte(value: Int) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstByte
-    c.byteValue = value
-    c.typ = "Byte"
-    c
+    MirConst {kind: MirConstByte, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: value, fnSymbol: "", typ: "Byte"}
 }
 pub fn mirConstUnit() -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstUnit
-    c.typ = "Unit"
-    c
+    MirConst {kind: MirConstUnit, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ: "Unit"}
 }
 pub fn mirConstNull(typ: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstNull
-    c.typ = typ
-    c
+    MirConst {kind: MirConstNull, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: "", typ}
 }
 pub fn mirConstFn(symbol: String, typ: String) -> MirConst {
-    let mut c = mirConstInvalid()
-    c.kind = MirConstFn
-    c.fnSymbol = symbol
-    c.typ = typ
-    c
+    MirConst {kind: MirConstFn, intValue: 0, boolValue: false, floatText: "", strValue: "", charValue: 0, byteValue: 0, fnSymbol: symbol, typ}
 }
 // ====================================================================
 // Projections and Places
@@ -435,49 +397,22 @@ pub fn mirProjInvalid() -> MirProjection {
     MirProjection {kind: MirProjInvalid, index: 0, name: "", variantField: -1, indexLocal: -1, indexConst: 0, typ: ""}
 }
 pub fn mirFieldProj(index: Int, name: String, typ: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjField
-    p.index = index
-    p.name = name
-    p.typ = typ
-    p
+    MirProjection {kind: MirProjField, index, name, variantField: -1, indexLocal: -1, indexConst: 0, typ}
 }
 pub fn mirTupleProj(index: Int, typ: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjTuple
-    p.index = index
-    p.typ = typ
-    p
+    MirProjection {kind: MirProjTuple, index, name: "", variantField: -1, indexLocal: -1, indexConst: 0, typ}
 }
 pub fn mirVariantProj(variantIndex: Int, name: String, fieldIdx: Int, typ: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjVariant
-    p.index = variantIndex
-    p.name = name
-    p.variantField = fieldIdx
-    p.typ = typ
-    p
+    MirProjection {kind: MirProjVariant, index: variantIndex, name, variantField: fieldIdx, indexLocal: -1, indexConst: 0, typ}
 }
 pub fn mirIndexProjLocal(localId: Int, elemTyp: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjIndex
-    p.indexLocal = localId
-    p.typ = elemTyp
-    p
+    MirProjection {kind: MirProjIndex, index: 0, name: "", variantField: -1, indexLocal: localId, indexConst: 0, typ: elemTyp}
 }
 pub fn mirIndexProjConst(value: Int, elemTyp: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjIndex
-    p.indexLocal = -1
-    p.indexConst = value
-    p.typ = elemTyp
-    p
+    MirProjection {kind: MirProjIndex, index: 0, name: "", variantField: -1, indexLocal: -1, indexConst: value, typ: elemTyp}
 }
 pub fn mirDerefProj(typ: String) -> MirProjection {
-    let mut p = mirProjInvalid()
-    p.kind = MirProjDeref
-    p.typ = typ
-    p
+    MirProjection {kind: MirProjDeref, index: 0, name: "", variantField: -1, indexLocal: -1, indexConst: 0, typ}
 }
 /// MirPlace identifies a storage location: a local, optionally refined
 /// by a chain of projections.
@@ -519,25 +454,13 @@ pub fn mirOperandInvalid() -> MirOperand {
     MirOperand {kind: MirOpInvalid, place: mirPlace(-1), const: mirConstInvalid(), typ: ""}
 }
 pub fn mirOperandCopy(place: MirPlace, typ: String) -> MirOperand {
-    let mut op = mirOperandInvalid()
-    op.kind = MirOpCopy
-    op.place = place
-    op.typ = typ
-    op
+    MirOperand {kind: MirOpCopy, place, const: mirConstInvalid(), typ}
 }
 pub fn mirOperandMove(place: MirPlace, typ: String) -> MirOperand {
-    let mut op = mirOperandInvalid()
-    op.kind = MirOpMove
-    op.place = place
-    op.typ = typ
-    op
+    MirOperand {kind: MirOpMove, place, const: mirConstInvalid(), typ}
 }
 pub fn mirOperandConst(c: MirConst) -> MirOperand {
-    let mut op = mirOperandInvalid()
-    op.kind = MirOpConst
-    op.const = c
-    op.typ = c.typ
-    op
+    MirOperand {kind: MirOpConst, place: mirPlace(-1), const: c, typ: c.typ}
 }
 // ====================================================================
 // RValues
@@ -579,98 +502,50 @@ pub fn mirRValueInvalid() -> MirRValue {
     MirRValue {kind: MirRVInvalid, typ: "", unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVUse(op: MirOperand) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVUse
-    rv.arg = op
-    rv.typ = op.typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVUse, typ: op.typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: op, right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVUnary(op: MirUnaryOp, arg: MirOperand, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVUnary
-    rv.unaryOp = op
-    rv.arg = arg
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVUnary, typ, unaryOp: op, binaryOp: MirBinInvalid, arg, right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVBinary(op: MirBinaryOp, left: MirOperand, right: MirOperand, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVBinary
-    rv.binaryOp = op
-    rv.arg = left
-    rv.right = right
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVBinary, typ, unaryOp: MirUnInvalid, binaryOp: op, arg: left, right, aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVAggregate(kind: MirAggregateKind, fields: List<MirOperand>, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVAggregate
-    rv.aggKind = kind
-    rv.aggFields = fields
-    rv.typ = typ
-    rv
+    MirRValue {kind: MirRVAggregate, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: kind, aggFields: fields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVVariant(variantIdx: Int, variantTag: String, fields: List<MirOperand>, typ: String) -> MirRValue {
-    let mut rv = mirRVAggregate(MirAggEnumVariant, fields, typ)
-    rv.aggVariantIdx = variantIdx
-    rv.aggVariantTag = variantTag
-    rv
+    MirRValue {kind: MirRVAggregate, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggEnumVariant, aggFields: fields, aggVariantIdx: variantIdx, aggVariantTag: variantTag, place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVDiscriminant(place: MirPlace, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVDiscriminant
-    rv.place = place
-    rv.hasPlace = true
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVDiscriminant, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place, hasPlace: true, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVLen(place: MirPlace, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVLen
-    rv.place = place
-    rv.hasPlace = true
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVLen, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place, hasPlace: true, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVCast(kind: MirCastKind, arg: MirOperand, from: String, to: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVCast
-    rv.castKind = kind
-    rv.arg = arg
-    rv.castFrom = from
-    rv.castTo = to
-    rv.typ = to
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVCast, typ: to, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg, right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: kind, castFrom: from, castTo: to, globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVRef(place: MirPlace, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVRef
-    rv.place = place
-    rv.hasPlace = true
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVRef, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place, hasPlace: true, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVAddressOf(place: MirPlace, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVAddressOf
-    rv.place = place
-    rv.hasPlace = true
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVAddressOf, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place, hasPlace: true, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVGlobalRef(name: String, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVGlobalRef
-    rv.globalName = name
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVGlobalRef, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: name, nullaryKind: MirNullaryInvalid}
 }
 pub fn mirRVNullary(kind: MirNullaryRVKind, typ: String) -> MirRValue {
-    let mut rv = mirRValueInvalid()
-    rv.kind = MirRVNullary
-    rv.nullaryKind = kind
-    rv.typ = typ
-    rv
+    let aggFields: List<MirOperand> = []
+    MirRValue {kind: MirRVNullary, typ, unaryOp: MirUnInvalid, binaryOp: MirBinInvalid, arg: mirOperandInvalid(), right: mirOperandInvalid(), aggKind: MirAggInvalid, aggFields, aggVariantIdx: 0, aggVariantTag: "", place: mirPlace(-1), hasPlace: false, castKind: MirCastInvalid, castFrom: "", castTo: "", globalName: "", nullaryKind: kind}
 }
 // ====================================================================
 // Instructions

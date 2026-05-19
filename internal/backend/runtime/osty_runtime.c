@@ -28584,6 +28584,19 @@ typedef struct osty_rt_os_exec_result {
   void *error_text;
 } osty_rt_os_exec_result;
 
+typedef struct osty_rt_os_exec_result_box {
+  int64_t tag;
+  void *ok_payload;
+  void *err_payload;
+} osty_rt_os_exec_result_box;
+
+typedef struct osty_rt_os_exec_output_payload {
+  int64_t exit_code;
+  void *stdout_text;
+  void *stderr_text;
+  bool timed_out;
+} osty_rt_os_exec_output_payload;
+
 typedef struct osty_rt_os_string_result {
   int64_t tag;
   void *value_text;
@@ -29832,24 +29845,65 @@ osty_rt_os_exec_result *osty_rt_os_exec_input(const char *cmd, void *args,
  * variant of osty_rt_os_exec_options. Wired through MIR symbol rewrite for
  * the LLVM self-host source-bootstrap path (cf. SPEC_GAPS::cross-pkg-module-
  * resolution path #5; PR3-C trajectory). */
-osty_rt_os_exec_result *osty_rt_os_exec_with(const char *cmd, void *args,
-                                             const char *cwd,
-                                             void *env_overrides,
-                                             int64_t timeout_ms) {
-  return osty_rt_os_exec_options(cmd, args, /*shell=*/false, cwd,
-                                 env_overrides, timeout_ms);
+static void *osty_rt_os_exec_box_exec_output(osty_rt_os_exec_result *raw,
+                                             const char *site) {
+  osty_rt_os_exec_result_box *box =
+      (osty_rt_os_exec_result_box *)osty_rt_stage0_alloc(
+          (int64_t)sizeof(osty_rt_os_exec_result_box));
+  if (box == NULL) {
+    if (raw != NULL) {
+      free(raw);
+    }
+    return NULL;
+  }
+  box->tag = 1;
+  box->ok_payload = NULL;
+  box->err_payload = NULL;
+  if (raw == NULL) {
+    box->err_payload =
+        osty_rt_os_error_message("failed to launch process", "unknown error",
+                                 site);
+    return box;
+  }
+  if (raw->tag == 0) {
+    osty_rt_os_exec_output_payload *out =
+        (osty_rt_os_exec_output_payload *)osty_rt_stage0_alloc(
+            (int64_t)sizeof(osty_rt_os_exec_output_payload));
+    if (out == NULL) {
+      free(raw);
+      return NULL;
+    }
+    out->exit_code = raw->exit_code;
+    out->stdout_text = raw->stdout_text;
+    out->stderr_text = raw->stderr_text;
+    out->timed_out = raw->timed_out;
+    box->tag = 0;
+    box->ok_payload = out;
+  } else {
+    box->tag = 1;
+    box->err_payload = raw->error_text;
+  }
+  free(raw);
+  return box;
+}
+
+void *osty_rt_os_exec_with(const char *cmd, void *args, const char *cwd,
+                           void *env_overrides, int64_t timeout_ms) {
+  return osty_rt_os_exec_box_exec_output(
+      osty_rt_os_exec_options(cmd, args, /*shell=*/false, cwd, env_overrides,
+                              timeout_ms),
+      "runtime.os.execWith.result");
 }
 
 /* std.os.execInputWith(cmd, args, stdin, cwd, env, timeoutMillis) —
  * `shell=false` variant with stdin pipe. */
-osty_rt_os_exec_result *osty_rt_os_exec_input_with(const char *cmd,
-                                                   void *args,
-                                                   const char *stdin_text,
-                                                   const char *cwd,
-                                                   void *env_overrides,
-                                                   int64_t timeout_ms) {
-  return osty_rt_os_exec_input_options(cmd, args, /*shell=*/false, cwd,
-                                       env_overrides, timeout_ms, stdin_text);
+void *osty_rt_os_exec_input_with(const char *cmd, void *args,
+                                 const char *stdin_text, const char *cwd,
+                                 void *env_overrides, int64_t timeout_ms) {
+  return osty_rt_os_exec_box_exec_output(
+      osty_rt_os_exec_input_options(cmd, args, /*shell=*/false, cwd,
+                                    env_overrides, timeout_ms, stdin_text),
+      "runtime.os.execInputWith.result");
 }
 
 /* std.os.execOutput(exitCode, stdout, stderr, timedOut) constructs an
