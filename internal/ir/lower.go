@@ -12,6 +12,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -6216,7 +6217,156 @@ func (l *lowerer) lowerUseDecl(u *ast.UseDecl) Decl {
 			out.GoBody = append(out.GoBody, lowered)
 		}
 	}
+	// Populate UseDecl.Imports from the consumer's import surfaces so
+	// MIR's `useDeclFnType` can recover cross-pkg return types when
+	// the call's IR-level Type is poisoned. Aliased to use-decl's
+	// resolved alias; FFI uses (GoBody / IsGoFFI / IsRuntimeFFI) take
+	// their own path and don't need this seed.
+	if !out.IsGoFFI && !out.IsRuntimeFFI && out.Alias != "" && l.chk != nil {
+		for i := range l.chk.ImportSurfaces {
+			surface := &l.chk.ImportSurfaces[i]
+			if surface.Alias != out.Alias {
+				continue
+			}
+			for _, fn := range surface.Functions {
+				if fnDecl := l.lowerImportedFn(&fn); fnDecl != nil {
+					out.Imports = append(out.Imports, fnDecl)
+				}
+			}
+		}
+	}
 	return out
+}
+
+// lowerImportedFn converts one cross-pkg import-surface function into
+// a minimal `*ir.FnDecl` carrying just the name and signature shape
+// (params + return type) so MIR's `useDeclFnType` can read it back.
+//
+// We do NOT lower the body — the consumer doesn't have one and the
+// dep's body lives in its own IR module. Param types come from the
+// surface's `ParamTypeReprs` (preferred, structural) or the legacy
+// `ParamTypes` strings; the return type follows the same fallback
+// pair. Unknown types lower to `ir.ErrTypeVal` so a partial signature
+// still surfaces a usable name match upstream rather than dropping
+// the entry entirely.
+//
+// Skips functions registered with a non-empty Owner (those are
+// method-form alias-prefixed registrations the surface arena walker
+// emits alongside the free-fn form per
+// `import_surface_arena.go:225-229`). Only the free-fn form gets a
+// lowered `FnDecl` here so cross-pkg method-call dispatch keeps
+// going through the receiver-type method lookup in MIR.
+func (l *lowerer) lowerImportedFn(fn *api.PackageCheckFn) *FnDecl {
+	if fn == nil || fn.Name == "" || fn.Owner != "" {
+		return nil
+	}
+	params := make([]*Param, 0, len(fn.ParamNames))
+	for i, name := range fn.ParamNames {
+		paramTy := l.lowerImportedFnType(fn.ParamTypeReprs, fn.ParamTypes, i)
+		// `?`-prefixed names mark trailing defaults (see
+		// `selfhostImportFnParamNames` + check.osty::paramDefaultCount).
+		// MIR's signature recovery cares about the bare name, so strip
+		// the marker before the FnDecl materializes.
+		bareName := name
+		if len(bareName) > 0 && bareName[0] == '?' {
+			bareName = bareName[1:]
+		}
+		params = append(params, &Param{Name: bareName, Type: paramTy})
+	}
+	retTy := l.lowerImportedFnType([]api.TypeRepr{}, []string{}, -1)
+	if fn.ReturnTypeRepr != nil {
+		retTy = lowerImportedTypeRepr(fn.ReturnTypeRepr)
+	} else if fn.ReturnType != "" && fn.ReturnType != "()" {
+		retTy = ErrTypeVal
+	} else {
+		retTy = TUnit
+	}
+	return &FnDecl{
+		Name:   fn.Name,
+		Params: params,
+		Return: retTy,
+	}
+}
+
+// lowerImportedFnType returns the type at `index` in the parallel
+// repr/legacy-string slices, preferring the structural repr when
+// present. When `index` is -1 (return-type slot) the caller has
+// already inspected ReturnTypeRepr/ReturnType directly.
+func (l *lowerer) lowerImportedFnType(reprs []api.TypeRepr, names []string, index int) Type {
+	if index < 0 || index >= len(reprs) && index >= len(names) {
+		return ErrTypeVal
+	}
+	if index < len(reprs) {
+		repr := reprs[index]
+		if t := lowerImportedTypeRepr(&repr); t != nil {
+			return t
+		}
+	}
+	return ErrTypeVal
+}
+
+// lowerImportedTypeRepr converts an `api.TypeRepr` (the structured
+// type description shared with the selfhost JSON wire format) into an
+// `ir.Type`. Best-effort: unknown kinds fall back to ErrTypeVal so
+// the caller can decide whether to drop the FnDecl or carry a
+// partial signature.
+func lowerImportedTypeRepr(repr *api.TypeRepr) Type {
+	if repr == nil {
+		return nil
+	}
+	switch repr.Kind {
+	case "primitive":
+		switch repr.Name {
+		case "Int":
+			return TInt
+		case "Int8":
+			return TInt8
+		case "Int16":
+			return TInt16
+		case "Int32":
+			return TInt32
+		case "Int64":
+			return TInt64
+		case "Float32":
+			return TFloat32
+		case "Float64":
+			return TFloat64
+		case "Bool":
+			return TBool
+		case "String":
+			return TString
+		case "Char":
+			return TChar
+		case "Byte":
+			return TByte
+		case "Bytes":
+			return TBytes
+		case "()":
+			return TUnit
+		}
+		return ErrTypeVal
+	case "named":
+		// Builtin generic shapes get the Builtin flag for downstream
+		// recovery (Option/Result/List/Map/Set). Unknown nameds stay
+		// as bare NamedType.
+		nt := &NamedType{Name: repr.Name}
+		if len(repr.Args) > 0 {
+			for i := range repr.Args {
+				nt.Args = append(nt.Args, lowerImportedTypeRepr(&repr.Args[i]))
+			}
+		}
+		switch repr.Name {
+		case "Option", "Maybe", "Result", "List", "Map", "Set":
+			nt.Builtin = true
+		}
+		return nt
+	case "optional":
+		if len(repr.Args) >= 1 {
+			return &OptionalType{Inner: lowerImportedTypeRepr(&repr.Args[0])}
+		}
+		return &OptionalType{Inner: ErrTypeVal}
+	}
+	return ErrTypeVal
 }
 
 func (l *lowerer) lowerInterfaceDecl(id *ast.InterfaceDecl) Decl {

@@ -202,6 +202,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		checkedSrc selfhostCheckedSource
 		err        error
 	)
+	var fileInput api.PackageCheckInput
 	switch r := runner.(type) {
 	case nativePackageChecker:
 		// File-mode callers already hold the parsed public AST, so prefer the
@@ -210,7 +211,8 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		// checks back through the astbridge/public-AST adapter path.
 		checkedSrc = selfhostFileStructuredSource(file, rr, src)
 		maybeDumpNativeCheckerSource(checkedSrc.source)
-		checked, err = r.CheckPackageStructured(selfhostSingleFileCheckInput(file, src, stdlib))
+		fileInput = selfhostSingleFileCheckInput(file, src, stdlib)
+		checked, err = r.CheckPackageStructured(fileInput)
 	default:
 		checkedSrc = selfhostFileSource(file, rr, src, stdlib)
 		maybeDumpNativeCheckerSource(checkedSrc.source)
@@ -227,6 +229,9 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(checkedSrc, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	if len(fileInput.Imports) > 0 {
+		result.ImportSurfaces = append(result.ImportSurfaces, fileInput.Imports...)
+	}
 	result.SemanticDB = semanticdb.FromCheck(checked)
 }
 
@@ -240,7 +245,12 @@ type selfhostPackageOutcome struct {
 	src       selfhostCheckedSource
 	telemetry *NativeCheckerTelemetry
 	checked   api.CheckResult
-	ran       bool
+	// imports caches the `PackageCheckInput.Imports` slice the native
+	// checker consumed, so `foldSelfhostPackageOutcome` can stash it on
+	// `Result.ImportSurfaces` for downstream IR lowering (Task B —
+	// cross-pkg fn signature propagation).
+	imports []api.PackageCheckImport
+	ran     bool
 }
 
 // runSelfhostPackageCheck routes a package through the configured native
@@ -294,6 +304,7 @@ func runSelfhostPackageCheck(pkg *resolve.Package, ws *resolve.Workspace, stdlib
 		src:       src,
 		telemetry: nativeCheckerTelemetry(checked, policy),
 		checked:   checked,
+		imports:   input.Imports,
 		ran:       true,
 	}
 }
@@ -316,6 +327,9 @@ func foldSelfhostPackageOutcome(result *Result, pr *resolve.PackageResult, outco
 	}
 	result.NativeCheckerTelemetry = outcome.telemetry
 	result.NativeCheckResult = cloneNativeCheckResult(outcome.checked)
+	if len(outcome.imports) > 0 {
+		result.ImportSurfaces = append(result.ImportSurfaces, outcome.imports...)
+	}
 	attachSemanticDB(result, pr, outcome.checked)
 }
 
