@@ -19,29 +19,36 @@
 //   FrontCheckInstantiation.resultType / typeArgs / typeArgIds carry
 //   over directly.
 //
-// Position handling (M4 brick A):
+// M4 byte-parity coverage (bricks A + B + C all wired):
 //
-//   The shared entry `frontCheckSourceToWireJson(source)` now lexes the
-//   input, builds a rune→byte table, and threads a `FrontWireMapper`
-//   into the serializers so every `start`/`end` field carries the same
-//   byte offset the Go adapter
-//   (`internal/selfhost/check_adapter.go::checkNodeOffsets`) emits.
-//   Diagnostics additionally get the `startLine`/`startColumn`/
-//   `endLine`/`endColumn` fields from `FrontLexToken.start.line` etc.
+//   A. Position handling — the shared entry
+//      `frontCheckSourceToWireJson(source)` lexes the input, builds a
+//      rune→byte table, and threads a `FrontWireMapper` into the
+//      serializers so every `start`/`end` field carries the same byte
+//      offset the Go adapter
+//      (`internal/selfhost/check_adapter.go::checkNodeOffsets`) emits.
+//      Diagnostics additionally get `startLine` / `startColumn` /
+//      `endLine` / `endColumn` from `FrontLexToken.start.line` etc.
+//
+//   B. Summary telemetry — `frontWireBuildTelemetry` aggregates every
+//      severity-error diagnostic into the same `errorsByContext` /
+//      `errorDetails` shape `selfhostDiagnosticTelemetry`
+//      (`internal/selfhost/check_telemetry.go`) attaches to
+//      `CheckResult.Summary`. Detail rows carry the `@L<line>:C<col>`
+//      suffix on the lex-aware path; key order is the lexicographic
+//      sort `encoding/json` emits.
+//
+//   C. Stable IDs — `toolchain/check_stable_id.osty` mirrors
+//      `EnsureStableIDs`: each record body emits `id` / `nodeKey` /
+//      `typeKey` (+ `typeArgKeys` / `resultTypeKey` on instantiations)
+//      derived from SHA256 over the same content tuples the Go
+//      adapter uses.
 //
 //   The legacy entry `frontCheckResultToWireJson(result)` keeps the
-//   pre-M4 behaviour (token indices, no line/column) by passing an
-//   identity mapper. Callers that already constructed a
-//   `FrontCheckResult` outside the lex chain still get a stable output.
-//
-// Remaining M4 work (separate bricks):
-//
-//   - sha256 stable IDs (`EnsureStableIDs`): unique `id` / `nodeKey` /
-//     `typeKey` per record.
-//   - `errorsByContext` / `errorDetails` summary telemetry.
-//
-//   Both are independent of byte-offset conversion; punted to follow-up
-//   PRs.
+//   identity-mapper behaviour (token indices verbatim, no line/column,
+//   no `@L:C` detail suffix). Stable IDs still stamp because they are
+//   content-derived rather than mapper-dependent — callers exercising
+//   the legacy entry with synthetic records get deterministic keys.
 use std.strings as strings
 /// frontCheckSourceToWireJson is the single cross-pkg entry the
 /// LLVM-built native checker calls. Owning the lex + parse + check +
