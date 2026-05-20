@@ -4,13 +4,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/spanid"
 )
+
+// resolveIDHashPool pools sha256 hashers so each call to
+// stableResolveID can reuse one instead of allocating fresh
+// internal state per call. selfhostAssignResolveIDs makes 4–9 ID
+// computations per symbol / ref / typeRef on the install-self toolchain
+// build, so the per-call hasher allocation was a measurable share of
+// the 2.7s ID-assignment phase.
+var resolveIDHashPool = sync.Pool{
+	New: func() any { return sha256.New() },
+}
 
 // Resolve-side types re-exported from internal/selfhost/api for compatibility.
 // New consumers should import internal/selfhost/api directly.
@@ -255,26 +269,41 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 // filtering activates when input.Cfg is non-nil.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
 	cfg := cfgEnvToSelf(input.Cfg)
+	endBuild := beginSelfhostPhase("selfhost.buildPackageAst")
 	file, layout, err := selfhostBuildPackageAst(input.Files)
+	endBuild()
 	if err != nil {
 		return ResolveResult{}, err
 	}
 	if file == nil {
 		return ResolveResult{}, nil
 	}
+	endResolve := beginSelfhostPhase("selfhost.selfResolveAst")
+	resolveOut := selfResolveAstFileWithCfg(file, cfg)
+	endResolve()
+	endAdapt := beginSelfhostPhase("selfhost.adaptResolveResult")
 	result := adaptResolveResult(
-		selfResolveAstFileWithCfg(file, cfg),
+		resolveOut,
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsetsWithTokenLayout(layout, start, end)
 		},
 	)
+	endAdapt()
+	endImports := beginSelfhostPhase("selfhost.applyImportSurfaces")
 	selfhostApplyResolveImportSurfaces(&result, file, input.Imports, func(start, end int) (int, int) {
 		return checkNodeOffsetsWithTokenLayout(layout, start, end)
 	})
+	endImports()
+	endAnnotate := beginSelfhostPhase("selfhost.annotateFiles")
 	selfhostAnnotateResolveFiles(&result, input.Files)
+	endAnnotate()
+	endFilter := beginSelfhostPhase("selfhost.filterDupUseDiag")
 	selfhostFilterCrossFileDuplicateUseDiagnostics(&result, file, layout)
+	endFilter()
+	endIDs := beginSelfhostPhase("selfhost.assignResolveIDs")
 	selfhostAssignResolveIDs(&result, selfhostResolvePackageKey(input))
+	endIDs()
 	return result, nil
 }
 
@@ -661,53 +690,124 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	}
 	packageID := stableResolveID("package", packageKey)
 	result.PackageID = packageID
-	byTarget := map[string]string{}
+
+	// Symbol pass is serial because the Refs / TypeRefs passes below
+	// look up TargetSymbolID through `byTarget` keyed by the symbol's
+	// (file, node, start, end). Build that map once, then fan the
+	// downstream passes out across workers.
+	byTarget := make(map[string]string, len(result.Symbols))
 	for i := range result.Symbols {
 		sym := &result.Symbols[i]
 		sym.PackageID = packageID
-		sym.DeclID = stableResolveID("decl", packageKey, sym.File, sym.Kind, sym.Name, fmt.Sprint(sym.Node), fmt.Sprint(sym.Start), fmt.Sprint(sym.End))
-		sym.ID = stableResolveID("symbol", packageKey, sym.File, sym.Kind, sym.Name, fmt.Sprint(sym.Node), fmt.Sprint(sym.Start), fmt.Sprint(sym.End), fmt.Sprint(sym.Public))
+		sym.DeclID = stableResolveID("decl", packageKey, sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End))
+		sym.ID = stableResolveID("symbol", packageKey, sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End), strconv.FormatBool(sym.Public))
 		byTarget[resolveTargetKey(sym.File, sym.Node, sym.Start, sym.End)] = sym.ID
 	}
-	for i := range result.Refs {
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+
+	// Refs pass — each ref reads byTarget (read-only after symbol pass)
+	// and writes only to its own slot.
+	parallelAssignIDs(len(result.Refs), workers, func(i int) {
 		ref := &result.Refs[i]
 		ref.PackageID = packageID
-		ref.BindingID = stableResolveID("binding", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End))
-		ref.ID = stableResolveID("ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End), fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd), ref.TargetFile)
+		ref.BindingID = stableResolveID("binding", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End))
+		ref.ID = stableResolveID("ref", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
 		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
 			ref.TargetSymbolID = id
 		} else if ref.TargetNode >= 0 {
-			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd))
+			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
 		}
-	}
-	for i := range result.TypeRefs {
+	})
+
+	// TypeRefs pass — same shape as Refs.
+	parallelAssignIDs(len(result.TypeRefs), workers, func(i int) {
 		ref := &result.TypeRefs[i]
 		ref.PackageID = packageID
-		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End), fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd), ref.TargetFile)
+		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
 		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
 			ref.TargetSymbolID = id
 		} else if ref.TargetNode >= 0 {
-			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd))
+			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
 		}
-	}
-	for i := range result.Diagnostics {
+	})
+
+	// Diagnostics pass — independent of the others.
+	parallelAssignIDs(len(result.Diagnostics), workers, func(i int) {
 		d := &result.Diagnostics[i]
 		d.PackageID = packageID
-		d.ID = stableResolveID("diagnostic", packageKey, d.File, d.Code, d.Name, fmt.Sprint(d.Node), fmt.Sprint(d.Start), fmt.Sprint(d.End), d.Message)
-	}
+		d.ID = stableResolveID("diagnostic", packageKey, d.File, d.Code, d.Name, itoa(d.Node), itoa(d.Start), itoa(d.End), d.Message)
+	})
 }
 
+// parallelAssignIDs invokes fn(i) for every i in [0, n) using a worker
+// pool of size `workers`. The serial path runs for small n / single
+// worker to avoid goroutine startup overhead.
+func parallelAssignIDs(n, workers int, fn func(i int)) {
+	if n == 0 {
+		return
+	}
+	if workers <= 1 || n < 64 {
+		for i := 0; i < n; i++ {
+			fn(i)
+		}
+		return
+	}
+	chunk := (n + workers - 1) / workers
+	var wg sync.WaitGroup
+	for start := 0; start < n; start += chunk {
+		end := start + chunk
+		if end > n {
+			end = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				fn(i)
+			}
+		}(start, end)
+	}
+	wg.Wait()
+}
+
+// itoa is a small wrapper around strconv.Itoa kept local so the
+// hot-path call sites in selfhostAssignResolveIDs read tightly.
+// Replaces the previous `fmt.Sprint(intValue)` calls which went
+// through reflection and allocated multiple times per call.
+func itoa(n int) string { return strconv.Itoa(n) }
+
 func resolveTargetKey(file string, node, start, end int) string {
-	return file + "\x00" + fmt.Sprint(node) + "\x00" + fmt.Sprint(start) + "\x00" + fmt.Sprint(end)
+	// Pre-sized builder avoids the multi-step allocations of
+	// `file + "\x00" + fmt.Sprint(...) + ...`. itoa + Builder cuts
+	// per-call cost ~5x measured against the previous fmt.Sprint
+	// concat path on the install-self toolchain build.
+	var b strings.Builder
+	b.Grow(len(file) + 32)
+	b.WriteString(file)
+	b.WriteByte(0)
+	b.WriteString(itoa(node))
+	b.WriteByte(0)
+	b.WriteString(itoa(start))
+	b.WriteByte(0)
+	b.WriteString(itoa(end))
+	return b.String()
 }
 
 func stableResolveID(parts ...string) string {
-	h := sha256.New()
+	h := resolveIDHashPool.Get().(hash.Hash)
+	h.Reset()
 	for _, part := range parts {
 		_, _ = h.Write([]byte(part))
 		_, _ = h.Write([]byte{0})
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	sum := h.Sum(nil)
+	out := hex.EncodeToString(sum)
+	resolveIDHashPool.Put(h)
+	return out
 }
 
 func selfhostResolveNodeOffsets(file *AstFile, node int, offsets func(start, end int) (int, int)) (int, int) {
