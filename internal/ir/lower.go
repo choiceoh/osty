@@ -2,8 +2,10 @@ package ir
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -120,40 +122,101 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 	// `*ast.Ident` nodes whose `NodeID` collides with unrelated
 	// nodes in the lowerer's current file; the pointer-keyed maps
 	// disambiguate them by node identity rather than ID.
+	endMaps := beginIRPhase("ir.LowerPackage.buildMaps")
 	typeRefByPtr := buildPkgTypeRefMap(pkg)
 	refByPtr := buildPkgRefMap(pkg)
-	for i, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		file := pf.EnsureFile()
-		if file == nil {
-			continue
-		}
-		res := &resolve.Result{
-			RefsByID:      pf.RefsByID,
-			TypeRefsByID:  pf.TypeRefsByID,
-			RefIdents:     pf.RefIdents,
-			TypeRefIdents: pf.TypeRefIdents,
-			FileScope:     pf.FileScope,
-		}
-		l := &lowerer{
-			pkgName:      pkgName,
-			file:         file,
-			res:          res,
-			chk:          chk,
-			typeRefByPtr: typeRefByPtr,
-			refByPtr:     refByPtr,
-		}
-		fileMod, fileIssues := l.run()
-		if i == 0 {
-			mod.SpanV = fileMod.SpanV
-		}
-		mod.Decls = append(mod.Decls, fileMod.Decls...)
-		mod.Script = append(mod.Script, fileMod.Script...)
-		issues = append(issues, fileIssues...)
+	endMaps()
+	endLoop := beginIRPhase("ir.LowerPackage.fileLoop")
+	// Per-file lowering is independent — each lowerer allocates its own
+	// `bindingPatTypes` / `fieldTypeCache` / `native` / `issues` state,
+	// shares only read-only views of `chk`, `typeRefByPtr`, `refByPtr`,
+	// and writes to its own `*Module` that we concatenate in source order
+	// below. That makes the loop safe to fan out across worker goroutines.
+	// On the toolchain install-self build (118 files) this trades
+	// ~11.2s of serial CPU for parallel runs at GOMAXPROCS cap.
+	//
+	// Deterministic output order is preserved by writing into per-index
+	// slots in `results` and concatenating in package-file order, so
+	// downstream `ir.Monomorphize` / `Optimize` / `Validate` see the same
+	// decl order as before. Single-file packages (`len(pkg.Files) <= 1`)
+	// keep the serial path — the goroutine overhead would dominate.
+	results := make([]fileLowerResult, len(pkg.Files))
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
 	}
+	if workers > len(pkg.Files) {
+		workers = len(pkg.Files)
+	}
+	if workers <= 1 || len(pkg.Files) <= 1 {
+		for i, pf := range pkg.Files {
+			results[i] = lowerOneFile(pkgName, pf, chk, typeRefByPtr, refByPtr)
+		}
+	} else {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, workers)
+		for i, pf := range pkg.Files {
+			i, pf := i, pf
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				results[i] = lowerOneFile(pkgName, pf, chk, typeRefByPtr, refByPtr)
+			}()
+		}
+		wg.Wait()
+	}
+	for i, r := range results {
+		if r.mod == nil {
+			continue
+		}
+		if i == 0 || mod.SpanV == (Span{}) {
+			mod.SpanV = r.mod.SpanV
+		}
+		mod.Decls = append(mod.Decls, r.mod.Decls...)
+		mod.Script = append(mod.Script, r.mod.Script...)
+		issues = append(issues, r.issues...)
+	}
+	endLoop()
 	return mod, issues
+}
+
+type fileLowerResult struct {
+	mod    *Module
+	issues []error
+}
+
+// lowerOneFile runs the per-file lowerer for one PackageFile and
+// returns its module + non-fatal issues. Pulled out of LowerPackage so
+// the parallel worker pool can call it without inlining a closure that
+// captures loop-iteration variables. Caller is responsible for
+// preserving order when merging results.
+func lowerOneFile(pkgName string, pf *resolve.PackageFile, chk *check.Result, typeRefByPtr map[*ast.NamedType]*resolve.Symbol, refByPtr map[*ast.Ident]*resolve.Symbol) fileLowerResult {
+	if pf == nil {
+		return fileLowerResult{}
+	}
+	file := pf.EnsureFile()
+	if file == nil {
+		return fileLowerResult{}
+	}
+	res := &resolve.Result{
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
+	}
+	l := &lowerer{
+		pkgName:      pkgName,
+		file:         file,
+		res:          res,
+		chk:          chk,
+		typeRefByPtr: typeRefByPtr,
+		refByPtr:     refByPtr,
+	}
+	mod, issues := l.run()
+	return fileLowerResult{mod: mod, issues: issues}
 }
 
 // lowerer holds per-file state for one Lower call.

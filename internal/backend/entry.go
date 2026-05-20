@@ -146,7 +146,9 @@ func LowerPackageIR(packageName, sourcePath string, pkg *resolve.Package, entryF
 			FileScope: entryFile.FileScope,
 		}
 	}
+	endLowerPkg := BeginPhase("ir.LowerPackage")
 	mod, issues := ir.LowerPackage(packageName, pkg, chk)
+	endLowerPkg()
 	entry.IRIssues = append(entry.IRIssues, issues...)
 	if mod == nil {
 		return entry, fmt.Errorf("backend: ir.LowerPackage returned nil module")
@@ -184,6 +186,7 @@ func LowerGraphPackageIR(packageName, sourcePath string, graph *resolve.PackageG
 // PreparePackage behavior for existing callers.
 func finalizeEntryIR(entry Entry, mod *ir.Module) (Entry, error) {
 	if stdlibBodyLoweringEnabled() {
+		endInject := BeginPhase("ir.injectStdlib")
 		reg := stdlib.LoadCached()
 		injected, injectionErrs := injectReachableStdlibBodies(mod, reg)
 		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
@@ -197,14 +200,22 @@ func finalizeEntryIR(entry Entry, mod *ir.Module) (Entry, error) {
 		injectedTypes, typeIssues := injectReachableStdlibTypes(mod, reg)
 		entry.IRIssues = append(entry.IRIssues, typeIssues...)
 		mod.Decls = append(mod.Decls, injectedTypes...)
+		endInject()
 	}
+	endMono := BeginPhase("ir.Monomorphize")
 	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
 		mod = monoMod
 		entry.IRIssues = append(entry.IRIssues, monoErrs...)
 	}
+	endMono()
+	endOpt := BeginPhase("ir.Optimize")
 	mod = ir.Optimize(mod, ir.OptimizeOptions{})
+	endOpt()
 	entry.IR = mod
-	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
+	endValidate := BeginPhase("ir.Validate")
+	validateErrs := ir.Validate(mod)
+	endValidate()
+	if len(validateErrs) != 0 {
 		entry.IRIssues = append(entry.IRIssues, validateErrs...)
 		return entry, errors.Join(validateErrs...)
 	}
@@ -216,15 +227,22 @@ func finalizeEntryIR(entry Entry, mod *ir.Module) (Entry, error) {
 // Any MIR coverage issue is fatal because backend dispatch no longer retries a
 // legacy HIR path.
 func LowerEntryMIR(entry Entry) (Entry, error) {
+	endMirLower := BeginPhase("mir.Lower")
 	mirMod := mir.Lower(entry.IR)
+	endMirLower()
 	if mirMod == nil {
 		return entry, errors.Join(ErrMIRCoverageIncomplete, fmt.Errorf("mir.Lower returned nil module"))
 	}
 	if mirOptimizeEnabled() {
+		endMirOpt := BeginPhase("mir.Optimize")
 		mir.Optimize(mirMod)
+		endMirOpt()
 	}
 	entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
-	if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
+	endMirValidate := BeginPhase("mir.Validate")
+	mirValidateErrs := mir.Validate(mirMod)
+	endMirValidate()
+	if len(mirValidateErrs) != 0 {
 		entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
 	}
 	entry.MIR = mirMod
