@@ -528,11 +528,22 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 	features := resolvedFeatures(resolved)
 	linkLibraries := resolvedLinkLibraries(resolved)
 
-	if backendID == backend.NameLLVM {
+	if backendID == backend.NameLLVM && !bootstrapStage0 {
 		// Cross-package dependency objects: built once per dep (when
 		// OSTY_CROSS_PKG_LINK is truthy), passed as ExtraObjects to the
 		// link step. Otherwise nil — the default matches the pre–PR-G2
 		// baseline. See cmd/osty/cross_pkg_deps.go and ARCHITECTURE.md.
+		//
+		// Skip the native-owned external path entirely under
+		// `--bootstrap-stage0`. The caller is install-self's source
+		// bootstrap which already knows `osty-self` is unavailable;
+		// invoking `nativellvmgen.TryPackage` here re-parses + re-
+		// resolves the entire package in a subprocess that is
+		// guaranteed to decline, then falls through to the in-process
+		// `Emit.Get` path anyway. Measured at 22.2s of pure waste on
+		// the install-self toolchain build before this gate. The non-
+		// bootstrap path keeps the original dispatch: cached
+		// `osty-self` makes the subprocess the production fast lane.
 		var extraObjects []string
 		if emitMode == backend.EmitBinary {
 			extraObjects = buildCrossPkgDepObjects(context.Background(), root, m, eng, lower, resolved, feats, layout)
