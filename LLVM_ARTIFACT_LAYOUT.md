@@ -15,7 +15,7 @@ Phase 6 이전 구현은 Go backend 단일 경로를 전제로 했다.
 | `osty build` generated Go | `<root>/.osty/out/<profile>[-<target>]/main.go` | `profile.OutputDir`, `cmd/osty/build.go` |
 | `osty build` binary | `<root>/.osty/out/<profile>[-<target>]/<bin>[-<target>]` | `cmd/osty/build.go` |
 | `osty run` generated Go | `<root>/.osty/out/<profile>[-<target>]/main.go` | `cmd/osty/run.go` |
-| build fingerprint | `<root>/.osty/cache/<profile>[-<target>].json` | `profile.LegacyCachePath` |
+| build fingerprint (legacy, pre-backend-aware) | `<root>/.osty/cache/<profile>[-<target>].json` | retired (was `profile.LegacyCachePath`) |
 | `osty test` generated harness | `$TMPDIR/osty-test-<pkg-hash>/main.go`, `harness.go` | `cmd/osty/test.go` |
 | `osty test` cached binary | `$TMPDIR/osty-test-<pkg-hash>/osty-test-bin-<hash>` | `cmd/osty/test.go` |
 | publish tarball | `<root>/.osty/publish/<name>-<version>.tgz` | `cmd/osty/publish.go` |
@@ -116,8 +116,9 @@ During the migration, the existing cache path:
 ```
 
 may remain on disk as a stale legacy Go backend fingerprint. Migrated builds
-write and read the backend-aware path only; `ReadLegacyFingerprint` exists for
-diagnostics, not for freshness decisions.
+write and read the backend-aware path only; the helpers that targeted the
+legacy fingerprint (`profile.LegacyCachePath`, `profile.ReadLegacyFingerprint`,
+`backend.Layout.LegacyCachePath`) were retired once no caller remained.
 
 Fingerprint fields should include:
 

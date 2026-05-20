@@ -24,7 +24,7 @@ func TestCheckCLINativeCleanSourceExitsZero(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "check", "--native", path)
+	got := runOstyCLI(t, "check", path)
 	if got.exit != 0 {
 		t.Fatalf("osty check --native exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -46,7 +46,7 @@ fn bad() -> Int {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "check", "--native", path)
+	got := runOstyCLI(t, "check", path)
 	if got.exit != 1 {
 		t.Fatalf("osty check --native exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -71,7 +71,7 @@ func TestCheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "--inspect", "check", "--native", path)
+	got := runOstyCLI(t, "--inspect", "check", path)
 	if got.exit != 0 {
 		t.Fatalf("exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -144,7 +144,7 @@ func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -165,7 +165,7 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -193,7 +193,7 @@ fn bad() -> Int {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -233,7 +233,7 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty check --native WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}

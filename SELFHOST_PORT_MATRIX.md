@@ -13,8 +13,8 @@ Go → Osty 셀프호스팅 포팅 현황 매트릭스. 리졸버 / 체커 잔�
 > fallback 제거 + managed subprocess flip 이 누적.
 > 이전 2026-04-24 스냅샷 이후 80 커밋이 들어왔고, 그 위에 Phase 0 (MirSwitchCase
 > rename + typeRepr migration + scopeFor O(N²) → sorted-binsearch+memoize) 가
-> 추가됐다. 코드 실측 기준: `--legacy` check/typecheck escape hatch 는
-> 제거됐고, `--native` 는 backwards-compat no-op 이다. `just front`,
+> 추가됐다. 코드 실측 기준: `--legacy` check/typecheck escape hatch 와
+> no-op `--native` 플래그 둘 다 제거됐다. `just front`,
 > `just verify-selfhost`, CLI astbridge-free 회귀 테스트는 통과. **`osty check
 > toolchain` smoke 는 EXIT=0 으로 복구됐다** (Phase 0 a/b 커밋 후). MIR-merged
 > probe 4 종 중 `TestProbeWholeToolchainMerged` / `TestProbeNativeToolchainMerged`
@@ -167,8 +167,7 @@ adapter 통합) 은 2026-05-16 착륙 — **Go-side LSP 의 algorithmic pointer-
 (`ParseRun → CheckStructuredFromRun → CheckDiagnosticsAsDiag`) 로 전환되었다.
 Go-native `runCheckFileLegacy` / `runCheckPackageLegacy` /
 `runTypecheckFileLegacy` 경로와 `cliFlags.legacy` 는 삭제됐다. 역사적인
-`--native` 플래그는 현재도 backwards compat 로 수락되지만 선택지는 바꾸지 않는다
-(no-op).
+`--native` no-op 플래그도 함께 제거됐다.
 
 영향 범위:
 - `osty check FILE` / `osty check DIR` → self-host default
@@ -271,8 +270,8 @@ Go-native `runCheckFileLegacy` / `runCheckPackageLegacy` /
     `runLintFile` / `runLintPackageLegacy` → `runLintPackage` 리네임 +
     `cmd/osty/check_legacy_baseline_test.go` / `lint_legacy_baseline_test.go`
     test file 전체 삭제 + 관련 legacy 가드 test 2 종 (`TestCheckCLILegacyOptOutStillWorks` /
-    `TestTypecheckCLILegacyPackageRejected`) 삭제. `--native` 는 backwards-compat
-    no-op 으로 수락. `check.File` 잔여 호출자는 0.
+    `TestTypecheckCLILegacyPackageRejected`) 삭제. `--native` no-op 플래그도
+    함께 제거됨. `check.File` 잔여 호출자는 0.
 
 각 phase 의 끝에 `just full` + 매뉴얼 `osty check toolchain` smoke 로
 regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환. **2026-04-26 시점에는

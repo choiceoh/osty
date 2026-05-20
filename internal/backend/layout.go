@@ -41,12 +41,6 @@ func (l Layout) CachePath(n Name) string {
 	return filepath.Join(l.CacheRoot(), n.String()+".json")
 }
 
-// LegacyCachePath returns the pre-backend-aware fingerprint path. It exists so
-// the migration can read or retire old cache files deliberately.
-func (l Layout) LegacyCachePath() string {
-	return profile.LegacyCachePath(l.Root, l.Profile, l.Target)
-}
-
 // Artifacts is the conventional set of paths a backend may write. Not every
 // field is populated by every backend or emit mode.
 type Artifacts struct {

@@ -25,7 +25,7 @@ func TestTypecheckCLINativeCleanSourcePrintsTypes(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "typecheck", "--native", path)
+	got := runOstyCLI(t, "typecheck", path)
 	if got.exit != 0 {
 		t.Fatalf("osty typecheck --native exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -49,7 +49,7 @@ func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "typecheck", "--native", path)
+	got := runOstyCLI(t, "typecheck", path)
 	if got.exit != 1 {
 		t.Fatalf("osty typecheck --native exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -71,7 +71,7 @@ func TestTypecheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "--inspect", "typecheck", "--native", path)
+	got := runOstyCLI(t, "--inspect", "typecheck", path)
 	if got.exit != 0 {
 		t.Fatalf("exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -160,7 +160,7 @@ func TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "typecheck", "--native", dir)
+	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty typecheck --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -186,7 +186,7 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "typecheck", "--native", dir)
+	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty typecheck --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -222,7 +222,7 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "typecheck", "--native", dir)
+	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
 		t.Fatalf("osty typecheck --native WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}

@@ -58,13 +58,6 @@ func CachePath(root, profile, triple string) string {
 	return BackendCachePath(root, profile, triple, defaultCacheBackend)
 }
 
-// LegacyCachePath returns the pre-backend-aware fingerprint JSON file. New
-// builds do not write this path; it remains here so migration code and layout
-// tests can identify stale records deliberately.
-func LegacyCachePath(root, profile, triple string) string {
-	return filepath.Join(root, CacheDirName, ArtifactKey(profile, triple)+".json")
-}
-
 // Fingerprint is the on-disk record describing one build. Sources
 // maps the project-relative .osty file path to its sha256 content
 // hash; ToolVersion records the toolchain stamp so a binary upgrade
@@ -266,20 +259,6 @@ func ReadFingerprintForBackend(root, profile, triple, backend string) (*Fingerpr
 		f.Backend = backend
 	}
 	return f, nil
-}
-
-// ReadLegacyFingerprint loads the old <key>.json cache path. Build does not
-// use this for freshness decisions; it exists for cache migration diagnostics.
-func ReadLegacyFingerprint(root, profile, triple string) (*Fingerprint, error) {
-	path := LegacyCachePath(root, profile, triple)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return parseFingerprint(path, data)
 }
 
 // parseFingerprint decodes one cache JSON record and annotates corrupt-cache

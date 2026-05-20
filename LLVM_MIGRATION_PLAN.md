@@ -765,19 +765,18 @@ astbridge는 한 방에 제거하지 않고 `*ast.File` 소비자들이 AstArena
 
 ### CLI 재배선 진척 (2026-04)
 
-CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패키지 + workspace** happy path 에서 완료됐다. `--legacy` check/typecheck escape hatch 는 제거됐고, `--native` 는 no-op 으로만 남았다. `FrontendRun.File()` 가 제거되면서 native/default 경로가 astbridge 를 우회한다는 사실은 컴파일 타임 구조적 (메서드 부재) 으로 강제된다 — 이전의 `selfhost.AstbridgeLowerCount` 런타임 카운터는 함께 제거됐다.
+CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패키지 + workspace** happy path 에서 완료됐다. `--legacy` check/typecheck escape hatch 와 no-op `--native` 플래그 둘 다 제거됐다 — self-host arena pipeline 이 유일한 경로다. `FrontendRun.File()` 가 제거되면서 native/default 경로가 astbridge 를 우회한다는 사실은 컴파일 타임 구조적 (메서드 부재) 으로 강제된다 — 이전의 `selfhost.AstbridgeLowerCount` 런타임 카운터는 함께 제거됐다.
 
-| CLI 경로                            | Happy-path 회귀 테스트                               |
-| ----------------------------------- | ---------------------------------------------------- |
-| `osty resolve FILE` (기본 native)   | `TestRunResolveFileHappyPath`                        |
-| `osty resolve DIR` (기본 native)    | `TestRunResolvePackageHappyPath`                     |
-| `osty check --native FILE`          | `TestRunCheckFileNativeDumpTelemetry`                |
-| `osty check --native DIR`           | `TestRunCheckPackageNativeHappyPath`                 |
-| `osty check --native WORKSPACE`     | `TestRunCheckWorkspaceNativeHappyPath`               |
-| `osty check FILE` (default)         | `TestRunCheckFileDefaultPathHappyPath`               |
-| `osty typecheck --native FILE`      | `TestRunTypecheckFileNativeDumpTelemetry`            |
-| `osty typecheck --native DIR`       | `TestRunTypecheckPackageNativeHappyPath`             |
-| `osty typecheck --native WORKSPACE` | `TestRunTypecheckWorkspaceNativeHappyPath`           |
+| CLI 경로                  | Happy-path 회귀 테스트                            |
+| ------------------------- | ------------------------------------------------- |
+| `osty resolve FILE`       | `TestRunResolveFileHappyPath`                     |
+| `osty resolve DIR`        | `TestRunResolvePackageHappyPath`                  |
+| `osty check FILE`         | `TestRunCheckFileDefaultPathHappyPath` + `TestRunCheckFileNativeDumpTelemetry` |
+| `osty check DIR`          | `TestRunCheckPackageNativeHappyPath`              |
+| `osty check WORKSPACE`    | `TestRunCheckWorkspaceNativeHappyPath`            |
+| `osty typecheck FILE`     | `TestRunTypecheckFileNativeDumpTelemetry`         |
+| `osty typecheck DIR`      | `TestRunTypecheckPackageNativeHappyPath`          |
+| `osty typecheck WORKSPACE` | `TestRunTypecheckWorkspaceNativeHappyPath`       |
 
 이 smoke 셋은 네이티브 CLI 경로의 exit-zero / 출력 기대치를 잡는다. astbridge 우회는 더 이상 런타임 카운터가 아니라 `FrontendRun.File()` 부재로 구조적으로 강제된다 — `LowerPublicFileFromRun` 만이 명시적 진입점이다.
 
