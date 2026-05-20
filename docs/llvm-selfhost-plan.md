@@ -55,10 +55,12 @@
 - 본 plan: **"osty-native-checker 가 LLVM 으로 자체 빌드되고 Go-built 와 같은 동작인가?"** — 셀프호스팅의 의미 단위. 측정 단위 = behavior parity.
 
 두 trajectory 가 만나는 지점:
-- stage0 **audit** 100% (PR #1858 이후, §3.1) ⇒ 남은 블로커는 주로 **LIR Proto / monomorph / cross-pkg** 축 (`SPEC_GAPS.md` 동일 날짜 타임라인) — `osty-native-checker` LLVM parity 는 여전히 entry JSON + checker 호출 + corpus 가 별도 작업.
+- stage0 **audit** 100% (PR #1858 이후, §3.1) ⇒ 남은 블로커는 주로 **LIR Proto / monomorph / cross-pkg** 축 (`SPEC_GAPS.md` 동일 날짜 타임라인). LLVM-built `main.osty` 는 PR [#1938](https://github.com/choiceoh/osty/pull/1938) 이후 `tc.frontCheckSourceToWireJson` 로 **진짜 checker wire** 를 태우고, M4 (PR [#1940](https://github.com/choiceoh/osty/pull/1940), [#1942](https://github.com/choiceoh/osty/pull/1942)) 에서 Go adapter 와 맞춘 byte/telemetry/stable-id 층을 맞췄다 — 남은 큰 덩어리는 **stdin/JSON entry 품질**, **production 링크 (stage0 fallback 없이)**, **corpus (L2/L3)**.
 - production 경로 (LIR Proto 서브프로세스) 는 **빌드된 `osty-self` 캐시** 에 의존한다는 점은 변하지 않는다. audit 퍼센트와 무관하게 subprocess 가 decline 하면 `OSTY_STAGE0_FALLBACK=1` 로만 bootstrap emitter 가 개입한다 (`internal/backend/llvm.go`).
 
 ### 3.3 `osty-native-checker` 의 현재 구조
+
+**갱신 (2026-05-20)**: LLVM-built `main.osty` 는 Go shell 과 동일한 `CheckRequest` JSON 을 받아 `tc.frontCheckSourceToWireJson` (`toolchain/check_json.osty`) 로 checker 결과를 직렬화한다 — frozen seed 의 multi-step adapter 를 한 entry 에서 흉내 내는 형태가 아니라, Osty 측 front-check 가 wire 레이어까지 한 번에 처리한다 (세부 milestone 은 [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md)).
 
 `cmd/osty-native-checker/main.go` (38 LOC, Go shell):
 
@@ -109,14 +111,16 @@ PackageCheckInput, PackageCheckFile, PackageCheckImport
 ### 4.1 Primary gate — behavior parity
 
 ```
-$ go build -o /tmp/go-checker     ./cmd/osty-native-checker         # Go-built
-$ osty build --backend llvm cmd/osty-native-checker/ -o /tmp/llvm-checker   # LLVM-built (이 plan 의 산출물)
+$ go build -o /tmp/go-checker ./cmd/osty-native-checker              # Go-built (production shell)
+$ go build -o .bin/osty ./cmd/osty                                   # host driver (once)
+$ .bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/   # LLVM-built target
+# 산출물 경로는 profile 에 따라 다름 — 예: cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm
 $ for fixture in testdata/selfhost_parity/*.request.json; do
-    diff <(/tmp/go-checker < $fixture) <(/tmp/llvm-checker < $fixture) || fail
+    diff <(/tmp/go-checker < $fixture) <(./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm < $fixture) || fail
   done
 ```
 
-위 `osty build cmd/osty-native-checker/` 형태는 **현재 미지원** — `osty build` 는 manifest (`osty.toml`) 가 있는 패키지 디렉토리를 받는다. PR1 에 `cmd/osty-native-checker/osty.toml` 도 같이 추가 (또는 R1 의 대안 모델).
+`cmd/osty-native-checker/osty.toml` 이 있으므로 디렉토리 인자 빌드는 지원된다. 다만 **bootstrap LLVM** 경로가 아직 실무 기본값인 이유는 `osty-self` LIR Proto 서브프로세스가 거절할 때 in-process stage0 emitter 가 필요하기 때문이다 (`--bootstrap-stage0`; [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md) §Build 참조). production 경로만으로 링크하는 측정은 [`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](llvm-selfhost-plan-cross-pkg-link-measurement.md) 등에서 별도 추적.
 
 - 두 binary 의 stdout 바이트가 정확히 같아야 한다 (byte-equal, not semantically-equal).
 - stderr 는 비교 안 함 (Go panic backtrace 등 host 차이 허용).
