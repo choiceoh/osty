@@ -51,7 +51,9 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if err := ValidateEmit(NameLLVM, req.Emit); err != nil {
 		return nil, err
 	}
+	endGen := BeginPhase("backend.generate-ir")
 	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit, req.BootstrapStage0)
+	endGen()
 	if genErr == nil {
 		return b.emitPrebuiltIR(ctx, req, irOut, warnings)
 	}
@@ -119,7 +121,9 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	endWriteIR := BeginPhase("backend.write-ir")
 	out, err := b.preparePrebuiltIRResult(req, irOut, warnings)
+	endWriteIR()
 	if err != nil {
 		return nil, err
 	}
@@ -127,16 +131,21 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 		return out, nil
 	}
 	tc := b.llvmToolchain()
+	endCompile := BeginPhase("backend.compile-object")
 	if err := tc.CompileObject(ctx, out.Artifacts.LLVMIR, out.Artifacts.Object, req.Layout.Target, req.Layout.Profile); err != nil {
+		endCompile()
 		return out, err
 	}
+	endCompile()
 	if !llvmabi.NeedsBinaryArtifact(req.Emit.String()) {
 		return out, nil
 	}
 	if out.Artifacts.Binary == "" {
 		return out, fmt.Errorf("%s", llvmabi.MissingBinaryArtifactMessage())
 	}
+	endRuntime := BeginPhase("backend.compile-runtime")
 	runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, out.Artifacts, req.Layout.Target, req.Layout.Profile)
+	endRuntime()
 	if err != nil {
 		return out, err
 	}
@@ -149,9 +158,12 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if runtimeObject != "" {
 		linkObjects = append(linkObjects, runtimeObject)
 	}
+	endLink := BeginPhase("backend.link-binary")
 	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target, req.Layout.Profile, req.LinkLibraries); err != nil {
+		endLink()
 		return out, err
 	}
+	endLink()
 	return out, nil
 }
 
