@@ -174,6 +174,93 @@ func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
 	}
 }
 
+// TestResolveNativeCheckerLLVMHonorsEnvOverride exercises the env-var
+// escape hatch the bootstrap-recursion story relies on: when a
+// prebuilt LLVM-target binary is staged outside the worktree and
+// `OSTY_NATIVE_CHECKER_LLVM_BIN` points at it, the resolver returns
+// that path without ever touching the in-tree build output. Mirrors
+// the OSTY_SELF_BIN precedent for osty-self. Complements
+// `RecursionGuardEnv` (set by `buildNativeChecker` on the
+// subprocess) — that flag aborts an in-progress nested build, while
+// this env var prevents the build from being triggered in the first
+// place.
+func TestResolveNativeCheckerLLVMHonorsEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	prebuilt := filepath.Join(dir, "prebuilt-checker")
+	if err := os.WriteFile(prebuilt, []byte("prebuilt"), 0o755); err != nil {
+		t.Fatalf("stage prebuilt: %v", err)
+	}
+	t.Setenv(NativeCheckerLLVMBinEnv, prebuilt)
+	// A different project root so the in-tree path is definitely
+	// absent — guarantees the env override is what produced the hit.
+	otherRoot := t.TempDir()
+	got := ResolveNativeCheckerLLVM(otherRoot)
+	if got != prebuilt {
+		t.Fatalf("ResolveNativeCheckerLLVM = %q, want %q (env override)", got, prebuilt)
+	}
+}
+
+// TestResolveNativeCheckerLLVMFallsBackToInTreeBuild covers the
+// default path: with the env var unset (or pointing at a missing
+// binary), the resolver looks at the conventional in-tree build
+// output `<project>/cmd/osty-native-checker/.osty/out/debug/llvm/`.
+// That is the location `osty build --backend llvm
+// cmd/osty-native-checker/` writes to per the README, AND the
+// location `buildNativeChecker` reads from when promoting the
+// artifact into the managed slot — so this fallback keeps the two
+// paths in lockstep.
+func TestResolveNativeCheckerLLVMFallsBackToInTreeBuild(t *testing.T) {
+	root := t.TempDir()
+	inTree := ManagedNativeCheckerLLVMPath(root)
+	if err := os.MkdirAll(filepath.Dir(inTree), 0o755); err != nil {
+		t.Fatalf("mkdir in-tree: %v", err)
+	}
+	if err := os.WriteFile(inTree, []byte("in-tree"), 0o755); err != nil {
+		t.Fatalf("write in-tree: %v", err)
+	}
+	t.Setenv(NativeCheckerLLVMBinEnv, "")
+	got := ResolveNativeCheckerLLVM(root)
+	if got != inTree {
+		t.Fatalf("ResolveNativeCheckerLLVM = %q, want %q (in-tree fallback)", got, inTree)
+	}
+}
+
+// TestResolveNativeCheckerLLVMReturnsEmptyWhenNothingStaged is the
+// "no usable binary" signal callers branch on to decide between
+// "build it" and "fall back to the Go-built variant". The empty
+// string is a deliberate sentinel — no error type — so callers do
+// not have to match on `os.ErrNotExist`.
+func TestResolveNativeCheckerLLVMReturnsEmptyWhenNothingStaged(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(NativeCheckerLLVMBinEnv, "")
+	got := ResolveNativeCheckerLLVM(root)
+	if got != "" {
+		t.Fatalf("ResolveNativeCheckerLLVM = %q, want empty (no binary staged)", got)
+	}
+}
+
+// TestResolveNativeCheckerLLVMIgnoresMissingEnvPath guards against
+// a silent skip when the env var points at a stale path (e.g. the
+// user's shell profile pins the var across worktrees and the binary
+// gets cleaned). The resolver must fall through to the in-tree
+// search instead of returning the stale path.
+func TestResolveNativeCheckerLLVMIgnoresMissingEnvPath(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(t.TempDir(), "missing-checker")
+	t.Setenv(NativeCheckerLLVMBinEnv, stale)
+	inTree := ManagedNativeCheckerLLVMPath(root)
+	if err := os.MkdirAll(filepath.Dir(inTree), 0o755); err != nil {
+		t.Fatalf("mkdir in-tree: %v", err)
+	}
+	if err := os.WriteFile(inTree, []byte("in-tree"), 0o755); err != nil {
+		t.Fatalf("write in-tree: %v", err)
+	}
+	got := ResolveNativeCheckerLLVM(root)
+	if got != inTree {
+		t.Fatalf("ResolveNativeCheckerLLVM = %q, want %q (env path missing, fall back to in-tree)", got, inTree)
+	}
+}
+
 func TestInstallManagedBinaryPreservesExistingArtifactAfterUnrelatedRenameFailure(t *testing.T) {
 	dir := t.TempDir()
 	tmp := filepath.Join(dir, "tmp-bin")

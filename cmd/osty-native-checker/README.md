@@ -70,6 +70,31 @@ go build -o .bin/osty ./cmd/osty
 echo '{"source":""}' | ./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm
 ```
 
+### Bootstrap escape — prebuilt binary slot
+
+The LLVM build path is recursive: producing the LLVM-target checker
+requires `osty-self` to be present (so the production `lir-proto-lower`
+subprocess can lower MIR), and producing `osty-self` is itself an
+`osty build toolchain/` invocation. CI / install-self / cross-worktree
+developers can break the recursion by staging a prebuilt LLVM-target
+binary outside the worktree and exporting:
+
+```sh
+export OSTY_NATIVE_CHECKER_LLVM_BIN="$PWD/.bin/osty-native-checker-llvm"
+```
+
+`internal/toolchain.ResolveNativeCheckerLLVM` then returns the env path
+without consulting the in-tree build output, mirroring the
+`OSTY_SELF_BIN` precedent. Fallback order:
+
+1. `$OSTY_NATIVE_CHECKER_LLVM_BIN` env override (must point at an
+   existing file; missing paths are silently ignored to guard against
+   stale shell-profile pins per CLAUDE.md).
+2. In-tree build at
+   `<project>/cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm`.
+3. Returns `""` so callers can fall back to the Go-built variant or
+   trigger a build explicitly.
+
 `--bootstrap-stage0` is still the practical default for this LLVM build
 because **normal MIR→LLVM emission goes through `osty-self lir-proto-lower`**
 (`internal/backend/llvm.go` `emitLLVMFallback`). On a checkout without a
@@ -89,10 +114,18 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 
 본 entry 의 의도와 현재 갭:
 
-- `io.readLine()` 으로 stdin 한 줄만 (PR1c, [#1826](https://github.com/choiceoh/osty/pull/1826))
-- `strings.indexOf` + `strings.slice` 만 사용한 manual naive JSON source 추출 (PR2, [#1829](https://github.com/choiceoh/osty/pull/1829)):
-  - 입력 측 escape (`\"`, `\n`) 미처리
-  - 다른 key 가 `"source"` substring 포함 시 오인지
+- ✓ 멀티라인 stdin (`io.readAllStdin()` → `osty_rt_io_read_all_stdin`
+  runtime symbol). 줄바꿈된 JSON request 가 통째로 읽힌다.
+- ✓ JSON value escape (`\"` / `\\` / `\n` / `\t` / `\r` / `\b` /
+  `\f` / `\/` / `\uXXXX` + surrogate pair) 디코딩
+  (`extractJsonStringValueAt`).
+- ✓ (partial) `CheckRequest.package` 모드 — byte-level scanner 가 첫
+  `"source":` key 를 찾으므로 package 모드 입력에서는 첫 file 의
+  source 가 자연스럽게 매치된다. **첫 파일만 검사** — cross-file
+  resolution 은 toolchain `frontCheckPackageToWireJson` 신설 후에
+  활성 (별도 batch).
+- 잔여: 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
+  (key-boundary 엄격 매칭 후속 batch).
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
   (`toolchain/check_json.osty` + `toolchain/check_stable_id.osty`) 가
   lex/parse/check 한 후 wire JSON 으로 직렬화. M4 byte parity 의 세

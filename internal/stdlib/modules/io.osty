@@ -515,3 +515,11 @@ pub fn println(s: String)
 pub fn eprint(s: String)
 pub fn eprintln(s: String)
 pub fn readLine() -> String
+/// readAllStdin reads stdin until EOF and returns the full payload
+/// as a single String. Unlike `readLine`, no line-stripping: callers
+/// that need multi-line input (e.g. JSON requests spanning several
+/// lines) receive the exact byte stream stdin produced. The runtime
+/// allocates a fresh GC-managed String; the buffer grows under
+/// doubling reallocation so the cost is amortised O(n) over input
+/// size.
+pub fn readAllStdin() -> String

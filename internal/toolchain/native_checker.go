@@ -66,8 +66,83 @@ func LLVMCheckerArtifactName() string {
 	return name
 }
 
+// NativeCheckerLLVMBinEnv is the env var override that points at a
+// prebuilt LLVM-target native checker binary. When set,
+// `ResolveNativeCheckerLLVM` returns the env value directly without
+// looking at the in-tree build output. Mirrors the
+// `OSTY_NATIVE_CHECKER_BIN` precedent for the Go-built variant.
+//
+// Distinct from `RecursionGuardEnv`: that flag is set by
+// `buildNativeChecker` on the subprocess to abort nested build
+// re-entries. This one is a *user-facing* opt-in that lets CI /
+// install-self / cross-worktree developers stage a prebuilt binary
+// and skip the build entirely.
+//
+// Use cases:
+//
+//   - CI: stage a prebuilt binary outside the repo and point this
+//     env var at it so the install-self ratchet does not need to
+//     bootstrap `osty-self` first.
+//   - Worktree-shared cache: a developer with `osty-self` already
+//     built can run `osty build --backend llvm cmd/osty-native-checker/`
+//     once, then export this env var from their shell profile to
+//     reuse the LLVM-built binary across other worktrees without
+//     rebuilding (mirrors the OSTY_NATIVE_CHECKER_BIN convention
+//     documented in CLAUDE.md).
+//   - Tests: an integration test wanting byte-parity diff between
+//     the Go-built and LLVM-built variants supplies its own
+//     prebuilt path here.
+//
+// CLAUDE.md note still applies: prefer not pinning this in a global
+// shell profile across worktrees — stale references silently
+// propagate.
+const NativeCheckerLLVMBinEnv = "OSTY_NATIVE_CHECKER_LLVM_BIN"
+
 func ManagedNativeCheckerPath(projectRoot string) string {
 	return filepath.Join(projectRoot, toolchainDirName, Version(), NativeCheckerBinaryName())
+}
+
+// ManagedNativeCheckerLLVMPath returns the conventional location
+// `osty build --backend llvm cmd/osty-native-checker/` writes its
+// artifact to (`<project>/cmd/osty-native-checker/.osty/out/{debug,release}/llvm/osty-native-checker-llvm`).
+// Returned for the debug profile because the manual build command
+// from `cmd/osty-native-checker/README.md` uses the default profile.
+// Release-profile callers should resolve the binary path themselves.
+// Same leaf as `buildNativeChecker` resolves at line ~271
+// (`LLVMCheckerArtifactName`) — kept in lockstep so the in-tree
+// fallback in `ResolveNativeCheckerLLVM` hits the file `buildNativeChecker`
+// just produced.
+func ManagedNativeCheckerLLVMPath(projectRoot string) string {
+	return filepath.Join(projectRoot, "cmd", "osty-native-checker", ".osty", "out", "debug", "llvm", LLVMCheckerArtifactName())
+}
+
+// ResolveNativeCheckerLLVM returns the first usable LLVM-target
+// native checker binary, searching:
+//
+//  1. `$OSTY_NATIVE_CHECKER_LLVM_BIN` env override.
+//  2. The in-tree build output at
+//     `<project>/cmd/osty-native-checker/.osty/out/debug/llvm/`.
+//
+// Returns an empty string when neither location yields a binary so
+// callers can branch into "build it" or "use the Go-built variant"
+// without parsing error types. No build is attempted here — this
+// helper is a lookup, not a managed builder, because the LLVM build
+// path is heavyweight (`osty-self` recursion) and tests should opt
+// into building explicitly. Differs from `EnsureNativeChecker`,
+// which manages a separate slot at
+// `.osty/toolchain/<version>/osty-native-checker` and DOES drive a
+// build on miss.
+func ResolveNativeCheckerLLVM(projectRoot string) string {
+	if envPath := strings.TrimSpace(os.Getenv(NativeCheckerLLVMBinEnv)); envPath != "" {
+		if fileExists(envPath) {
+			return envPath
+		}
+	}
+	inTree := ManagedNativeCheckerLLVMPath(projectRoot)
+	if fileExists(inTree) {
+		return inTree
+	}
+	return ""
 }
 
 // EnsureNativeChecker returns the managed checker artifact for the current
