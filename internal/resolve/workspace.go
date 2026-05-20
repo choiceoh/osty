@@ -268,7 +268,9 @@ func (w *Workspace) MaterializeCanonicalSources() {
 // diagnostics back onto the owning package result. The Go side no
 // longer performs a workspace-wide two-pass resolve walk.
 func (w *Workspace) ResolveAll() map[string]*PackageResult {
+	endCycle := beginResolvePhase("resolve.workspace.detectCycles")
 	cycleDiags := w.detectCycles()
+	endCycle()
 	prelude := NewPrelude()
 	results := map[string]*PackageResult{}
 	paths := make([]string, 0, len(w.Packages))
@@ -276,6 +278,8 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 		paths = append(paths, path)
 	}
 	paths = w.resolveOrder(paths)
+	endLoop := beginResolvePhase("resolve.workspace.iter")
+	var pkgCount, preResolvedCount int
 	for _, path := range paths {
 		pkg := w.Packages[path]
 		if pkg == nil {
@@ -288,10 +292,14 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 		pkg.workspace = w
 		if w.isPreResolvedStdlib(path, pkg) {
 			results[path] = &PackageResult{PackageScope: pkg.PkgScope}
+			preResolvedCount++
 			continue
 		}
 		results[path] = ResolvePackage(pkg, prelude)
+		pkgCount++
 	}
+	endLoop()
+	logResolveWorkspaceCounts(pkgCount, preResolvedCount, len(paths))
 	// Attach cycle diagnostics to the package they were reported from.
 	// Each entry is (importerPath, diagnostic).
 	for _, cd := range cycleDiags {

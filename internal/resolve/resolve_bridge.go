@@ -36,6 +36,24 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
 	}
 
+	// Pre-bucket refs / typeRefs by source file once so the per-file
+	// bridge loop iterates only its own refs instead of the whole
+	// `result.Refs` / `result.TypeRefs` slice with a `ref.File != fi.path`
+	// filter. On the install-self toolchain build this drops the bridge
+	// hot loop from O(files × all-refs) to O(total-refs), eliminating
+	// the ~3.7M cross-file ref iterations the previous filter elided
+	// per build (see the historical comment inside bridgeTypeRefs).
+	//
+	// Refs whose `File` is empty (synthesized / cross-cutting refs) used
+	// to be processed in every per-file iteration by the old O(N×M)
+	// loop, so we preserve that behaviour by collecting them in a
+	// shared slice and concatenating with the per-file bucket on each
+	// pass. The slice is typically empty, so the concat is free in
+	// practice but keeps correctness identical to the pre-fix path.
+	refsByFile, refsAllFiles := groupRefsByFile(result.Refs)
+	typeRefsByFile, typeRefsAllFiles := groupTypeRefsByFile(result.TypeRefs)
+	symByTarget := nativeSymbolByTarget(result.Symbols)
+
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
 			continue
@@ -50,12 +68,21 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		}
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
 
-		refsByID, refIdents := bridgeRefs(result.Refs, result.Symbols, files, fi, identIdx, declIndexes, fileScope)
+		refsForFile := refsByFile[pf.Path]
+		if len(refsAllFiles) > 0 {
+			refsForFile = append(refsForFile, refsAllFiles...)
+		}
+		typeRefsForFile := typeRefsByFile[pf.Path]
+		if len(typeRefsAllFiles) > 0 {
+			typeRefsForFile = append(typeRefsForFile, typeRefsAllFiles...)
+		}
+
+		refsByID, refIdents := bridgeRefsForFile(refsForFile, symByTarget, files, fi, identIdx, declIndexes, fileScope)
 		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
-		typeRefsByID, typeRefIdents := bridgeTypeRefs(result.TypeRefs, result.Symbols, files, fi, typeIdx, declIndexes, fileScope)
+		typeRefsByID, typeRefIdents := bridgeTypeRefsForFile(typeRefsForFile, symByTarget, files, fi, typeIdx, declIndexes, fileScope)
 		pf.TypeRefsByID = typeRefsByID
 		pf.TypeRefIdents = typeRefIdents
 
@@ -65,6 +92,37 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 
 	diags = append(diags, nativeResolveDiagnosticsFromArtifacts(result, files)...)
 	return &PackageResult{PackageScope: pkgScope, SemanticDB: semanticDB, Diags: diags}
+}
+
+// groupRefsByFile partitions every ResolvedRef by its originating file
+// path. Refs whose `File` field is empty are returned separately as the
+// "shared" slice — the old O(N×M) loop processed empty-file refs for
+// every per-file iteration, so callers must concatenate this shared
+// slice with the per-file bucket to keep behaviour identical.
+func groupRefsByFile(refs []api.ResolvedRef) (map[string][]api.ResolvedRef, []api.ResolvedRef) {
+	byFile := make(map[string][]api.ResolvedRef, 16)
+	var shared []api.ResolvedRef
+	for _, ref := range refs {
+		if ref.File == "" {
+			shared = append(shared, ref)
+			continue
+		}
+		byFile[ref.File] = append(byFile[ref.File], ref)
+	}
+	return byFile, shared
+}
+
+func groupTypeRefsByFile(refs []api.ResolvedTypeRef) (map[string][]api.ResolvedTypeRef, []api.ResolvedTypeRef) {
+	byFile := make(map[string][]api.ResolvedTypeRef, 16)
+	var shared []api.ResolvedTypeRef
+	for _, ref := range refs {
+		if ref.File == "" {
+			shared = append(shared, ref)
+			continue
+		}
+		byFile[ref.File] = append(byFile[ref.File], ref)
+	}
+	return byFile, shared
 }
 
 func nativeParseDiagnostics(pkg *Package) []*diag.Diagnostic {
@@ -486,24 +544,29 @@ func bridgeRefs(
 	declIndexes map[string]map[int]ast.Node,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.Ident) {
+	return bridgeRefsForFile(filterRefsForFile(refs, fi.path), nativeSymbolByTarget(symbols), files, fi, identIdx, declIndexes, fileScope)
+}
+
+// bridgeRefsForFile is the file-scoped variant of bridgeRefs. Callers
+// pre-bucket refs by file and pre-build the symbol-target index so the
+// inner loop runs O(refs-for-this-file) instead of O(all-refs). The
+// historical cross-file gate inside the loop is gone because the input
+// slice is already file-filtered (refs whose `File` is "" land in the
+// "" bucket and never reach a per-file bridge call).
+func bridgeRefsForFile(
+	refs []api.ResolvedRef,
+	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
+	files []nativeResolveFileInfo,
+	fi nativeResolveFileInfo,
+	identIdx map[int]*ast.Ident,
+	declIndexes map[string]map[int]ast.Node,
+	fileScope *Scope,
+) (map[ast.NodeID]*Symbol, []*ast.Ident) {
 	refsByID := make(map[ast.NodeID]*Symbol, len(refs))
 	refIdents := make([]*ast.Ident, 0, len(refs))
 	symCache := make(map[nativeSymbolTarget]*Symbol)
-	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range refs {
-		// Cross-file filter: skip refs that originate in a different
-		// source file than the one this bridge invocation owns. Without
-		// this gate, `nativeToOriginalOffset` can still return a valid
-		// offset for a foreign-file ref (when the merged-source range
-		// happens to overlap), and `identIdx[origOff]` then matches
-		// an unrelated ident in the current file, populating
-		// `refsByID[wrong_ident.ID]` with the foreign-file ref's target.
-		// Multi-file `osty install-self` previously hit this 291 times
-		// across ~50 distinct source/symbol shape mismappings.
-		if ref.File != "" && ref.File != fi.path {
-			continue
-		}
 		origOff, ok := nativeToOriginalOffset(fi, ref.Start)
 		if !ok {
 			continue
@@ -521,6 +584,17 @@ func bridgeRefs(
 		refIdents = append(refIdents, ident)
 	}
 	return refsByID, refIdents
+}
+
+func filterRefsForFile(refs []api.ResolvedRef, path string) []api.ResolvedRef {
+	out := refs[:0:0]
+	for _, ref := range refs {
+		if ref.File != "" && ref.File != path {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 func findIdentForResolvedRef(identIdx map[int]*ast.Ident, name string, start, end int) *ast.Ident {
@@ -610,31 +684,29 @@ func bridgeTypeRefs(
 	declIndexes map[string]map[int]ast.Node,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
+	return bridgeTypeRefsForFile(filterTypeRefsForFile(typeRefs, fi.path), nativeSymbolByTarget(symbols), files, fi, typeIdx, declIndexes, fileScope)
+}
+
+// bridgeTypeRefsForFile is the file-scoped variant of bridgeTypeRefs.
+// See bridgeRefsForFile for the same pre-bucket rationale — the
+// historical comment about 3.7M cross-file ref elisions per
+// install-self build motivated the partition; downstream
+// `resolverSymbolMatchesSourceName` (PR #1919) still catches the
+// residual same-file mismaps that the elision used to cover.
+func bridgeTypeRefsForFile(
+	typeRefs []api.ResolvedTypeRef,
+	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
+	files []nativeResolveFileInfo,
+	fi nativeResolveFileInfo,
+	typeIdx map[int]*ast.NamedType,
+	declIndexes map[string]map[int]ast.Node,
+	fileScope *Scope,
+) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
 	typeRefsByID := make(map[ast.NodeID]*Symbol, len(typeRefs))
 	typeRefIdents := make([]*ast.NamedType, 0, len(typeRefs))
 	symCache := make(map[nativeSymbolTarget]*Symbol)
-	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range typeRefs {
-		// Cross-file filter, twin of the gate in bridgeRefs: skip
-		// typeRefs whose source file isn't the one this bridge
-		// invocation owns. Without this, `nativeToOriginalOffset` can
-		// resolve a foreign-file ref to an offset that exists in the
-		// current file's source range, and the subsequent
-		// `typeIdx[origOff]` matches an unrelated NamedType — the
-		// `TypeRefsByID[wrong_node.ID] = sym_for_other_file`
-		// mismapping shape. Measured at 3.7M cross-file refs
-		// elided per install-self run on the toolchain/ package
-		// (98.5% of all bridge ref iterations), making the bridge
-		// hot loop O(N * M) → O(N) in the cross-file dimension.
-		// The downstream IR-layer guard
-		// (`resolverSymbolMatchesSourceName`, PR #1919) still
-		// catches the residual same-file collisions
-		// (~291 per build); follow-up work needs to chase those
-		// to a per-file root cause.
-		if ref.File != "" && ref.File != fi.path {
-			continue
-		}
 		origOff, ok := nativeToOriginalOffset(fi, ref.Start)
 		if !ok {
 			continue
@@ -648,6 +720,17 @@ func bridgeTypeRefs(
 		typeRefIdents = append(typeRefIdents, nt)
 	}
 	return typeRefsByID, typeRefIdents
+}
+
+func filterTypeRefsForFile(refs []api.ResolvedTypeRef, path string) []api.ResolvedTypeRef {
+	out := refs[:0:0]
+	for _, ref := range refs {
+		if ref.File != "" && ref.File != path {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 func findOrCreateTypeSymbol(
