@@ -36,8 +36,12 @@ files=$(git ls-files '*.osty' |
 hash_pairs=$(printf '%s\n' "$files" | xargs shasum -a 256)
 
 # Pipe-separated marker|file pairs for entries that lack a cache hit.
+# On Windows-style toolchains shasum opens files in binary mode and
+# prefixes the filename with `*` (e.g. `<hash> *toolchain/ty.osty`).
+# Strip the marker so `osty repair --check` receives a plain path.
 needs_check=$(printf '%s\n' "$hash_pairs" | while read -r hash file; do
 	marker="$cache_dir/${hash:0:32}"
+	file=${file#\*}
 	[ -f "$marker" ] && continue
 	printf '%s|%s\n' "$marker" "$file"
 done)

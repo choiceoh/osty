@@ -1025,7 +1025,13 @@ fn mirJsonFunctionBuildCore(obj: List<MirJsonEntry>, params: List<Int>, locals: 
     let targetFeatures: List<String> = []
     let noaliasParams: List<String> = []
     let exportSymbol = name
-    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal: false, isIntrinsic: false, exported: false, exportSymbol, cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures, noaliasAll: false, noaliasParams, pure: false})
+    // A13 `#[pure]` → readnone. Go-side `internal/mirjson/json.go`
+    // emits `"pure": true` when `ir.FnDecl.Pure` is set; without this
+    // decode the production MIR-JSON path lost the flag and downstream
+    // emitters (`mir_generator.osty::mirEmitFnAttrsFromMir`,
+    // `lir_proto.osty::lirFnAttrsFromMir`) skipped readnone.
+    let pure = mirJsonBoolField(obj, 4020706, "pure", false)?
+    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal: false, isIntrinsic: false, exported: false, exportSymbol, cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures, noaliasAll: false, noaliasParams, pure})
 }
 
 fn mirJsonFunctionParamsField(obj: List<MirJsonEntry>, params: List<Int>) -> Result<Bool, String> {
