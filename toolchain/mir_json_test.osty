@@ -173,3 +173,255 @@ fn testMirJsonDecodeNonPureFunctionSkipsReadnone() {
     // readnone, masking a regression here.
     testing.assert(!strings.contains(ir, "@main() readnone"))
 }
+
+// A5–A11 round-trip — every annotation flag the Go-side
+// `internal/mirjson/json.go` serializes on `ir.FnDecl` must thread
+// through `mirJsonFunctionBuildCore` into `MirFunction` so the
+// downstream emitters (`mir_generator.osty::mirEmitFnAttrsFromMir`
+// for the `define`-line attrs, `lir_proto.osty::lirFnAttrsFromMir`
+// + `lirNextLoopMD` for param attrs and loop metadata) observe the
+// same shape as the in-process pipeline. Prior to this batch every
+// flag except `pure` (A13) dropped to its default, leaving the LLVM
+// emit code paths dead for production MIR-JSON inputs covering
+// `#[inline(...)]` (A8) / `#[hot]` + `#[cold]` (A9) /
+// `#[target_feature(...)]` (A10) / `#[noalias]` (A11) /
+// `#[vectorize(...)]` (A5) / `#[parallel]` (A6) / `#[unroll(...)]`
+// (A7).
+fn testMirJsonDecodeAllFnAnnotationFlagsRoundTrip() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ],
+      "vectorize": true,
+      "vectorizeWidth": 8,
+      "vectorizeScalable": true,
+      "vectorizePredicate": true,
+      "parallel": true,
+      "unroll": true,
+      "unrollCount": 4,
+      "inlineMode": 2,
+      "hot": true,
+      "targetFeatures": ["avx512f", "avx512bw"],
+      "noaliasAll": true,
+      "noaliasParams": ["src", "dst"],
+      "pure": true
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    let fn_ = m.functions[0]
+    testing.assert(fn_.vectorize)
+    testing.assertEq(fn_.vectorizeWidth, 8)
+    testing.assert(fn_.vectorizeScalable)
+    testing.assert(fn_.vectorizePredicate)
+    testing.assert(fn_.parallel)
+    testing.assert(fn_.unroll)
+    testing.assertEq(fn_.unrollCount, 4)
+    testing.assert(fn_.inlineMode == MirInlineAlways)
+    testing.assert(fn_.hot)
+    testing.assert(!fn_.cold)
+    testing.assert(fn_.pure)
+    testing.assert(fn_.noaliasAll)
+    testing.assertEq(fn_.targetFeatures.len(), 2)
+    testing.assertEq(fn_.targetFeatures[0], "avx512f")
+    testing.assertEq(fn_.targetFeatures[1], "avx512bw")
+    testing.assertEq(fn_.noaliasParams.len(), 2)
+    testing.assertEq(fn_.noaliasParams[0], "src")
+    testing.assertEq(fn_.noaliasParams[1], "dst")
+}
+
+// Baseline default guard — every annotation absent from the JSON
+// must decode to the off / empty / `MirInlineNone` defaults the Go
+// `ir.FnDecl` zero-value carries. Guards against accidental
+// hardcoded-`true` regressions in `mirJsonFunctionBuildCore`'s
+// fallback values: if any field gets an inverted default, the
+// downstream LLVM emitter would stamp the attribute on every
+// function — including those without the corresponding source
+// annotation — silently miscompiling the program.
+fn testMirJsonDecodeFnAnnotationFlagsDefaults() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ]
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    let fn_ = m.functions[0]
+    testing.assert(!fn_.vectorize)
+    testing.assert(!fn_.noVectorize)
+    testing.assertEq(fn_.vectorizeWidth, 0)
+    testing.assert(!fn_.vectorizeScalable)
+    testing.assert(!fn_.vectorizePredicate)
+    testing.assert(!fn_.parallel)
+    testing.assert(!fn_.unroll)
+    testing.assertEq(fn_.unrollCount, 0)
+    testing.assert(fn_.inlineMode == MirInlineNone)
+    testing.assert(!fn_.hot)
+    testing.assert(!fn_.cold)
+    testing.assert(!fn_.pure)
+    testing.assert(!fn_.noaliasAll)
+    testing.assertEq(fn_.targetFeatures.len(), 0)
+    testing.assertEq(fn_.noaliasParams.len(), 0)
+}
+
+// `#[cold]` round-trip — separate from the all-flags test because
+// `hot` and `cold` are mutually exclusive at the source level
+// (the resolver rejects both on the same function), so the LLVM
+// emitter would never see them both set. Verifies the cold path's
+// JSON wire ("cold": true) lands on `MirFunction.cold` without
+// also flipping `hot`.
+fn testMirJsonDecodeColdFunctionWithoutHot() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ],
+      "cold": true
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    testing.assert(m.functions[0].cold)
+    testing.assert(!m.functions[0].hot)
+}
+
+// `#[no_vectorize]` round-trip — A5.2 baseline opts every function
+// into vectorize by default, so the explicit `noVectorize` opt-out
+// flag must survive JSON round-trip independently of the `vectorize`
+// flag (the two are not the same boolean inverted; both can be false
+// to mean "let the default policy decide"). Guards against the
+// decoder silently dropping the opt-out, which would re-vectorize a
+// loop the source explicitly asked to keep scalar.
+fn testMirJsonDecodeNoVectorizeFunction() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ],
+      "noVectorize": true
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    testing.assert(m.functions[0].noVectorize)
+    testing.assert(!m.functions[0].vectorize)
+}

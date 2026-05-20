@@ -37,8 +37,8 @@ func Parse(src []byte) (*ast.File, []error) {
 // semantic AST plus parser-level compatibility provenance. Compatibility
 // helper syntax is canonicalized in the parser core; this facade only records
 // source alias provenance that remains useful at legacy boundaries. The public
-// AST is produced through the explicit compatibility adapter so ParseDetailed
-// does not exercise FrontendRun.File's legacy astbridge entry point.
+// AST is produced through the explicit compatibility adapter
+// (selfhost.LowerPublicFileFromRun).
 func ParseDetailed(src []byte) Result {
 	pipeline := newParsePipeline(src)
 	run := pipeline.parseRun()
@@ -70,9 +70,8 @@ func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
 // FrontendRun without lowering the result to the public *ast.File semantic AST.
 // Callers that only need the Osty-native parser arena (native resolver, native
 // checker, native llvmgen) should use this entry point so astbridge-based
-// public lowering is not triggered. Calling run.File() afterwards remains valid
-// if the *ast.File is eventually needed; it is computed lazily from the
-// semantic arena on first access.
+// public lowering is not triggered. Pass the run to
+// selfhost.LowerPublicFileFromRun if the *ast.File is eventually needed.
 func ParseRun(src []byte) *selfhost.FrontendRun {
 	return selfhost.Run(src)
 }

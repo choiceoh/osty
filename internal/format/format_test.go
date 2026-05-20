@@ -5,17 +5,15 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
-func TestSourceDoesNotMaterializePublicAST(t *testing.T) {
+func TestSourceFormatsCleanSource(t *testing.T) {
 	src := []byte(`fn main() {
 let x = 1
 x
 }
 `)
 
-	selfhost.ResetAstbridgeLowerCount()
 	out, diags, err := Source(src)
 	if err != nil {
 		t.Fatalf("Source: %v", err)
@@ -27,9 +25,6 @@ x
 	}
 	if len(out) == 0 {
 		t.Fatal("Source returned empty formatted output")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("Source astbridge count = %d, want 0", got)
 	}
 }
 

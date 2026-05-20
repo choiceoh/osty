@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,73 @@ func TestInstallManagedBinaryReplacesExistingArtifactAfterRenameFailure(t *testi
 	}
 	if removeCalls != 1 {
 		t.Fatalf("remove calls = %d, want 1", removeCalls)
+	}
+}
+
+func TestEnsureNativeCheckerReturnsRecursionGuardError(t *testing.T) {
+	t.Setenv(RecursionGuardEnv, "1")
+	_, err := EnsureNativeChecker(".")
+	if err == nil {
+		t.Fatal("EnsureNativeChecker returned nil, want recursion guard error")
+	}
+	if !strings.Contains(err.Error(), RecursionGuardEnv) {
+		t.Fatalf("error %q does not mention %q", err, RecursionGuardEnv)
+	}
+}
+
+func TestFilterEnvRemovesInheritedRecursionGuard(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		RecursionGuardEnv + "=0",
+		"HOME=/home/test",
+		RecursionGuardEnv + "=anything",
+	}
+	got := filterEnv(env, RecursionGuardEnv)
+	for _, kv := range got {
+		if strings.HasPrefix(kv, RecursionGuardEnv+"=") {
+			t.Fatalf("filterEnv left a %s entry: %v", RecursionGuardEnv, got)
+		}
+	}
+	final := append(got, RecursionGuardEnv+"=1")
+	seen := 0
+	for _, kv := range final {
+		if strings.HasPrefix(kv, RecursionGuardEnv+"=") {
+			if kv != RecursionGuardEnv+"=1" {
+				t.Fatalf("unexpected guard entry %q in %v", kv, final)
+			}
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("expected exactly one %s=1 entry after append, got %d in %v", RecursionGuardEnv, seen, final)
+	}
+}
+
+func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, NativeCheckerBinaryName())
+
+	oldRepoRoot := sourceRepoRootFunc
+	oldVerify := verifyOstySelfCached
+	t.Cleanup(func() {
+		sourceRepoRootFunc = oldRepoRoot
+		verifyOstySelfCached = oldVerify
+	})
+
+	sourceRepoRootFunc = func() (string, error) { return root, nil }
+	verifyOstySelfCached = func(string) error {
+		return errors.New("osty-self not cached: run `osty install-self` first")
+	}
+
+	err := buildNativeChecker(dest)
+	if err == nil {
+		t.Fatal("buildNativeChecker returned nil, want osty-self cache-miss error")
+	}
+	if !strings.Contains(err.Error(), "osty-self not cached") {
+		t.Fatalf("error %q does not propagate cache-miss reason", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("dest %q must not exist after failed build (stat err: %v)", dest, statErr)
 	}
 }
 

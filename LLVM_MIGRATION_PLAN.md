@@ -19,8 +19,8 @@
   `internal/selfhost/generated.go`는 재생성 대상이 아니라 frozen seed다.
 - native checker bundle은 `internal/selfhost/bundle.ToolchainCheckerFiles()`에
   고정되어 있고, `internal/selfhost/ast_lower.osty`를 포함하지 않는다. 해당
-  파일은 `FrontendRun.File` / `Parse` / `EnsureFile` 기반 legacy public-AST
-  소비자용 호환 어댑터로만 남아 있다.
+  파일은 `selfhost.LowerPublicFileFromRun` / `Parse` / `EnsureFile` 기반
+  legacy public-AST 소비자용 호환 어댑터로만 남아 있다.
 - `osty check`, `osty typecheck`, `osty resolve`의 happy path는 self-host arena
   구조체를 직접 소비한다. 현재 기준 `just front`, `just spec`,
   `just verify-selfhost`, `go run ./cmd/osty check toolchain`은 통과한다.
@@ -765,21 +765,21 @@ astbridge는 한 방에 제거하지 않고 `*ast.File` 소비자들이 AstArena
 
 ### CLI 재배선 진척 (2026-04)
 
-CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패키지 + workspace** happy path 에서 완료됐다. `--legacy` check/typecheck escape hatch 는 제거됐고, `--native` 는 no-op 으로만 남았다. in-process 회귀 테스트는 native/default 경로가 `astLowerPublicFile` 호출을 트리거하지 않는지 `selfhost.AstbridgeLowerCount` 로 pin 한다.
+CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패키지 + workspace** happy path 에서 완료됐다. `--legacy` check/typecheck escape hatch 는 제거됐고, `--native` 는 no-op 으로만 남았다. `FrontendRun.File()` 가 제거되면서 native/default 경로가 astbridge 를 우회한다는 사실은 컴파일 타임 구조적 (메서드 부재) 으로 강제된다 — 이전의 `selfhost.AstbridgeLowerCount` 런타임 카운터는 함께 제거됐다.
 
-| CLI 경로                            | Warm astbridge bumps | 회귀 테스트                                      |
-| ----------------------------------- | -------------------- | ------------------------------------------------ |
-| `osty resolve FILE` (기본 native)   | 0                    | `TestRunResolveFileHappyPathIsAstbridgeFree`     |
-| `osty resolve DIR` (기본 native)    | 0                    | `TestRunResolvePackageHappyPathIsAstbridgeFree`  |
-| `osty check --native FILE`          | 0                    | `TestRunCheckFileNativeIsAstbridgeFree`          |
-| `osty check --native DIR`           | 0                    | `TestRunCheckPackageNativeIsAstbridgeFree`       |
-| `osty check --native WORKSPACE`     | 0                    | `TestRunCheckWorkspaceNativeIsAstbridgeFree`     |
-| `osty check FILE` (default)         | 0                    | `TestRunCheckFileDefaultPathIsAstbridgeFree`     |
-| `osty typecheck --native FILE`      | 0                    | `TestRunTypecheckFileNativeIsAstbridgeFree`      |
-| `osty typecheck --native DIR`       | 0                    | `TestRunTypecheckPackageNativeIsAstbridgeFree`   |
-| `osty typecheck --native WORKSPACE` | 0                    | `TestRunTypecheckWorkspaceNativeIsAstbridgeFree` |
+| CLI 경로                            | Happy-path 회귀 테스트                               |
+| ----------------------------------- | ---------------------------------------------------- |
+| `osty resolve FILE` (기본 native)   | `TestRunResolveFileHappyPath`                        |
+| `osty resolve DIR` (기본 native)    | `TestRunResolvePackageHappyPath`                     |
+| `osty check --native FILE`          | `TestRunCheckFileNativeDumpTelemetry`                |
+| `osty check --native DIR`           | `TestRunCheckPackageNativeHappyPath`                 |
+| `osty check --native WORKSPACE`     | `TestRunCheckWorkspaceNativeHappyPath`               |
+| `osty check FILE` (default)         | `TestRunCheckFileDefaultPathHappyPath`               |
+| `osty typecheck --native FILE`      | `TestRunTypecheckFileNativeDumpTelemetry`            |
+| `osty typecheck --native DIR`       | `TestRunTypecheckPackageNativeHappyPath`             |
+| `osty typecheck --native WORKSPACE` | `TestRunTypecheckWorkspaceNativeHappyPath`           |
 
-이 회귀 넷은 네이티브 경로 비용 누출을 잡는다. 예: fallback이 `EnsureFiles`를 부당하게 발동해 astbridge bump 가 생기면 즉시 실패한다.
+이 smoke 셋은 네이티브 CLI 경로의 exit-zero / 출력 기대치를 잡는다. astbridge 우회는 더 이상 런타임 카운터가 아니라 `FrontendRun.File()` 부재로 구조적으로 강제된다 — `LowerPublicFileFromRun` 만이 명시적 진입점이다.
 
 **인프라 작업**:
 
@@ -788,7 +788,7 @@ CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패�
 - `selfhost.CheckDiagnosticsAsDiag(src, records) []*diag.Diagnostic` — 네이티브 `CheckDiagnosticRecord`를 `*diag.Diagnostic`으로 변환하는 공용 헬퍼 (PR #631).
 - `resolve.LoadPackageForNative` / `PackageFile.Run` / `EnsureFile` — loader를 lazy하게 만들어 native 경로는 0 bump, fallback 경로는 필요 시에만 lowering (PR #621 #628).
 - `selfhostIntrinsicBodyDiagnosticsFromArena` — `#[intrinsic]` 게이트를 AstArena 기반으로 재작성 (PR #623 #626), `selfhostAppendIntrinsicBodyGateForSource` / `...ForPackage` 둘 다 arena walker 사용.
-- `selfhost.AstbridgeLowerCount()` / `ResetAstbridgeLowerCount()` — `FrontendRun.File()` 단일 진입점을 계수하는 글로벌 카운터 (PR #623).
+- ~~`selfhost.AstbridgeLowerCount()` / `ResetAstbridgeLowerCount()` — `FrontendRun.File()` 단일 진입점을 계수하는 글로벌 카운터 (PR #623).~~ `FrontendRun.File()` 가 제거되면서 counter 인프라도 함께 폐기됐다. astbridge 우회는 이제 메서드 부재로 구조적 강제.
 
 **남아있는 작업**:
 

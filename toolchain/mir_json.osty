@@ -1022,16 +1022,32 @@ fn mirJsonFunctionBuildCore(obj: List<MirJsonEntry>, params: List<Int>, locals: 
     let span = mirJsonSpanField(obj, 4020328, "span")?
     let returnLocal = mirJsonIntField(obj, 11161188, "returnLocal", 0)?
     let entry = mirJsonIntField(obj, 5034129, "entry", 0)?
-    let targetFeatures: List<String> = []
-    let noaliasParams: List<String> = []
     let exportSymbol = name
-    // A13 `#[pure]` → readnone. Go-side `internal/mirjson/json.go`
-    // emits `"pure": true` when `ir.FnDecl.Pure` is set; without this
-    // decode the production MIR-JSON path lost the flag and downstream
-    // emitters (`mir_generator.osty::mirEmitFnAttrsFromMir`,
-    // `lir_proto.osty::lirFnAttrsFromMir`) skipped readnone.
+    // A5–A13 annotation flags. Go-side `internal/mirjson/json.go`
+    // serializes every flag set on `ir.FnDecl`; this decoder threads
+    // each through to `MirFunction` so the downstream emitters
+    // `mir_generator.osty::mirEmitFnAttrsFromMir` (define-line attrs)
+    // and `lir_proto.osty::lirFnAttrsFromMir` / `lirNextLoopMD`
+    // (param attrs + loop metadata) see the same shape as the in-process
+    // pipeline. Prior to this batch only `pure` (A13) was decoded; the
+    // remaining flags silently dropped to defaults, leaving the LLVM
+    // emit code paths dead for production MIR-JSON inputs.
+    let inlineMode = mirJsonInlineMode(mirJsonIntField(obj, 10127682, "inlineMode", 0)?)
+    let hot = mirJsonBoolField(obj, 3012385, "hot", false)?
+    let cold = mirJsonBoolField(obj, 4019847, "cold", false)?
     let pure = mirJsonBoolField(obj, 4020706, "pure", false)?
-    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal: false, isIntrinsic: false, exported: false, exportSymbol, cAbi: false, span, vectorize: false, noVectorize: false, vectorizeWidth: 0, vectorizeScalable: false, vectorizePredicate: false, parallel: false, unroll: false, unrollCount: 0, inlineMode: MirInlineNone, hot: false, cold: false, targetFeatures, noaliasAll: false, noaliasParams, pure})
+    let vectorize = mirJsonBoolField(obj, 9110349, "vectorize", false)?
+    let noVectorize = mirJsonBoolField(obj, 11169689, "noVectorize", false)?
+    let vectorizeWidth = mirJsonIntField(obj, 14285181, "vectorizeWidth", 0)?
+    let vectorizeScalable = mirJsonBoolField(obj, 17432931, "vectorizeScalable", false)?
+    let vectorizePredicate = mirJsonBoolField(obj, 18503357, "vectorizePredicate", false)?
+    let parallel = mirJsonBoolField(obj, 8082271, "parallel", false)?
+    let unroll = mirJsonBoolField(obj, 6046941, "unroll", false)?
+    let unrollCount = mirJsonIntField(obj, 11168432, "unrollCount", 0)?
+    let noaliasAll = mirJsonBoolField(obj, 10127269, "noaliasAll", false)?
+    let targetFeatures = mirJsonStringList(mirJsonArrayField(obj, 14288238, "targetFeatures")?)?
+    let noaliasParams = mirJsonStringList(mirJsonArrayField(obj, 13238031, "noaliasParams")?)?
+    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal: false, isIntrinsic: false, exported: false, exportSymbol, cAbi: false, span, vectorize, noVectorize, vectorizeWidth, vectorizeScalable, vectorizePredicate, parallel, unroll, unrollCount, inlineMode, hot, cold, targetFeatures, noaliasAll, noaliasParams, pure})
 }
 
 fn mirJsonFunctionParamsField(obj: List<MirJsonEntry>, params: List<Int>) -> Result<Bool, String> {

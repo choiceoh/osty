@@ -8,7 +8,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestAnalyzePackageContainingUsesNativeCompatibilityPath(t *testing.T) {
@@ -25,16 +24,9 @@ func TestAnalyzePackageContainingUsesNativeCompatibilityPath(t *testing.T) {
 	src := []byte("pub fn fresh() {}\n")
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
-	selfhost.ResetAstbridgeLowerCount()
 	a := s.analyzePackageContaining(path, src)
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
-	}
-	// The engine-based package path may still materialize public ASTs for
-	// compatibility consumers, but parser.ParseDetailed must use the explicit
-	// adapter rather than FrontendRun.File's legacy astbridge entry point.
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after package analyze = %d, want 0", got)
 	}
 	if len(a.packages) != 1 {
 		t.Fatalf("packages = %d, want 1", len(a.packages))
@@ -58,13 +50,9 @@ func TestAnalyzePackageDiagnosticsUseNativeResolveResult(t *testing.T) {
 	src := []byte("fn main() { missing() }\n")
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
-	selfhost.ResetAstbridgeLowerCount()
 	a := s.analyzePackageContaining(path, src)
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after package diagnostics = %d, want 0", got)
 	}
 	var sawUndefined bool
 	for _, d := range a.diags {
@@ -94,13 +82,9 @@ func TestAnalyzePackageIdentIndexUsesNativeStructuredResult(t *testing.T) {
 	src := []byte("fn main() { helper() }\n")
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
-	selfhost.ResetAstbridgeLowerCount()
 	a := s.analyzePackageContaining(path, src)
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after package ident index = %d, want 0", got)
 	}
 	helperOff := bytes.Index(src, []byte("helper"))
 	if helperOff < 0 {
@@ -115,15 +99,9 @@ func TestAnalyzeSingleFileUsesNativeCompatibilityPath(t *testing.T) {
 	src := []byte("pub fn fresh() {}\n")
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
-	selfhost.ResetAstbridgeLowerCount()
 	a := s.analyzeSingleFileViaEngine("untitled:NativeCompat.osty", src)
 	if a == nil {
 		t.Fatal("analyzeSingleFileViaEngine returned nil")
-	}
-	// The public-AST compatibility surface stays explicit; no LSP single-file
-	// analysis path should call FrontendRun.File.
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want 0", got)
 	}
 	if got := lspFirstFnName(a.file); got != "fresh" {
 		t.Fatalf("first function = %q, want %q", got, "fresh")
@@ -153,15 +131,9 @@ func TestAnalyzeWorkspaceUsesNativeCompatibilityPath(t *testing.T) {
 	src := []byte("pub fn fresh() {}\n")
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
-	selfhost.ResetAstbridgeLowerCount()
 	a := s.analyzePackageContaining(path, src)
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
-	}
-	// Workspace analysis can still expose public ASTs to compatibility
-	// consumers, but it must not use FrontendRun.File as the authority path.
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after workspace analyze = %d, want 0", got)
 	}
 	if len(a.packages) != 2 {
 		t.Fatalf("packages = %d, want 2", len(a.packages))

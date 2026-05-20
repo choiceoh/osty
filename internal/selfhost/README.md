@@ -27,9 +27,11 @@ Authority rule:
 - Production front-end paths must treat `FrontendRun` / arena / structured
   results as the source of truth. Public `*ast.File` values are compatibility
   output only.
-- `FrontendRun.File()` is deprecated for production code. If a legacy consumer
-  still needs public AST shape, use `LowerPublicFileFromRun()` at that explicit
-  boundary so the compatibility hop is visible and searchable.
+- If a legacy consumer still needs public AST shape, use
+  `LowerPublicFileFromRun()` at that explicit boundary so the compatibility hop
+  is visible and searchable. The previous lazy `FrontendRun.File()` accessor
+  was removed; structural enforcement (no method to call) replaces the prior
+  runtime counter.
 - Package-level code should keep `PackageFile.Run` / structured results where
   possible. If a legacy package consumer still needs `PackageFile.File`, call
   `MaterializePublicCompatibility()` at that boundary rather than hiding the
