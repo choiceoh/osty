@@ -61,3 +61,108 @@ fn testMirJsonDecodeConstReturnModule() {
     testing.assert(strings.contains(ir, "define i64 @main()"))
     testing.assert(strings.contains(ir, "ret i64"))
 }
+
+// A13: the Go-side `internal/mirjson/json.go` emits `"pure": true`
+// when `ir.FnDecl.Pure` is set. The decoder must thread that flag
+// through `MirFunction.pure` so downstream LLVM emitters
+// (`mir_generator.osty::mirEmitFnAttrsFromMir`,
+// `lir_proto.osty::lirFnAttrsFromMir`) stamp `readnone` on the
+// `define` line. Without this round-trip the production
+// MIR-JSON path lost the annotation between Go MIR and Osty LLVM
+// emit, leaving `#[pure]` functions un-attributed at the LLVM tier.
+fn testMirJsonDecodePureFunctionEmitsReadnone() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ],
+      "pure": true
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    testing.assert(m.functions[0].pure)
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_pure_test.mir.json", ""), m)
+    testing.assert(lirLowerOK(result))
+    let ir = lirRenderModule(result.module)
+    testing.assert(strings.contains(ir, "readnone"))
+}
+
+// Baseline guard: absent the `pure` JSON field, the decoded
+// function defaults to `pure: false` and the rendered IR must not
+// carry `readnone`. Guards against accidentally stamping the attr
+// on every function regardless of the source flag.
+fn testMirJsonDecodeNonPureFunctionSkipsReadnone() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 0}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ]
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    testing.assert(!m.functions[0].pure)
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_non_pure_test.mir.json", ""), m)
+    testing.assert(lirLowerOK(result))
+    let ir = lirRenderModule(result.module)
+    testing.assert(!strings.contains(ir, "readnone"))
+}
