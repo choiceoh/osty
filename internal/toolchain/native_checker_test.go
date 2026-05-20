@@ -118,6 +118,34 @@ func TestEnsureNativeCheckerReturnsRecursionGuardError(t *testing.T) {
 	}
 }
 
+func TestFilterEnvRemovesInheritedRecursionGuard(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		RecursionGuardEnv + "=0",
+		"HOME=/home/test",
+		RecursionGuardEnv + "=anything",
+	}
+	got := filterEnv(env, RecursionGuardEnv)
+	for _, kv := range got {
+		if strings.HasPrefix(kv, RecursionGuardEnv+"=") {
+			t.Fatalf("filterEnv left a %s entry: %v", RecursionGuardEnv, got)
+		}
+	}
+	final := append(got, RecursionGuardEnv+"=1")
+	seen := 0
+	for _, kv := range final {
+		if strings.HasPrefix(kv, RecursionGuardEnv+"=") {
+			if kv != RecursionGuardEnv+"=1" {
+				t.Fatalf("unexpected guard entry %q in %v", kv, final)
+			}
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("expected exactly one %s=1 entry after append, got %d in %v", RecursionGuardEnv, seen, final)
+	}
+}
+
 func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
 	root := t.TempDir()
 	dest := filepath.Join(root, NativeCheckerBinaryName())

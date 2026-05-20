@@ -174,7 +174,12 @@ func buildNativeChecker(dest string) error {
 	pkgDir := filepath.Join(root, "cmd", "osty-native-checker")
 	cmd := exec.Command(hostOsty, "build", "--backend", "llvm", pkgDir)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), RecursionGuardEnv+"=1")
+	// Strip any pre-existing OSTY_BUILDING_NATIVE_CHECKER from the parent
+	// env before appending the guard. `os.Environ()` reflects whatever the
+	// user exported (including `=0`); the child's `os.Getenv` returns the
+	// first match, so an unfiltered append would let an inherited `=0`
+	// shadow our `=1` and re-enable the recursion.
+	cmd.Env = append(filterEnv(os.Environ(), RecursionGuardEnv), RecursionGuardEnv+"=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -204,13 +209,35 @@ func buildNativeChecker(dest string) error {
 
 func defaultVerifyOstySelfCached(root string) error {
 	if _, _, err := selfhostcache.ResolveBinary(root); err != nil {
+		// `selfhostcache.ResolveBinary` accepts OSTY_SELF_BIN, in-tree
+		// toolchain/.osty/out/{debug,release}/llvm/osty-self builds, AND the
+		// content-addressed `.osty/cache/self-host/` entries — so phrase the
+		// failure as a generic "no resolvable osty-self" rather than naming
+		// only the cache, and point at the install-self recipe as the
+		// canonical fix.
 		return fmt.Errorf(
-			"LLVM-built osty-native-checker requires a cached osty-self; "+
-				"run `osty install-self` to populate %s: %w",
+			"LLVM-built osty-native-checker requires a resolvable osty-self "+
+				"(OSTY_SELF_BIN override, toolchain/.osty/out/{debug,release}/llvm/osty-self, "+
+				"or `.osty/cache/self-host/`); run `osty install-self` to populate %s: %w",
 			selfhostcache.CacheDirName, err,
 		)
 	}
 	return nil
+}
+
+// filterEnv returns a copy of env with all `<key>=...` entries removed.
+// Used to prevent inherited assignments from shadowing a value we are
+// about to append.
+func filterEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // copyExecutable streams src to dst with 0755 perm. Unlike os.Rename it
