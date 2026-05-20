@@ -1,38 +1,11 @@
 package selfhost
 
 import (
-	"sync/atomic"
 	"unicode/utf8"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
-
-// astbridgeLowerCount records every time a FrontendRun materializes
-// the *ast.File via the astbridge-based astLowerPublicFile adapter.
-// It is the single source of truth for "did this code path touch the
-// runtime.golegacy.astbridge bootstrap bridge?" — tests use it to pin
-// astbridge-free code paths (e.g., the native resolve wedge) and to
-// detect regressions when a would-be-native path silently falls back
-// to the Go AST. Counter is package-global because FrontendRun.File()
-// is the only astbridge entry point for the resolve/check/llvmgen
-// callers. See ResolveStructuredFromRun / cmd/osty case "resolve" for
-// the intended zero-bump usage.
-var astbridgeLowerCount int64
-
-// AstbridgeLowerCount returns the total number of astbridge-based
-// *ast.File lowerings performed since process start (or since the
-// last ResetAstbridgeLowerCount call).
-func AstbridgeLowerCount() int64 {
-	return atomic.LoadInt64(&astbridgeLowerCount)
-}
-
-// ResetAstbridgeLowerCount zeros the counter. Intended for tests that
-// want to measure astbridge activity over a specific code window.
-func ResetAstbridgeLowerCount() {
-	atomic.StoreInt64(&astbridgeLowerCount, 0)
-}
 
 // Lex runs the bootstrapped pure-Osty lexer and adapts its stream to the
 // compiler's public token surface.
@@ -46,8 +19,8 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 
 // FrontendRun is one complete self-hosted front-end pass over a source file.
 // It owns the shared lex stream, parser arena, public token adaptation,
-// lowered AST, and diagnostic adaptation so callers do not accidentally
-// re-run the front end.
+// and diagnostic adaptation so callers do not accidentally re-run the
+// front end. Use LowerPublicFileFromRun when a public *ast.File is needed.
 type FrontendRun struct {
 	text     string
 	rt       runeTable
@@ -56,7 +29,6 @@ type FrontendRun struct {
 	parser   *OstyParser
 	toks     []token.Token
 	comments []token.Comment
-	file     *ast.File
 	semantic *AstFile
 	lexDiags []*diag.Diagnostic
 	diags    []*diag.Diagnostic
@@ -151,29 +123,6 @@ func (r *FrontendRun) Tokens() []token.Token {
 func (r *FrontendRun) Comments() []token.Comment {
 	r.ensureLexAdapted()
 	return r.comments
-}
-
-// File returns the public semantic AST for this front-end pass.
-//
-// First call materializes the *ast.File from the already-lowered semantic
-// arena via astLowerPublicFile. Subsequent calls return the cached result
-// without touching astbridge again, so each FrontendRun contributes at most one
-// lowering to AstbridgeLowerCount regardless of how many callers poke it.
-//
-// Deprecated: production front-end paths should keep FrontendRun / arena /
-// structured results as the source of truth. Use LowerPublicFileFromRun only at
-// explicit public-AST compatibility boundaries.
-func (r *FrontendRun) File() *ast.File {
-	if r.file != nil {
-		return r.file
-	}
-	atomic.AddInt64(&astbridgeLowerCount, 1)
-	arena := r.parser.arena
-	if semantic := r.semanticAstFile(); semantic != nil && semantic.arena != nil {
-		arena = semantic.arena
-	}
-	r.file = lowerPublicFileFromArena(arena, r.Tokens())
-	return r.file
 }
 
 // astFile wraps the parser arena in the self-host AstFile handle without

@@ -179,12 +179,16 @@ Go-native `runCheckFileLegacy` / `runCheckPackageLegacy` /
 - `osty lint DIR` / workspace lint 도 arena-first loader 뒤에 Go resolver +
   linter 를 태운다. lint identity 모델 포팅 전까지 astbridge 제거 대상이다.
 
-회귀 테스트:
+회귀 테스트 (모두 happy-path smoke; astbridge 우회는 이제 `FrontendRun.File()`
+부재로 컴파일 타임 강제):
 - `TestCheckCLIDefaultPathExitsZero` — `osty check FILE` 기본 경로 exit 0
-- `TestRunCheckFileDefaultPathIsAstbridgeFree` — 기본 check 경로 astbridge 0
-- `TestRunResolve{File,Package}HappyPathIsAstbridgeFree` +
-  `TestRun{Check,Typecheck}{File,Package,Workspace}NativeIsAstbridgeFree`
-  — resolve/check/typecheck native/default 경로 astbridge 0
+- `TestRunCheckFileDefaultPathHappyPath` — 기본 check 경로 in-process smoke
+- `TestRunResolve{File,Package}HappyPath` +
+  `TestRunCheck{Package,Workspace}NativeHappyPath` +
+  `TestRunCheckFileNativeDumpTelemetry` +
+  `TestRunTypecheck{Package,Workspace}NativeHappyPath` +
+  `TestRunTypecheckFileNativeDumpTelemetry`
+  — resolve/check/typecheck native/default 경로 exit-zero + 텔레메트리 헤더
 - ~~`TestGoGenerateSelfhostLeavesGeneratedArtifactsClean`~~ — **삭제됨
   (2026-04-23, PR #854)**. Osty→Go bootstrap transpiler 가 retire 되면서
   `go generate ./internal/selfhost` regen 파이프라인 자체가 사라졌고,

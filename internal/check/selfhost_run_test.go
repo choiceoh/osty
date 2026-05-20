@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/parser"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestSelfhostRunStaysOffPublicASTCompatibility(t *testing.T) {
@@ -14,11 +13,7 @@ func TestSelfhostRunStaysOffPublicASTCompatibility(t *testing.T) {
 		t.Fatal("ParseRun returned nil")
 	}
 
-	selfhost.ResetAstbridgeLowerCount()
 	result := SelfhostRun(run, Opts{Source: src})
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("SelfhostRun astbridge count = %d, want 0", got)
-	}
 	if result == nil || result.NativeCheckResult == nil {
 		t.Fatalf("SelfhostRun result = %#v, want structured native check result", result)
 	}

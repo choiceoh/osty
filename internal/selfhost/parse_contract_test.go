@@ -167,10 +167,4 @@ func TestLowerPublicFileUsesSelfhostStableNodeIDs(t *testing.T) {
 	if got, want := stmt.Value.(*ast.CallExpr).ID, ast.NodeID(callIdx+2); got != want {
 		t.Fatalf("call ID = %d, want selfhost arena stable ID %d", got, want)
 	}
-
-	fromRunFile := run.File()
-	fromRunFn := fromRunFile.Decls[0].(*ast.FnDecl)
-	if fromRunFn.ID != fn.ID {
-		t.Fatalf("run.File fn ID = %d, want same stable ID %d", fromRunFn.ID, fn.ID)
-	}
 }

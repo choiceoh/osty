@@ -80,23 +80,17 @@ func TestCheckDiagnosticsAsDiagDropsEmptyRecords(t *testing.T) {
 	}
 }
 
-// TestCheckDiagnosticsAsDiagIsAstbridgeFree pins the invariant that
-// record-to-diagnostic conversion — purely byte-offset → line/column
-// math plus struct shaping — never walks into astbridge. Combined
-// with the existing CheckSourceStructured / CheckStructuredFromRun
-// astbridge-free guarantees, this proves a future native CLI path
-// (parse → check → convert → print) stays at count == 0.
-func TestCheckDiagnosticsAsDiagIsAstbridgeFree(t *testing.T) {
+// TestCheckDiagnosticsAsDiagConvertsDiagnostics exercises the
+// `CheckDiagnosticRecord` → `*diag.Diagnostic` converter end-to-end
+// and asserts at least one diagnostic surfaces when the source has
+// a real violation.
+func TestCheckDiagnosticsAsDiagConvertsDiagnostics(t *testing.T) {
 	src := []byte(`#[intrinsic]
 fn bad() -> Int { 42 }
 `)
 	checked := selfhost.CheckSourceStructured(src)
 
-	selfhost.ResetAstbridgeLowerCount()
 	diags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("CheckDiagnosticsAsDiag: AstbridgeLowerCount = %d, want 0", got)
-	}
 	if len(diags) == 0 {
 		t.Fatalf("expected at least one converted diagnostic")
 	}

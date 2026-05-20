@@ -9,10 +9,9 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
-	"github.com/osty/osty/internal/selfhost"
 )
 
-func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testing.T) {
+func TestMaterializePublicCompatibilityIsLazyAndIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -28,14 +27,9 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 		t.Fatal(err)
 	}
 
-	selfhost.ResetAstbridgeLowerCount()
-
 	pkg, err := LoadPackageForNative(dir)
 	if err != nil {
 		t.Fatalf("LoadPackageForNative: %v", err)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("after LoadPackageForNative: astbridge count = %d, want 0", got)
 	}
 	for _, pf := range pkg.Files {
 		if pf.Run == nil {
@@ -71,14 +65,8 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 	if got := idx[helperOff]; got != "function" {
 		t.Fatalf("NativeIdentKindIndex[%d] = %q, want function (idx=%#v)", helperOff, got, idx)
 	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("after native package queries: astbridge count = %d, want 0", got)
-	}
 
 	pkg.MaterializePublicCompatibility()
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("after MaterializePublicCompatibility: astbridge count = %d, want 0", got)
-	}
 	for _, pf := range pkg.Files {
 		if pf.File == nil {
 			t.Fatalf("MaterializePublicCompatibility left File nil for %s", pf.Path)
@@ -86,9 +74,6 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 	}
 
 	pkg.MaterializePublicCompatibility()
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("second MaterializePublicCompatibility: astbridge count = %d, want 0", got)
-	}
 }
 
 func TestWorkspaceLoadPackageNativeDiscoversDepsWithoutPublicAST(t *testing.T) {
@@ -110,8 +95,6 @@ fn main() {
 		t.Fatal(err)
 	}
 
-	selfhost.ResetAstbridgeLowerCount()
-
 	ws, err := NewWorkspace(root)
 	if err != nil {
 		t.Fatalf("NewWorkspace: %v", err)
@@ -131,9 +114,6 @@ fn main() {
 				t.Fatalf("package %q file %s materialized public AST during native workspace load", key, pf.Path)
 			}
 		}
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("after workspace LoadPackageNative: astbridge count = %d, want 0", got)
 	}
 }
 

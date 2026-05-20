@@ -2,9 +2,8 @@
 //
 // Core selfhost consumers should stay arena-native and use FrontendRun /
 // AstArena APIs directly. This file is intentionally isolated behind
-// FrontendRun.File and LowerPublicFileFromRun for legacy callers that still
-// need *ast.File while the checker/resolver/LLVM paths migrate away from the
-// Go astbridge surface.
+// LowerPublicFileFromRun for legacy callers that still need *ast.File while
+// the checker/resolver/LLVM paths migrate away from the Go astbridge surface.
 use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     struct File {}
     struct Decl {}

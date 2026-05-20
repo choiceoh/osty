@@ -363,17 +363,10 @@ use std.fs as strings
 	}
 }
 
-// TestResolveStructuredFromRunIsAstbridgeFree pins the core wedge
-// promise: calling Run + Diagnostics + ResolveStructuredFromRun on a
-// clean single-file source must not trigger astLowerPublicFile, i.e.
-// AstbridgeLowerCount stays at zero. The same test then calls
-// run.File() and verifies the counter bumps exactly once, confirming
-// that astbridge is still reachable for fallbacks (for example the
-// --show-scopes path in `osty resolve`) and that the counter is wired
-// to the right site. This is the regression net for future wedges:
-// any new native path that accidentally re-introduces an *ast.File
-// detour will bump the counter and fail this test.
-func TestResolveStructuredFromRunIsAstbridgeFree(t *testing.T) {
+// TestResolveStructuredFromRunSmoke exercises the core wedge:
+// Run + Diagnostics + ResolveStructuredFromRun on a clean single-file
+// source completes without diagnostics.
+func TestResolveStructuredFromRunSmoke(t *testing.T) {
 	src := []byte(`fn helper(x: Int) -> Int {
     x
 }
@@ -382,29 +375,12 @@ fn main() {
     let value = helper(1)
 }
 `)
-	selfhost.ResetAstbridgeLowerCount()
-
 	run := selfhost.Run(src)
 	_ = run.Diagnostics()
 	resolved := selfhost.ResolveStructuredFromRun(run)
 
 	if resolved.Summary.Diagnostics != 0 {
 		t.Fatalf("clean source produced diagnostics: %#v", resolved.Diagnostics)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after Run + Diagnostics + ResolveStructuredFromRun = %d, want 0 (the arena path must not touch astbridge)", got)
-	}
-
-	if file := run.File(); file == nil {
-		t.Fatalf("run.File() returned nil")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 1 {
-		t.Fatalf("AstbridgeLowerCount after run.File() = %d, want 1 (counter should be wired to the sole astbridge entry point)", got)
-	}
-
-	_ = run.File()
-	if got := selfhost.AstbridgeLowerCount(); got != 1 {
-		t.Fatalf("AstbridgeLowerCount after cached run.File() = %d, want 1 (re-calling File() should not re-lower)", got)
 	}
 }
 
@@ -500,16 +476,12 @@ fn main() {
 			wantDiags := run.Diagnostics()
 			wantResult := selfhost.ResolveStructuredFromRunForPath(run, tc.path)
 
-			selfhost.ResetAstbridgeLowerCount()
 			gotDiags, gotResult := selfhost.ResolveFromSource(tc.src, tc.path)
 			if !reflect.DeepEqual(wantDiags, gotDiags) {
 				t.Fatalf("ResolveFromSource parse diagnostics diverge\nwant=%#v\ngot=%#v", wantDiags, gotDiags)
 			}
 			if !reflect.DeepEqual(wantResult, gotResult) {
 				t.Fatalf("ResolveFromSource result diverges\nwant=%#v\ngot=%#v", wantResult, gotResult)
-			}
-			if got := selfhost.AstbridgeLowerCount(); got != 0 {
-				t.Fatalf("ResolveFromSource: AstbridgeLowerCount = %d, want 0", got)
 			}
 		})
 	}
