@@ -9,7 +9,7 @@ import (
 )
 
 // TestTypecheckCLINativeCleanSourcePrintsTypes confirms `osty
-// typecheck --native FILE` on clean input exits 0 AND emits at least
+// typecheck FILE` on clean input exits 0 AND emits at least
 // one `line:col-line:col\tType` row per printNativeTypes. The exact
 // node set depends on the native checker's recording, so we only
 // assert the presence of the `Int` type for the scalar bindings
@@ -27,7 +27,7 @@ func TestTypecheckCLINativeCleanSourcePrintsTypes(t *testing.T) {
 	}
 	got := runOstyCLI(t, "typecheck", path)
 	if got.exit != 0 {
-		t.Fatalf("osty typecheck --native exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty typecheck exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
@@ -39,7 +39,7 @@ func TestTypecheckCLINativeCleanSourcePrintsTypes(t *testing.T) {
 
 // TestTypecheckCLINativeSurfacesTypeError pins that a clear type
 // mismatch (Int binding initialized with String) still surfaces a
-// typed-check diagnostic on stderr under --native.
+// typed-check diagnostic on stderr.
 func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
@@ -51,7 +51,7 @@ func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
 	}
 	got := runOstyCLI(t, "typecheck", path)
 	if got.exit != 1 {
-		t.Fatalf("osty typecheck --native exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty typecheck exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if !strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr missing error[ prefix:\n%s", got.stderr)
@@ -162,7 +162,7 @@ func TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes(t *testing.T) {
 	}
 	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty typecheck --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty typecheck DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if !strings.Contains(got.stdout, "# "+bPath) {
 		t.Fatalf("stdout missing `# %s` header:\n%s", bPath, got.stdout)
@@ -188,7 +188,7 @@ fn main() {
 	}
 	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty typecheck --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty typecheck DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[E0703]") {
 		t.Fatalf("stderr retained missing-method E0703 for std.strings surface:\n%s", got.stderr)
@@ -224,7 +224,7 @@ fn main() {
 	}
 	got := runOstyCLI(t, "typecheck", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty typecheck --native WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty typecheck WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if !strings.Contains(got.stdout, "# "+appPath) {
 		t.Fatalf("stdout missing `# %s` header:\n%s", appPath, got.stdout)
@@ -339,10 +339,10 @@ fn main() {
 	}
 }
 
-// TestRunTypecheckFileNativeDumpTelemetry exercises the typecheck
-// --native CLI body end-to-end (including the type dump which iterates
-// TypedNodes) and asserts the dump-native-diags telemetry header
-// lands on stderr.
+// TestRunTypecheckFileNativeDumpTelemetry exercises the native
+// typecheck CLI body end-to-end (including the type dump which
+// iterates TypedNodes) and asserts the dump-native-diags telemetry
+// header lands on stderr.
 func TestRunTypecheckFileNativeDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1

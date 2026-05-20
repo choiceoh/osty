@@ -116,10 +116,9 @@ pipeline** by default: `parser.ParseRun` produces a selfhost `FrontendRun`
 (no astbridge lowering), then `selfhost.CheckStructuredFromRun` runs the
 Osty-native resolver + checker in one pass, emitting structured records
 that `selfhost.CheckDiagnosticsAsDiag` lifts into the CLI's `diag.Diagnostic`
-shape. The old Go-hosted `--legacy` check/typecheck escape hatch and
-`check.File` entrypoint have been removed; `--native` remains accepted only as
-a backwards-compatible no-op (the global `-native` flag defaults to `true`, and
-`cliFlags.native` is no longer consulted to pick a checker backend). `osty resolve` is also self-host-first. Package
+shape. The Go-hosted `--legacy` check/typecheck escape hatch, the `check.File`
+entrypoint, and the no-op `--native` flag have all been removed; the self-host
+pipeline is the only path. `osty resolve` is also self-host-first. Package
 and workspace loaders for `pipeline`, `build`, `run`, `doc`, `lsp`, and
 `cihost` use arena-first `FrontendRun` parsing. Some compatibility wrappers
 still call `EnsureFiles` / `MaterializeCanonicalSources` to hand downstream
