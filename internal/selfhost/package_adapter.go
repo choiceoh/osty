@@ -3,6 +3,7 @@ package selfhost
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/api"
@@ -92,20 +93,58 @@ type selfhostPackageTokenLayout struct {
 func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPackageTokenLayout, error) {
 	arena := emptyAstArena()
 	layout := &selfhostPackageTokenLayout{}
-	haveFile := false
-	for _, file := range files {
+
+	// Per-file lex + parse + semantic clone are independent; the
+	// `ostyTagType` and `frontPositionCache` package globals they touch
+	// are mutex-protected, so concurrent invocation is safe. Fan out
+	// across GOMAXPROCS while the deterministic arena/layout merge
+	// stays strictly serial below — the merge depends on cumulative
+	// `tokenBase` / `fileIdx` from prior iterations.
+	//
+	// Memory note: a naive "spawn all parsers, then merge" model holds
+	// every parsed AST live at once (200 files × multi-MB toolchain
+	// sources easily exceeds 16 GB). The pipeline below caps in-flight
+	// parses to `workers` by holding each parser's semaphore slot until
+	// the merge consumer drains it — `parsedSlot` is cleared right
+	// after merging file i so the GC can reclaim the AST before the
+	// next file's parse fills its slot.
+	//
+	// Toolchain-scale install-self builds (200 files) used to spend
+	// ~9.4s here serially; the bounded-parallel fan-out cuts that to
+	// GOMAXPROCS-divided wall-time while keeping peak memory
+	// proportional to GOMAXPROCS, not file count.
+	type parsedFile struct {
+		lexed  *OstyLexedSource
+		parsed *AstFile
+		err    error
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	parseOne := func(file PackageCheckFile) parsedFile {
 		if len(file.Source) == 0 {
-			continue
+			return parsedFile{}
 		}
 		lexed := ostyLexSource(string(file.Source))
-		parsed := astParseLexedSource(lexed)
-		if parsed == nil || parsed.arena == nil {
-			return nil, nil, fmt.Errorf("selfhost package adapter: parse produced no AST")
+		ast := astParseLexedSource(lexed)
+		if ast == nil || ast.arena == nil {
+			return parsedFile{err: fmt.Errorf("selfhost package adapter: parse produced no AST")}
 		}
-		if len(parsed.arena.errors) > 0 {
-			return nil, nil, fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(parsed))
+		if len(ast.arena.errors) > 0 {
+			return parsedFile{err: fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(ast))}
 		}
-		parsed = selfhostSemanticAstFile(parsed)
+		return parsedFile{lexed: lexed, parsed: selfhostSemanticAstFile(ast)}
+	}
+
+	mergeOne := func(p parsedFile, file PackageCheckFile) {
+		if p.parsed == nil {
+			return
+		}
 		tokenBase := len(layout.starts)
 		fileIdx := -1
 		displayName := file.Path
@@ -117,9 +156,135 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 			layout.files = append(layout.files, displayName)
 			layout.fileIDs = append(layout.fileIDs, file.SourceFileID)
 		}
-		selfhostAppendTokenLayout(layout, lexed, file.Base, fileIdx)
-		selfhostMergeAstArena(arena, parsed.arena, tokenBase)
-		haveFile = true
+		selfhostAppendTokenLayout(layout, p.lexed, file.Base, fileIdx)
+		selfhostMergeAstArena(arena, p.parsed.arena, tokenBase)
+	}
+
+	haveFile := false
+	if workers <= 1 || len(files) <= 1 {
+		for _, file := range files {
+			p := parseOne(file)
+			if p.err != nil {
+				return nil, nil, p.err
+			}
+			if p.parsed != nil {
+				haveFile = true
+				mergeOne(p, file)
+			}
+		}
+	} else {
+		// Bounded-parallel pipeline: per-file done channels gate the
+		// merge in input order while a `workers`-deep semaphore caps
+		// the number of parsers in flight. Each parser's sem slot is
+		// released by the merge consumer after the slot is drained,
+		// so a slow parse (mir_generator.osty is 23k lines) cannot
+		// open the floodgates for the rest of the package.
+		//
+		// `cancelCh` lets the consumer fail fast on the first parse
+		// error without paying the worst-case "wait for every parse
+		// in flight" tail latency. The producer skips queueing new
+		// work past the cancellation point, and any unstarted worker
+		// short-circuits past `parseOne` and releases its sem slot
+		// itself; consumer drain reads sem non-blocking so it
+		// doesn't matter who released it.
+		parsedSlots := make([]parsedFile, len(files))
+		done := make([]chan struct{}, len(files))
+		for i := range done {
+			done[i] = make(chan struct{})
+		}
+		sem := make(chan struct{}, workers)
+		cancelCh := make(chan struct{})
+		cancelled := false
+		cancel := func() {
+			if !cancelled {
+				cancelled = true
+				close(cancelCh)
+			}
+		}
+		go func() {
+			for i := range files {
+				if len(files[i].Source) == 0 {
+					close(done[i])
+					continue
+				}
+				select {
+				case sem <- struct{}{}:
+				case <-cancelCh:
+					// Cancelled while waiting for a sem slot —
+					// close remaining done channels so the consumer
+					// drain returns immediately.
+					close(done[i])
+					for j := i + 1; j < len(files); j++ {
+						close(done[j])
+					}
+					return
+				}
+				i := i
+				go func() {
+					// Convert any panic inside the selfhost lexer /
+					// parser into a parsedFile.err so the serial
+					// merge consumer surfaces it as a normal package
+					// adapter error. The caller's `defer
+					// recoverCheckResult` (CheckPackageStructured)
+					// or InspectPackageStructured recover is on the
+					// host goroutine and cannot reach panics raised
+					// here — recover does not cross goroutine
+					// boundaries.
+					defer func() {
+						if r := recover(); r != nil {
+							parsedSlots[i] = parsedFile{err: fmt.Errorf("selfhost package adapter: parse panic: %v", r)}
+							close(done[i])
+						}
+					}()
+					// Skip expensive parse work when an earlier file
+					// already errored. Release the sem slot we
+					// acquired so the consumer's non-blocking drain
+					// doesn't double-pull.
+					select {
+					case <-cancelCh:
+						<-sem
+						close(done[i])
+						return
+					default:
+					}
+					parsedSlots[i] = parseOne(files[i])
+					close(done[i])
+				}()
+			}
+		}()
+		releaseSem := func(idx int) {
+			if len(files[idx].Source) == 0 {
+				return
+			}
+			select {
+			case <-sem:
+			default:
+			}
+		}
+		for i, file := range files {
+			<-done[i]
+			p := parsedSlots[i]
+			parsedSlots[i] = parsedFile{}
+			releaseSem(i)
+			if p.err != nil {
+				cancel()
+				// Drain remaining done channels so producer + worker
+				// goroutines exit cleanly. Cancellation makes this
+				// fast: unstarted workers short-circuit, the
+				// producer abandons the queue, and only the parses
+				// already past their cancel check still run to
+				// completion.
+				for j := i + 1; j < len(files); j++ {
+					<-done[j]
+					releaseSem(j)
+				}
+				return nil, nil, p.err
+			}
+			if p.parsed != nil {
+				haveFile = true
+				mergeOne(p, file)
+			}
+		}
 	}
 	if !haveFile {
 		return nil, layout, nil
