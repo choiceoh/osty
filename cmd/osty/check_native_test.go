@@ -9,7 +9,7 @@ import (
 )
 
 // TestCheckCLINativeCleanSourceExitsZero is the subprocess-level smoke
-// test: `osty check --native FILE` on well-typed input succeeds with
+// test: `osty check FILE` on well-typed input succeeds with
 // exit 0 and produces no error output. Validates end-to-end
 // invocation (flag parsing, dispatch, conversion, exit code) without
 // depending on the in-process counter.
@@ -24,9 +24,9 @@ func TestCheckCLINativeCleanSourceExitsZero(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "check", "--native", path)
+	got := runOstyCLI(t, "check", path)
 	if got.exit != 0 {
-		t.Fatalf("osty check --native exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty check exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
@@ -46,9 +46,9 @@ fn bad() -> Int {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "check", "--native", path)
+	got := runOstyCLI(t, "check", path)
 	if got.exit != 1 {
-		t.Fatalf("osty check --native exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty check exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if !strings.Contains(got.stderr, "error[E0773]") {
 		t.Fatalf("stderr missing E0773:\n%s", got.stderr)
@@ -71,7 +71,7 @@ func TestCheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	got := runOstyCLI(t, "--inspect", "check", "--native", path)
+	got := runOstyCLI(t, "--inspect", "check", path)
 	if got.exit != 0 {
 		t.Fatalf("exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -126,7 +126,7 @@ fn main() {
 
 // TestCheckCLINativePackageCleanSourceExitsZero is the DIR sibling
 // of the single-file happy-path test. A two-file package (no cross-
-// file references) should pass `osty check --native DIR` with exit
+// file references) should pass `osty check DIR` with exit
 // 0 and no stderr error output.
 func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
 	dir := t.TempDir()
@@ -144,9 +144,9 @@ func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty check DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr contained error output on clean package:\n%s", got.stderr)
@@ -165,9 +165,9 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty check DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[E0703]") {
 		t.Fatalf("stderr retained missing-method E0703 for std.strings surface:\n%s", got.stderr)
@@ -193,7 +193,7 @@ fn bad() -> Int {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
@@ -233,9 +233,9 @@ fn main() {
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := runOstyCLI(t, "check", "--native", dir)
+	got := runOstyCLI(t, "check", dir)
 	if got.exit != 0 {
-		t.Fatalf("osty check --native WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+		t.Fatalf("osty check WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr contained error output on clean workspace:\n%s", got.stderr)
@@ -436,9 +436,9 @@ fn main() {
 	}
 }
 
-// TestRunCheckFileNativeDumpTelemetry exercises the --native CLI path
-// end-to-end (CheckStructuredFromRun + CheckDiagnosticsAsDiag) and
-// asserts the dump-native-diags telemetry header lands on stderr.
+// TestRunCheckFileNativeDumpTelemetry exercises the native check CLI
+// path end-to-end (CheckStructuredFromRun + CheckDiagnosticsAsDiag)
+// and asserts the dump-native-diags telemetry header lands on stderr.
 func TestRunCheckFileNativeDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
@@ -484,11 +484,10 @@ func TestRunCheckFileNativeDumpTelemetry(t *testing.T) {
 
 // TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
 // companion to TestRunCheckFileNativeDumpTelemetry: after the
-// 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` with no
-// flag at all routes through the self-host arena pipeline the same
-// way `--native` does. Run the subprocess CLI so the default
-// actually goes through clicmd.ParseArgs dispatch, then verify exit 0 on
-// a well-typed input. Phase 1c.5 retired the Go-hosted escape
+// 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` routes
+// through the self-host arena pipeline. Run the subprocess CLI so
+// dispatch actually goes through clicmd.ParseArgs, then verify exit 0
+// on a well-typed input. Phase 1c.5 retired the Go-hosted escape
 // hatch — the self-host path is the only path now.
 func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 	dir := t.TempDir()
