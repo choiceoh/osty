@@ -179,19 +179,46 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 		// released by the merge consumer after the slot is drained,
 		// so a slow parse (mir_generator.osty is 23k lines) cannot
 		// open the floodgates for the rest of the package.
+		//
+		// `cancelCh` lets the consumer fail fast on the first parse
+		// error without paying the worst-case "wait for every parse
+		// in flight" tail latency. The producer skips queueing new
+		// work past the cancellation point, and any unstarted worker
+		// short-circuits past `parseOne` and releases its sem slot
+		// itself; consumer drain reads sem non-blocking so it
+		// doesn't matter who released it.
 		parsedSlots := make([]parsedFile, len(files))
 		done := make([]chan struct{}, len(files))
 		for i := range done {
 			done[i] = make(chan struct{})
 		}
 		sem := make(chan struct{}, workers)
+		cancelCh := make(chan struct{})
+		cancelled := false
+		cancel := func() {
+			if !cancelled {
+				cancelled = true
+				close(cancelCh)
+			}
+		}
 		go func() {
 			for i := range files {
 				if len(files[i].Source) == 0 {
 					close(done[i])
 					continue
 				}
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-cancelCh:
+					// Cancelled while waiting for a sem slot —
+					// close remaining done channels so the consumer
+					// drain returns immediately.
+					close(done[i])
+					for j := i + 1; j < len(files); j++ {
+						close(done[j])
+					}
+					return
+				}
 				i := i
 				go func() {
 					// Convert any panic inside the selfhost lexer /
@@ -209,28 +236,47 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 							close(done[i])
 						}
 					}()
+					// Skip expensive parse work when an earlier file
+					// already errored. Release the sem slot we
+					// acquired so the consumer's non-blocking drain
+					// doesn't double-pull.
+					select {
+					case <-cancelCh:
+						<-sem
+						close(done[i])
+						return
+					default:
+					}
 					parsedSlots[i] = parseOne(files[i])
 					close(done[i])
 				}()
 			}
 		}()
+		releaseSem := func(idx int) {
+			if len(files[idx].Source) == 0 {
+				return
+			}
+			select {
+			case <-sem:
+			default:
+			}
+		}
 		for i, file := range files {
 			<-done[i]
 			p := parsedSlots[i]
 			parsedSlots[i] = parsedFile{}
-			if len(file.Source) != 0 {
-				<-sem
-			}
+			releaseSem(i)
 			if p.err != nil {
-				// Drain remaining done channels so producer goroutines
-				// can exit cleanly; we already abort the package, so
-				// the leftover ASTs will be GC'd along with the slot
-				// slice once this function returns.
+				cancel()
+				// Drain remaining done channels so producer + worker
+				// goroutines exit cleanly. Cancellation makes this
+				// fast: unstarted workers short-circuit, the
+				// producer abandons the queue, and only the parses
+				// already past their cancel check still run to
+				// completion.
 				for j := i + 1; j < len(files); j++ {
 					<-done[j]
-					if len(files[j].Source) != 0 {
-						<-sem
-					}
+					releaseSem(j)
 				}
 				return nil, nil, p.err
 			}
