@@ -572,6 +572,15 @@ func subcommandSpecs(cmd string) []FlagSpec {
 			Flag("no-default-features", "", "drop manifest default features"),
 			OptionDefault("backend", "", "llvm", "code generation backend"),
 			Option("emit", "", "artifact mode"),
+			// internal: install-self's bootstrap fork passes this; the
+			// global pre-parser must accept it so the flag reaches
+			// runBuild's flag set instead of being rejected as
+			// unknown. Without this entry, `osty install-self`
+			// failed before the forked osty even started parsing its
+			// own flags, leaving the bootstrap path unreachable in
+			// environments where the registry / cached osty-self
+			// fallback is unavailable.
+			Flag("bootstrap-stage0", "", "internal: allow install-self bootstrap stage0 emitter when osty-self is missing"),
 		}
 	case "run":
 		return []FlagSpec{

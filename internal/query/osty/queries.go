@@ -570,8 +570,15 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	// cannot be content-compared cheaply. Downstream ResolvePackage supplies
 	// the real cutoff via its semantic output hash, so BuildPackage just bumps
 	// computedAt on every rerun.
+	// Heavy front-end + lowering queries carry `backend.BeginPhase`
+	// markers so `OSTY_BUILD_PHASE_TIMING=1` captures the per-package
+	// cost of parse / resolve / check / IR-lower / MIR-lower for the
+	// install-self bootstrap critical path. Marker fires only on the
+	// first invocation per query key (subsequent Fetches hit the
+	// query cache and skip the lambda entirely).
 	qs.BuildPackage = query.Register(db, "BuildPackage",
 		func(ctx *query.Ctx, dir string) *resolve.Package {
+			defer backend.BeginPhase("frontend.BuildPackage")()
 			files := inp.PackageFiles.Fetch(ctx, dir)
 			metadata := PackageMetadata{Name: packageNameFromDir(dir)}
 			if inp.PackageMetadata.HasFetch(ctx, dir) {
@@ -607,6 +614,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 	qs.ResolvePackage = query.Register(db, "ResolvePackage",
 		func(ctx *query.Ctx, dir string) *ResolvedPackage {
+			defer backend.BeginPhase("frontend.ResolvePackage")()
 			built := qs.BuildPackage.Fetch(ctx, dir)
 			// Allocate a brand-new Package with copied PackageFile
 			// entries so resolve.ResolvePackage's in-place mutation
@@ -663,6 +671,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 	qs.CheckPackage = query.Register(db, "CheckPackage",
 		func(ctx *query.Ctx, dir string) *check.Result {
+			defer backend.BeginPhase("frontend.CheckPackage")()
 			rp := qs.ResolvePackage.Fetch(ctx, dir)
 			if rp == nil || rp.pkg == nil {
 				return &check.Result{}
@@ -686,6 +695,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	// corrupt the BuildPackage cache), and runs cross-package resolution.
 	qs.ResolveWorkspace = query.Register(db, "ResolveWorkspace",
 		func(ctx *query.Ctx, rootDir string) *ResolvedWorkspace {
+			defer backend.BeginPhase("frontend.ResolveWorkspace")()
 			members := workspaceMembersForRoot(ctx, inp, rootDir)
 			if len(members) == 0 {
 				return nil
@@ -760,6 +770,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	// reusing the first-class graph captured by ResolveWorkspace.
 	qs.CheckWorkspace = query.Register(db, "CheckWorkspace",
 		func(ctx *query.Ctx, rootDir string) *WorkspaceCheckResult {
+			defer backend.BeginPhase("frontend.CheckWorkspace")()
 			rw := qs.ResolveWorkspace.Fetch(ctx, rootDir)
 			if rw == nil || len(rw.resolved) == 0 {
 				return &WorkspaceCheckResult{}
@@ -790,6 +801,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 	qs.LowerIRPackage = query.Register(db, "LowerIRPackage",
 		func(ctx *query.Ctx, key LowerKey) LowerIRResult {
+			defer backend.BeginPhase("frontend.LowerIRPackage")()
 			key = key.normalized()
 			if key.WorkspaceRoot != "" {
 				rw := qs.ResolveWorkspace.Fetch(ctx, key.WorkspaceRoot)
@@ -826,6 +838,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 	qs.LowerMIRPackage = query.Register(db, "LowerMIRPackage",
 		func(ctx *query.Ctx, key LowerKey) LowerMIRResult {
+			defer backend.BeginPhase("frontend.LowerMIRPackage")()
 			key = key.normalized()
 			lowered := qs.LowerIRPackage.Fetch(ctx, key)
 			if lowered.Err != nil {
