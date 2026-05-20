@@ -2,6 +2,7 @@ package selfhost
 
 import (
 	"crypto/sha256"
+	"encoding"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -691,6 +692,24 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	packageID := stableResolveID("package", packageKey)
 	result.PackageID = packageID
 
+	// Precompute one sha256-state snapshot per ID kind with the
+	// (tag, packageKey) prefix already absorbed. Each ID we emit then
+	// resumes from the snapshot and hashes only the per-record
+	// suffix. On the install-self toolchain build, packageKey is
+	// ~10 kB (joined `\x00` of every file path); previously each of
+	// the ~50 k IDs hashed all 10 kB end-to-end, dominating the
+	// assignResolveIDs phase. Resuming from a snapshot drops the
+	// per-ID hash to its few-hundred-byte suffix and shaves a couple
+	// of seconds off the phase — output bytes are identical because
+	// sha256 is order-preserving over the same byte sequence.
+	declPrefix := newPrefixedResolveHasher("decl", packageKey)
+	symbolPrefix := newPrefixedResolveHasher("symbol", packageKey)
+	bindingPrefix := newPrefixedResolveHasher("binding", packageKey)
+	refPrefix := newPrefixedResolveHasher("ref", packageKey)
+	typeRefPrefix := newPrefixedResolveHasher("type-ref", packageKey)
+	symbolTargetPrefix := newPrefixedResolveHasher("symbol-target", packageKey)
+	diagnosticPrefix := newPrefixedResolveHasher("diagnostic", packageKey)
+
 	// Symbol pass is serial because the Refs / TypeRefs passes below
 	// look up TargetSymbolID through `byTarget` keyed by the symbol's
 	// (file, node, start, end). Build that map once, then fan the
@@ -699,8 +718,8 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	for i := range result.Symbols {
 		sym := &result.Symbols[i]
 		sym.PackageID = packageID
-		sym.DeclID = stableResolveID("decl", packageKey, sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End))
-		sym.ID = stableResolveID("symbol", packageKey, sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End), strconv.FormatBool(sym.Public))
+		sym.DeclID = declPrefix.hash(sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End))
+		sym.ID = symbolPrefix.hash(sym.File, sym.Kind, sym.Name, itoa(sym.Node), itoa(sym.Start), itoa(sym.End), strconv.FormatBool(sym.Public))
 		byTarget[resolveTargetKey(sym.File, sym.Node, sym.Start, sym.End)] = sym.ID
 	}
 
@@ -714,12 +733,12 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	parallelAssignIDs(len(result.Refs), workers, func(i int) {
 		ref := &result.Refs[i]
 		ref.PackageID = packageID
-		ref.BindingID = stableResolveID("binding", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End))
-		ref.ID = stableResolveID("ref", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
+		ref.BindingID = bindingPrefix.hash(ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End))
+		ref.ID = refPrefix.hash(ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
 		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
 			ref.TargetSymbolID = id
 		} else if ref.TargetNode >= 0 {
-			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
+			ref.TargetSymbolID = symbolTargetPrefix.hash(ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
 		}
 	})
 
@@ -727,11 +746,11 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	parallelAssignIDs(len(result.TypeRefs), workers, func(i int) {
 		ref := &result.TypeRefs[i]
 		ref.PackageID = packageID
-		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
+		ref.ID = typeRefPrefix.hash(ref.File, ref.Name, itoa(ref.Node), itoa(ref.Start), itoa(ref.End), itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd), ref.TargetFile)
 		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
 			ref.TargetSymbolID = id
 		} else if ref.TargetNode >= 0 {
-			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
+			ref.TargetSymbolID = symbolTargetPrefix.hash(ref.TargetFile, ref.Name, itoa(ref.TargetNode), itoa(ref.TargetStart), itoa(ref.TargetEnd))
 		}
 	})
 
@@ -739,8 +758,57 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	parallelAssignIDs(len(result.Diagnostics), workers, func(i int) {
 		d := &result.Diagnostics[i]
 		d.PackageID = packageID
-		d.ID = stableResolveID("diagnostic", packageKey, d.File, d.Code, d.Name, itoa(d.Node), itoa(d.Start), itoa(d.End), d.Message)
+		d.ID = diagnosticPrefix.hash(d.File, d.Code, d.Name, itoa(d.Node), itoa(d.Start), itoa(d.End), d.Message)
 	})
+}
+
+// prefixedResolveHasher snapshots a sha256 state after writing the
+// (tag, packageKey) prefix that every ID in `selfhostAssignResolveIDs`
+// shares. Resuming a hasher from `state` and writing only the per-
+// record suffix yields the same final digest as
+// `stableResolveID(tag, packageKey, ...suffix)` end-to-end — sha256 is
+// order-preserving — but avoids re-hashing the ~10 kB packageKey for
+// every ID. Read-only after construction; `hash` is safe to call
+// from many goroutines concurrently.
+type prefixedResolveHasher struct {
+	state []byte
+}
+
+func newPrefixedResolveHasher(tag, packageKey string) prefixedResolveHasher {
+	h := sha256.New()
+	h.Write([]byte(tag))
+	h.Write([]byte{0})
+	h.Write([]byte(packageKey))
+	h.Write([]byte{0})
+	state, err := h.(encoding.BinaryMarshaler).MarshalBinary()
+	if err != nil {
+		// stdlib sha256 never returns an error from MarshalBinary; the
+		// only way this can fail is a stdlib regression. Keep the
+		// failure mode loud rather than silently fall through to a
+		// degraded path.
+		panic(fmt.Sprintf("selfhost: sha256 MarshalBinary: %v", err))
+	}
+	return prefixedResolveHasher{state: state}
+}
+
+func (p prefixedResolveHasher) hash(parts ...string) string {
+	h := resolveIDHashPool.Get().(hash.Hash)
+	// UnmarshalBinary fully replaces the hasher's internal state with
+	// the snapshot's; no Reset needed.
+	if err := h.(encoding.BinaryUnmarshaler).UnmarshalBinary(p.state); err != nil {
+		// Match newPrefixedResolveHasher's failure semantics — stdlib
+		// sha256 does not return an error here in practice.
+		resolveIDHashPool.Put(h)
+		panic(fmt.Sprintf("selfhost: sha256 UnmarshalBinary: %v", err))
+	}
+	for _, part := range parts {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	out := hex.EncodeToString(sum)
+	resolveIDHashPool.Put(h)
+	return out
 }
 
 // parallelAssignIDs invokes fn(i) for every i in [0, n) using a worker
