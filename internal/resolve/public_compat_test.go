@@ -11,7 +11,7 @@ import (
 	"github.com/osty/osty/internal/parser"
 )
 
-func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testing.T) {
+func TestMaterializePublicCompatibilityIsLazyAndIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")

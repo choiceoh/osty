@@ -10,7 +10,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 )
 
-func TestRunLintFileIsAstbridgeFree(t *testing.T) {
+func TestRunLintFileHappyPath(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     x
@@ -32,7 +32,7 @@ func TestRunLintFileIsAstbridgeFree(t *testing.T) {
 	}
 }
 
-func TestLintPackageNativeDiagnosticsIsAstbridgeFree(t *testing.T) {
+func TestLintPackageNativeDiagnosticsCleanPackage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.osty"), []byte(`pub fn helper() -> Int { 1 }
 `), 0o644); err != nil {

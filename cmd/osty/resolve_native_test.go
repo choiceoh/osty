@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRunResolveFileHappyPathIsAstbridgeFree(t *testing.T) {
+func TestRunResolveFileHappyPath(t *testing.T) {
 	src := []byte(`fn helper(x: Int) -> Int {
     x
 }
@@ -47,7 +47,7 @@ fn main() {
 	}
 }
 
-func TestRunResolvePackageHappyPathIsAstbridgeFree(t *testing.T) {
+func TestRunResolvePackageHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")

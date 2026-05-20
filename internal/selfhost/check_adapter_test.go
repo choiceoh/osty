@@ -442,11 +442,11 @@ func TestCheckFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
 	}
 }
 
-// TestCheckPackageStructuredIsAstbridgeFree is the multi-file analogue.
-// The package adapter merges parser arenas and lets the generated checker
-// run its internal gates, so no *ast.File lowering happens even with the
-// Direct-path input.
-func TestCheckPackageStructuredIsAstbridgeFree(t *testing.T) {
+// TestCheckPackageStructuredSurfacesIntrinsicGate is the multi-file
+// analogue: the package adapter merges parser arenas and lets the
+// generated checker run its internal gates; an `#[intrinsic]`
+// violation in one of the files must surface as E0773.
+func TestCheckPackageStructuredSurfacesIntrinsicGate(t *testing.T) {
 	aSrc := []byte(`pub fn helper() -> Int { 1 }
 `)
 	bSrc := []byte(`#[intrinsic]

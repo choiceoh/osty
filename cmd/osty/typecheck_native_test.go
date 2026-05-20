@@ -234,11 +234,11 @@ fn main() {
 	}
 }
 
-// TestRunTypecheckPackageNativeIsAstbridgeFree exercises the DIR
+// TestRunTypecheckPackageNativeHappyPath exercises the DIR
 // typecheck path end-to-end (LoadPackageForNative →
 // CheckPackageStructured → nativePackageCheckDiags →
 // printNativePackageTypes) on a clean two-file package.
-func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
+func TestRunTypecheckPackageNativeHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -285,7 +285,7 @@ func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	}
 }
 
-func TestRunTypecheckWorkspaceNativeIsAstbridgeFree(t *testing.T) {
+func TestRunTypecheckWorkspaceNativeHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -339,10 +339,11 @@ fn main() {
 	}
 }
 
-// TestRunTypecheckFileNativeIsAstbridgeFree exercises the typecheck
-// --native CLI body end-to-end including the type dump (which iterates
-// TypedNodes, not AST nodes) and asserts exit 0.
-func TestRunTypecheckFileNativeIsAstbridgeFree(t *testing.T) {
+// TestRunTypecheckFileNativeDumpTelemetry exercises the typecheck
+// --native CLI body end-to-end (including the type dump which iterates
+// TypedNodes) and asserts the dump-native-diags telemetry header
+// lands on stderr.
+func TestRunTypecheckFileNativeDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2

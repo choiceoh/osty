@@ -7,7 +7,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 )
 
-func TestSourceDoesNotMaterializePublicAST(t *testing.T) {
+func TestSourceFormatsCleanSource(t *testing.T) {
 	src := []byte(`fn main() {
 let x = 1
 x

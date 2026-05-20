@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestNativeSemanticDBKeepsResolveFactsAstbridgeFree(t *testing.T) {
+func TestNativeSemanticDBPopulatesResolveFacts(t *testing.T) {
 	dir := t.TempDir()
 	helperPath := filepath.Join(dir, "helper.osty")
 	mainPath := filepath.Join(dir, "main.osty")

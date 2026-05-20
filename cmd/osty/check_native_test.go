@@ -242,11 +242,11 @@ fn main() {
 	}
 }
 
-// TestRunCheckPackageNativeIsAstbridgeFree exercises the DIR check
+// TestRunCheckPackageNativeHappyPath exercises the DIR check
 // path end-to-end (LoadPackageForNative + CheckPackageStructured +
 // nativePackageCheckDiags + CheckDiagnosticsAsDiag) on a clean
 // multi-file package and asserts exit 0.
-func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
+func TestRunCheckPackageNativeHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -293,7 +293,7 @@ func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	}
 }
 
-func TestRunCheckWorkspaceNativeIsAstbridgeFree(t *testing.T) {
+func TestRunCheckWorkspaceNativeHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -436,14 +436,10 @@ fn main() {
 	}
 }
 
-// TestRunCheckFileNativeIsAstbridgeFree is the in-process counter
-// test analog of TestRunResolveFileHappyPathIsAstbridgeFree. Proves
-// the --native CLI path produces zero astLowerPublicFile calls
-// end-to-end, including through CheckStructuredFromRun and the
-// CheckDiagnosticsAsDiag converter. Stdout redirected to discard so
-// printDiags output doesn't pollute test logs; the counter assertion
-// is the actual invariant.
-func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
+// TestRunCheckFileNativeDumpTelemetry exercises the --native CLI path
+// end-to-end (CheckStructuredFromRun + CheckDiagnosticsAsDiag) and
+// asserts the dump-native-diags telemetry header lands on stderr.
+func TestRunCheckFileNativeDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2
@@ -487,7 +483,7 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 }
 
 // TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
-// companion to TestRunCheckFileNativeIsAstbridgeFree: after the
+// companion to TestRunCheckFileNativeDumpTelemetry: after the
 // 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` with no
 // flag at all routes through the self-host arena pipeline the same
 // way `--native` does. Run the subprocess CLI so the default
@@ -514,11 +510,10 @@ func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 	}
 }
 
-// TestRunCheckFileDefaultPathIsAstbridgeFree is the in-process
-// counter assertion for the default flip. runCheckFileNative is the
-// production happy path for single-file check; confirm zero astbridge
-// lowerings end-to-end.
-func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
+// TestRunCheckFileDefaultPathHappyPath exercises the production
+// default-path single-file check (runCheckFileNative) and asserts
+// exit 0 on clean input.
+func TestRunCheckFileDefaultPathHappyPath(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2
