@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/backend/stage0"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
@@ -37,6 +38,10 @@ import (
 //
 // Exit codes match the rest of the CLI: 0 success, 1 failure.
 func runInstallSelf(args []string, _ cliFlags) {
+	// Flush accumulated phase timings (including any recorded in the
+	// forked `osty build` if it inherited the env gate) at exit when
+	// `OSTY_BUILD_PHASE_TIMING=1`. No-op otherwise.
+	defer backend.EmitPhaseTimings()
 	fs := flag.NewFlagSet("install-self", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: osty install-self [--force] [--toolchain-dir DIR] [--osty-bin PATH]")
@@ -52,12 +57,15 @@ func runInstallSelf(args []string, _ cliFlags) {
 		os.Exit(2)
 	}
 
+	endLocate := backend.BeginPhase("install-self.locate-and-key")
 	root, err := selfhostcache.LocateProjectRoot(".")
 	if err != nil {
+		endLocate()
 		fmt.Fprintf(os.Stderr, "osty install-self: locate project root: %v\n", err)
 		os.Exit(1)
 	}
 	key, err := selfhostcache.ComputeKey(root)
+	endLocate()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: compute key: %v\n", err)
 		os.Exit(1)
@@ -120,23 +128,30 @@ func runInstallSelf(args []string, _ cliFlags) {
 	builtBin := ""
 	var buildErr error
 	if force && resolveErr == nil {
+		endSelfhostBuild := backend.BeginPhase("install-self.build-via-selfhost")
 		builtBin, buildErr = buildOstySelfWithSelfhost(context.Background(), resolvedSelf, hostOsty, root, tcAbs)
+		endSelfhostBuild()
 		if buildErr != nil {
 			fmt.Fprintf(os.Stderr, "osty install-self: selfhost build failed; retrying source bootstrap: %v\n", buildErr)
 		}
 	}
 	if builtBin == "" {
+		endStage0Build := backend.BeginPhase("install-self.build-via-stage0")
 		builtBin, buildErr = buildOstySelf(context.Background(), hostOsty, root, tcAbs)
+		endStage0Build()
 	}
 	if buildErr != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", buildErr)
 		printInstallSelfBootstrapHint()
 		os.Exit(1)
 	}
+	endPromote := backend.BeginPhase("install-self.cache-promote")
 	if err := selfhostcache.Install(root, key, builtBin); err != nil {
+		endPromote()
 		fmt.Fprintf(os.Stderr, "osty install-self: cache install: %v\n", err)
 		os.Exit(1)
 	}
+	endPromote()
 	fmt.Printf("installed:   %s\n", cachedPath)
 }
 

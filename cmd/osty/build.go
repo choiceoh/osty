@@ -43,6 +43,11 @@ import (
 //	2   usage error or manifest validation failure
 //	3   dependency resolution failure
 func runBuild(args []string, flags cliFlags) {
+	// Print accumulated backend phase timings at exit when
+	// `OSTY_BUILD_PHASE_TIMING=1`. No-op otherwise. Wired here so
+	// every runBuild return path (success or fail) flushes the
+	// markers recorded inside `LLVMBackend.Emit` / `emitPrebuiltIR`.
+	defer backend.EmitPhaseTimings()
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: osty build [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [--force] [--airepair=false] [--airepair-mode MODE] [PATH]")
