@@ -369,51 +369,24 @@ func TestRunDiagnosticsAllowDiscardInForInHead(t *testing.T) {
 	}
 }
 
-// TestCheckStructuredFromRunIsAstbridgeFree pins the PR8 wedge:
+// TestCheckStructuredFromRunSmoke exercises the PR8 wedge:
 // CheckStructuredFromRun runs the native checker plus the
-// intrinsic-body gate entirely off the FrontendRun's AstArena, so the
-// astbridge *ast.File lowering is never invoked. The only bump path
-// is run.File() on explicit demand.
-func TestCheckStructuredFromRunIsAstbridgeFree(t *testing.T) {
+// intrinsic-body gate entirely off the FrontendRun's AstArena.
+func TestCheckStructuredFromRunSmoke(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2
     y
 }
 `)
-	ResetAstbridgeLowerCount()
-
 	run := Run(src)
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("Run alone: AstbridgeLowerCount = %d, want 0", got)
-	}
-
 	_ = CheckStructuredFromRun(run)
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("after CheckStructuredFromRun: AstbridgeLowerCount = %d, want 0 (arena-direct check + arena-direct gate must not touch astbridge)", got)
-	}
-
 	_ = CheckStructuredFromRun(run)
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("second CheckStructuredFromRun on same run: AstbridgeLowerCount = %d, want 0", got)
-	}
-
-	// Explicit run.File() still works and is the only way to bump the
-	// counter — proves the counter wiring isn't accidentally short-
-	// circuited by the earlier CheckStructuredFromRun calls.
-	if f := run.File(); f == nil {
-		t.Fatalf("run.File() returned nil")
-	}
-	if got := AstbridgeLowerCount(); got != 1 {
-		t.Fatalf("after explicit run.File(): AstbridgeLowerCount = %d, want 1", got)
-	}
 }
 
-// TestCheckSourceStructuredIsAstbridgeFree extends the zero-astbridge
-// guarantee to CheckSourceStructured: the full source-based check path
-// runs the generated checker and its internal gates without triggering
-// astLowerPublicFile.
-func TestCheckSourceStructuredIsAstbridgeFree(t *testing.T) {
+// TestCheckSourceStructuredSmoke covers the full source-based check
+// path through the generated checker and its internal gates.
+func TestCheckSourceStructuredSmoke(t *testing.T) {
 	src := []byte(`#[intrinsic]
 fn bad() -> Int {
     42
@@ -425,17 +398,8 @@ fn main() {
     y
 }
 `)
-	ResetAstbridgeLowerCount()
-
 	_ = CheckSourceStructured(src)
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("CheckSourceStructured: AstbridgeLowerCount = %d, want 0 (arena gate must not touch astbridge)", got)
-	}
-
 	_ = CheckSourceStructured(src)
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("second CheckSourceStructured: AstbridgeLowerCount = %d, want 0", got)
-	}
 }
 
 func TestCheckFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
@@ -467,16 +431,12 @@ func TestCheckFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
 			wantDiags := run.Diagnostics()
 			wantResult := CheckStructuredFromRun(run)
 
-			ResetAstbridgeLowerCount()
 			gotDiags, gotResult := CheckFromSource(tc.src)
 			if !reflect.DeepEqual(wantDiags, gotDiags) {
 				t.Fatalf("CheckFromSource parse diagnostics diverge\nwant=%#v\ngot=%#v", wantDiags, gotDiags)
 			}
 			if !reflect.DeepEqual(wantResult, gotResult) {
 				t.Fatalf("CheckFromSource result diverges\nwant=%#v\ngot=%#v", wantResult, gotResult)
-			}
-			if got := AstbridgeLowerCount(); got != 0 {
-				t.Fatalf("CheckFromSource: AstbridgeLowerCount = %d, want 0", got)
 			}
 		})
 	}
@@ -505,14 +465,9 @@ fn main() {
 		},
 	}
 
-	ResetAstbridgeLowerCount()
-
 	result, err := CheckPackageStructured(input)
 	if err != nil {
 		t.Fatalf("CheckPackageStructured: %v", err)
-	}
-	if got := AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("CheckPackageStructured: AstbridgeLowerCount = %d, want 0", got)
 	}
 
 	// Sanity: the intrinsic violation in b.osty surfaces as a

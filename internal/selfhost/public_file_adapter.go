@@ -6,9 +6,9 @@ import (
 )
 
 // LowerPublicFileFromRun lowers a FrontendRun's semantic arena to the public
-// *ast.File surface without bumping AstbridgeLowerCount. Use this explicit
-// compatibility API only where host-side AST inspection is still required while
-// the caller remains on the native parser path.
+// *ast.File surface. Use this explicit compatibility API only where host-side
+// AST inspection is still required while the caller remains on the native
+// parser path.
 func LowerPublicFileFromRun(run *FrontendRun) *ast.File {
 	if run == nil || run.parser == nil {
 		return nil

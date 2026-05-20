@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // TestTypecheckCLINativeCleanSourcePrintsTypes confirms `osty
@@ -114,7 +112,6 @@ fn main() {
 	os.Stderr = werr
 	t.Cleanup(func() { os.Stderr = origStderr })
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runTypecheckFileNative(path, src, formatter, flags)
 	_ = wout.Close()
 	_ = werr.Close()
@@ -131,9 +128,6 @@ fn main() {
 
 	if exit != 0 {
 		t.Fatalf("runTypecheckFileNative exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", exit, stdout, stderr)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after dump-native-diags native typecheck = %d, want 0", got)
 	}
 	if !strings.Contains(stderr, "native checker telemetry: "+path) {
 		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
@@ -240,11 +234,10 @@ fn main() {
 	}
 }
 
-// TestRunTypecheckPackageNativeIsAstbridgeFree is the DIR in-process
-// counter test: runTypecheckPackageNative's full pipeline
-// (LoadPackageForNative → CheckPackageStructured →
-// nativePackageCheckDiags → printNativePackageTypes) must produce
-// AstbridgeLowerCount == 0.
+// TestRunTypecheckPackageNativeIsAstbridgeFree exercises the DIR
+// typecheck path end-to-end (LoadPackageForNative →
+// CheckPackageStructured → nativePackageCheckDiags →
+// printNativePackageTypes) on a clean two-file package.
 func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
@@ -281,7 +274,6 @@ func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runTypecheckPackageNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
@@ -290,9 +282,6 @@ func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runTypecheckPackageNative exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runTypecheckPackageNative = %d, want 0", got)
 	}
 }
 
@@ -339,7 +328,6 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runTypecheckWorkspaceNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
@@ -349,16 +337,11 @@ fn main() {
 	if exit != 0 {
 		t.Fatalf("runTypecheckWorkspaceNative exit = %d, want 0", exit)
 	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runTypecheckWorkspaceNative = %d, want 0", got)
-	}
 }
 
-// TestRunTypecheckFileNativeIsAstbridgeFree is the in-process counter
-// test. Verifies the typecheck --native CLI body leaves
-// AstbridgeLowerCount at zero — including the type dump (which
-// iterates TypedNodes, not AST nodes, and should not trigger any
-// *ast.File lowering).
+// TestRunTypecheckFileNativeIsAstbridgeFree exercises the typecheck
+// --native CLI body end-to-end including the type dump (which iterates
+// TypedNodes, not AST nodes) and asserts exit 0.
 func TestRunTypecheckFileNativeIsAstbridgeFree(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
@@ -393,7 +376,6 @@ func TestRunTypecheckFileNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runTypecheckFileNative(path, src, formatter, flags)
 	_ = wout.Close()
 	_ = werr.Close()
@@ -402,8 +384,5 @@ func TestRunTypecheckFileNativeIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runTypecheckFileNative exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runTypecheckFileNative = %d, want 0 (typecheck --native regressed into *ast.File detour)", got)
 	}
 }

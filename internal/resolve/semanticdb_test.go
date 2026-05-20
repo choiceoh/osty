@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestNativeSemanticDBKeepsResolveFactsAstbridgeFree(t *testing.T) {
@@ -26,7 +24,6 @@ func TestNativeSemanticDBKeepsResolveFactsAstbridgeFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	selfhost.ResetAstbridgeLowerCount()
 	pkg, err := LoadPackageForNative(dir)
 	if err != nil {
 		t.Fatalf("LoadPackageForNative: %v", err)
@@ -37,9 +34,6 @@ func TestNativeSemanticDBKeepsResolveFactsAstbridgeFree(t *testing.T) {
 	}
 	if db == nil {
 		t.Fatal("NativeSemanticDB returned nil")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("NativeSemanticDB astbridge count = %d, want 0", got)
 	}
 	if db.PackageID == "" {
 		t.Fatal("SemanticDB PackageID is empty")

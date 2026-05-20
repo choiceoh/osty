@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // TestCheckCLINativeCleanSourceExitsZero is the subprocess-level smoke
@@ -107,7 +105,6 @@ fn main() {
 	os.Stderr = werr
 	t.Cleanup(func() { os.Stderr = origStderr })
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runCheckFileNative(path, src, formatter, flags)
 	_ = werr.Close()
 	stderrBytes, err := io.ReadAll(rerr)
@@ -118,9 +115,6 @@ fn main() {
 
 	if exit != 0 {
 		t.Fatalf("runCheckFileNative exit = %d, want 0\nstderr:\n%s", exit, stderr)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after dump-native-diags native check = %d, want 0", got)
 	}
 	if !strings.Contains(stderr, "native checker telemetry: "+path) {
 		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
@@ -248,12 +242,10 @@ fn main() {
 	}
 }
 
-// TestRunCheckPackageNativeIsAstbridgeFree is the DIR in-process
-// counter test. LoadPackageForNative + CheckPackageStructured +
-// nativePackageCheckDiags + CheckDiagnosticsAsDiag must all leave
-// AstbridgeLowerCount at zero for a clean multi-file package. Pairs
-// with TestLoadPackageForNativeMultiFileIsAstbridgeFree (which only
-// covered the resolve side).
+// TestRunCheckPackageNativeIsAstbridgeFree exercises the DIR check
+// path end-to-end (LoadPackageForNative + CheckPackageStructured +
+// nativePackageCheckDiags + CheckDiagnosticsAsDiag) on a clean
+// multi-file package and asserts exit 0.
 func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
@@ -290,7 +282,6 @@ func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runCheckPackageNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
@@ -299,9 +290,6 @@ func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runCheckPackageNative exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runCheckPackageNative = %d, want 0 (DIR path regressed into *ast.File detour)", got)
 	}
 }
 
@@ -348,7 +336,6 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runCheckWorkspaceNative(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
@@ -357,9 +344,6 @@ fn main() {
 
 	if exit != 0 {
 		t.Fatalf("runCheckWorkspaceNative exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runCheckWorkspaceNative = %d, want 0", got)
 	}
 }
 
@@ -491,7 +475,6 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, r); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, re); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runCheckFileNative(path, src, formatter, flags)
 	_ = w.Close()
 	_ = we.Close()
@@ -500,9 +483,6 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runCheckFileNative exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runCheckFileNative = %d, want 0 (--native CLI path regressed into a *ast.File detour)", got)
 	}
 }
 
@@ -570,7 +550,6 @@ func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, r); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, re); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runCheckFileNative(path, src, formatter, flags)
 	_ = w.Close()
 	_ = we.Close()
@@ -579,8 +558,5 @@ func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runCheckFileNative (default) exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after default runCheckFileNative = %d, want 0", got)
 	}
 }

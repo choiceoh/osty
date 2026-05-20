@@ -6,8 +6,8 @@
 
 `internal/selfhost/ast_lower.osty` is no longer a checker-bundle input. It
 remains only as the public-AST compatibility adapter for legacy Go callers that
-still request `*ast.File` through `FrontendRun.File`, `Parse`, or
-`PackageFile.EnsureFile`. The native checker input set is pinned in
+still request `*ast.File` through `selfhost.LowerPublicFileFromRun`, `Parse`,
+or `PackageFile.EnsureFile`. The native checker input set is pinned in
 `internal/selfhost/bundle.ToolchainCheckerFiles()` and rejects bootstrap-only
 host adapters, including `use runtime.cihost`.
 
@@ -170,7 +170,7 @@ Current-tree observations from the code re-audit:
 | Layer | Where | What blocks |
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
-| Bootstrap boundary | merged whole-toolchain probe / checker bundle | the current toolchain host adapter is `toolchain/ci.osty` with `use runtime.cihost as host`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `internal/selfhost/ast_lower.osty` is now deliberately outside `ToolchainCheckerFiles()` as a legacy public-AST adapter for `FrontendRun.File` / `Parse` / `EnsureFile` consumers. `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day. |
+| Bootstrap boundary | merged whole-toolchain probe / checker bundle | the current toolchain host adapter is `toolchain/ci.osty` with `use runtime.cihost as host`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `internal/selfhost/ast_lower.osty` is now deliberately outside `ToolchainCheckerFiles()` as a legacy public-AST adapter for `selfhost.LowerPublicFileFromRun` / `Parse` / `EnsureFile` consumers. `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day. |
 | Native backend surface | merged native-only probe | the old AST merged probe is info-only; the authoritative current gate is `TestNativeToolchainMergedMIRPipelineIsClean`, which mirrors production MIR-first dispatch without a legacy backend retry. Bootstrap-only sources are filtered by FFI stanza (`use runtime.cihost`, `use runtime.golegacy.*`, or `use go "..."`). Historical 2026-04-21 notes about `TestNativeToolchainMergedIsClean` describe the retired AST gate, not the current pass/fail surface. |
 | Public runtime scheduler | `osty_rt_*` task/thread/select | `#496` complete. Select-send arm landed as typed entry points `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` (scalar packing into channel ring slot, bytes via GC-managed copy). The public LLVM runtime now has zero `osty_sched_unimplemented` call sites — concurrency spec §8 (taskGroup / spawn / join / cancel / chan / select / parallel / race / collectAll) is fully covered. See RUNTIME_SCHEDULER.md |
 | MIR Osty port | `toolchain/mir.osty` | `#503` — MIR core (intrinsic kinds, printer, operand/instr shapes) now has an Osty-native mirror in `toolchain/mir.osty`; Go remains authoritative while the Osty side participates in the spec corpus |

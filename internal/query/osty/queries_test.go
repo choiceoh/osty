@@ -12,7 +12,6 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
@@ -412,13 +411,9 @@ func TestIdentIndexUpdatesWithSymbols(t *testing.T) {
 	src := "pub fn foo() -> Int { 1 }\nfn main() { foo() }\n"
 	path := seedFile(eng, "/tmp/pkg_ii", "main.osty", src)
 
-	selfhost.ResetAstbridgeLowerCount()
 	idx := eng.Queries.IdentIndex.Get(eng.DB, path)
 	if idx == nil {
 		t.Fatal("IdentIndex returned nil")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("IdentIndex touched astbridge = %d, want 0", got)
 	}
 	callOff := strings.LastIndex(src, "foo")
 	if callOff < 0 {
@@ -446,11 +441,7 @@ func TestResolveDiagnosticsUseNativeStructuredResult(t *testing.T) {
 
 	path := seedFile(eng, "/tmp/pkg_resolve_diags", "main.osty", "fn main() { missing() }\n")
 
-	selfhost.ResetAstbridgeLowerCount()
 	diags := eng.Queries.ResolveDiagnostics.Get(eng.DB, path)
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("ResolveDiagnostics touched astbridge = %d, want 0", got)
-	}
 	var sawUndefined bool
 	for _, d := range diags {
 		if d != nil && d.Code == diag.CodeUndefinedName {

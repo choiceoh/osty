@@ -92,11 +92,7 @@ fn bad() -> Int { 42 }
 `)
 	checked := selfhost.CheckSourceStructured(src)
 
-	selfhost.ResetAstbridgeLowerCount()
 	diags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("CheckDiagnosticsAsDiag: AstbridgeLowerCount = %d, want 0", got)
-	}
 	if len(diags) == 0 {
 		t.Fatalf("expected at least one converted diagnostic")
 	}

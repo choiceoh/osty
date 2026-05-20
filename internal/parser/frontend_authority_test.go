@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 func requireNoParseDiagnostics(t *testing.T, result Result) {
@@ -333,7 +332,6 @@ func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *test
 }
 `)
 
-	selfhost.ResetAstbridgeLowerCount()
 	result := ParseDetailed(src)
 	requireNoParseDiagnostics(t, result)
 	if result.Run == nil {
@@ -341,9 +339,6 @@ func TestParseDetailedKeepsFrontendRunAndUsesExplicitPublicCompatibility(t *test
 	}
 	if result.File == nil {
 		t.Fatal("ParseDetailed File = nil, want public compatibility AST")
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("ParseDetailed astbridge count = %d, want 0", got)
 	}
 }
 

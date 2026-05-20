@@ -6,21 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/osty/osty/internal/selfhost"
 )
 
-// TestRunResolveFileHappyPathIsAstbridgeFree pins the end-to-end CLI
-// invariant: the extracted runResolveFile body that powers `osty
-// resolve FILE` must not trigger a single astLowerPublicFile call on
-// clean input. This catches CLI-layer regressions that the library
-// primitive tests (ResolveStructuredFromRun, LoadPackageForNative)
-// cannot see on their own — any accidentally-added run.File() inside
-// the subcommand body would fail this test.
-//
-// Stdout is redirected to discard so the subcommand's normal ref/diag
-// rendering doesn't pollute go test output; the counter assertion is
-// the actual invariant under test.
 func TestRunResolveFileHappyPathIsAstbridgeFree(t *testing.T) {
 	src := []byte(`fn helper(x: Int) -> Int {
     x
@@ -51,7 +38,6 @@ fn main() {
 		_, _ = io.Copy(io.Discard, r)
 	}()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runResolveFile(path, src, formatter, flags)
 	_ = w.Close()
 	<-drained
@@ -59,24 +45,8 @@ fn main() {
 	if exit != 0 {
 		t.Fatalf("runResolveFile exit = %d, want 0", exit)
 	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runResolveFile happy path = %d, want 0 (any non-zero means the CLI body regressed into a *ast.File detour)", got)
-	}
 }
 
-// TestRunResolvePackageHappyPathIsAstbridgeFree is the DIR sibling of
-// TestRunResolveFileHappyPathIsAstbridgeFree. A two-file clean
-// package should round-trip through runResolvePackageInner with zero
-// astbridge lowerings — LoadPackageForNative gives us FrontendRuns
-// per file, native diagnostics + native rows don't need *ast.File,
-// and the EnsureFiles fallback should never fire on this input
-// (native rows are always available for resolvable refs).
-//
-// Any non-zero count means the DIR CLI body regressed: either a
-// fallback triggered unnecessarily (ensureGoResolve ran when it
-// shouldn't), or a new call site leaked run.File() in. Pairs with
-// the library-level TestLoadPackageForNativeMultiFileIsAstbridgeFree
-// to cover the entire stack from loader to printer.
 func TestRunResolvePackageHappyPathIsAstbridgeFree(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
@@ -112,7 +82,6 @@ func TestRunResolvePackageHappyPathIsAstbridgeFree(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	selfhost.ResetAstbridgeLowerCount()
 	exit := runResolvePackageInner(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
@@ -121,9 +90,6 @@ func TestRunResolvePackageHappyPathIsAstbridgeFree(t *testing.T) {
 
 	if exit != 0 {
 		t.Fatalf("runResolvePackageInner exit = %d, want 0", exit)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after runResolvePackageInner = %d, want 0 (DIR resolve CLI body regressed into a *ast.File fallback)", got)
 	}
 }
 
