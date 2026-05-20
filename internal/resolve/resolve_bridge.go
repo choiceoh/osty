@@ -3,6 +3,8 @@ package resolve
 import (
 	"fmt"
 	"reflect"
+	"runtime"
+	"sync"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
@@ -13,7 +15,9 @@ import (
 // resolvePackageViaNative resolves a package using the self-host (Osty)
 // resolver and bridges results back to Go's resolve.Result types.
 func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
+	endNative := beginResolvePhase("resolve.native.artifacts")
 	result, files, err := nativeResolveArtifacts(pkg)
+	endNative()
 	if err != nil {
 		return &PackageResult{
 			Diags: []*diag.Diagnostic{
@@ -25,6 +29,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
 	diags := nativeParseDiagnostics(pkg)
+	endDecl := beginResolvePhase("resolve.native.declIndexes")
 	declIndexes := make(map[string]map[int]ast.Node, len(pkg.Files))
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
@@ -35,6 +40,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		declIndexes[pf.Path] = declIdx
 		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
 	}
+	endDecl()
 
 	// Pre-bucket refs / typeRefs by source file once so the per-file
 	// bridge loop iterates only its own refs instead of the whole
@@ -50,22 +56,33 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	// shared slice and concatenating with the per-file bucket on each
 	// pass. The slice is typically empty, so the concat is free in
 	// practice but keeps correctness identical to the pre-fix path.
+	endBuckets := beginResolvePhase("resolve.native.bucketRefs")
 	refsByFile, refsAllFiles := groupRefsByFile(result.Refs)
 	typeRefsByFile, typeRefsAllFiles := groupTypeRefsByFile(result.TypeRefs)
 	symByTarget := nativeSymbolByTarget(result.Symbols)
+	endBuckets()
 
+	endBridge := beginResolvePhase("resolve.native.bridgeLoop")
+	// Per-file bridge is CPU-bound (3 walkReflect calls per file:
+	// buildIdentIndex, buildNamedTypeIndex, supplementUseAliasRefs) and
+	// per-file outputs land in disjoint PackageFile fields. Fan out
+	// across GOMAXPROCS goroutines with a bounded semaphore — the inputs
+	// (refsByFile / typeRefsByFile / symByTarget / declIndexes / files /
+	// pkgScope) are read-only after the buckets are built above, and
+	// each worker creates its own child FileScope (NewScope only reads
+	// the parent pointer). Packages with ≤1 file keep the serial path
+	// because the goroutine overhead would dominate.
+	bridgeFiles := make([]*PackageFile, 0, len(pkg.Files))
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
 			continue
 		}
+		bridgeFiles = append(bridgeFiles, pf)
+	}
+	processFile := func(pf *PackageFile) {
 		fi := nativeResolveFileInfoFor(files, pf.Path)
 		identIdx := buildIdentIndex(pf.File)
 		typeIdx := buildNamedTypeIndex(pf.File)
-		declIdx := declIndexes[pf.Path]
-		if declIdx == nil {
-			declIdx = buildDeclIndex(pf.File)
-			declIndexes[pf.Path] = declIdx
-		}
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
 
 		refsForFile := refsByFile[pf.Path]
@@ -77,6 +94,12 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 			typeRefsForFile = append(typeRefsForFile, typeRefsAllFiles...)
 		}
 
+		// declIndexes is read-only after the declIndexes loop above
+		// populated every reachable file. We deliberately drop the
+		// previous "rebuild + reinsert into shared map" fallback —
+		// the skip predicate matches between the two loops, so a
+		// missing slot is unreachable, and a shared-map write here
+		// would race with the workers.
 		refsByID, refIdents := bridgeRefsForFile(refsForFile, symByTarget, files, fi, identIdx, declIndexes, fileScope)
 		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
 		pf.RefsByID = refsByID
@@ -88,6 +111,33 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 
 		pf.FileScope = fileScope
 	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(bridgeFiles) {
+		workers = len(bridgeFiles)
+	}
+	if workers <= 1 || len(bridgeFiles) <= 1 {
+		for _, pf := range bridgeFiles {
+			processFile(pf)
+		}
+	} else {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, workers)
+		for _, pf := range bridgeFiles {
+			pf := pf
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				processFile(pf)
+			}()
+		}
+		wg.Wait()
+	}
+	endBridge()
 	pkg.PkgScope = pkgScope
 
 	diags = append(diags, nativeResolveDiagnosticsFromArtifacts(result, files)...)
