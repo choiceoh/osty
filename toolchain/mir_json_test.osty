@@ -114,7 +114,10 @@ fn testMirJsonDecodePureFunctionEmitsReadnone() {
     let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_pure_test.mir.json", ""), m)
     testing.assert(lirLowerOK(result))
     let ir = lirRenderModule(result.module)
-    testing.assert(strings.contains(ir, "readnone"))
+    // Assert readnone lands on the @main() define line specifically,
+    // not just anywhere in the module — guards against false-positives
+    // if unrelated runtime declarations ever carry readnone.
+    testing.assert(strings.contains(ir, "@main() readnone"))
 }
 
 // Baseline guard: absent the `pure` JSON field, the decoded
@@ -164,5 +167,9 @@ fn testMirJsonDecodeNonPureFunctionSkipsReadnone() {
     let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_non_pure_test.mir.json", ""), m)
     testing.assert(lirLowerOK(result))
     let ir = lirRenderModule(result.module)
-    testing.assert(!strings.contains(ir, "readnone"))
+    // Mirror the positive test's narrow check: assert the @main()
+    // define line specifically lacks readnone. Searching the whole
+    // module would also fail if any runtime decl ever carries
+    // readnone, masking a regression here.
+    testing.assert(!strings.contains(ir, "@main() readnone"))
 }
