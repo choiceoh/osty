@@ -194,6 +194,21 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 				sem <- struct{}{}
 				i := i
 				go func() {
+					// Convert any panic inside the selfhost lexer /
+					// parser into a parsedFile.err so the serial
+					// merge consumer surfaces it as a normal package
+					// adapter error. The caller's `defer
+					// recoverCheckResult` (CheckPackageStructured)
+					// or InspectPackageStructured recover is on the
+					// host goroutine and cannot reach panics raised
+					// here — recover does not cross goroutine
+					// boundaries.
+					defer func() {
+						if r := recover(); r != nil {
+							parsedSlots[i] = parsedFile{err: fmt.Errorf("selfhost package adapter: parse panic: %v", r)}
+							close(done[i])
+						}
+					}()
 					parsedSlots[i] = parseOne(files[i])
 					close(done[i])
 				}()
