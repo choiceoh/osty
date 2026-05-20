@@ -81,9 +81,9 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	endBuckets()
 
 	endBridge := beginResolvePhase("resolve.native.bridgeLoop")
-	// Per-file bridge is CPU-bound (3 walkReflect calls per file:
-	// buildIdentIndex, buildNamedTypeIndex, supplementUseAliasRefs) and
-	// per-file outputs land in disjoint PackageFile fields. Fan out
+	// Per-file bridge is CPU-bound (one `walkIdentAndNamedType` pass to
+	// build identIdx + typeIdx, then per-ref / per-typeRef bridging)
+	// and per-file outputs land in disjoint PackageFile fields. Fan out
 	// across GOMAXPROCS goroutines with a bounded semaphore — the inputs
 	// (refsByFile / typeRefsByFile / symByTarget / declIndexes / files /
 	// pkgScope) are read-only after the buckets are built above, and
@@ -346,22 +346,19 @@ func buildNamedTypeIndex(file *ast.File) map[int]*ast.NamedType {
 }
 
 // buildIdentAndNamedTypeIndex is the combined `buildIdentIndex` +
-// `buildNamedTypeIndex` walker. The reflect-based AST traversal is the
-// dominant cost in the per-file bridge loop (~19s wall on the
-// install-self toolchain build), and the two separate walks duplicate
-// every traversal step. Combining them halves the walker overhead while
-// keeping the per-index map shape identical.
+// `buildNamedTypeIndex` walker. The reflect-based AST traversal was
+// the dominant cost in the per-file bridge loop (~19s wall on the
+// install-self toolchain build); `walkIdentAndNamedType` is the
+// hand-rolled successor, switching on each Node type instead of going
+// through `reflect.Value.Field` / `Interface()` so the per-node cost
+// drops to a single virtual call + small switch.
 func buildIdentAndNamedTypeIndex(file *ast.File) (map[int]*ast.Ident, map[int]*ast.NamedType) {
 	identIdx := make(map[int]*ast.Ident, 64)
 	typeIdx := make(map[int]*ast.NamedType, 32)
-	walkReflect(reflect.ValueOf(file), func(id *ast.Ident) {
-		if id.ID != 0 {
-			identIdx[id.PosV.Offset] = id
-		}
+	walkIdentAndNamedType(file, func(id *ast.Ident) {
+		identIdx[id.PosV.Offset] = id
 	}, func(nt *ast.NamedType) {
-		if nt.ID != 0 {
-			typeIdx[nt.PosV.Offset] = nt
-		}
+		typeIdx[nt.PosV.Offset] = nt
 	})
 	return identIdx, typeIdx
 }
