@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"strings"
+
+	"github.com/osty/osty/internal/runner"
 )
 
 type CliFlags struct {
@@ -380,12 +382,11 @@ func KnownCommand(name string) bool {
 	return false
 }
 
+// UsesFrontEndAIRepair delegates to runner.UsesFrontEndAIRepair so the
+// host CLI stays aligned with toolchain/airepair_flags.osty (the
+// review-time source of truth mirrored in internal/runner).
 func UsesFrontEndAIRepair(name string) bool {
-	switch name {
-	case "check", "typecheck", "resolve", "lint":
-		return true
-	}
-	return false
+	return runner.UsesFrontEndAIRepair(name)
 }
 
 func IsTraceableCommand(name string) bool {
