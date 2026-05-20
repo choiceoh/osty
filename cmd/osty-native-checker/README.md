@@ -120,7 +120,6 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 | [#1890](https://github.com/choiceoh/osty/pull/1890) | **PR3-E/F activation** — cross-pkg method-call dispatch arm |
 | [#1938](https://github.com/choiceoh/osty/pull/1938) | **PR3-G semantic correctness** — `tc.frontCheckSourceToWireJson` (`toolchain/check_json.osty`) replaces stub `emptyCheckResultJson` |
 | [#1940](https://github.com/choiceoh/osty/pull/1940) | **M4 brick A** — byte offsets + diagnostic line/column (`FrontWireMapper`) |
-| (this branch) | **M4 brick B** — `errorsByContext` / `errorDetails` summary telemetry |
-| (this branch) | **M4 brick C** — sha256 stable IDs (`toolchain/check_stable_id.osty` mirrors `EnsureStableIDs`) |
+| [#1942](https://github.com/choiceoh/osty/pull/1942) | **M4 bricks B+C** — `errorsByContext` / `errorDetails` telemetry + sha256 stable IDs (`toolchain/check_stable_id.osty`) |
 
 자세한 분기 결정 + 시도 결과 → `docs/llvm-selfhost-plan-pr*.md` 시리즈.
