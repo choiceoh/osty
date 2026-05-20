@@ -27,18 +27,36 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	}
 	semanticDB := pkg.nativeResolve.db
 
+	// Build a `path → nativeResolveFileInfo` map once so the
+	// per-iteration lookups in this function (defineTopLevelSymbols,
+	// processFile) skip the `nativeResolveFileInfoFor` linear scan over
+	// `files`. The slice is still threaded into the bridge functions
+	// because the per-ref findOrCreateSymbol path needs target-file
+	// lookups too, but the dominant cost there is the reflect-based
+	// walks; this map shaves the per-file constant.
+	filesByPath := make(map[string]nativeResolveFileInfo, len(files))
+	for _, f := range files {
+		filesByPath[f.path] = f
+	}
+
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
 	diags := nativeParseDiagnostics(pkg)
 	endDecl := beginResolvePhase("resolve.native.declIndexes")
 	declIndexes := make(map[string]map[int]ast.Node, len(pkg.Files))
+	// Pre-bucket result.Symbols by sym.File so per-file
+	// defineTopLevelSymbols iterates only its own symbols rather than
+	// the whole slice with a `sym.File != fi.path` filter for every
+	// file. Same O(N×M) → O(total) shape as the ref / typeRef bucket
+	// below.
+	symbolsByFile := groupSymbolsByFile(result.Symbols)
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
 			continue
 		}
-		fi := nativeResolveFileInfoFor(files, pf.Path)
+		fi := filesByPath[pf.Path]
 		declIdx := buildDeclIndex(pf.File)
 		declIndexes[pf.Path] = declIdx
-		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
+		defineTopLevelSymbolsForFile(pkgScope, symbolsByFile, fi, declIdx)
 	}
 	endDecl()
 
@@ -80,9 +98,8 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		bridgeFiles = append(bridgeFiles, pf)
 	}
 	processFile := func(pf *PackageFile) {
-		fi := nativeResolveFileInfoFor(files, pf.Path)
-		identIdx := buildIdentIndex(pf.File)
-		typeIdx := buildNamedTypeIndex(pf.File)
+		fi := filesByPath[pf.Path]
+		identIdx, typeIdx := buildIdentAndNamedTypeIndex(pf.File)
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
 
 		refsForFile := refsByFile[pf.Path]
@@ -101,7 +118,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		// missing slot is unreachable, and a shared-map write here
 		// would race with the workers.
 		refsByID, refIdents := bridgeRefsForFile(refsForFile, symByTarget, files, fi, identIdx, declIndexes, fileScope)
-		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
+		refsByID, refIdents = supplementUseAliasRefsFromIndex(pf.File, fileScope, identIdx, refsByID, refIdents)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
@@ -173,6 +190,29 @@ func groupTypeRefsByFile(refs []api.ResolvedTypeRef) (map[string][]api.ResolvedT
 		byFile[ref.File] = append(byFile[ref.File], ref)
 	}
 	return byFile, shared
+}
+
+// groupSymbolsByFile partitions selfhost-emitted symbols by their owning
+// file path so `defineTopLevelSymbolsForFile` can iterate only the
+// per-file slice instead of the whole `result.Symbols` slice (with a
+// `sym.File != fi.path` filter) once per file. Symbols whose `File` is
+// empty land in the shared bucket so they are visited from every
+// file — preserving the old wildcard semantics in
+// `defineTopLevelSymbols`.
+func groupSymbolsByFile(symbols []api.ResolvedSymbol) map[string][]api.ResolvedSymbol {
+	byFile := make(map[string][]api.ResolvedSymbol, 16)
+	var shared []api.ResolvedSymbol
+	for _, sym := range symbols {
+		if sym.File == "" {
+			shared = append(shared, sym)
+			continue
+		}
+		byFile[sym.File] = append(byFile[sym.File], sym)
+	}
+	if len(shared) > 0 {
+		byFile[""] = shared
+	}
+	return byFile
 }
 
 func nativeParseDiagnostics(pkg *Package) []*diag.Diagnostic {
@@ -303,6 +343,27 @@ func buildNamedTypeIndex(file *ast.File) map[int]*ast.NamedType {
 		}
 	})
 	return idx
+}
+
+// buildIdentAndNamedTypeIndex is the combined `buildIdentIndex` +
+// `buildNamedTypeIndex` walker. The reflect-based AST traversal is the
+// dominant cost in the per-file bridge loop (~19s wall on the
+// install-self toolchain build), and the two separate walks duplicate
+// every traversal step. Combining them halves the walker overhead while
+// keeping the per-index map shape identical.
+func buildIdentAndNamedTypeIndex(file *ast.File) (map[int]*ast.Ident, map[int]*ast.NamedType) {
+	identIdx := make(map[int]*ast.Ident, 64)
+	typeIdx := make(map[int]*ast.NamedType, 32)
+	walkReflect(reflect.ValueOf(file), func(id *ast.Ident) {
+		if id.ID != 0 {
+			identIdx[id.PosV.Offset] = id
+		}
+	}, func(nt *ast.NamedType) {
+		if nt.ID != 0 {
+			typeIdx[nt.PosV.Offset] = nt
+		}
+	})
+	return identIdx, typeIdx
 }
 
 func buildDeclIndex(file *ast.File) map[int]ast.Node {
@@ -725,6 +786,56 @@ func supplementUseAliasRefs(
 	return refsByID, refIdents
 }
 
+// supplementUseAliasRefsFromIndex is the identIdx-driven variant of
+// `supplementUseAliasRefs`. The caller has already walked the file once
+// to build `identIdx`, so we reuse that map instead of paying for a
+// third reflect-walk per file. Behaviour matches the walk-based path:
+// every non-zero-ID ident in the file is considered, and unresolved
+// idents that match a `use`-decl alias are bridged to the alias's
+// fileScope symbol.
+func supplementUseAliasRefsFromIndex(
+	file *ast.File,
+	fileScope *Scope,
+	identIdx map[int]*ast.Ident,
+	refsByID map[ast.NodeID]*Symbol,
+	refIdents []*ast.Ident,
+) (map[ast.NodeID]*Symbol, []*ast.Ident) {
+	if file == nil || fileScope == nil {
+		return refsByID, refIdents
+	}
+	aliases := map[string]*Symbol{}
+	for _, u := range file.Uses {
+		name := nativeUseAlias(u)
+		if name == "" {
+			continue
+		}
+		if sym := fileScope.LookupLocal(name); sym != nil {
+			aliases[name] = sym
+		}
+	}
+	if len(aliases) == 0 {
+		return refsByID, refIdents
+	}
+	if refsByID == nil {
+		refsByID = map[ast.NodeID]*Symbol{}
+	}
+	for _, id := range identIdx {
+		if id == nil || id.ID == 0 {
+			continue
+		}
+		if _, exists := refsByID[id.ID]; exists {
+			continue
+		}
+		sym := aliases[id.Name]
+		if sym == nil {
+			continue
+		}
+		refsByID[id.ID] = sym
+		refIdents = append(refIdents, id)
+	}
+	return refsByID, refIdents
+}
+
 func bridgeTypeRefs(
 	typeRefs []api.ResolvedTypeRef,
 	symbols []api.ResolvedSymbol,
@@ -954,6 +1065,24 @@ func findNearestDecl(declIdx map[int]ast.Node, targetOff int) ast.Node {
 }
 
 // --- Symbol construction from native symbols ---
+
+// defineTopLevelSymbolsForFile is the pre-bucketed counterpart of
+// `defineTopLevelSymbols`. The caller has already partitioned the
+// selfhost-emitted Symbols slice by sym.File via `groupSymbolsByFile`,
+// so the per-file loop iterates only its own bucket plus the shared
+// (`File==""`) bucket — eliminating the `sym.File != fi.path` rescan
+// every previous file paid for the whole slice.
+func defineTopLevelSymbolsForFile(
+	scope *Scope,
+	symbolsByFile map[string][]api.ResolvedSymbol,
+	fi nativeResolveFileInfo,
+	declIdx map[int]ast.Node,
+) {
+	defineTopLevelSymbols(scope, symbolsByFile[fi.path], fi, declIdx)
+	if shared, ok := symbolsByFile[""]; ok && fi.path != "" {
+		defineTopLevelSymbols(scope, shared, fi, declIdx)
+	}
+}
 
 func defineTopLevelSymbols(
 	scope *Scope,

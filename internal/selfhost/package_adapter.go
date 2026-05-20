@@ -3,6 +3,7 @@ package selfhost
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/api"
@@ -92,20 +93,58 @@ type selfhostPackageTokenLayout struct {
 func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPackageTokenLayout, error) {
 	arena := emptyAstArena()
 	layout := &selfhostPackageTokenLayout{}
-	haveFile := false
-	for _, file := range files {
+
+	// Per-file lex + parse + semantic clone are independent; the
+	// `ostyTagType` and `frontPositionCache` package globals they touch
+	// are mutex-protected, so concurrent invocation is safe. Fan out
+	// across GOMAXPROCS while the deterministic arena/layout merge
+	// stays strictly serial below — the merge depends on cumulative
+	// `tokenBase` / `fileIdx` from prior iterations.
+	//
+	// Memory note: a naive "spawn all parsers, then merge" model holds
+	// every parsed AST live at once (200 files × multi-MB toolchain
+	// sources easily exceeds 16 GB). The pipeline below caps in-flight
+	// parses to `workers` by holding each parser's semaphore slot until
+	// the merge consumer drains it — `parsedSlot` is cleared right
+	// after merging file i so the GC can reclaim the AST before the
+	// next file's parse fills its slot.
+	//
+	// Toolchain-scale install-self builds (200 files) used to spend
+	// ~9.4s here serially; the bounded-parallel fan-out cuts that to
+	// GOMAXPROCS-divided wall-time while keeping peak memory
+	// proportional to GOMAXPROCS, not file count.
+	type parsedFile struct {
+		lexed  *OstyLexedSource
+		parsed *AstFile
+		err    error
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	parseOne := func(file PackageCheckFile) parsedFile {
 		if len(file.Source) == 0 {
-			continue
+			return parsedFile{}
 		}
 		lexed := ostyLexSource(string(file.Source))
-		parsed := astParseLexedSource(lexed)
-		if parsed == nil || parsed.arena == nil {
-			return nil, nil, fmt.Errorf("selfhost package adapter: parse produced no AST")
+		ast := astParseLexedSource(lexed)
+		if ast == nil || ast.arena == nil {
+			return parsedFile{err: fmt.Errorf("selfhost package adapter: parse produced no AST")}
 		}
-		if len(parsed.arena.errors) > 0 {
-			return nil, nil, fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(parsed))
+		if len(ast.arena.errors) > 0 {
+			return parsedFile{err: fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(ast))}
 		}
-		parsed = selfhostSemanticAstFile(parsed)
+		return parsedFile{lexed: lexed, parsed: selfhostSemanticAstFile(ast)}
+	}
+
+	mergeOne := func(p parsedFile, file PackageCheckFile) {
+		if p.parsed == nil {
+			return
+		}
 		tokenBase := len(layout.starts)
 		fileIdx := -1
 		displayName := file.Path
@@ -117,9 +156,74 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 			layout.files = append(layout.files, displayName)
 			layout.fileIDs = append(layout.fileIDs, file.SourceFileID)
 		}
-		selfhostAppendTokenLayout(layout, lexed, file.Base, fileIdx)
-		selfhostMergeAstArena(arena, parsed.arena, tokenBase)
-		haveFile = true
+		selfhostAppendTokenLayout(layout, p.lexed, file.Base, fileIdx)
+		selfhostMergeAstArena(arena, p.parsed.arena, tokenBase)
+	}
+
+	haveFile := false
+	if workers <= 1 || len(files) <= 1 {
+		for _, file := range files {
+			p := parseOne(file)
+			if p.err != nil {
+				return nil, nil, p.err
+			}
+			if p.parsed != nil {
+				haveFile = true
+				mergeOne(p, file)
+			}
+		}
+	} else {
+		// Bounded-parallel pipeline: per-file done channels gate the
+		// merge in input order while a `workers`-deep semaphore caps
+		// the number of parsers in flight. Each parser's sem slot is
+		// released by the merge consumer after the slot is drained,
+		// so a slow parse (mir_generator.osty is 23k lines) cannot
+		// open the floodgates for the rest of the package.
+		parsedSlots := make([]parsedFile, len(files))
+		done := make([]chan struct{}, len(files))
+		for i := range done {
+			done[i] = make(chan struct{})
+		}
+		sem := make(chan struct{}, workers)
+		go func() {
+			for i := range files {
+				if len(files[i].Source) == 0 {
+					close(done[i])
+					continue
+				}
+				sem <- struct{}{}
+				i := i
+				go func() {
+					parsedSlots[i] = parseOne(files[i])
+					close(done[i])
+				}()
+			}
+		}()
+		for i, file := range files {
+			<-done[i]
+			p := parsedSlots[i]
+			parsedSlots[i] = parsedFile{}
+			if len(file.Source) != 0 {
+				<-sem
+			}
+			if p.err != nil {
+				// Drain remaining done channels so producer goroutines
+				// can exit cleanly; we already abort the package, so
+				// the leftover ASTs will be GC'd along with the slot
+				// slice once this function returns.
+				for j := i + 1; j < len(files); j++ {
+					<-done[j]
+					if len(files[j].Source) != 0 {
+						<-sem
+					}
+				}
+				return nil, nil, p.err
+			}
+			if p.parsed != nil {
+				haveFile = true
+				mergeOne(p, file)
+			}
+		}
 	}
 	if !haveFile {
 		return nil, layout, nil
