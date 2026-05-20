@@ -101,6 +101,16 @@ var productionNativeCheckerFactory = func() (nativeChecker, string) {
 // the live `toolchain/*.osty` sources and a silent fallback hides real
 // configuration/build problems.
 //
+// Gate (b-llvm) policy (this PR): the managed binary is now the
+// LLVM-built `cmd/osty-native-checker/` artifact, not the Go-built
+// `cmd/osty-native-checker/main.go` shell. `toolchain.EnsureNativeChecker`
+// requires a cached `osty-self` (via `osty install-self`) up front and
+// drives `osty build --backend llvm cmd/osty-native-checker/` to produce
+// the binary. The Go-built shell survives only for test helpers in
+// `testsupport.go` and the `OSTY_NATIVE_CHECKER_BIN` override path;
+// production checker capability is now sourced from live
+// `toolchain/*.osty` instead of `internal/selfhost/generated.go`.
+//
 // Tests do not call this and continue to use the embedded factory — the
 // managed binary build would otherwise add seconds and clutter
 // `internal/check/.osty/` on every package's test run.

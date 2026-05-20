@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,45 @@ func TestInstallManagedBinaryReplacesExistingArtifactAfterRenameFailure(t *testi
 	}
 	if removeCalls != 1 {
 		t.Fatalf("remove calls = %d, want 1", removeCalls)
+	}
+}
+
+func TestEnsureNativeCheckerReturnsRecursionGuardError(t *testing.T) {
+	t.Setenv(RecursionGuardEnv, "1")
+	_, err := EnsureNativeChecker(".")
+	if err == nil {
+		t.Fatal("EnsureNativeChecker returned nil, want recursion guard error")
+	}
+	if !strings.Contains(err.Error(), RecursionGuardEnv) {
+		t.Fatalf("error %q does not mention %q", err, RecursionGuardEnv)
+	}
+}
+
+func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, NativeCheckerBinaryName())
+
+	oldRepoRoot := sourceRepoRootFunc
+	oldVerify := verifyOstySelfCached
+	t.Cleanup(func() {
+		sourceRepoRootFunc = oldRepoRoot
+		verifyOstySelfCached = oldVerify
+	})
+
+	sourceRepoRootFunc = func() (string, error) { return root, nil }
+	verifyOstySelfCached = func(string) error {
+		return errors.New("osty-self not cached: run `osty install-self` first")
+	}
+
+	err := buildNativeChecker(dest)
+	if err == nil {
+		t.Fatal("buildNativeChecker returned nil, want osty-self cache-miss error")
+	}
+	if !strings.Contains(err.Error(), "osty-self not cached") {
+		t.Fatalf("error %q does not propagate cache-miss reason", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("dest %q must not exist after failed build (stat err: %v)", dest, statErr)
 	}
 }
 
