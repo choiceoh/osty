@@ -42,10 +42,10 @@ pub struct FrontTypeRepr {
     pub path: String,
     pub args: List<FrontTypeRepr>,
     pub ret: Option<FrontTypeRepr>,
-    /// paramNames: G20. For fn-type reprs, carries parameter names.
-    /// Empty when no names are available.
     pub paramNames: List<String>,
 }
+/// paramNames: G20. For fn-type reprs, carries parameter names.
+/// Empty when no names are available.
 /// tyToRepr converts a TyArena index into a structured FrontTypeRepr,
 /// eliminating the string-based round-trip on the Go ↔ Osty boundary.
 pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
@@ -77,7 +77,6 @@ pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
             for p in node.args {
                 paramReprs.push(tyToRepr(arena, p))
             }
-            // G20: propagate param names from the TyNode.
             let names = node.fnParamNames
             FrontTypeRepr {kind: "fn", name: "", path: "", args: paramReprs, ret: Some(tyToRepr(arena, node.ret)), paramNames: names}
         },
@@ -92,6 +91,7 @@ pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
         TkSelf -> FrontTypeRepr {kind: "self", name: "Self", path: "", args: [], ret: None, paramNames: []},
     }
 }
+// G20: propagate param names from the TyNode.
 pub fn frontInvalidTypeRepr() -> FrontTypeRepr {
     FrontTypeRepr {kind: "error", name: "Invalid", path: "", args: [], ret: None, paramNames: []}
 }
@@ -126,7 +126,6 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
         let mut parts: List<String> = []
         let mut i = 0
         for p in repr.args {
-            // G20: include param name when available.
             if repr.paramNames.len() > 0 && i < repr.paramNames.len() {
                 let name = repr.paramNames[i]
                 if name != "" {
@@ -148,6 +147,7 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
         repr.name
     }
 }
+// G20: include param name when available.
 pub struct FrontCheckedNode {
     pub nodeId: Int,
     pub kind: String,
@@ -218,6 +218,25 @@ pub fn frontendCheckAst(file: AstFile) -> FrontCheckSummary {
 pub fn frontendCheckAstStructured(file: AstFile) -> FrontCheckResult {
     let tys = emptyTyArena()
     let cx = newElabCx(file, tys)
+    elabFile(cx)
+    serializeCheckResult(cx)
+}
+/// frontendCheckLexedSourceWithImports is the multi-file analogue
+/// entry called by `frontCheckPackageToWireJson`. It installs the
+/// supplied import surfaces (`FrontPackageImport` carrying exported
+/// fns / fields / variants / aliases / type decls / interface
+/// extensions / register-as-iface markers) into the check env
+/// between `newElabCx` and `elabFile`. Mirrors the Go-side
+/// `selfhost.CheckPackageStructured` flow:
+///
+///     cx := newElabCx(file, nil)
+///     selfhostInstallImportSurfaces(cx.env, input.Imports)
+///     elabFile(cx)
+pub fn frontendCheckLexedSourceWithImports(lexed: OstyLexedSource, imports: List<FrontPackageImport>) -> FrontCheckResult {
+    let parsed = astParseLexedSource(lexed)
+    let tys = emptyTyArena()
+    let cx = newElabCx(parsed, tys)
+    frontInstallImportSurfaces(cx.env, imports)
     elabFile(cx)
     serializeCheckResult(cx)
 }
@@ -734,16 +753,10 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
     } else {
         let _ = node
     }
-    // G20: build fn-type with param names. Strip the "?" prefix
-    // that arity-tracking uses — the fn-type metadata wants clean names.
     let fnTy = if sig.paramNames.len() > 0 {
         let mut cleanNames: List<String> = []
         for pn in sig.paramNames {
             if pn.startsWith("?") {
-                // String has no 1-arg `slice` intrinsic method; use the
-                // free-function form `strings.slice(s, start, end)`
-                // which the native checker recognises and the MIR
-                // emitter lowers to `MirIntrinsicStringSubstring`.
                 cleanNames.push(strings.slice(pn, 1, pn.len()))
             } else {
                 cleanNames.push(pn)
@@ -755,6 +768,12 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
     }
     checkRecordSymbol(cx.env, declIdx, "fn", name, owner, fnTy, node.start, node.end)
 }
+// G20: build fn-type with param names. Strip the "?" prefix
+// that arity-tracking uses — the fn-type metadata wants clean names.
+// String has no 1-arg `slice` intrinsic method; use the
+// free-function form `strings.slice(s, start, end)`
+// which the native checker recognises and the MIR
+// emitter lowers to `MirIntrinsicStringSubstring`.
 // Build paramTys / paramNames from node.children (AstNParam entries).
 // Prefix default-carrying params with "?" so the arity check
 // (see paramDefaultCount in elab.osty) can count trailing

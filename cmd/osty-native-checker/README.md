@@ -126,6 +126,15 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
   threading 되어 모든 record 의 `start` / `end` / `startLine` / `endLine`
   이 file-local 좌표로 환산되고, diagnostic 은 추가로 `file` /
   `sourceFileId` 필드 + telemetry suffix `<file>:@L<line>:C<col>` 를 받는다.
+- ✓ `PackageCheckInput.imports` cross-package surface — `frontExtractPackageImports`
+  가 `imports` 배열을 `FrontPackageImport` 로 디코드 (Functions + Fields +
+  Variants + Aliases + TypeDecls + InterfaceExts + RegisterAsIface 전부;
+  nested `TypeRepr` 재귀 디코드 포함). `frontInstallImportSurfaces` 가
+  `newElabCx` 와 `elabFile` 사이에서 각 alias 를 모듈-like named type
+  binding + import alias 마킹 + 모든 exported surface 등록. Go-side
+  `selfhostInstallImportSurfaces` (`internal/selfhost/package_adapter.go`)
+  와 동등. `use std.io` / `use toolchain as tc` 같은 cross-pkg 참조가
+  E0501 / E0703 / E0702 없이 정상 resolve.
 - 잔여: 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
   (key-boundary 엄격 매칭 후속 batch).
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
