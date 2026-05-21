@@ -771,12 +771,12 @@ CLI 재배선의 resolve + check/typecheck 축은 **단일 파일 + 단일 패�
 | ------------------------- | ------------------------------------------------- |
 | `osty resolve FILE`       | `TestRunResolveFileHappyPath`                     |
 | `osty resolve DIR`        | `TestRunResolvePackageHappyPath`                  |
-| `osty check FILE`         | `TestRunCheckFileDefaultPathHappyPath` + `TestRunCheckFileNativeDumpTelemetry` |
-| `osty check DIR`          | `TestRunCheckPackageNativeHappyPath`              |
-| `osty check WORKSPACE`    | `TestRunCheckWorkspaceNativeHappyPath`            |
-| `osty typecheck FILE`     | `TestRunTypecheckFileNativeDumpTelemetry`         |
-| `osty typecheck DIR`      | `TestRunTypecheckPackageNativeHappyPath`          |
-| `osty typecheck WORKSPACE` | `TestRunTypecheckWorkspaceNativeHappyPath`       |
+| `osty check FILE`         | `TestRunCheckFileDefaultPathHappyPath` + `TestRunCheckFileDumpTelemetry` |
+| `osty check DIR`          | `TestRunCheckPackageDirHappyPath`                 |
+| `osty check WORKSPACE`    | `TestRunCheckWorkspaceHappyPath`                  |
+| `osty typecheck FILE`     | `TestRunTypecheckFileDumpTelemetry`               |
+| `osty typecheck DIR`      | `TestRunTypecheckPackageDirHappyPath`             |
+| `osty typecheck WORKSPACE` | `TestRunTypecheckWorkspaceHappyPath`             |
 
 이 smoke 셋은 네이티브 CLI 경로의 exit-zero / 출력 기대치를 잡는다. astbridge 우회는 더 이상 런타임 카운터가 아니라 `FrontendRun.File()` 부재로 구조적으로 강제된다 — `LowerPublicFileFromRun` 만이 명시적 진입점이다.
 

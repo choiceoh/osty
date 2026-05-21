@@ -36,7 +36,7 @@ func runLintPackage(dir string, flags cliFlags) {
 	}
 	frontendDiags, err := lintNativePackageDiagnostics(pkg, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		fmt.Fprintf(os.Stderr, "osty: check: %v\n", err)
 		os.Exit(1)
 	}
 	cfg, _, hasCfg := loadLintConfigWithBase(dir)
@@ -49,14 +49,14 @@ func runLintPackage(dir string, flags cliFlags) {
 // runLintWorkspace lints each package inside dir, aggregating diagnostics
 // so a single strict check covers the whole tree.
 func runLintWorkspace(dir string, flags cliFlags) {
-	ws, err := loadNativeWorkspace(dir, "lint", flags)
+	ws, err := loadWorkspace(dir, "lint", flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
 	graph := resolve.NewPackageGraph(ws)
 	anyErr, anyWarn := false, false
-	for _, path := range nativeGraphPaths(graph) {
+	for _, path := range graphPaths(graph) {
 		pkg := graph.Package(path)
 		if pkg == nil {
 			continue
@@ -64,7 +64,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 		imports := resolve.PackageGraphImportSurfaces(graph, path)
 		frontendDiags, err := lintNativePackageDiagnostics(pkg, imports)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+			fmt.Fprintf(os.Stderr, "osty: check: %v\n", err)
 			anyErr = true
 			continue
 		}
@@ -111,13 +111,13 @@ func lintNativePackageDiagnostics(pkg *resolve.Package, imports []api.PackageChe
 	if pkg == nil {
 		return nil, nil
 	}
-	input := nativePackageCheckInput(pkg, imports)
+	input := packageCheckInput(pkg, imports)
 	checked, err := check.NativePackageCheck(input)
 	if err != nil {
 		return nil, err
 	}
 	diags := packageParseDiags(pkg)
-	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	diags = append(diags, packageCheckDiags(checked.Diagnostics, input.Files)...)
 	return diags, nil
 }
 

@@ -183,11 +183,12 @@ Go-native `runCheckFileLegacy` / `runCheckPackageLegacy` /
 - `TestCheckCLIDefaultPathExitsZero` — `osty check FILE` 기본 경로 exit 0
 - `TestRunCheckFileDefaultPathHappyPath` — 기본 check 경로 in-process smoke
 - `TestRunResolve{File,Package}HappyPath` +
-  `TestRunCheck{Package,Workspace}NativeHappyPath` +
-  `TestRunCheckFileNativeDumpTelemetry` +
-  `TestRunTypecheck{Package,Workspace}NativeHappyPath` +
-  `TestRunTypecheckFileNativeDumpTelemetry`
-  — resolve/check/typecheck native/default 경로 exit-zero + 텔레메트리 헤더
+  `TestRunCheckPackageDirHappyPath` + `TestRunCheckWorkspaceHappyPath` +
+  `TestRunCheckFileDumpTelemetry` +
+  `TestRunTypecheckPackageDirHappyPath` +
+  `TestRunTypecheckWorkspaceHappyPath` +
+  `TestRunTypecheckFileDumpTelemetry`
+  — resolve/check/typecheck CLI 경로 exit-zero + 텔레메트리 헤더
 - ~~`TestGoGenerateSelfhostLeavesGeneratedArtifactsClean`~~ — **삭제됨
   (2026-04-23, PR #854)**. Osty→Go bootstrap transpiler 가 retire 되면서
   `go generate ./internal/selfhost` regen 파이프라인 자체가 사라졌고,

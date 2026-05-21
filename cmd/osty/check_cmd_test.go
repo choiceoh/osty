@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-// TestCheckCLINativeCleanSourceExitsZero is the subprocess-level smoke
+// TestCheckCLICleanSourceExitsZero is the subprocess-level smoke
 // test: `osty check FILE` on well-typed input succeeds with
 // exit 0 and produces no error output. Validates end-to-end
 // invocation (flag parsing, dispatch, conversion, exit code) without
 // depending on the in-process counter.
-func TestCheckCLINativeCleanSourceExitsZero(t *testing.T) {
+func TestCheckCLICleanSourceExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {
@@ -33,10 +33,10 @@ func TestCheckCLINativeCleanSourceExitsZero(t *testing.T) {
 	}
 }
 
-// TestCheckCLINativeSurfacesIntrinsicViolation confirms the native
+// TestCheckCLISurfacesIntrinsicViolation confirms the native
 // CLI path actually surfaces the `#[intrinsic]` non-empty-body gate
 // to stderr with the correct stable code (E0773). Exit code is 1.
-func TestCheckCLINativeSurfacesIntrinsicViolation(t *testing.T) {
+func TestCheckCLISurfacesIntrinsicViolation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`#[intrinsic]
@@ -58,10 +58,10 @@ fn bad() -> Int {
 	}
 }
 
-// TestCheckCLINativeInspectFlagUsesSelfhost pins that --inspect is served by
+// TestCheckCLIInspectFlagUsesSelfhost pins that --inspect is served by
 // the selfhost inspect pass on the native check path, not by the retired Go
 // check.Result replay.
-func TestCheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
+func TestCheckCLIInspectFlagUsesSelfhost(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {
@@ -80,7 +80,7 @@ func TestCheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 	}
 }
 
-func TestRunCheckFileNativeDumpNativeDiagsPrintsSummary(t *testing.T) {
+func TestRunCheckFileDumpCheckDiagsPrintsSummary(t *testing.T) {
 	src := []byte(`fn id(n: Int) -> Int {
     n
 }
@@ -94,7 +94,7 @@ fn main() {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, dumpNativeDiags: true}
+	flags := cliFlags{noColor: true, dumpCheckDiags: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStderr := os.Stderr
@@ -105,7 +105,7 @@ fn main() {
 	os.Stderr = werr
 	t.Cleanup(func() { os.Stderr = origStderr })
 
-	exit := runCheckFileNative(path, src, formatter, flags)
+	exit := runCheckFile(path, src, formatter, flags)
 	_ = werr.Close()
 	stderrBytes, err := io.ReadAll(rerr)
 	if err != nil {
@@ -114,9 +114,9 @@ fn main() {
 	stderr := string(stderrBytes)
 
 	if exit != 0 {
-		t.Fatalf("runCheckFileNative exit = %d, want 0\nstderr:\n%s", exit, stderr)
+		t.Fatalf("runCheckFile exit = %d, want 0\nstderr:\n%s", exit, stderr)
 	}
-	if !strings.Contains(stderr, "native checker telemetry: "+path) {
+	if !strings.Contains(stderr, "checker telemetry: "+path) {
 		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, "assignments:") {
@@ -124,11 +124,11 @@ fn main() {
 	}
 }
 
-// TestCheckCLINativePackageCleanSourceExitsZero is the DIR sibling
+// TestCheckCLIPackageCleanSourceExitsZero is the DIR sibling
 // of the single-file happy-path test. A two-file package (no cross-
 // file references) should pass `osty check DIR` with exit
 // 0 and no stderr error output.
-func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
+func TestCheckCLIPackageCleanSourceExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -153,7 +153,7 @@ func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
 	}
 }
 
-func TestCheckCLINativePackageLoadsStdlibImportSurfaces(t *testing.T) {
+func TestCheckCLIPackageLoadsStdlibImportSurfaces(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`use std.strings as strings
@@ -174,11 +174,11 @@ fn main() {
 	}
 }
 
-// TestCheckCLINativePackageSurfacesPerFileIntrinsic confirms the
+// TestCheckCLIPackageSurfacesPerFileIntrinsic confirms the
 // per-file diagnostic bucketing: an `#[intrinsic]` violation in the
 // second file must surface with E0773 and a span whose rendered path
 // points at b.osty (not the first file and not the bundled buffer).
-func TestCheckCLINativePackageSurfacesPerFileIntrinsic(t *testing.T) {
+func TestCheckCLIPackageSurfacesPerFileIntrinsic(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -210,7 +210,7 @@ fn bad() -> Int {
 	}
 }
 
-func TestCheckCLINativeWorkspaceCrossPackageExitsZero(t *testing.T) {
+func TestCheckCLIWorkspaceCrossPackageExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -242,11 +242,11 @@ fn main() {
 	}
 }
 
-// TestRunCheckPackageNativeHappyPath exercises the DIR check
+// TestRunCheckPackageDirHappyPath exercises the DIR check
 // path end-to-end (LoadPackageForNative + CheckPackageStructured +
-// nativePackageCheckDiags + CheckDiagnosticsAsDiag) on a clean
+// packageCheckDiags + CheckDiagnosticsAsDiag) on a clean
 // multi-file package and asserts exit 0.
-func TestRunCheckPackageNativeHappyPath(t *testing.T) {
+func TestRunCheckPackageDirHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -282,18 +282,18 @@ func TestRunCheckPackageNativeHappyPath(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	exit := runCheckPackageNative(dir, cliFlags{noColor: true})
+	exit := runCheckPackageDir(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runCheckPackageNative exit = %d, want 0", exit)
+		t.Fatalf("runCheckPackageDir exit = %d, want 0", exit)
 	}
 }
 
-func TestRunCheckWorkspaceNativeHappyPath(t *testing.T) {
+func TestRunCheckWorkspaceHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -336,14 +336,14 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	exit := runCheckWorkspaceNative(dir, cliFlags{noColor: true})
+	exit := runCheckWorkspace(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runCheckWorkspaceNative exit = %d, want 0", exit)
+		t.Fatalf("runCheckWorkspace exit = %d, want 0", exit)
 	}
 }
 
@@ -436,10 +436,10 @@ fn main() {
 	}
 }
 
-// TestRunCheckFileNativeDumpTelemetry exercises the native check CLI
+// TestRunCheckFileDumpTelemetry exercises the native check CLI
 // path end-to-end (CheckStructuredFromRun + CheckDiagnosticsAsDiag)
-// and asserts the dump-native-diags telemetry header lands on stderr.
-func TestRunCheckFileNativeDumpTelemetry(t *testing.T) {
+// and asserts the dump-check-diags telemetry header lands on stderr.
+func TestRunCheckFileDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2
@@ -471,19 +471,19 @@ func TestRunCheckFileNativeDumpTelemetry(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, r); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, re); drained <- struct{}{} }()
 
-	exit := runCheckFileNative(path, src, formatter, flags)
+	exit := runCheckFile(path, src, formatter, flags)
 	_ = w.Close()
 	_ = we.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runCheckFileNative exit = %d, want 0", exit)
+		t.Fatalf("runCheckFile exit = %d, want 0", exit)
 	}
 }
 
 // TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
-// companion to TestRunCheckFileNativeDumpTelemetry: after the
+// companion to TestRunCheckFileDumpTelemetry: after the
 // 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` routes
 // through the self-host arena pipeline. Run the subprocess CLI so
 // dispatch actually goes through clicmd.ParseArgs, then verify exit 0
@@ -510,7 +510,7 @@ func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 }
 
 // TestRunCheckFileDefaultPathHappyPath exercises the production
-// default-path single-file check (runCheckFileNative) and asserts
+// default-path single-file check (runCheckFile) and asserts
 // exit 0 on clean input.
 func TestRunCheckFileDefaultPathHappyPath(t *testing.T) {
 	src := []byte(`fn main() {
@@ -544,13 +544,13 @@ func TestRunCheckFileDefaultPathHappyPath(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, r); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, re); drained <- struct{}{} }()
 
-	exit := runCheckFileNative(path, src, formatter, flags)
+	exit := runCheckFile(path, src, formatter, flags)
 	_ = w.Close()
 	_ = we.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runCheckFileNative (default) exit = %d, want 0", exit)
+		t.Fatalf("runCheckFile (default) exit = %d, want 0", exit)
 	}
 }

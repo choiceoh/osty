@@ -24,8 +24,8 @@ unavailable" diagnostic instead of an opaque silent shift to the frozen
 embedded path. `OSTY_NATIVE_CHECKER_BIN` still wins outright when set.
 
 Every CLI surface that previously called `selfhost.CheckPackageStructured`
-directly (`runCheckPackageNative`, `runNativeWorkspaceCheck`,
-`runTypecheckPackageNative`, the file-mode helper, and
+directly (`runCheckPackageDir`, `runWorkspaceCheck`,
+`runTypecheckPackageDir`, the file-mode helper, and
 `lintNativePackageDiagnostics`) now goes through `check.NativePackageCheck`,
 so the same factory selection that built the bench data feeds every
 `osty check` / `osty lint` / `osty typecheck` invocation.

@@ -12,10 +12,10 @@ pub struct CliFlags {
     pub inspect: Bool,
     pub aiRepair: Bool,
     pub aiMode: String,
-    pub dumpNativeDiags: Bool,
+    pub dumpCheckDiags: Bool,
 }
 pub fn defaultCliFlags() -> CliFlags {
-    CliFlags {noColor: false, forceColor: false, maxErrors: 0, jsonOutput: false, strict: false, fix: false, fixDryRun: false, showScopes: false, trace: false, explain: false, inspect: false, aiRepair: false, aiMode: "", dumpNativeDiags: false}
+    CliFlags {noColor: false, forceColor: false, maxErrors: 0, jsonOutput: false, strict: false, fix: false, fixDryRun: false, showScopes: false, trace: false, explain: false, inspect: false, aiRepair: false, aiMode: "", dumpCheckDiags: false}
 }
 pub struct ParsedCommand {
     pub name: String,
@@ -398,11 +398,8 @@ fn applyBoolFlag(flags: CliFlags, name: String) -> Bool {
         flags.inspect = true
         return true
     }
-    if name == "dump-native-diags" {
-        flags.dumpNativeDiags = true
-        return true
-    }
-    if name == "native" {
+    if name == "dump-check-diags" {
+        flags.dumpCheckDiags = true
         return true
     }
     if name == "airepair" || name == "repair" {

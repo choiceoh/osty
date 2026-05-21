@@ -8,13 +8,13 @@ import (
 	"testing"
 )
 
-// TestTypecheckCLINativeCleanSourcePrintsTypes confirms `osty
+// TestTypecheckCLICleanSourcePrintsTypes confirms `osty
 // typecheck FILE` on clean input exits 0 AND emits at least
-// one `line:col-line:col\tType` row per printNativeTypes. The exact
+// one `line:col-line:col\tType` row per printTypes. The exact
 // node set depends on the native checker's recording, so we only
 // assert the presence of the `Int` type for the scalar bindings
 // instead of an exact snapshot.
-func TestTypecheckCLINativeCleanSourcePrintsTypes(t *testing.T) {
+func TestTypecheckCLICleanSourcePrintsTypes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {
@@ -33,14 +33,14 @@ func TestTypecheckCLINativeCleanSourcePrintsTypes(t *testing.T) {
 		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
 	}
 	if !strings.Contains(got.stdout, "Int") {
-		t.Fatalf("stdout missing `Int` type row — printNativeTypes silent or empty\nstdout:\n%s", got.stdout)
+		t.Fatalf("stdout missing `Int` type row — printTypes silent or empty\nstdout:\n%s", got.stdout)
 	}
 }
 
-// TestTypecheckCLINativeSurfacesTypeError pins that a clear type
+// TestTypecheckCLISurfacesTypeError pins that a clear type
 // mismatch (Int binding initialized with String) still surfaces a
 // typed-check diagnostic on stderr.
-func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
+func TestTypecheckCLISurfacesTypeError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {
@@ -58,10 +58,10 @@ func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
 	}
 }
 
-// TestTypecheckCLINativeInspectFlagUsesSelfhost mirrors the check-path
+// TestTypecheckCLIInspectFlagUsesSelfhost mirrors the check-path
 // contract: --inspect is served by the selfhost inspect pass on the native
 // typecheck path.
-func TestTypecheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
+func TestTypecheckCLIInspectFlagUsesSelfhost(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {
@@ -80,7 +80,7 @@ func TestTypecheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 	}
 }
 
-func TestRunTypecheckFileNativeDumpNativeDiagsPrintsSummary(t *testing.T) {
+func TestRunTypecheckFileDumpCheckDiagsPrintsSummary(t *testing.T) {
 	src := []byte(`fn id(n: Int) -> Int {
     n
 }
@@ -94,7 +94,7 @@ fn main() {
 	if err := os.WriteFile(path, src, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	flags := cliFlags{noColor: true, dumpNativeDiags: true}
+	flags := cliFlags{noColor: true, dumpCheckDiags: true}
 	formatter := newFormatter(path, src, flags)
 
 	origStdout := os.Stdout
@@ -112,7 +112,7 @@ fn main() {
 	os.Stderr = werr
 	t.Cleanup(func() { os.Stderr = origStderr })
 
-	exit := runTypecheckFileNative(path, src, formatter, flags)
+	exit := runTypecheckFile(path, src, formatter, flags)
 	_ = wout.Close()
 	_ = werr.Close()
 	stdoutBytes, err := io.ReadAll(rout)
@@ -127,9 +127,9 @@ fn main() {
 	stderr := string(stderrBytes)
 
 	if exit != 0 {
-		t.Fatalf("runTypecheckFileNative exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", exit, stdout, stderr)
+		t.Fatalf("runTypecheckFile exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", exit, stdout, stderr)
 	}
-	if !strings.Contains(stderr, "native checker telemetry: "+path) {
+	if !strings.Contains(stderr, "checker telemetry: "+path) {
 		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, "assignments:") {
@@ -140,11 +140,11 @@ fn main() {
 	}
 }
 
-// TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes confirms
+// TestTypecheckCLIPackageCleanSourcePrintsPerFileTypes confirms
 // the DIR rendering: each file's type dump is prefixed with a
 // `# <path>` header so downstream consumers can split by file. A
 // clean two-file package exits 0 and emits both file headers.
-func TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes(t *testing.T) {
+func TestTypecheckCLIPackageCleanSourcePrintsPerFileTypes(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -174,7 +174,7 @@ func TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes(t *testing.T) {
 	}
 }
 
-func TestTypecheckCLINativePackageLoadsStdlibImportSurfaces(t *testing.T) {
+func TestTypecheckCLIPackageLoadsStdlibImportSurfaces(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`use std.strings as strings
@@ -198,7 +198,7 @@ fn main() {
 	}
 }
 
-func TestTypecheckCLINativeWorkspaceCrossPackagePrintsTypes(t *testing.T) {
+func TestTypecheckCLIWorkspaceCrossPackagePrintsTypes(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -234,11 +234,11 @@ fn main() {
 	}
 }
 
-// TestRunTypecheckPackageNativeHappyPath exercises the DIR
+// TestRunTypecheckPackageDirHappyPath exercises the DIR
 // typecheck path end-to-end (LoadPackageForNative →
-// CheckPackageStructured → nativePackageCheckDiags →
-// printNativePackageTypes) on a clean two-file package.
-func TestRunTypecheckPackageNativeHappyPath(t *testing.T) {
+// CheckPackageStructured → packageCheckDiags →
+// printPackageTypes) on a clean two-file package.
+func TestRunTypecheckPackageDirHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
 	bPath := filepath.Join(dir, "b.osty")
@@ -274,18 +274,18 @@ func TestRunTypecheckPackageNativeHappyPath(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	exit := runTypecheckPackageNative(dir, cliFlags{noColor: true})
+	exit := runTypecheckPackageDir(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runTypecheckPackageNative exit = %d, want 0", exit)
+		t.Fatalf("runTypecheckPackageDir exit = %d, want 0", exit)
 	}
 }
 
-func TestRunTypecheckWorkspaceNativeHappyPath(t *testing.T) {
+func TestRunTypecheckWorkspaceHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	depDir := filepath.Join(dir, "dep")
 	appDir := filepath.Join(dir, "app")
@@ -328,22 +328,22 @@ fn main() {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	exit := runTypecheckWorkspaceNative(dir, cliFlags{noColor: true})
+	exit := runTypecheckWorkspace(dir, cliFlags{noColor: true})
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runTypecheckWorkspaceNative exit = %d, want 0", exit)
+		t.Fatalf("runTypecheckWorkspace exit = %d, want 0", exit)
 	}
 }
 
-// TestRunTypecheckFileNativeDumpTelemetry exercises the native
+// TestRunTypecheckFileDumpTelemetry exercises the native
 // typecheck CLI body end-to-end (including the type dump which
-// iterates TypedNodes) and asserts the dump-native-diags telemetry
+// iterates TypedNodes) and asserts the dump-check-diags telemetry
 // header lands on stderr.
-func TestRunTypecheckFileNativeDumpTelemetry(t *testing.T) {
+func TestRunTypecheckFileDumpTelemetry(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1
     let y = x + 2
@@ -377,13 +377,13 @@ func TestRunTypecheckFileNativeDumpTelemetry(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
 	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
 
-	exit := runTypecheckFileNative(path, src, formatter, flags)
+	exit := runTypecheckFile(path, src, formatter, flags)
 	_ = wout.Close()
 	_ = werr.Close()
 	<-drained
 	<-drained
 
 	if exit != 0 {
-		t.Fatalf("runTypecheckFileNative exit = %d, want 0", exit)
+		t.Fatalf("runTypecheckFile exit = %d, want 0", exit)
 	}
 }
