@@ -71,11 +71,13 @@ pub fn frontCheckSourceToWireJson(source: String) -> String {
 /// extracts every file object inside `"files":[...]` (carrying
 /// `source` plus the per-file metadata `name` / `path` / `base` /
 /// `sourceFileId` from `PackageCheckFile`), concatenates the source
-/// bytes with a single `\n` separator, and runs the standard
-/// single-file check pipeline on the combined buffer. The
-/// combined-source approach gives multi-file callers package-level
-/// top-level scope for free — duplicate top-level decls across files
-/// correctly trigger E0501 / E0103 collisions just like the Go-side
+/// bytes with a single `\n` separator, runs the standard single-file
+/// check pipeline on the combined buffer, and additionally walks
+/// `"imports":[...]` to install each `PackageCheckImport` surface
+/// into the check env before elaboration. The combined-source
+/// approach gives multi-file callers package-level top-level scope
+/// for free — duplicate top-level decls across files correctly
+/// trigger E0501 / E0103 collisions just like the Go-side
 /// `selfhost.CheckPackageStructured`.
 ///
 /// Per-file token layout: a `FrontPackageFileTable` records each
@@ -90,31 +92,27 @@ pub fn frontCheckSourceToWireJson(source: String) -> String {
 /// `displayName` selection in `selfhostBuildPackageAst`) and a
 /// `sourceFileId` field when the request supplied one.
 ///
+/// Cross-package imports: every `PackageCheckImport` entry installs
+/// the import alias as a module-like named type binding, marks the
+/// alias on the check env so dotted access (`tc.foo()`) resolves,
+/// and registers every exported fn / field / variant / alias / type
+/// decl / interface extension / register-as-iface marker under that
+/// alias as owner. Mirrors `selfhostInstallImportSurfaces`
+/// (`internal/selfhost/package_adapter.go`) — see
+/// `toolchain/check_imports.osty` for the install logic.
+///
 /// Telemetry detail suffix mirrors the Go shape:
 /// `<file>:@L<line>:C<col>` when the owning file is known, falling
 /// back to `@L<line>:C<col>` for tokens whose owner cannot be
 /// resolved (degenerate stdin-style requests with empty `name` /
 /// `path` / `sourceFileId`).
-///
-/// Limitation relative to `selfhost.CheckPackageStructured` (Go-side
-/// production path, `internal/selfhost/package_adapter.go`):
-///
-///   - The `imports` array (`PackageCheckInput.Imports`, carrying
-///     cross-package surfaces — exported fns, fields, variants,
-///     type decls) is **not consumed**. References that need an
-///     installed import surface (typical `use std.io` / `use
-///     toolchain as tc`) will surface as E0501 unresolved-name
-///     diagnostics. Closing this requires a toolchain analogue of
-///     `selfhostInstallImportSurfaces` plus the full
-///     `PackageCheckImport` JSON decoder — explicitly out of scope
-///     for this landing (tracked as a separate batch in
-///     `SPEC_GAPS.md::cross-pkg-module-resolution`).
 pub fn frontCheckPackageToWireJson(packageJson: String) -> String {
     let files = frontExtractPackageFiles(packageJson)
+    let imports = frontExtractPackageImports(packageJson)
     let table = frontBuildPackageFileTable(files)
     let combined = table.combined
     let lexed = ostyLexSource(combined)
-    let result = frontendCheckLexedSourceStructured(lexed)
+    let result = frontendCheckLexedSourceWithImports(lexed, imports)
     frontCheckResultToWireJsonForLexedAndPackage(result, lexed, table)
 }
 /// frontExtractPackageFileSources is the legacy single-key extractor
@@ -286,22 +284,92 @@ pub fn frontExtractPackageFiles(packageJson: String) -> List<FrontPackageFile> {
     files
 }
 fn frontFindFilesArrayOpen(bs: List<Byte>, len: Int) -> Int {
+    let bounds = frontFindPackageObjectBounds(bs, len)
+    if bounds.start < 0 {
+        return -1
+    }
+    frontFindArrayOpenForKey(bs, bounds.start, bounds.end, "files")
+}
+/// FrontPackageBounds describes the half-open byte range that the
+/// `package` value spans inside its enclosing `{...}` braces. The
+/// `start` byte is the first byte AFTER the opening `{`; the `end`
+/// byte is the position OF the closing `}` (so `[start, end)` covers
+/// the object's interior content). Both values are -1 when the
+/// scanner could not find a top-level `"package": {...}` shape.
+pub struct FrontPackageBounds {
+    pub start: Int,
+    pub end: Int,
+}
+/// frontFindPackageObjectBounds locates the top-level `"package"`
+/// key inside the request body and returns the byte range covering
+/// the interior of its object value. Mirrors the Go-side
+/// `CheckRequest.Package` field decoding — only keys nested under
+/// `package` count as part of the package shape, so callers
+/// scanning for `files` / `imports` arrays should restrict their
+/// search to this range rather than the whole document.
+///
+/// Implementation: byte-by-byte scan with string-boundary tracking,
+/// matches `"package"` at any position outside a JSON string, then
+/// skips ws + `:` + ws to locate the opening `{` and uses
+/// `frontSkipJsonObject` to find the matching `}`. Returns `start =
+/// end = -1` when no top-level `"package":{...}` is present.
+fn frontFindPackageObjectBounds(bs: List<Byte>, len: Int) -> FrontPackageBounds {
     let mut i = 0
     for i < len {
         let b = bs[i].toInt()
         if b == 0x22 {
-            if frontMatchKeyBytes(bs, i, len, "files") {
-                let afterKey = i + 7
+            if frontMatchKeyBytes(bs, i, len, "package") {
+                let afterKey = i + 9
                 let colonAt = frontSkipAsciiWs(bs, afterKey, len)
                 if colonAt < len && bs[colonAt].toInt() == 0x3A {
                     let openAt = frontSkipAsciiWs(bs, colonAt + 1, len)
-                    if openAt < len && bs[openAt].toInt() == 0x5B {
-                        return openAt
+                    if openAt < len && bs[openAt].toInt() == 0x7B {
+                        let afterObject = frontSkipJsonObject(bs, openAt, len)
+                        return FrontPackageBounds {start: openAt + 1, end: afterObject - 1}
                     }
                 }
             }
             let stringEnd = frontSkipJsonString(bs, i, len)
             i = stringEnd
+            continue
+        }
+        i = i + 1
+    }
+    FrontPackageBounds {start: -1, end: -1}
+}
+/// frontFindArrayOpenForKey returns the position of the `[` opening
+/// the JSON array bound to `key` within the byte range `[start,
+/// end)`. The scan tracks string boundaries by calling
+/// `frontSkipJsonString` past every string and jumps past every
+/// nested object / array via `frontSkipJsonObject` / `frontSkipJsonArray`,
+/// so only direct children of the enclosing object can match.
+/// Returns -1 when no array-valued occurrence at the top level of
+/// the scanned range is found.
+fn frontFindArrayOpenForKey(bs: List<Byte>, start: Int, end: Int, key: String) -> Int {
+    let mut i = start
+    for i < end {
+        let b = bs[i].toInt()
+        if b == 0x22 {
+            if frontMatchKeyBytes(bs, i, end, key) {
+                let keyLen = key.bytes().len()
+                let afterKey = i + keyLen + 2
+                let colonAt = frontSkipAsciiWs(bs, afterKey, end)
+                if colonAt < end && bs[colonAt].toInt() == 0x3A {
+                    let openAt = frontSkipAsciiWs(bs, colonAt + 1, end)
+                    if openAt < end && bs[openAt].toInt() == 0x5B {
+                        return openAt
+                    }
+                }
+            }
+            i = frontSkipJsonString(bs, i, end)
+            continue
+        }
+        if b == 0x7B {
+            i = frontSkipJsonObject(bs, i, end)
+            continue
+        }
+        if b == 0x5B {
+            i = frontSkipJsonArray(bs, i, end)
             continue
         }
         i = i + 1

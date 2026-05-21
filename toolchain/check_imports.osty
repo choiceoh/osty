@@ -1,0 +1,746 @@
+// check_imports.osty - PackageCheckImport JSON decoder + install surfaces.
+//
+// Closes PR #1966 limit 2 (cross-pkg imports in package mode). Mirrors
+// the Go-side `internal/selfhost/package_adapter.go::selfhostInstallImportSurfaces`
+// + `selfhostTypeReprToTy` + the wire shape from
+// `internal/selfhost/api/package.go::PackageCheckImport`.
+//
+// Pipeline:
+//
+//   1. `frontExtractPackageImports(packageJson)` walks the request
+//      body's `imports` array and decodes each `PackageCheckImport`
+//      object into a `FrontPackageImport`. Each entry carries the
+//      alias name plus the surfaces it exports — fns, fields,
+//      variants, aliases, type decls, interface extensions, and a
+//      list of interface types it claims to satisfy via structural
+//      `register_as_iface`.
+//
+//   2. `frontInstallImportSurfaces(env, imports)` walks the decoded
+//      list, binds each alias into the check env as a module-like
+//      named type (so `tc.foo()` member-access resolves), marks the
+//      alias as an import alias, then registers every imported
+//      surface (interfaces, type decls, interface extensions,
+//      aliases, fields, variants, functions) under the alias as
+//      owner. Functions tagged `hasBody` additionally get marked
+//      with `checkMarkFnHasBody` so the cross-pkg method dispatcher
+//      can tell stubs from real implementations.
+//
+//   3. `frontendCheckLexedSourceWithImports` (`check.osty`) calls
+//      `frontInstallImportSurfaces` between `newElabCx` and
+//      `elabFile` so the collect / elaborate two-phase walk sees
+//      the imported names before any body is visited.
+//
+// Without this pipeline, multi-file requests carrying cross-package
+// surfaces produced spurious E0501 unresolved-name diagnostics for
+// every `tc.foo` / `std.io.bar` reference — see PR #1966 limit 2.
+use std.strings as strings
+// =====================================================================
+// 1. Top-level shapes — mirror api.PackageCheckImport + sub-types.
+// =====================================================================
+pub struct FrontPackageImportGenericBound {
+    pub tyParam: String,
+    pub interfaceTypeRepr: FrontTypeRepr,
+    pub interfaceTypeName: String,
+}
+pub struct FrontPackageImportFn {
+    pub name: String,
+    pub owner: String,
+    pub receiverTypeRepr: FrontTypeRepr,
+    pub receiverTypeName: String,
+    pub hasReceiver: Bool,
+    pub returnTypeRepr: FrontTypeRepr,
+    pub returnTypeName: String,
+    pub hasReturn: Bool,
+    pub hasBody: Bool,
+    pub paramNames: List<String>,
+    pub paramTypeReprs: List<FrontTypeRepr>,
+    pub paramTypeNames: List<String>,
+    pub paramDefaults: List<Bool>,
+    pub generics: List<String>,
+    pub genericBounds: List<FrontPackageImportGenericBound>,
+}
+pub struct FrontPackageImportField {
+    pub owner: String,
+    pub name: String,
+    pub typeRepr: FrontTypeRepr,
+    pub typeName: String,
+    pub exported: Bool,
+    pub hasDefault: Bool,
+}
+pub struct FrontPackageImportVariant {
+    pub owner: String,
+    pub name: String,
+    pub fieldTypeReprs: List<FrontTypeRepr>,
+    pub fieldTypeNames: List<String>,
+    pub generics: List<String>,
+}
+pub struct FrontPackageImportAlias {
+    pub name: String,
+    pub targetRepr: FrontTypeRepr,
+    pub targetName: String,
+    pub generics: List<String>,
+}
+pub struct FrontPackageImportType {
+    pub name: String,
+    pub kind: String,
+    pub generics: List<String>,
+    pub genericBounds: List<FrontPackageImportGenericBound>,
+}
+pub struct FrontPackageImportInterfaceExt {
+    pub owner: String,
+    pub interfaceTypeRepr: FrontTypeRepr,
+    pub interfaceTypeName: String,
+}
+pub struct FrontPackageImport {
+    pub alias: String,
+    pub functions: List<FrontPackageImportFn>,
+    pub fields: List<FrontPackageImportField>,
+    pub variants: List<FrontPackageImportVariant>,
+    pub aliases: List<FrontPackageImportAlias>,
+    pub typeDecls: List<FrontPackageImportType>,
+    pub interfaceExts: List<FrontPackageImportInterfaceExt>,
+    pub registerAsIface: List<String>,
+}
+fn frontEmptyTypeRepr() -> FrontTypeRepr {
+    FrontTypeRepr {kind: "", name: "", path: "", args: [], ret: None, paramNames: []}
+}
+// =====================================================================
+// 2. Generic JSON value tree.
+//
+// The byte-level scanner in `check_json.osty` is sufficient for flat
+// field extraction, but PackageCheckImport carries deeply nested
+// shapes (TypeRepr recurses through args + return; per-import lists
+// each carry their own object schema). Building a generic value
+// tree keeps the downstream decoders short and uniform — every
+// decoder just reads expected keys off a `FrontJsonObject` and
+// recurses through `FrontJsonArray`s.
+// =====================================================================
+pub enum FrontJsonValue {
+    FJString(String),
+    FJBool(Bool),
+    FJInt(Int),
+    FJNull,
+    FJArray(List<FrontJsonValue>),
+    FJObject(List<FrontJsonField>),
+}
+pub struct FrontJsonField {
+    pub key: String,
+    pub value: FrontJsonValue,
+}
+pub struct FrontJsonValueScan {
+    pub value: FrontJsonValue,
+    pub next: Int,
+}
+fn frontParseJsonValueAt(bs: List<Byte>, pos: Int, len: Int) -> FrontJsonValueScan {
+    let p = frontSkipAsciiWs(bs, pos, len)
+    if p >= len {
+        return FrontJsonValueScan {value: FJNull, next: len}
+    }
+    let b = bs[p].toInt()
+    if b == 0x22 {
+        let scan = frontDecodeJsonStringAt(bs, p + 1, len)
+        return FrontJsonValueScan {value: FJString(scan.value), next: scan.next}
+    }
+    if b == 0x7B {
+        return frontParseJsonObjectAt(bs, p, len)
+    }
+    if b == 0x5B {
+        return frontParseJsonArrayAt(bs, p, len)
+    }
+    if b == 0x74 {
+        if frontMatchLiteral(bs, p, len, "true") {
+            return FrontJsonValueScan {value: FJBool(true), next: p + 4}
+        }
+        return FrontJsonValueScan {value: FJNull, next: frontSkipJsonLiteral(bs, p, len)}
+    }
+    if b == 0x66 {
+        if frontMatchLiteral(bs, p, len, "false") {
+            return FrontJsonValueScan {value: FJBool(false), next: p + 5}
+        }
+        return FrontJsonValueScan {value: FJNull, next: frontSkipJsonLiteral(bs, p, len)}
+    }
+    if b == 0x6E {
+        if frontMatchLiteral(bs, p, len, "null") {
+            return FrontJsonValueScan {value: FJNull, next: p + 4}
+        }
+        return FrontJsonValueScan {value: FJNull, next: frontSkipJsonLiteral(bs, p, len)}
+    }
+    if (b >= 0x30 && b <= 0x39) || b == 0x2D {
+        let numScan = frontScanJsonInt(bs, p, len)
+        return FrontJsonValueScan {value: FJInt(numScan.value), next: numScan.next}
+    }
+    FrontJsonValueScan {value: FJNull, next: p + 1}
+}
+fn frontMatchLiteral(bs: List<Byte>, at: Int, len: Int, literal: String) -> Bool {
+    let lb = literal.bytes()
+    let n = lb.len()
+    if at + n > len {
+        return false
+    }
+    let mut i = 0
+    for i < n {
+        if bs[at + i].toInt() != lb[i].toInt() {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+fn frontParseJsonArrayAt(bs: List<Byte>, openAt: Int, len: Int) -> FrontJsonValueScan {
+    let mut items: List<FrontJsonValue> = []
+    let mut i = openAt + 1
+    for i < len {
+        let pos = frontSkipAsciiWs(bs, i, len)
+        if pos >= len {
+            return FrontJsonValueScan {value: FJArray(items), next: len}
+        }
+        let b = bs[pos].toInt()
+        if b == 0x5D {
+            return FrontJsonValueScan {value: FJArray(items), next: pos + 1}
+        }
+        if b == 0x2C {
+            i = pos + 1
+            continue
+        }
+        let scan = frontParseJsonValueAt(bs, pos, len)
+        items.push(scan.value)
+        i = scan.next
+    }
+    FrontJsonValueScan {value: FJArray(items), next: len}
+}
+fn frontParseJsonObjectAt(bs: List<Byte>, openAt: Int, len: Int) -> FrontJsonValueScan {
+    let mut entries: List<FrontJsonField> = []
+    let mut i = openAt + 1
+    for i < len {
+        let pos = frontSkipAsciiWs(bs, i, len)
+        if pos >= len {
+            return FrontJsonValueScan {value: FJObject(entries), next: len}
+        }
+        let b = bs[pos].toInt()
+        if b == 0x7D {
+            return FrontJsonValueScan {value: FJObject(entries), next: pos + 1}
+        }
+        if b == 0x2C {
+            i = pos + 1
+            continue
+        }
+        if b != 0x22 {
+            i = pos + 1
+            continue
+        }
+        let keyScan = frontDecodeJsonStringAt(bs, pos + 1, len)
+        let key = keyScan.value
+        let colonAt = frontSkipAsciiWs(bs, keyScan.next, len)
+        if colonAt >= len || bs[colonAt].toInt() != 0x3A {
+            return FrontJsonValueScan {value: FJObject(entries), next: len}
+        }
+        let valScan = frontParseJsonValueAt(bs, colonAt + 1, len)
+        entries.push(FrontJsonField {key, value: valScan.value})
+        i = valScan.next
+    }
+    FrontJsonValueScan {value: FJObject(entries), next: len}
+}
+// =====================================================================
+// 3. JSON value accessors.
+//
+// Decoders below treat absent / wrong-typed fields as zero values
+// (empty string / 0 / false / empty list / empty struct). Matches the
+// Go-side `encoding/json` behaviour where unmarshalling onto a struct
+// leaves zero-valued fields zero-valued.
+// =====================================================================
+fn frontJsonObjectGet(obj: List<FrontJsonField>, key: String) -> FrontJsonValue {
+    for f in obj {
+        if f.key == key {
+            return f.value
+        }
+    }
+    FJNull
+}
+fn frontJsonAsString(v: FrontJsonValue) -> String {
+    match v {
+        FJString(s) -> s,
+        _ -> "",
+    }
+}
+fn frontJsonAsBool(v: FrontJsonValue) -> Bool {
+    match v {
+        FJBool(b) -> b,
+        _ -> false,
+    }
+}
+fn frontJsonAsInt(v: FrontJsonValue) -> Int {
+    match v {
+        FJInt(n) -> n,
+        _ -> 0,
+    }
+}
+fn frontJsonAsArray(v: FrontJsonValue) -> List<FrontJsonValue> {
+    match v {
+        FJArray(items) -> items,
+        _ -> {
+            let empty: List<FrontJsonValue> = []
+            empty
+        },
+    }
+}
+fn frontJsonAsObject(v: FrontJsonValue) -> List<FrontJsonField> {
+    match v {
+        FJObject(fields) -> fields,
+        _ -> {
+            let empty: List<FrontJsonField> = []
+            empty
+        },
+    }
+}
+fn frontJsonAsStringList(v: FrontJsonValue) -> List<String> {
+    let mut out: List<String> = []
+    for item in frontJsonAsArray(v) {
+        out.push(frontJsonAsString(item))
+    }
+    out
+}
+fn frontJsonAsBoolList(v: FrontJsonValue) -> List<Bool> {
+    let mut out: List<Bool> = []
+    for item in frontJsonAsArray(v) {
+        out.push(frontJsonAsBool(item))
+    }
+    out
+}
+fn frontJsonIsNull(v: FrontJsonValue) -> Bool {
+    match v {
+        FJNull -> true,
+        _ -> false,
+    }
+}
+// =====================================================================
+// 4. TypeRepr decoder.
+//
+// `TypeRepr` is recursive (args + return). The decoder mirrors the Go
+// struct field tags from `api.TypeRepr`. Missing fields default to
+// their zero values; `param_names` is the underscored JSON tag for the
+// Osty-side `paramNames`.
+// =====================================================================
+fn frontDecodeTypeReprValue(v: FrontJsonValue) -> FrontTypeRepr {
+    if frontJsonIsNull(v) {
+        return frontEmptyTypeRepr()
+    }
+    let obj = frontJsonAsObject(v)
+    if obj.len() == 0 {
+        return frontEmptyTypeRepr()
+    }
+    let kind = frontJsonAsString(frontJsonObjectGet(obj, "kind"))
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let path = frontJsonAsString(frontJsonObjectGet(obj, "path"))
+    let mut args: List<FrontTypeRepr> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "args")) {
+        args.push(frontDecodeTypeReprValue(item))
+    }
+    let retField = frontJsonObjectGet(obj, "return")
+    let ret = if frontJsonIsNull(retField) {
+        let none: Option<FrontTypeRepr> = None
+        none
+    } else {
+        Some(frontDecodeTypeReprValue(retField))
+    }
+    let paramNames = frontJsonAsStringList(frontJsonObjectGet(obj, "param_names"))
+    FrontTypeRepr {kind, name, path, args, ret, paramNames}
+}
+// =====================================================================
+// 5. Per-surface decoders.
+// =====================================================================
+fn frontDecodeGenericBound(v: FrontJsonValue) -> FrontPackageImportGenericBound {
+    let obj = frontJsonAsObject(v)
+    let tyParam = frontJsonAsString(frontJsonObjectGet(obj, "tyParam"))
+    let interfaceTypeName = frontJsonAsString(frontJsonObjectGet(obj, "interfaceType"))
+    let interfaceTypeRepr = frontDecodeTypeReprValue(frontJsonObjectGet(obj, "interfaceTypeRepr"))
+    FrontPackageImportGenericBound {tyParam, interfaceTypeRepr, interfaceTypeName}
+}
+fn frontDecodeGenericBoundList(v: FrontJsonValue) -> List<FrontPackageImportGenericBound> {
+    let mut out: List<FrontPackageImportGenericBound> = []
+    for item in frontJsonAsArray(v) {
+        out.push(frontDecodeGenericBound(item))
+    }
+    out
+}
+fn frontDecodeTypeReprList(v: FrontJsonValue) -> List<FrontTypeRepr> {
+    let mut out: List<FrontTypeRepr> = []
+    for item in frontJsonAsArray(v) {
+        out.push(frontDecodeTypeReprValue(item))
+    }
+    out
+}
+fn frontDecodeImportFn(v: FrontJsonValue) -> FrontPackageImportFn {
+    let obj = frontJsonAsObject(v)
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let owner = frontJsonAsString(frontJsonObjectGet(obj, "owner"))
+    let receiverTypeName = frontJsonAsString(frontJsonObjectGet(obj, "receiverType"))
+    let receiverField = frontJsonObjectGet(obj, "receiverTypeRepr")
+    let hasReceiver = !frontJsonIsNull(receiverField) || receiverTypeName != ""
+    let receiverTypeRepr = frontDecodeTypeReprValue(receiverField)
+    let returnTypeName = frontJsonAsString(frontJsonObjectGet(obj, "returnType"))
+    let returnField = frontJsonObjectGet(obj, "returnTypeRepr")
+    let hasReturn = !frontJsonIsNull(returnField)
+    let returnTypeRepr = frontDecodeTypeReprValue(returnField)
+    let hasBody = frontJsonAsBool(frontJsonObjectGet(obj, "hasBody"))
+    let paramNames = frontJsonAsStringList(frontJsonObjectGet(obj, "paramNames"))
+    let paramTypeNames = frontJsonAsStringList(frontJsonObjectGet(obj, "paramTypes"))
+    let paramTypeReprs = frontDecodeTypeReprList(frontJsonObjectGet(obj, "paramTypeReprs"))
+    let paramDefaults = frontJsonAsBoolList(frontJsonObjectGet(obj, "paramDefaults"))
+    let generics = frontJsonAsStringList(frontJsonObjectGet(obj, "generics"))
+    let genericBounds = frontDecodeGenericBoundList(frontJsonObjectGet(obj, "genericBounds"))
+    FrontPackageImportFn {name, owner, receiverTypeRepr, receiverTypeName, hasReceiver, returnTypeRepr, returnTypeName, hasReturn, hasBody, paramNames, paramTypeReprs, paramTypeNames, paramDefaults, generics, genericBounds}
+}
+fn frontDecodeImportField(v: FrontJsonValue) -> FrontPackageImportField {
+    let obj = frontJsonAsObject(v)
+    let owner = frontJsonAsString(frontJsonObjectGet(obj, "owner"))
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let typeName = frontJsonAsString(frontJsonObjectGet(obj, "typeName"))
+    let typeRepr = frontDecodeTypeReprValue(frontJsonObjectGet(obj, "type"))
+    let exported = frontJsonAsBool(frontJsonObjectGet(obj, "exported"))
+    let hasDefault = frontJsonAsBool(frontJsonObjectGet(obj, "hasDefault"))
+    FrontPackageImportField {owner, name, typeRepr, typeName, exported, hasDefault}
+}
+fn frontDecodeImportVariant(v: FrontJsonValue) -> FrontPackageImportVariant {
+    let obj = frontJsonAsObject(v)
+    let owner = frontJsonAsString(frontJsonObjectGet(obj, "owner"))
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let fieldTypeNames = frontJsonAsStringList(frontJsonObjectGet(obj, "fieldTypes"))
+    let fieldTypeReprs = frontDecodeTypeReprList(frontJsonObjectGet(obj, "fieldTypeReprs"))
+    let generics = frontJsonAsStringList(frontJsonObjectGet(obj, "generics"))
+    FrontPackageImportVariant {owner, name, fieldTypeReprs, fieldTypeNames, generics}
+}
+fn frontDecodeImportAlias(v: FrontJsonValue) -> FrontPackageImportAlias {
+    let obj = frontJsonAsObject(v)
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let targetName = frontJsonAsString(frontJsonObjectGet(obj, "target"))
+    let targetRepr = frontDecodeTypeReprValue(frontJsonObjectGet(obj, "targetRepr"))
+    let generics = frontJsonAsStringList(frontJsonObjectGet(obj, "generics"))
+    FrontPackageImportAlias {name, targetRepr, targetName, generics}
+}
+fn frontDecodeImportType(v: FrontJsonValue) -> FrontPackageImportType {
+    let obj = frontJsonAsObject(v)
+    let name = frontJsonAsString(frontJsonObjectGet(obj, "name"))
+    let kind = frontJsonAsString(frontJsonObjectGet(obj, "kind"))
+    let generics = frontJsonAsStringList(frontJsonObjectGet(obj, "generics"))
+    let genericBounds = frontDecodeGenericBoundList(frontJsonObjectGet(obj, "genericBounds"))
+    FrontPackageImportType {name, kind, generics, genericBounds}
+}
+fn frontDecodeImportInterfaceExt(v: FrontJsonValue) -> FrontPackageImportInterfaceExt {
+    let obj = frontJsonAsObject(v)
+    let owner = frontJsonAsString(frontJsonObjectGet(obj, "owner"))
+    let interfaceTypeName = frontJsonAsString(frontJsonObjectGet(obj, "interfaceType"))
+    let interfaceTypeRepr = frontDecodeTypeReprValue(frontJsonObjectGet(obj, "interfaceTypeRepr"))
+    FrontPackageImportInterfaceExt {owner, interfaceTypeRepr, interfaceTypeName}
+}
+fn frontDecodeImportEntry(v: FrontJsonValue) -> FrontPackageImport {
+    let obj = frontJsonAsObject(v)
+    let alias = frontJsonAsString(frontJsonObjectGet(obj, "alias"))
+    let mut functions: List<FrontPackageImportFn> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "functions")) {
+        functions.push(frontDecodeImportFn(item))
+    }
+    let mut fields: List<FrontPackageImportField> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "fields")) {
+        fields.push(frontDecodeImportField(item))
+    }
+    let mut variants: List<FrontPackageImportVariant> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "variants")) {
+        variants.push(frontDecodeImportVariant(item))
+    }
+    let mut aliases: List<FrontPackageImportAlias> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "aliases")) {
+        aliases.push(frontDecodeImportAlias(item))
+    }
+    let mut typeDecls: List<FrontPackageImportType> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "typeDecls")) {
+        typeDecls.push(frontDecodeImportType(item))
+    }
+    let mut interfaceExts: List<FrontPackageImportInterfaceExt> = []
+    for item in frontJsonAsArray(frontJsonObjectGet(obj, "interfaceExts")) {
+        interfaceExts.push(frontDecodeImportInterfaceExt(item))
+    }
+    let registerAsIface = frontJsonAsStringList(frontJsonObjectGet(obj, "registerAsIface"))
+    FrontPackageImport {alias, functions, fields, variants, aliases, typeDecls, interfaceExts, registerAsIface}
+}
+// =====================================================================
+// 6. `package.imports` array locator.
+//
+// The request body shape is
+// `{"package":{"files":[...],"imports":[...]}}`. The byte scanner
+// locates the `"package":{...}` object bounds first, then scans only
+// within its interior for a direct-child `"imports"` array — so a
+// sibling top-level `"imports"` key or a nested `"imports"` inside
+// some other shape cannot false-positive. Matches the Go-side
+// `CheckRequest.Package.Imports` decoding semantics — only keys
+// nested under `package` count as part of the package shape.
+// =====================================================================
+pub fn frontExtractPackageImports(packageJson: String) -> List<FrontPackageImport> {
+    let bs = packageJson.bytes()
+    let len = bs.len()
+    let mut out: List<FrontPackageImport> = []
+    let openAt = frontFindImportsArrayOpen(bs, len)
+    if openAt < 0 {
+        return out
+    }
+    let scan = frontParseJsonArrayAt(bs, openAt, len)
+    for item in frontJsonAsArray(scan.value) {
+        let entry = frontDecodeImportEntry(item)
+        if entry.alias != "" {
+            out.push(entry)
+        }
+    }
+    out
+}
+fn frontFindImportsArrayOpen(bs: List<Byte>, len: Int) -> Int {
+    let bounds = frontFindPackageObjectBounds(bs, len)
+    if bounds.start < 0 {
+        return -1
+    }
+    frontFindArrayOpenForKey(bs, bounds.start, bounds.end, "imports")
+}
+// =====================================================================
+// 7. TypeRepr → ty Int translator.
+//
+// Mirrors `internal/selfhost/package_adapter.go::selfhostTypeReprToTy`.
+// The structured `FrontTypeRepr` takes precedence; when its `kind` is
+// blank we fall back to parsing the legacy string typeName via
+// `tyFromString` (same fallback the Go side uses for older wire
+// shapes that did not yet carry TypeRepr).
+//
+// Inputs whose `kind` is `unit` / `never` / `error` / `poison` / `self`
+// short-circuit to their canonical TyArena singletons; `primitive`
+// looks up the prim kind by name and falls back to a named-type when
+// the prim name is unknown. `optional` recurses through `return`,
+// `tuple` / `fn` / `named` recurse through `args`, and `fn`
+// additionally takes the `return` as its return type (defaulting to
+// `()` when missing).
+// =====================================================================
+pub fn frontTypeReprToTy(env: CheckEnv, repr: FrontTypeRepr, fallback: String) -> Int {
+    if repr.kind == "" {
+        return frontTypeNameToTy(env, fallback)
+    }
+    if repr.kind == "unit" {
+        return tUnit(env.tys)
+    }
+    if repr.kind == "never" {
+        return tNever(env.tys)
+    }
+    if repr.kind == "error" {
+        return tErr(env.tys)
+    }
+    if repr.kind == "poison" {
+        return tPoison(env.tys)
+    }
+    if repr.kind == "self" {
+        return tySelf(env.tys, "")
+    }
+    if repr.kind == "primitive" {
+        let prim = primKindFromName(repr.name)
+        if frontIsValidPrimKind(prim) || repr.name == "Invalid" {
+            return tyPrim(env.tys, prim)
+        }
+        return tyNamed(env.tys, repr.name, [])
+    }
+    if repr.kind == "named" {
+        return tyNamed(env.tys, repr.name, frontTypeReprListToTys(env, repr.args))
+    }
+    if repr.kind == "optional" {
+        let inner = match repr.ret {
+            Some(r) -> frontTypeReprToTy(env, r, ""),
+            None -> tErr(env.tys),
+        }
+        return tyOptional(env.tys, inner)
+    }
+    if repr.kind == "tuple" {
+        return tyTuple(env.tys, frontTypeReprListToTys(env, repr.args))
+    }
+    if repr.kind == "fn" {
+        let retTy = match repr.ret {
+            Some(r) -> frontTypeReprToTy(env, r, ""),
+            None -> tUnit(env.tys),
+        }
+        return tyFn(env.tys, frontTypeReprListToTys(env, repr.args), retTy)
+    }
+    if repr.kind == "typevar" {
+        if repr.name == "" {
+            return tErr(env.tys)
+        }
+        return tyNamed(env.tys, repr.name, [])
+    }
+    if repr.name != "" {
+        return tyNamed(env.tys, repr.name, frontTypeReprListToTys(env, repr.args))
+    }
+    frontTypeNameToTy(env, fallback)
+}
+fn frontTypeReprListToTys(env: CheckEnv, reprs: List<FrontTypeRepr>) -> List<Int> {
+    let mut out: List<Int> = []
+    for r in reprs {
+        out.push(frontTypeReprToTy(env, r, ""))
+    }
+    out
+}
+fn frontTypeReprListWithFallback(env: CheckEnv, reprs: List<FrontTypeRepr>, fallback: List<String>) -> List<Int> {
+    let nr = reprs.len()
+    let nf = fallback.len()
+    let n = if nr >= nf {
+        nr
+    } else {
+        nf
+    }
+    let mut out: List<Int> = []
+    let mut i = 0
+    for i < n {
+        let r = if i < nr {
+            reprs[i]
+        } else {
+            frontEmptyTypeRepr()
+        }
+        let f = if i < nf {
+            fallback[i]
+        } else {
+            ""
+        }
+        out.push(frontTypeReprToTy(env, r, f))
+        i = i + 1
+    }
+    out
+}
+fn frontTypeNameToTy(env: CheckEnv, typeName: String) -> Int {
+    if typeName == "" {
+        return tErr(env.tys)
+    }
+    if typeName == "()" {
+        return tUnit(env.tys)
+    }
+    if typeName == "Invalid" || typeName == "Poison" {
+        return tErr(env.tys)
+    }
+    tyFromString(env.tys, typeName)
+}
+fn frontIsValidPrimKind(prim: PrimKind) -> Bool {
+    match prim {
+        PkInvalid -> false,
+        _ -> true,
+    }
+}
+// =====================================================================
+// 8. Install surfaces.
+//
+// Mirrors `internal/selfhost/package_adapter.go::selfhostInstallImportSurfaces`.
+// Walk order matches the Go side (interfaces → type decls → interface
+// exts → aliases → fields → variants → fns) so the check env build-up
+// is deterministic regardless of wire shape variation.
+// =====================================================================
+pub fn frontInstallImportSurfaces(env: CheckEnv, imports: List<FrontPackageImport>) {
+    for imp in imports {
+        if imp.alias == "" {
+            continue
+        }
+        let aliasTy = tyNamed(env.tys, imp.alias, [])
+        checkBind(env, imp.alias, aliasTy)
+        checkMarkImportAlias(env, imp.alias)
+        for iface in imp.registerAsIface {
+            if iface != "" {
+                checkRegisterInterface(env, iface)
+            }
+        }
+        for decl in imp.typeDecls {
+            checkRegisterType(env, CheckTypeSig {name: decl.name, generics: decl.generics, genericBounds: frontMaterializeBounds(env, decl.genericBounds), kind: decl.kind})
+        }
+        for ext in imp.interfaceExts {
+            let ifaceTy = frontTypeReprToTy(env, ext.interfaceTypeRepr, ext.interfaceTypeName)
+            if ifaceTy >= 0 {
+                let emptyNames: List<String> = []
+                let emptyNodes: List<Int> = []
+                checkRegisterInterfaceExtends(env, CheckInterfaceExt {owner: ext.owner, ifaceTy, defaultBodyNames: emptyNames, defaultBodyNodes: emptyNodes})
+            }
+        }
+        for alias in imp.aliases {
+            let ty = frontTypeReprToTy(env, alias.targetRepr, alias.targetName)
+            checkRegisterAlias(env, CheckAliasSig {name: alias.name, ty, generics: alias.generics})
+        }
+        for field in imp.fields {
+            let ty = frontTypeReprToTy(env, field.typeRepr, field.typeName)
+            checkRegisterField(env, CheckFieldSig {owner: field.owner, name: field.name, ty, exported: field.exported, hasDefault: field.hasDefault})
+        }
+        for variant in imp.variants {
+            let fieldTys = frontTypeReprListWithFallback(env, variant.fieldTypeReprs, variant.fieldTypeNames)
+            checkRegisterVariant(env, CheckVariantSig {owner: variant.owner, name: variant.name, fieldTys, generics: variant.generics})
+        }
+        for impFn in imp.functions {
+            let paramTys = frontTypeReprListWithFallback(env, impFn.paramTypeReprs, impFn.paramTypeNames)
+            let receiverTy = if impFn.hasReceiver {
+                frontTypeReprToTy(env, impFn.receiverTypeRepr, impFn.receiverTypeName)
+            } else {
+                -1
+            }
+            let retTy = if impFn.hasReturn {
+                frontTypeReprToTy(env, impFn.returnTypeRepr, impFn.returnTypeName)
+            } else if impFn.returnTypeName == "" || impFn.returnTypeName == "()" {
+                tUnit(env.tys)
+            } else {
+                frontTypeNameToTy(env, impFn.returnTypeName)
+            }
+            let paramNames = frontImportFnParamNames(impFn.paramNames, impFn.paramDefaults, paramTys.len())
+            checkRegisterFn(env, CheckFnSig {name: impFn.name, owner: impFn.owner, receiverTy, hasReceiver: impFn.hasReceiver, retTy, paramNames, paramTys, generics: impFn.generics, genericBounds: frontMaterializeBounds(env, impFn.genericBounds)})
+            if impFn.hasBody {
+                checkMarkFnHasBody(env, impFn.name, impFn.owner)
+            }
+        }
+    }
+}
+fn frontMaterializeBounds(env: CheckEnv, bounds: List<FrontPackageImportGenericBound>) -> List<CheckGenericBound> {
+    let mut out: List<CheckGenericBound> = []
+    for b in bounds {
+        let iface = frontTypeReprToTy(env, b.interfaceTypeRepr, b.interfaceTypeName)
+        out.push(CheckGenericBound {tyParam: b.tyParam, iface})
+    }
+    out
+}
+/// frontImportFnParamNames mirrors
+/// `internal/selfhost/package_adapter.go::selfhostImportFnParamNames`.
+/// Trailing `paramDefaults[true]` entries earn a `?` prefix on the
+/// corresponding param name so `paramDefaultCount` (in check.osty)
+/// recovers the trailing-default count. Pre-prefixed names (the
+/// arena-walking import surface already encodes `?`) survive
+/// unchanged. Synthesised `arg<idx>` names backfill missing entries
+/// so the trailing-default scanner has something to read from.
+fn frontImportFnParamNames(paramNames: List<String>, paramDefaults: List<Bool>, paramArity: Int) -> List<String> {
+    let mut out: List<String> = []
+    for name in paramNames {
+        out.push(name)
+    }
+    let mut target = paramArity
+    if out.len() > target {
+        target = out.len()
+    }
+    if paramDefaults.len() > target {
+        target = paramDefaults.len()
+    }
+    for out.len() < target {
+        out.push("arg{out.len()}")
+    }
+    if paramDefaults.len() == 0 {
+        return out
+    }
+    let mut trailingStart = paramDefaults.len()
+    let mut i = paramDefaults.len() - 1
+    for i >= 0 {
+        if !paramDefaults[i] {
+            i = -1
+            continue
+        }
+        trailingStart = i
+        i = i - 1
+    }
+    let mut j = trailingStart
+    let outLen = out.len()
+    let defaultsLen = paramDefaults.len()
+    for j < defaultsLen && j < outLen {
+        if !strings.hasPrefix(out[j], "?") {
+            out[j] = "?" + out[j]
+        }
+        j = j + 1
+    }
+    out
+}

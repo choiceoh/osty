@@ -28,6 +28,14 @@
 //      환산하며, diagnostic 은 추가로 `file` + `sourceFileId` 필드를
 //      받는다. Telemetry detail suffix 도 `<file>:@L<line>:C<col>` 으로
 //      파일명 prefix 를 붙인다 (Go-side `selfhostLayoutTokenPos` 동등).
+//   5. ✓ `PackageCheckInput.imports` cross-package surface installation —
+//      `frontExtractPackageImports` 가 wire 의 `imports` 배열을
+//      `FrontPackageImport` 로 디코드 (fns + fields + variants + aliases
+//      + typeDecls + interfaceExts + registerAsIface 전부; nested
+//      `TypeRepr` 재귀 디코더 포함). `frontInstallImportSurfaces` 가
+//      `newElabCx` 와 `elabFile` 사이에서 각 alias 를 모듈-like named
+//      type 으로 binding + import alias 마킹 + 모든 exported surface
+//      등록. Go-side `selfhostInstallImportSurfaces` 와 동등.
 //
 // 잔여 한계 (별도 batch):
 //
@@ -40,11 +48,6 @@
 //     scanner 가 `"` 직후 / `"` 직전 8 byte 만 검사하므로 `"sources"`
 //     같은 인접 key 가 false-positive 를 일으킬 수 있음 — 후속 batch
 //     에서 key-boundary 엄격 매칭으로 수정.
-//   - `PackageCheckInput.imports` 미처리: cross-package 참조
-//     (`use std.io`, `use toolchain as tc` 등) 는 E0501 unresolved-name
-//     으로 떨어진다. `selfhostInstallImportSurfaces` 의 toolchain
-//     analogue + `PackageCheckImport` JSON 디코더가 필요한 별도 batch
-//     (`SPEC_GAPS.md::cross-pkg-module-resolution`).
 //
 // 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
 // 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON

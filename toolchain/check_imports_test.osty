@@ -1,0 +1,320 @@
+// check_imports_test.osty — focused fixtures for the PackageCheckImport
+// JSON decoder + install surfaces pipeline introduced by
+// `toolchain/check_imports.osty`. The native checker subprocess
+// dispatch through `frontCheckPackageToWireJson` routes cross-pkg
+// surface requests here; a regression that drops a fn / field /
+// variant / alias / type / interface extension surfaces silently as
+// confusing E0501 / E0703 / E0702 diagnostics downstream.
+use std.testing
+use std.strings as strings
+// =====================================================================
+// JSON value tree round-trip.
+// =====================================================================
+fn testCheckImportsJsonValueParsesString() {
+    let bs = "\"hello\"".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    testing.assertEq(frontJsonAsString(scan.value), "hello")
+}
+fn testCheckImportsJsonValueParsesInt() {
+    let bs = "42".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    testing.assertEq(frontJsonAsInt(scan.value), 42)
+}
+fn testCheckImportsJsonValueParsesNegativeInt() {
+    let bs = "-7".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    testing.assertEq(frontJsonAsInt(scan.value), -7)
+}
+fn testCheckImportsJsonValueParsesBoolean() {
+    let trueScan = frontParseJsonValueAt("true".bytes(), 0, 4)
+    testing.assert(frontJsonAsBool(trueScan.value))
+    let falseScan = frontParseJsonValueAt("false".bytes(), 0, 5)
+    testing.assert(!frontJsonAsBool(falseScan.value))
+}
+fn testCheckImportsJsonValueParsesNull() {
+    let bs = "null".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    testing.assert(frontJsonIsNull(scan.value))
+}
+fn testCheckImportsJsonValueParsesArray() {
+    let bs = "[1,2,3]".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let items = frontJsonAsArray(scan.value)
+    testing.assertEq(items.len(), 3)
+    testing.assertEq(frontJsonAsInt(items[0]), 1)
+    testing.assertEq(frontJsonAsInt(items[1]), 2)
+    testing.assertEq(frontJsonAsInt(items[2]), 3)
+}
+fn testCheckImportsJsonValueParsesObject() {
+    let bs = "\{\"a\":1,\"b\":\"two\"\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let fields = frontJsonAsObject(scan.value)
+    testing.assertEq(fields.len(), 2)
+    testing.assertEq(frontJsonAsInt(frontJsonObjectGet(fields, "a")), 1)
+    testing.assertEq(frontJsonAsString(frontJsonObjectGet(fields, "b")), "two")
+}
+fn testCheckImportsJsonValueParsesNestedObject() {
+    let bs = "\{\"outer\":\{\"inner\":42\}\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let fields = frontJsonAsObject(scan.value)
+    let inner = frontJsonAsObject(frontJsonObjectGet(fields, "outer"))
+    testing.assertEq(frontJsonAsInt(frontJsonObjectGet(inner, "inner")), 42)
+}
+fn testCheckImportsJsonValueRoundtripsStringEscapes() {
+    let bs = "\"hi\\\"there\\nworld\"".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    testing.assertEq(frontJsonAsString(scan.value), "hi\"there\nworld")
+}
+// JSON `\"` and `\n` must decode to literal `"` and LF inside the
+// returned string. Same path `mir_json.osty::mirJsonParseStrEscaped`
+// takes for module JSON.
+// =====================================================================
+// TypeRepr decoder round-trip — every legal `kind` covered.
+// =====================================================================
+fn testCheckImportsTypeReprDecodesPrimitive() {
+    let bs = "\{\"kind\":\"primitive\",\"name\":\"Int\"\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let repr = frontDecodeTypeReprValue(scan.value)
+    testing.assertEq(repr.kind, "primitive")
+    testing.assertEq(repr.name, "Int")
+}
+fn testCheckImportsTypeReprDecodesOptional() {
+    let bs = "\{\"kind\":\"optional\",\"return\":\{\"kind\":\"primitive\",\"name\":\"String\"\}\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let repr = frontDecodeTypeReprValue(scan.value)
+    testing.assertEq(repr.kind, "optional")
+    match repr.ret {
+        Some(inner) -> {
+            testing.assertEq(inner.kind, "primitive")
+            testing.assertEq(inner.name, "String")
+        },
+        None -> testing.assert(false),
+    }
+}
+fn testCheckImportsTypeReprDecodesNamedGeneric() {
+    let bs = "\{\"kind\":\"named\",\"name\":\"List\",\"args\":[\{\"kind\":\"primitive\",\"name\":\"Int\"\}]\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let repr = frontDecodeTypeReprValue(scan.value)
+    testing.assertEq(repr.kind, "named")
+    testing.assertEq(repr.name, "List")
+    testing.assertEq(repr.args.len(), 1)
+    testing.assertEq(repr.args[0].name, "Int")
+}
+fn testCheckImportsTypeReprDecodesFnWithParamNames() {
+    let bs = "\{\"kind\":\"fn\",\"args\":[\{\"kind\":\"primitive\",\"name\":\"String\"\}],\"return\":\{\"kind\":\"unit\"\},\"param_names\":[\"msg\"]\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let repr = frontDecodeTypeReprValue(scan.value)
+    testing.assertEq(repr.kind, "fn")
+    testing.assertEq(repr.args.len(), 1)
+    testing.assertEq(repr.paramNames.len(), 1)
+    testing.assertEq(repr.paramNames[0], "msg")
+    match repr.ret {
+        Some(inner) -> testing.assertEq(inner.kind, "unit"),
+        None -> testing.assert(false),
+    }
+}
+fn testCheckImportsTypeReprMissingKindIsBlank() {
+    let bs = "\{\"name\":\"Whatever\"\}".bytes()
+    let scan = frontParseJsonValueAt(bs, 0, bs.len())
+    let repr = frontDecodeTypeReprValue(scan.value)
+    testing.assertEq(repr.kind, "")
+    testing.assertEq(repr.name, "Whatever")
+}
+// Empty `kind` triggers fallback to legacy string-name in
+// `frontTypeReprToTy` — keep the field accessible.
+// =====================================================================
+// PackageCheckImport JSON extraction.
+// =====================================================================
+fn testExtractPackageImportsEmpty() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 0)
+}
+fn testExtractPackageImportsNoImportsKey() {
+    let body = "\{\"package\":\{\"files\":[]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 0)
+}
+fn testExtractPackageImportsSingleAliasOnly() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "tc")
+    testing.assertEq(got[0].functions.len(), 0)
+}
+fn testExtractPackageImportsDropsEntriesWithBlankAlias() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"\"\},\{\"alias\":\"valid\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "valid")
+}
+fn testExtractPackageImportsCarriesFunction() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"checkSource\",\"owner\":\"tc\",\"returnType\":\"String\",\"paramNames\":[\"src\"],\"paramTypes\":[\"String\"]\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].functions.len(), 1)
+    let fn0 = got[0].functions[0]
+    testing.assertEq(fn0.name, "checkSource")
+    testing.assertEq(fn0.owner, "tc")
+    testing.assertEq(fn0.returnTypeName, "String")
+    testing.assertEq(fn0.paramNames.len(), 1)
+    testing.assertEq(fn0.paramNames[0], "src")
+    testing.assertEq(fn0.paramTypeNames.len(), 1)
+}
+fn testExtractPackageImportsCarriesHasBody() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"impl\",\"hasBody\":true\},\{\"name\":\"stub\",\"hasBody\":false\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].functions.len(), 2)
+    testing.assert(got[0].functions[0].hasBody)
+    testing.assert(!got[0].functions[1].hasBody)
+}
+fn testExtractPackageImportsCarriesField() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"fields\":[\{\"owner\":\"Cfg\",\"name\":\"path\",\"typeName\":\"String\",\"exported\":true,\"hasDefault\":false\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].fields.len(), 1)
+    testing.assertEq(got[0].fields[0].owner, "Cfg")
+    testing.assertEq(got[0].fields[0].name, "path")
+    testing.assertEq(got[0].fields[0].typeName, "String")
+    testing.assert(got[0].fields[0].exported)
+}
+fn testExtractPackageImportsCarriesVariant() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"variants\":[\{\"owner\":\"Event\",\"name\":\"Click\",\"fieldTypes\":[\"Int\",\"Int\"]\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].variants.len(), 1)
+    testing.assertEq(got[0].variants[0].owner, "Event")
+    testing.assertEq(got[0].variants[0].name, "Click")
+    testing.assertEq(got[0].variants[0].fieldTypeNames.len(), 2)
+}
+fn testExtractPackageImportsCarriesAlias() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"aliases\":[\{\"name\":\"NodeId\",\"target\":\"Int\"\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].aliases.len(), 1)
+    testing.assertEq(got[0].aliases[0].name, "NodeId")
+    testing.assertEq(got[0].aliases[0].targetName, "Int")
+}
+fn testExtractPackageImportsCarriesTypeDecl() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"typeDecls\":[\{\"name\":\"User\",\"kind\":\"struct\",\"generics\":[]\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].typeDecls.len(), 1)
+    testing.assertEq(got[0].typeDecls[0].name, "User")
+    testing.assertEq(got[0].typeDecls[0].kind, "struct")
+}
+fn testExtractPackageImportsCarriesInterfaceExt() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"interfaceExts\":[\{\"owner\":\"User\",\"interfaceType\":\"Equal\"\}]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].interfaceExts.len(), 1)
+    testing.assertEq(got[0].interfaceExts[0].owner, "User")
+    testing.assertEq(got[0].interfaceExts[0].interfaceTypeName, "Equal")
+}
+fn testExtractPackageImportsCarriesRegisterAsIface() {
+    let body = "\{\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"tc\",\"registerAsIface\":[\"Hashable\",\"Ordered\"]\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got[0].registerAsIface.len(), 2)
+    testing.assertEq(got[0].registerAsIface[0], "Hashable")
+    testing.assertEq(got[0].registerAsIface[1], "Ordered")
+}
+fn testExtractPackageImportsRespectsSourceStringBoundary() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"// \\\"imports\\\":[]\\nfn main()\{\}\"\}],\"imports\":[\{\"alias\":\"tc\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "tc")
+}
+// An `"imports"` substring embedded inside an escaped JSON string
+// value (the Osty source body) must NOT be confused for the real
+// top-level `"imports"` key — the JSON-aware scanner tracks string
+// boundaries so the outer `imports` array wins.
+// =====================================================================
+// End-to-end install: cross-pkg method dispatch.
+// =====================================================================
+fn testCheckPackageToWireJsonResolvesAliasMemberCall() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"fn main() \{ let _ = tc.checkSource(\\\"hi\\\") \}\"\}],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"checkSource\",\"owner\":\"tc\",\"returnTypeRepr\":\{\"kind\":\"primitive\",\"name\":\"String\"\},\"paramNames\":[\"src\"],\"paramTypeReprs\":[\{\"kind\":\"primitive\",\"name\":\"String\"\}]\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0501\""))
+    testing.assert(!strings.contains(out, "\"code\":\"E0703\""))
+}
+// `tc.checkSource("hi")` would surface as E0703 (unknown method on
+// receiver) without the installed function surface. With the import
+// surface threaded in by `frontInstallImportSurfaces`, the call site
+// resolves and the wire output carries no E0501 / E0703.
+fn testCheckPackageToWireJsonResolvesAliasFieldAccess() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"struct Cfg \{ path: String \}\\nfn open(c: Cfg) -> String \{ c.path \}\"\}],\"imports\":[\{\"alias\":\"tc\",\"fields\":[\{\"owner\":\"Cfg\",\"name\":\"path\",\"type\":\{\"kind\":\"primitive\",\"name\":\"String\"\},\"exported\":true\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0702\""))
+}
+// Struct fields exported through the import surface must satisfy
+// `c.path` field access. (The local struct decl is also present so
+// the test exercises the import-side registration explicitly — the
+// local decl alone would resolve without imports.)
+fn testCheckPackageToWireJsonInstallsImportAlias() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"fn main() \{ let _ = tc.helper() \}\"\}],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"helper\",\"owner\":\"tc\",\"returnTypeRepr\":\{\"kind\":\"unit\"\}\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0501\""))
+}
+// Without the alias binding, `tc` itself would not resolve and the
+// member-access lookup would never even be attempted —
+// `checkBind(env, "tc", ...)` is the gate that the install logic
+// must walk through.
+fn testCheckPackageToWireJsonWithoutImportsStillProducesE0501() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"fn main() \{ let _ = tc.helper() \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"diagnostics\":["))
+    testing.assert(strings.contains(out, "\"file\":\"main.osty\""))
+}
+// Negative control: when no imports are supplied, `tc` is
+// genuinely unresolved and the checker fires its normal
+// diagnostic. Confirms the install pipeline is the gate
+// distinguishing the two paths — the surface either resolves
+// (positive test above) or it produces a real diagnostic (this
+// test).
+fn testCheckPackageToWireJsonFnWithBodyMarked() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"fn main() \{\}\"\}],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"realImpl\",\"owner\":\"tc\",\"returnTypeRepr\":\{\"kind\":\"unit\"\},\"hasBody\":true\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0501\""))
+}
+// =====================================================================
+// Scoping: only `package.imports` / `package.files` count.
+// =====================================================================
+fn testExtractPackageImportsIgnoresTopLevelImportsKey() {
+    let body = "\{\"imports\":[\{\"alias\":\"phantom\"\}],\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"real\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "real")
+}
+// A sibling `"imports"` array OUTSIDE the `"package"` object must
+// not be picked up — only the nested `package.imports` counts.
+// Matches the Go `CheckRequest.Package.Imports` decoding shape.
+fn testExtractPackageImportsTopLevelOnlyWithoutPackageReturnsEmpty() {
+    let body = "\{\"imports\":[\{\"alias\":\"phantom\"\}]\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 0)
+}
+// Without a `"package":{...}` wrapper, no imports surface — even
+// a syntactically valid top-level `imports` array is rejected
+// because the wire shape requires the `package` envelope.
+fn testExtractPackageImportsIgnoresNestedImportsKey() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"\",\"meta\":\{\"imports\":[\{\"alias\":\"phantom\"\}]\}\}],\"imports\":[\{\"alias\":\"real\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "real")
+}
+// A nested `"imports"` key deeper inside a file object (some
+// hypothetical user-extension metadata) must not match — the
+// scanner only walks direct children of `package`.
+fn testExtractPackageFilesIgnoresTopLevelFilesKey() {
+    let body = "\{\"files\":[\{\"source\":\"phantom\"\}],\"package\":\{\"files\":[\{\"source\":\"real\"\}]\}\}"
+    let got = frontExtractPackageFiles(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].source, "real")
+}
+// `frontFindFilesArrayOpen` must scope its scan to `package.files`,
+// not the first `"files"` array anywhere in the document.
+// =====================================================================
+// P1: imported fns get registered under their declared owner, not
+// the alias.
+// =====================================================================
+fn testCheckPackageToWireJsonImportedMethodRegistersUnderReceiverOwner() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"struct Err \{ msg: String \}\\nfn use(e: Err) -> String \{ e.toString() \}\"\}],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"toString\",\"owner\":\"Err\",\"receiverTypeRepr\":\{\"kind\":\"named\",\"name\":\"Err\"\},\"returnTypeRepr\":\{\"kind\":\"primitive\",\"name\":\"String\"\}\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0703\""))
+}
