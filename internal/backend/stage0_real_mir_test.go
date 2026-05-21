@@ -233,10 +233,18 @@ fn main() {}`,
 }
 fn main() {}`,
 			wantIR: []string{
-				"declare i32 @printf(ptr, ...)",
-				`@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c"%lld\0A\00"`,
+				// `println(<Int>)` lowers through the runtime
+				// `osty_rt_int_to_string` + `osty_rt_io_write` pair
+				// rather than `printf` so the stage0 emitter does
+				// not depend on libc's variadic ABI on hosts that
+				// don't expose it (Windows MSVC, freestanding
+				// targets). Same shape for the loop and string
+				// variants below.
+				"declare ptr @osty_rt_int_to_string(i64)",
+				"declare void @osty_rt_io_write(ptr, i1, i1)",
 				"define i64 @show(i64 %n)",
-				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %n)",
+				"call ptr @osty_rt_int_to_string(i64 %n)",
+				"call void @osty_rt_io_write(ptr %stage0.print.int",
 				"ret i64 %n",
 			},
 		},
@@ -252,8 +260,10 @@ fn main() {}`,
 }
 fn main() {}`,
 			wantIR: []string{
-				"declare i32 @printf(ptr, ...)",
-				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 ",
+				"declare ptr @osty_rt_int_to_string(i64)",
+				"declare void @osty_rt_io_write(ptr, i1, i1)",
+				"call ptr @osty_rt_int_to_string(i64 ",
+				"call void @osty_rt_io_write(ptr %stage0.print.int",
 			},
 		},
 		{
@@ -293,9 +303,14 @@ fn main() {}`,
 			name: "println_string_literal",
 			src:  `fn main() { println("hi") }`,
 			wantIR: []string{
-				`@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c"%s\0A\00"`,
+				// String-valued `println` no longer needs a format
+				// string — `osty_rt_io_write` takes the byte buffer
+				// + `(needs_newline=true, needs_flush=false)` flag
+				// pair directly, so the stage0 emitter skips the
+				// printf detour entirely for string literals.
+				"declare void @osty_rt_io_write(ptr, i1, i1)",
 				`@.str.0 = private unnamed_addr constant [3 x i8] c"hi\00"`,
-				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr @.str.0)",
+				"call void @osty_rt_io_write(ptr @.str.0, i1 true, i1 false)",
 			},
 		},
 		{
