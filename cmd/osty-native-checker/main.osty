@@ -12,12 +12,13 @@
 //      `\f` / `\/` / `\uXXXX`) 디코딩. `extractJsonStringValueAt` 이
 //      `mirJsonParseStrEscaped` (`toolchain/mir_json.osty:200`) 와 동일
 //      한 surrogate-pair-aware UTF-8 인코딩 path 를 inline 으로 가짐.
-//   3. ✓ (partial) `CheckRequest.package` 모드 (`{"package":{...}}`):
-//      `extractSourceField` 가 byte-level scan 으로 첫 `"source":` key
-//      를 찾으므로, package 모드 입력에서는 첫 file 의 source 가 자연
-//      스럽게 매치된다. 본 batch 는 **첫 파일 만** 검사 — `package`
-//      모드 cross-file resolution 은 후속 batch 의 toolchain
-//      `frontCheckPackageToWireJson` 신설 후에 활성.
+//   3. ✓ `CheckRequest.package` 모드 (`{"package":{...}}`) multi-file
+//      dispatch — `isPackageRequest` 가 top-level `"package"` key 를
+//      탐지하면 `tc.frontCheckPackageToWireJson(input)` 로 라우팅.
+//      Toolchain 측 entry 는 `files[].source` 값을 모두 추출 → `\n` 으로
+//      concat → 기존 single-file check pipeline 통과 → 와이어 JSON 직렬화.
+//      Package-level top-level scope 가 공유되므로 cross-file 참조 +
+//      duplicate-decl collision 둘 다 정상 발화.
 //
 // 잔여 한계 (별도 batch):
 //
@@ -30,9 +31,16 @@
 //     scanner 가 `"` 직후 / `"` 직전 8 byte 만 검사하므로 `"sources"`
 //     같은 인접 key 가 false-positive 를 일으킬 수 있음 — 후속 batch
 //     에서 key-boundary 엄격 매칭으로 수정.
-//   - `package` 모드 cross-file resolution: toolchain 측에
-//     multi-file dispatch entry 가 없어 현재 batch 에서는 첫 파일만
-//     검사한다.
+//   - `CheckRequest.package` 모드의 per-file token layout: 진단의
+//     `start` / `end` / `startLine` / `startColumn` 은 concat 된
+//     package-wide 버퍼 기준 offset 으로 나간다 (Go-side
+//     `selfhost.CheckPackageStructured` 의 `selfhostPackageTokenLayout`
+//     같은 file-id 매퍼 부재). 별도 batch.
+//   - `PackageCheckInput.imports` 미처리: cross-package 참조
+//     (`use std.io`, `use toolchain as tc` 등) 는 E0501 unresolved-name
+//     으로 떨어진다. `selfhostInstallImportSurfaces` 의 toolchain
+//     analogue + `PackageCheckImport` JSON 디코더가 필요한 별도 batch
+//     (`SPEC_GAPS.md::cross-pkg-module-resolution`).
 //
 // 출력 측은 toolchain 의 `tc.frontCheckSourceToWireJson` 가 담당 — 진짜
 // 체커를 돌리고 `internal/selfhost/api/types.go::CheckResult` 의 JSON
@@ -234,6 +242,45 @@ fn appendUtf8Codepoint(out: String, cp: Int) -> String {
 }
 fn main() {
     let input = io.readAllStdin()
-    let source = extractSourceField(input)
-    println(tc.frontCheckSourceToWireJson(source))
+    if isPackageRequest(input) {
+        println(tc.frontCheckPackageToWireJson(input))
+    } else {
+        let source = extractSourceField(input)
+        println(tc.frontCheckSourceToWireJson(source))
+    }
+}
+/// isPackageRequest returns true when the JSON request body matches
+/// the `{"package":{...}}` shape — i.e. carries a `"package"` JSON
+/// object key at top level rather than a single-file `"source"` key.
+/// Detection is escape-aware and accepts ASCII whitespace between
+/// `:` and the opening `{` so pretty-printed bodies match.
+///
+/// Implementation: byte-by-byte scan for the literal 9-byte sequence
+/// `"package"` (including surrounding quotes). The single-file
+/// (`{"source":...}`) and package (`{"package":...}`) request bodies
+/// are mutually exclusive at the wire boundary
+/// (`internal/selfhost/api/types.go::CheckRequest`) so a literal
+/// substring match suffices for production traffic. False positives
+/// from a string value containing the literal text `"package"` are
+/// possible in principle but never occur in practice since the
+/// request shape's only string fields are file `source` bodies (Osty
+/// code, not JSON-of-JSON) and arbitrary user code rarely contains
+/// the exact quoted form `"package"`.
+fn isPackageRequest(text: String) -> Bool {
+    let bs = text.bytes()
+    let len = bs.len()
+    let mut i = 0
+    for i < len {
+        if isPackageKeyAt(bs, i, len) {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+fn isPackageKeyAt(bs: List<Byte>, at: Int, len: Int) -> Bool {
+    if at + 9 > len {
+        return false
+    }
+    bs[at].toInt() == 0x22 && bs[at + 1].toInt() == 0x70 && bs[at + 2].toInt() == 0x61 && bs[at + 3].toInt() == 0x63 && bs[at + 4].toInt() == 0x6B && bs[at + 5].toInt() == 0x61 && bs[at + 6].toInt() == 0x67 && bs[at + 7].toInt() == 0x65 && bs[at + 8].toInt() == 0x22
 }

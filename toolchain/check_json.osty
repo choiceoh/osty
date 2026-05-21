@@ -61,6 +61,236 @@ pub fn frontCheckSourceToWireJson(source: String) -> String {
     let result = frontendCheckLexedSourceStructured(lexed)
     frontCheckResultToWireJsonForLexed(result, lexed)
 }
+/// frontCheckPackageToWireJson is the multi-file analogue of
+/// `frontCheckSourceToWireJson`. The native checker invokes it when
+/// the request body matches the `{"package":{"files":[...]}}` shape
+/// instead of the single-file `{"source":"..."}` shape.
+///
+/// Wire shape — accepted: the full raw JSON request body
+/// (`internal/selfhost/api/types.go::CheckRequest`). The function
+/// extracts every `"source"` string value embedded inside
+/// `"files":[...]`, concatenates the source bytes with a single `\n`
+/// separator, and runs the standard single-file check pipeline on the
+/// combined buffer. The combined-source approach gives multi-file
+/// callers package-level top-level scope for free — duplicate
+/// top-level decls across files correctly trigger E0501 / E0103
+/// collisions just like the Go-side `selfhost.CheckPackageStructured`
+/// — at the cost of byte-parity in `start` / `end` offsets relative
+/// to the original per-file sources.
+///
+/// Limitations relative to `selfhost.CheckPackageStructured` (Go-side
+/// production path, `internal/selfhost/package_adapter.go`):
+///
+///   1. Token positions in the wire output are **package-wide**
+///      offsets into the concatenated buffer rather than per-file
+///      offsets. Diagnostic `start` / `end` / `startLine` /
+///      `startColumn` still resolve through the same byte-table
+///      machinery `frontCheckSourceToWireJson` uses, but the file
+///      identity is lost — telemetry suffixes drop back to
+///      `@L<line>:C<col>` without a `<filename>:` prefix.
+///   2. The `imports` array (`PackageCheckInput.Imports`, carrying
+///      cross-package surfaces — exported fns, fields, variants,
+///      type decls) is **not consumed**. References that need an
+///      installed import surface (typical `use std.io` / `use
+///      toolchain as tc`) will surface as E0501 unresolved-name
+///      diagnostics. Closing this requires a toolchain analogue of
+///      `selfhostInstallImportSurfaces` plus the full
+///      `PackageCheckImport` JSON decoder — explicitly out of scope
+///      for the initial multi-file landing (tracked as a separate
+///      batch in `SPEC_GAPS.md::cross-pkg-module-resolution`).
+///   3. File-level metadata (`PackageCheckFile.Name`, `.Path`,
+///      `.SourceFileID`, `.Base`) is ignored. The concatenated
+///      check does not need per-file naming to produce correct
+///      cross-file resolution within the package; surfacing those
+///      names in diagnostic telemetry is the same per-file token
+///      layout work item as (1).
+pub fn frontCheckPackageToWireJson(packageJson: String) -> String {
+    let sources = frontExtractPackageFileSources(packageJson)
+    let combined = strings.join(sources, "\n")
+    frontCheckSourceToWireJson(combined)
+}
+/// frontExtractPackageFileSources scans `packageJson` for every
+/// `"source"` JSON object key found inside an enclosing `"files":[...]`
+/// array and returns the decoded string values in document order.
+///
+/// Implementation: a single byte pass that locates each `"source"`
+/// key (key-boundary aware so `"sources"` does not false-positive),
+/// skips ASCII whitespace + `:` + ASCII whitespace + opening `"`,
+/// then decodes the JSON string body honouring `\"` / `\\` / `\/` /
+/// `\b` / `\f` / `\n` / `\r` / `\t` / `\uXXXX` (BMP) / surrogate
+/// pair (`\uD8xx\uDCxx`) → UTF-8 — same escape semantics as
+/// `cmd/osty-native-checker/main.osty::extractJsonStringValueAt`
+/// and the proven `mir_json.osty::mirJsonParseStrEscaped` path.
+///
+/// A truly bullet-proof JSON parser would also distinguish a `source`
+/// key at top level (`{"source":"..."}` single-file request shape)
+/// from a `source` key nested inside `files[]`. This scanner does
+/// not — it returns every `source` value it finds. The native checker
+/// dispatches to this entry only on `{"package":...}` shape so a
+/// stray top-level `"source"` does not occur in practice, and even
+/// if it did, the concatenation step would still produce a valid
+/// combined source.
+pub fn frontExtractPackageFileSources(packageJson: String) -> List<String> {
+    let bs = packageJson.bytes()
+    let len = bs.len()
+    let mut sources: List<String> = []
+    let mut i = 0
+    for i < len {
+        if frontMatchSourceKeyAt(bs, i, len) {
+            let afterKey = i + 8
+            let colonAt = frontSkipAsciiWs(bs, afterKey, len)
+            if colonAt < len && bs[colonAt].toInt() == 0x3A {
+                let quoteAt = frontSkipAsciiWs(bs, colonAt + 1, len)
+                if quoteAt < len && bs[quoteAt].toInt() == 0x22 {
+                    let scan = frontDecodeJsonStringAt(bs, quoteAt + 1, len)
+                    sources.push(scan.value)
+                    i = scan.next
+                    continue
+                }
+            }
+        }
+        i = i + 1
+    }
+    sources
+}
+pub struct FrontJsonStringScan {
+    pub value: String,
+    pub next: Int,
+}
+fn frontMatchSourceKeyAt(bs: List<Byte>, at: Int, len: Int) -> Bool {
+    if at + 8 > len {
+        return false
+    }
+    bs[at].toInt() == 0x22 && bs[at + 1].toInt() == 0x73 && bs[at + 2].toInt() == 0x6F && bs[at + 3].toInt() == 0x75 && bs[at + 4].toInt() == 0x72 && bs[at + 5].toInt() == 0x63 && bs[at + 6].toInt() == 0x65 && bs[at + 7].toInt() == 0x22
+}
+fn frontSkipAsciiWs(bs: List<Byte>, pos: Int, len: Int) -> Int {
+    let mut i = pos
+    for i < len {
+        let c = bs[i].toInt()
+        if c != 0x20 && c != 0x09 && c != 0x0A && c != 0x0D {
+            return i
+        }
+        i = i + 1
+    }
+    i
+}
+fn frontDecodeJsonStringAt(bs: List<Byte>, pos: Int, len: Int) -> FrontJsonStringScan {
+    let mut out = ""
+    let mut i = pos
+    for i < len {
+        let b = bs[i].toInt()
+        if b == 0x22 {
+            return FrontJsonStringScan {value: out, next: i + 1}
+        }
+        if b == 0x5C {
+            i = i + 1
+            if i >= len {
+                return FrontJsonStringScan {value: "", next: len}
+            }
+            let esc = bs[i].toInt()
+            if esc == 0x22 {
+                out = out + "\""
+            } else if esc == 0x5C {
+                out = out + "\\"
+            } else if esc == 0x2F {
+                out = out + "/"
+            } else if esc == 0x62 {
+                out = frontAppendUtf8Codepoint(out, 0x08)
+            } else if esc == 0x66 {
+                out = frontAppendUtf8Codepoint(out, 0x0C)
+            } else if esc == 0x6E {
+                out = out + "\n"
+            } else if esc == 0x72 {
+                out = out + "\r"
+            } else if esc == 0x74 {
+                out = out + "\t"
+            } else if esc == 0x75 {
+                if i + 4 >= len {
+                    return FrontJsonStringScan {value: "", next: len}
+                }
+                let cp = frontParseHex4(bs, i + 1)
+                if cp < 0 {
+                    return FrontJsonStringScan {value: "", next: len}
+                }
+                i = i + 4
+                if cp >= 0xD800 && cp <= 0xDBFF {
+                    if i + 2 >= len || bs[i + 1].toInt() != 0x5C || bs[i + 2].toInt() != 0x75 {
+                        return FrontJsonStringScan {value: "", next: len}
+                    }
+                    if i + 6 >= len {
+                        return FrontJsonStringScan {value: "", next: len}
+                    }
+                    let low = frontParseHex4(bs, i + 3)
+                    if low < 0xDC00 || low > 0xDFFF {
+                        return FrontJsonStringScan {value: "", next: len}
+                    }
+                    let combined = ((cp - 0xD800) << 10) + (low - 0xDC00) + 0x10000
+                    out = frontAppendUtf8Codepoint(out, combined)
+                    i = i + 6
+                } else if cp >= 0xDC00 && cp <= 0xDFFF {
+                    return FrontJsonStringScan {value: "", next: len}
+                } else {
+                    out = frontAppendUtf8Codepoint(out, cp)
+                }
+            } else {
+                return FrontJsonStringScan {value: "", next: len}
+            }
+            i = i + 1
+        } else if b < 0x20 {
+            return FrontJsonStringScan {value: "", next: len}
+        } else {
+            out = out + b.toChar().toString()
+            i = i + 1
+        }
+    }
+    FrontJsonStringScan {value: "", next: len}
+}
+fn frontParseHex4(bs: List<Byte>, pos: Int) -> Int {
+    let mut acc = 0
+    let mut i = 0
+    for i < 4 {
+        let b = bs[pos + i].toInt()
+        let digit = if b >= 0x30 && b <= 0x39 {
+            b - 0x30
+        } else if b >= 0x41 && b <= 0x46 {
+            b - 0x41 + 10
+        } else if b >= 0x61 && b <= 0x66 {
+            b - 0x61 + 10
+        } else {
+            -1
+        }
+        if digit < 0 {
+            return -1
+        }
+        acc = (acc << 4) | digit
+        i = i + 1
+    }
+    acc
+}
+fn frontAppendUtf8Codepoint(out: String, cp: Int) -> String {
+    if cp < 0x80 {
+        return out + cp.toChar().toString()
+    }
+    if cp < 0x800 {
+        let b1 = 0xC0 | (cp >> 6)
+        let b2 = 0x80 | (cp & 0x3F)
+        return out + b1.toChar().toString() + b2.toChar().toString()
+    }
+    if cp < 0x10000 {
+        let b1 = 0xE0 | (cp >> 12)
+        let b2 = 0x80 | ((cp >> 6) & 0x3F)
+        let b3 = 0x80 | (cp & 0x3F)
+        return out + b1.toChar().toString() + b2.toChar().toString() + b3.toChar().toString()
+    }
+    if cp < 0x110000 {
+        let b1 = 0xF0 | (cp >> 18)
+        let b2 = 0x80 | ((cp >> 12) & 0x3F)
+        let b3 = 0x80 | ((cp >> 6) & 0x3F)
+        let b4 = 0x80 | (cp & 0x3F)
+        return out + b1.toChar().toString() + b2.toChar().toString() + b3.toChar().toString() + b4.toChar().toString()
+    }
+    out + 0xEF.toChar().toString() + 0xBF.toChar().toString() + 0xBD.toChar().toString()
+}
 /// frontCheckResultToWireJson serialises a `FrontCheckResult` into the
 /// JSON wire format using token indices as start/end (no byte-offset
 /// conversion, no display line/column). Preserved for callers that hold
