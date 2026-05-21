@@ -6153,6 +6153,7 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 //
 // Coverage:
 //   - std.io.readLine     → osty_rt_io_read_line
+//   - std.io.readAllStdin → osty_rt_io_read_all_stdin
 //   - std.os.execWith     → osty_rt_os_exec_with
 //   - std.os.execInputWith → osty_rt_os_exec_input_with
 //   - std.os.execOutput   → osty_rt_os_exec_output
@@ -6168,6 +6169,8 @@ func rewriteStdlibSymbolToRuntime(sym string) string {
 	switch sym {
 	case "std.io.readLine":
 		return "osty_rt_io_read_line"
+	case "std.io.readAllStdin":
+		return "osty_rt_io_read_all_stdin"
 	case "std.os.execWith":
 		return "osty_rt_os_exec_with"
 	case "std.os.execInputWith":

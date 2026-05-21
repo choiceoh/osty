@@ -25419,6 +25419,40 @@ void *osty_rt_io_read_line(void) {
   return out;
 }
 
+/* Read stdin until EOF and return the full payload as a single
+ * String. Unlike osty_rt_io_read_line, no line-stripping: the
+ * caller (e.g. cmd/osty-native-checker/main.osty) receives the
+ * exact byte stream stdin produced. Used for multi-line JSON
+ * requests where readLine would silently truncate at the first
+ * '\n' and downstream naive parsing would fall back to empty
+ * source. */
+void *osty_rt_io_read_all_stdin(void) {
+  size_t cap = 4096;
+  size_t len = 0;
+  char *buf = (char *)osty_rt_xmalloc(cap, "runtime.io.read_all_stdin.buf");
+  for (;;) {
+    if (len + 1 >= cap) {
+      size_t next_cap = cap * 2;
+      char *grown = (char *)realloc(buf, next_cap);
+      if (grown == NULL) {
+        free(buf);
+        osty_rt_abort("runtime.io.read_all_stdin: realloc failed");
+      }
+      buf = grown;
+      cap = next_cap;
+    }
+    size_t want = cap - len - 1;
+    size_t got = fread(buf + len, 1, want, stdin);
+    len += got;
+    if (got < want) {
+      break;
+    }
+  }
+  void *out = osty_rt_string_dup_site(buf, len, "runtime.io.read_all_stdin");
+  free(buf);
+  return out;
+}
+
 /* std.term low-level terminal surface.
  *
  * The LLVM shim builds public Result values around these small C helpers:
