@@ -27,13 +27,11 @@ type checkCacheEntry struct {
 // that nil straight through to ir.LowerFnDecl, which degrades to
 // ErrTypeVal the same way it does for any missing checker output.
 //
-// Uses check.SelfhostFile instead of check.File so stdlib compilation
-// skips the AST-level builder-desugar pass: stdlib sources are first-
-// party and don't exercise the user-facing `.builder()` / `.build()`
-// auto-derive chains that desugar targets. Shaves a linear walk per
-// module off the cold path; more importantly, makes the stdlib side of
-// the Phase 1c.4 migration the first production site to bypass the
-// check.File "everything" wrapper.
+// Uses check.SelfhostFile so stdlib compilation skips the AST-level
+// builder-desugar pass: stdlib sources are first-party and don't
+// exercise the user-facing `.builder()` / `.build()` auto-derive
+// chains that desugar targets. Shaves a linear walk per module off
+// the cold path.
 //
 // Concurrency: sync.Once guarantees at-most-once checker invocation per
 // module even if multiple PrepareEntry calls race.

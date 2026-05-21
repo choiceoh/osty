@@ -27,10 +27,8 @@ import (
 //     more subdirectories do. The whole tree is loaded via Workspace
 //     so cross-package `use` declarations resolve.
 //
-// Always routes through the self-host native path since Phase 1c.5
-// retired the Go-hosted legacy alternative. Diagnostics are rendered
-// with each file's own formatter so source snippets point at the right
-// lines even when spanning packages.
+// Diagnostics are rendered with each file's own formatter so source
+// snippets point at the right lines even when spanning packages.
 func runCheckPackage(dir string, flags cliFlags) {
 	if root, ok, abort := workspaceRoot(dir, flags); abort {
 		os.Exit(2)
@@ -189,11 +187,10 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 	return 0
 }
 
-// runTypecheckPackageDir is the DIR sibling of
-// runTypecheckFile and the typecheck sibling of
-// runCheckPackageDir. After the package check runs astbridge-free
-// over the merged arena, it emits a per-file type dump with each
-// file's header so `osty typecheck --native DIR` output stays
+// runTypecheckPackageDir is the DIR sibling of runTypecheckFile and
+// the typecheck sibling of runCheckPackageDir. After the package check
+// runs astbridge-free over the merged arena, it emits a per-file type
+// dump with each file's header so `osty typecheck DIR` output stays
 // readable for packages with more than one source file. Returns the
 // subcommand exit code.
 func runTypecheckPackageDir(dir string, flags cliFlags) int {
@@ -575,9 +572,9 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 	return line, col
 }
 
-// runCheckFile drives `osty check --native FILE` end-to-end on
-// the self-host arena pipeline. Files without imports still take the
-// direct source path; files with bundled stdlib imports use the same
+// runCheckFile drives `osty check FILE` end-to-end on the self-host
+// arena pipeline. Files without imports still take the direct source
+// path; files with bundled stdlib imports use the same
 // structured package import surface as package/workspace checks, so
 // calls like `strings.trim(...)` and `gui.renderHtml(...)` are checked
 // against real exported signatures. Both paths stay astbridge-free.

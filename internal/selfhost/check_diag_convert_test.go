@@ -13,7 +13,7 @@ import (
 // `#[intrinsic]` non-empty-body violation produces a record that, after
 // conversion, renders as an *diag.Diagnostic with the expected code,
 // severity, primary span, and notes. This is the CLI-side contract
-// that future `osty check --native` wiring relies on.
+// the `osty check` wiring relies on.
 func TestCheckDiagnosticsAsDiagSurfacesIntrinsicViolation(t *testing.T) {
 	src := []byte(`#[intrinsic]
 fn bad() -> Int {

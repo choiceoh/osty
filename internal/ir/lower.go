@@ -2597,8 +2597,8 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		if t == ErrTypeVal {
 			// Default int-literal type when the checker didn't
 			// populate Types[e] — covers literals nested inside
-			// contexts the Go-hosted checker skips (string interp
-			// parts, match arm bodies, etc.). Without this, a
+			// contexts the checker skips (string interp parts,
+			// match arm bodies, etc.). Without this, a
 			// stray `+ 1` poisons the enclosing BinaryExpr to
 			// ErrType, which cascades to every consumer of the
 			// match / block result.
@@ -4057,8 +4057,8 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	if t == ErrTypeVal {
 		t = recoverCallReturnType(callee)
 	}
-	// The Go-hosted checker doesn't register `use X { fn Y(...) -> R
-	// }` member signatures on the package symbol, so `host.Y` ends up
+	// The checker doesn't register `use X { fn Y(...) -> R }`
+	// member signatures on the package symbol, so `host.Y` ends up
 	// as <error> in both the checker types map and the callee's
 	// FnType. Fall back to reading the UseDecl body (for inline FFI
 	// signatures) or the resolved package scope (for stdlib /
@@ -5413,8 +5413,8 @@ func (l *lowerer) enumDeclByName(name string) *ast.EnumDecl {
 // recoverMethodReturnType derives the return type of a receiver-and-
 // method pair for the subset of stdlib intrinsics where the return
 // shape is fixed by the name alone. Used as a fallback when the
-// Go-hosted checker didn't populate `Types[e]` for the call. Mirrors
-// the routing in internal/mir/lower.go:methodToIntrinsic.
+// checker doesn't populate `Types[e]` for the call. Mirrors the
+// routing in internal/mir/lower.go:methodToIntrinsic.
 func recoverMethodReturnType(name string, recv Expr) Type {
 	if recv == nil {
 		return nil

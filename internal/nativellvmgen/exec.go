@@ -50,9 +50,8 @@ type PackageInput struct {
 	// callers — which mangle via
 	// `internal/mir/lower.go::qualifiedSymbol` as
 	// `<use.RawPath>.<fn>` — find a matching `define` at link time.
-	// Empty PackageName falls back to the historical bare-name
-	// emission (no rename) for backwards compatibility with callers
-	// that haven't filled the field yet.
+	// Empty PackageName disables the rename (defensive: every
+	// production caller now derives Name via the package loader).
 	PackageName string `json:"packageName,omitempty"`
 }
 

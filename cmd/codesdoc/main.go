@@ -628,13 +628,15 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
 // frontendCheckSource / selfLintSource based on this phase string;
 // the table itself lives in `codesdoc_policy.osty::harvestPhaseFor`.
 
-// unsafeForBootstrapGen reports whether an example string would trip
-// the Go-hosted bootstrap transpiler's lexer when embedded as an Osty
-// string literal. Today the known trigger is the `\{` + `=>` pair; add
-// more conditions here (instead of broadening the filter) so each
-// carved-out code stays traceable.
-// unsafeForBootstrapGen / proseExample / ostyEscape delegate to
-// toolchain/codesdoc_policy.osty.
+// unsafeForBootstrapGen reports whether an example string trips the
+// historical bootstrap-gen lexer when embedded as an Osty string
+// literal — the `\{` + `=>` pair. The Osty→Go bootstrap transpiler
+// was retired in PR #854, but the filter remains as a defensive guard
+// for the harvest pipeline (the selfhost bundle that consumes
+// `toolchain/diag_examples.osty` shares the same brace/interpolation
+// shape). Add new conditions here instead of broadening the filter so
+// each carved-out code stays traceable. Delegates with proseExample
+// and ostyEscape to toolchain/codesdoc_policy.osty.
 func unsafeForBootstrapGen(example string) bool {
 	return runner.UnsafeForBootstrapGen(example)
 }
@@ -681,13 +683,11 @@ pub fn diagHarvestCases() -> List<DiagHarvestCase> {
 			if e.Doc.Example == "" {
 				continue
 			}
-			// Bootstrap-gen's lexer mishandles Osty's `\{` brace-escape
-			// inside string literals — it treats it as an interpolation
-			// opener and then chokes on the "code" between the braces.
-			// Until the Go-hosted transpiler is retired, drop any
-			// example that would be embedded into the selfhost bundle
-			// with both a `\{` escape and a token (`=>`) that's a
-			// static error outside an expression context.
+			// Defensive: skip examples whose `\{` + `=>` pair tripped
+			// the (now-retired) bootstrap-gen lexer when embedded
+			// into the selfhost bundle as a string literal. The
+			// transpiler is gone but the filter stays — the selfhost
+			// harvest still reads diag_examples.osty as Osty source.
 			if unsafeForBootstrapGen(e.Doc.Example) || proseExample(e.Doc.Example) {
 				continue
 			}
