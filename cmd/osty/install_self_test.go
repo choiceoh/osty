@@ -337,8 +337,8 @@ func main() { os.Exit(1) }
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "OSTY_STAGE0_FALLBACK") || strings.Contains(got, "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP") {
-		t.Errorf("output should not mention removed bootstrap env vars:\n%s", got)
+	if strings.Contains(got, "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP") {
+		t.Errorf("output should not mention retired bootstrap env var OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP:\n%s", got)
 	}
 }
 
@@ -362,7 +362,6 @@ func TestRunInstallSelfStage0FallbackAttemptsSourceBootstrap(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"OSTY_STAGE0_FALLBACK=1",
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
-		"OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -410,7 +409,6 @@ func TestRunInstallSelfForceUsesResolvedSelfhostWithoutStage0Fallback(t *testing
 		"OSTY_STAGE0_FALLBACK=",
 		"OSTY_STAGE0_LIST_ALL_DECLINES=",
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
-		"OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -475,7 +473,6 @@ func TestRunInstallSelfForceUsesStaleLocalSelfhostWithoutStage0Fallback(t *testi
 		"OSTY_STAGE0_LIST_ALL_DECLINES=",
 		"OSTY_SELF_BIN=",
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
-		"OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
