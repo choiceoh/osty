@@ -265,13 +265,11 @@ func diagsHaveError(diags []*diag.Diagnostic) bool {
 // returned in Result.Diags; they may be concatenated with the parser's
 // and resolver's diagnostics before display.
 //
-// Phase 1c.5 collapsed the earlier File / SelfhostFile pair into this
-// single entry. The native checker is authoritative for builder-chain
-// typing and diagnostics after #833 ported builder auto-derive into
-// the selfhost checker + on-demand IR rewriting; the Go-side
-// `DesugarBuildersInFile` prepass that File used to carry is gone.
-// OnDecl timing bookkeeping moved into this function so no caller
-// loses the per-decl phase dump `osty pipeline --per-decl` emits.
+// The native checker is authoritative for builder-chain typing and
+// diagnostics after #833 ported builder auto-derive into the selfhost
+// checker + on-demand IR rewriting; the Go-side `DesugarBuildersInFile`
+// prepass has been removed. OnDecl timing bookkeeping lives here so
+// `osty pipeline --per-decl` keeps its per-decl phase dump.
 func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()

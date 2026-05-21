@@ -482,13 +482,11 @@ func TestRunCheckFileDumpTelemetry(t *testing.T) {
 	}
 }
 
-// TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
-// companion to TestRunCheckFileDumpTelemetry: after the
-// 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` routes
-// through the self-host arena pipeline. Run the subprocess CLI so
-// dispatch actually goes through clicmd.ParseArgs, then verify exit 0
-// on a well-typed input. Phase 1c.5 retired the Go-hosted escape
-// hatch — the self-host path is the only path now.
+// TestCheckCLIDefaultPathExitsZero is the production-default companion
+// to TestRunCheckFileDumpTelemetry: `osty check FILE` routes through
+// the self-host arena pipeline. Run the subprocess CLI so dispatch
+// actually goes through clicmd.ParseArgs, then verify exit 0 on a
+// well-typed input — the self-host path is the only path.
 func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
