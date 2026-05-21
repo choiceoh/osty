@@ -507,3 +507,84 @@ fn allLowerHex(s: String) -> Bool {
 fn stringsContainsJson(haystack: String, needle: String) -> Bool {
     strings.contains(haystack, needle)
 }
+// ---------------------------------------------------------------------
+// frontExtractPackageFileSources + frontCheckPackageToWireJson tests.
+//
+// The native checker subprocess routes any `{"package":{...}}` request
+// to `frontCheckPackageToWireJson`. These tests pin the JSON byte
+// scanner so a regression that silently drops files or mis-decodes
+// escapes shows up here instead of as confusing per-file diagnostic
+// gaps downstream.
+// ---------------------------------------------------------------------
+fn testExtractPackageFileSourcesEmptyFilesArray() {
+    let got = frontExtractPackageFileSources("\{\"package\":\{\"files\":[]\}\}")
+    testing.assertEq(got.len(), 0)
+}
+fn testExtractPackageFileSourcesSingleFile() {
+    let got = frontExtractPackageFileSources("\{\"package\":\{\"files\":[\{\"source\":\"fn main()\{\}\"\}]\}\}")
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0], "fn main()\{\}")
+}
+fn testExtractPackageFileSourcesMultipleFilesPreservesOrder() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"fn a()\{\}\"\},\{\"source\":\"fn b()\{\}\"\},\{\"source\":\"fn c()\{\}\"\}]\}\}"
+    let got = frontExtractPackageFileSources(body)
+    testing.assertEq(got.len(), 3)
+    testing.assertEq(got[0], "fn a()\{\}")
+    testing.assertEq(got[1], "fn b()\{\}")
+    testing.assertEq(got[2], "fn c()\{\}")
+}
+fn testExtractPackageFileSourcesDecodesEscapes() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"fn main() \{ println(\\\"hi\\\\n\\\") \}\"\}]\}\}"
+    let got = frontExtractPackageFileSources(body)
+    testing.assertEq(got.len(), 1)
+    testing.assert(strings.contains(got[0], "println(\"hi"))
+    testing.assert(strings.contains(got[0], "\n\")"))
+}
+// Escape pairs in the JSON source value: `\"`, `\\`, `\n`. Decoded
+// values must match the corresponding raw bytes — same path
+// `mir_json.osty::mirJsonParseStrEscaped` takes.
+// The decoded source contains a literal newline byte (0x0A) inside
+// the string literal because `\n` in JSON decodes to ASCII LF.
+fn testExtractPackageFileSourcesAcceptsWhitespaceAroundColon() {
+    let body = "\{\n  \"package\": \{\n    \"files\": [\n      \{ \"source\" :  \"fn x()\{\}\" \}\n    ]\n  \}\n\}"
+    let got = frontExtractPackageFileSources(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0], "fn x()\{\}")
+}
+// Pretty-printed JSON: whitespace between `"source"` and `:` and
+// again between `:` and the opening `"`. The byte scanner must
+// skip both so prettified request bodies still match.
+fn testExtractPackageFileSourcesIgnoresUnrelatedKeys() {
+    let body = "\{\"package\":\{\"files\":[\{\"name\":\"a.osty\",\"path\":\"/tmp/a.osty\",\"source\":\"fn a()\{\}\"\},\{\"source\":\"fn b()\{\}\",\"name\":\"b.osty\"\}]\}\}"
+    let got = frontExtractPackageFileSources(body)
+    testing.assertEq(got.len(), 2)
+    testing.assertEq(got[0], "fn a()\{\}")
+    testing.assertEq(got[1], "fn b()\{\}")
+}
+// `"name"` / `"path"` siblings on the same file object must not
+// interfere with the `"source"` extraction. Only `"source"` values
+// are collected.
+fn testCheckPackageToWireJsonEmptyFiles() {
+    let out = frontCheckPackageToWireJson("\{\"package\":\{\"files\":[]\}\}")
+    testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
+}
+// No files → concatenated source is "" → standard empty-source
+// wire output. The package code path must NOT diverge from the
+// single-file empty-source baseline for the no-content case.
+fn testCheckPackageToWireJsonProducesSameShapeAsSourceMode() {
+    let pkgOut = frontCheckPackageToWireJson("\{\"package\":\{\"files\":[\{\"source\":\"\"\}]\}\}")
+    testing.assert(strings.contains(pkgOut, "\"summary\":"))
+    testing.assert(strings.contains(pkgOut, "\"typedNodes\":"))
+    testing.assert(strings.contains(pkgOut, "\"bindings\":"))
+    testing.assert(strings.contains(pkgOut, "\"symbols\":"))
+    testing.assert(strings.contains(pkgOut, "\"instantiations\":"))
+}
+// Single-file payload routed through the package entry must
+// produce the same top-level JSON shape (`summary` / `typedNodes`
+// / `bindings` / `symbols` / `instantiations`) the single-file
+// entry produces — that contract is what `cmd/osty-native-checker`
+// relies on when its dispatcher fans out by request shape.
+fn testCheckPackageToWireJsonConcatenatesFilesWithNewline() {
+    let out = frontCheckPackageToWireJson("\{\"package\":\{\"files\":[\{\"source\":\"\"\},\{\"source\":\"\"\}]\}\}")
+    testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
+}
