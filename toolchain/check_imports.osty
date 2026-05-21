@@ -463,15 +463,16 @@ fn frontDecodeImportEntry(v: FrontJsonValue) -> FrontPackageImport {
     FrontPackageImport {alias, functions, fields, variants, aliases, typeDecls, interfaceExts, registerAsIface}
 }
 // =====================================================================
-// 6. Top-level `imports` array locator.
+// 6. `package.imports` array locator.
 //
 // The request body shape is
 // `{"package":{"files":[...],"imports":[...]}}`. The byte scanner
-// finds the first `"imports"` key whose immediate JSON value is an
-// array, builds the value tree from there, and decodes each entry.
-// Like `frontFindFilesArrayOpen`, the search respects string
-// boundaries so a stray `"imports"` substring inside a source body
-// cannot false-positive.
+// locates the `"package":{...}` object bounds first, then scans only
+// within its interior for a direct-child `"imports"` array — so a
+// sibling top-level `"imports"` key or a nested `"imports"` inside
+// some other shape cannot false-positive. Matches the Go-side
+// `CheckRequest.Package.Imports` decoding semantics — only keys
+// nested under `package` count as part of the package shape.
 // =====================================================================
 pub fn frontExtractPackageImports(packageJson: String) -> List<FrontPackageImport> {
     let bs = packageJson.bytes()
@@ -491,27 +492,11 @@ pub fn frontExtractPackageImports(packageJson: String) -> List<FrontPackageImpor
     out
 }
 fn frontFindImportsArrayOpen(bs: List<Byte>, len: Int) -> Int {
-    let mut i = 0
-    for i < len {
-        let b = bs[i].toInt()
-        if b == 0x22 {
-            if frontMatchKeyBytes(bs, i, len, "imports") {
-                let afterKey = i + 9
-                let colonAt = frontSkipAsciiWs(bs, afterKey, len)
-                if colonAt < len && bs[colonAt].toInt() == 0x3A {
-                    let openAt = frontSkipAsciiWs(bs, colonAt + 1, len)
-                    if openAt < len && bs[openAt].toInt() == 0x5B {
-                        return openAt
-                    }
-                }
-            }
-            let stringEnd = frontSkipJsonString(bs, i, len)
-            i = stringEnd
-            continue
-        }
-        i = i + 1
+    let bounds = frontFindPackageObjectBounds(bs, len)
+    if bounds.start < 0 {
+        return -1
     }
-    -1
+    frontFindArrayOpenForKey(bs, bounds.start, bounds.end, "imports")
 }
 // =====================================================================
 // 7. TypeRepr → ty Int translator.
@@ -697,9 +682,9 @@ pub fn frontInstallImportSurfaces(env: CheckEnv, imports: List<FrontPackageImpor
                 frontTypeNameToTy(env, impFn.returnTypeName)
             }
             let paramNames = frontImportFnParamNames(impFn.paramNames, impFn.paramDefaults, paramTys.len())
-            checkRegisterFn(env, CheckFnSig {name: impFn.name, owner: imp.alias, receiverTy, hasReceiver: impFn.hasReceiver, retTy, paramNames, paramTys, generics: impFn.generics, genericBounds: frontMaterializeBounds(env, impFn.genericBounds)})
+            checkRegisterFn(env, CheckFnSig {name: impFn.name, owner: impFn.owner, receiverTy, hasReceiver: impFn.hasReceiver, retTy, paramNames, paramTys, generics: impFn.generics, genericBounds: frontMaterializeBounds(env, impFn.genericBounds)})
             if impFn.hasBody {
-                checkMarkFnHasBody(env, impFn.name, imp.alias)
+                checkMarkFnHasBody(env, impFn.name, impFn.owner)
             }
         }
     }

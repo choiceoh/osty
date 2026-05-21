@@ -272,3 +272,49 @@ fn testCheckPackageToWireJsonFnWithBodyMarked() {
     let out = frontCheckPackageToWireJson(body)
     testing.assert(!strings.contains(out, "\"code\":\"E0501\""))
 }
+// =====================================================================
+// Scoping: only `package.imports` / `package.files` count.
+// =====================================================================
+fn testExtractPackageImportsIgnoresTopLevelImportsKey() {
+    let body = "\{\"imports\":[\{\"alias\":\"phantom\"\}],\"package\":\{\"files\":[],\"imports\":[\{\"alias\":\"real\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "real")
+}
+// A sibling `"imports"` array OUTSIDE the `"package"` object must
+// not be picked up — only the nested `package.imports` counts.
+// Matches the Go `CheckRequest.Package.Imports` decoding shape.
+fn testExtractPackageImportsTopLevelOnlyWithoutPackageReturnsEmpty() {
+    let body = "\{\"imports\":[\{\"alias\":\"phantom\"\}]\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 0)
+}
+// Without a `"package":{...}` wrapper, no imports surface — even
+// a syntactically valid top-level `imports` array is rejected
+// because the wire shape requires the `package` envelope.
+fn testExtractPackageImportsIgnoresNestedImportsKey() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"\",\"meta\":\{\"imports\":[\{\"alias\":\"phantom\"\}]\}\}],\"imports\":[\{\"alias\":\"real\"\}]\}\}"
+    let got = frontExtractPackageImports(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].alias, "real")
+}
+// A nested `"imports"` key deeper inside a file object (some
+// hypothetical user-extension metadata) must not match — the
+// scanner only walks direct children of `package`.
+fn testExtractPackageFilesIgnoresTopLevelFilesKey() {
+    let body = "\{\"files\":[\{\"source\":\"phantom\"\}],\"package\":\{\"files\":[\{\"source\":\"real\"\}]\}\}"
+    let got = frontExtractPackageFiles(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].source, "real")
+}
+// `frontFindFilesArrayOpen` must scope its scan to `package.files`,
+// not the first `"files"` array anywhere in the document.
+// =====================================================================
+// P1: imported fns get registered under their declared owner, not
+// the alias.
+// =====================================================================
+fn testCheckPackageToWireJsonImportedMethodRegistersUnderReceiverOwner() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"main.osty\",\"source\":\"struct Err \{ msg: String \}\\nfn use(e: Err) -> String \{ e.toString() \}\"\}],\"imports\":[\{\"alias\":\"tc\",\"functions\":[\{\"name\":\"toString\",\"owner\":\"Err\",\"receiverTypeRepr\":\{\"kind\":\"named\",\"name\":\"Err\"\},\"returnTypeRepr\":\{\"kind\":\"primitive\",\"name\":\"String\"\}\}]\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(!strings.contains(out, "\"code\":\"E0703\""))
+}

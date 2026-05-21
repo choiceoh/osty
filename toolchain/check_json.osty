@@ -284,22 +284,92 @@ pub fn frontExtractPackageFiles(packageJson: String) -> List<FrontPackageFile> {
     files
 }
 fn frontFindFilesArrayOpen(bs: List<Byte>, len: Int) -> Int {
+    let bounds = frontFindPackageObjectBounds(bs, len)
+    if bounds.start < 0 {
+        return -1
+    }
+    frontFindArrayOpenForKey(bs, bounds.start, bounds.end, "files")
+}
+/// FrontPackageBounds describes the half-open byte range that the
+/// `package` value spans inside its enclosing `{...}` braces. The
+/// `start` byte is the first byte AFTER the opening `{`; the `end`
+/// byte is the position OF the closing `}` (so `[start, end)` covers
+/// the object's interior content). Both values are -1 when the
+/// scanner could not find a top-level `"package": {...}` shape.
+pub struct FrontPackageBounds {
+    pub start: Int,
+    pub end: Int,
+}
+/// frontFindPackageObjectBounds locates the top-level `"package"`
+/// key inside the request body and returns the byte range covering
+/// the interior of its object value. Mirrors the Go-side
+/// `CheckRequest.Package` field decoding — only keys nested under
+/// `package` count as part of the package shape, so callers
+/// scanning for `files` / `imports` arrays should restrict their
+/// search to this range rather than the whole document.
+///
+/// Implementation: byte-by-byte scan with string-boundary tracking,
+/// matches `"package"` at any position outside a JSON string, then
+/// skips ws + `:` + ws to locate the opening `{` and uses
+/// `frontSkipJsonObject` to find the matching `}`. Returns `start =
+/// end = -1` when no top-level `"package":{...}` is present.
+fn frontFindPackageObjectBounds(bs: List<Byte>, len: Int) -> FrontPackageBounds {
     let mut i = 0
     for i < len {
         let b = bs[i].toInt()
         if b == 0x22 {
-            if frontMatchKeyBytes(bs, i, len, "files") {
-                let afterKey = i + 7
+            if frontMatchKeyBytes(bs, i, len, "package") {
+                let afterKey = i + 9
                 let colonAt = frontSkipAsciiWs(bs, afterKey, len)
                 if colonAt < len && bs[colonAt].toInt() == 0x3A {
                     let openAt = frontSkipAsciiWs(bs, colonAt + 1, len)
-                    if openAt < len && bs[openAt].toInt() == 0x5B {
-                        return openAt
+                    if openAt < len && bs[openAt].toInt() == 0x7B {
+                        let afterObject = frontSkipJsonObject(bs, openAt, len)
+                        return FrontPackageBounds {start: openAt + 1, end: afterObject - 1}
                     }
                 }
             }
             let stringEnd = frontSkipJsonString(bs, i, len)
             i = stringEnd
+            continue
+        }
+        i = i + 1
+    }
+    FrontPackageBounds {start: -1, end: -1}
+}
+/// frontFindArrayOpenForKey returns the position of the `[` opening
+/// the JSON array bound to `key` within the byte range `[start,
+/// end)`. The scan tracks string boundaries by calling
+/// `frontSkipJsonString` past every string and jumps past every
+/// nested object / array via `frontSkipJsonObject` / `frontSkipJsonArray`,
+/// so only direct children of the enclosing object can match.
+/// Returns -1 when no array-valued occurrence at the top level of
+/// the scanned range is found.
+fn frontFindArrayOpenForKey(bs: List<Byte>, start: Int, end: Int, key: String) -> Int {
+    let mut i = start
+    for i < end {
+        let b = bs[i].toInt()
+        if b == 0x22 {
+            if frontMatchKeyBytes(bs, i, end, key) {
+                let keyLen = key.bytes().len()
+                let afterKey = i + keyLen + 2
+                let colonAt = frontSkipAsciiWs(bs, afterKey, end)
+                if colonAt < end && bs[colonAt].toInt() == 0x3A {
+                    let openAt = frontSkipAsciiWs(bs, colonAt + 1, end)
+                    if openAt < end && bs[openAt].toInt() == 0x5B {
+                        return openAt
+                    }
+                }
+            }
+            i = frontSkipJsonString(bs, i, end)
+            continue
+        }
+        if b == 0x7B {
+            i = frontSkipJsonObject(bs, i, end)
+            continue
+        }
+        if b == 0x5B {
+            i = frontSkipJsonArray(bs, i, end)
             continue
         }
         i = i + 1
