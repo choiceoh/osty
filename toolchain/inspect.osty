@@ -455,7 +455,7 @@ fn inspectThreadHintsThroughContainers(arena: AstArena, checked: FrontCheckResul
 fn inspectBindingTypeByPattern(checked: FrontCheckResult) -> List<InspectBindingEntry> {
     let mut out: List<InspectBindingEntry> = []
     for bnd in checked.bindings {
-        out.push(InspectBindingEntry {node: bnd.node, typeRepr: bnd.typeRepr})
+        out.push(InspectBindingEntry {node: bnd.nodeId, typeRepr: bnd.typeRepr})
     }
     out
 }
@@ -568,7 +568,7 @@ fn inspectBuildRecords(arena: AstArena, checked: FrontCheckResult, letPatterns: 
         if bnd.name == "" || bnd.name == "_" {
             continue
         }
-        let isLocalLet = inspectIsLetPatternIdx(letPatterns, bnd.node)
+        let isLocalLet = inspectIsLetPatternIdx(letPatterns, bnd.nodeId)
         let rule = if isLocalLet {
             "LET"
         } else {
@@ -589,7 +589,7 @@ fn inspectBuildRecords(arena: AstArena, checked: FrontCheckResult, letPatterns: 
             }
         }
         let span = if isLocalLet {
-            inspectLookupLetSpan(letSpanByPattern, bnd.node, bnd.start, bnd.end)
+            inspectLookupLetSpan(letSpanByPattern, bnd.nodeId, bnd.start, bnd.end)
         } else {
             InspectSpan {start: bnd.start, end: bnd.end}
         }
