@@ -9,8 +9,8 @@ func TestCheckResultIndexUsesStableIDs(t *testing.T) {
 			{NodeID: 42, Kind: "Call", TypeID: 8},
 		},
 		Bindings: []CheckedBinding{
-			{NodeID: 0, BindingID: 11, Name: "root", TypeID: 7},
-			{NodeID: 42, BindingID: 12, Name: "value", TypeID: 8},
+			{NodeID: 0, Name: "root", TypeID: 7},
+			{NodeID: 42, Name: "value", TypeID: 8},
 		},
 		Symbols: []CheckedSymbol{
 			{NodeID: 42, SymbolID: 21, Name: "value", TypeID: 8},
@@ -29,11 +29,8 @@ func TestCheckResultIndexUsesStableIDs(t *testing.T) {
 	if got := idx.TypedNodesByNodeID[42]; got == nil || got.Kind != "Call" {
 		t.Fatalf("typed node 42 = %#v, want Call", got)
 	}
-	if got := idx.BindingsByID[12]; got == nil || got.Name != "value" {
-		t.Fatalf("binding 12 = %#v, want value", got)
-	}
-	if got := idx.BindingsByNodeID[42]; len(got) != 1 || got[0].BindingID != 12 {
-		t.Fatalf("bindings by node 42 = %#v, want binding 12", got)
+	if got := idx.BindingsByNodeID[42]; len(got) != 1 || got[0].Name != "value" {
+		t.Fatalf("bindings by node 42 = %#v, want binding value", got)
 	}
 	if got := idx.SymbolsByID[21]; got == nil || got.Name != "value" {
 		t.Fatalf("symbol 21 = %#v, want value", got)
@@ -93,7 +90,6 @@ func TestNilCheckResultIndexIsEmpty(t *testing.T) {
 	idx := (*CheckResult)(nil).Index()
 	if len(idx.TypedNodesByNodeID) != 0 ||
 		len(idx.TypedNodesByStableID) != 0 ||
-		len(idx.BindingsByID) != 0 ||
 		len(idx.BindingsByStableID) != 0 ||
 		len(idx.SymbolsByID) != 0 ||
 		len(idx.SymbolsByStableID) != 0 ||

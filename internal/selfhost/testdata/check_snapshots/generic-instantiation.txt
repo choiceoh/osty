@@ -6,7 +6,7 @@ typedNodes
   id=typed-node:e8a8faf85 nodeKey=node:33fed6004b55fa7 typeKey=type:0cbe92b642f4e2f nodeId=13 typeId=2 kind=Call span=68:71 type=Int
   id=typed-node:dd6cc8b79 nodeKey=node:ff211993b5265fe typeKey=type:520c4bf26e2fabc nodeId=15 typeId=19 kind=Block span=44:73 type=()
 bindings
-  id=binding:46a24bc911e8 nodeKey=node:943860bfc5f7e91 typeKey=type:0cbe92b642f4e2f bindingId=0 nodeId=8 name=answer mutable=false typeId=2 span=50:56 type=Int
+  id=binding:46a24bc911e8 nodeKey=node:943860bfc5f7e91 typeKey=type:0cbe92b642f4e2f nodeId=8 name=answer mutable=false typeId=2 span=50:56 type=Int
 symbols
   id=symbol:5f62d6da7a4ee nodeKey=node:5c0b26c77174404 typeKey=type:9addffd32952554 symbolId=0 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
   id=symbol:b8e98828503be nodeKey=node:3370ff521ebcb76 typeKey=type:b4f942e1ed0777f symbolId=1 nodeId=16 kind=fn name=main owner= typeId=135 span=34:73 type=fn() -> ()

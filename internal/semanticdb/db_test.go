@@ -79,11 +79,11 @@ func TestWithCheckKeepsResolveDBImmutable(t *testing.T) {
 	base := New(nil, api.ResolveResult{PackageID: "pkg"})
 	checked := api.CheckResult{
 		TypedNodes: []api.CheckedNode{{
-			Node:  1,
-			Kind:  "Ident",
-			Start: 0,
-			End:   1,
-			Type:  &api.TypeRepr{Kind: "primitive", Name: "Int"},
+			NodeID: 1,
+			Kind:   "Ident",
+			Start:  0,
+			End:    1,
+			Type:   &api.TypeRepr{Kind: "primitive", Name: "Int"},
 		}},
 	}
 

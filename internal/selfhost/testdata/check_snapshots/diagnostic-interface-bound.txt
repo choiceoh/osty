@@ -11,8 +11,8 @@ typedNodes
   id=typed-node:985a6b5a7 nodeKey=node:3cc4b7378e4d535 typeKey=type:27afd946bb3613d nodeId=29 typeId=17 kind=Call span=208:214 type=String
   id=typed-node:eb39bd0b2 nodeKey=node:598cc8b8332a80c typeKey=type:520c4bf26e2fabc nodeId=31 typeId=19 kind=Block span=137:216 type=()
 bindings
-  id=binding:ddf28dba2fe5 nodeKey=node:beda8c03414007c typeKey=type:addc461d1f10d07 bindingId=0 nodeId=18 name=user mutable=false typeId=137 span=147:151 type=User
-  id=binding:0b0c94771576 nodeKey=node:7abebfc4521a235 typeKey=type:27afd946bb3613d bindingId=1 nodeId=25 name=label mutable=false typeId=17 span=185:190 type=String
+  id=binding:ddf28dba2fe5 nodeKey=node:beda8c03414007c typeKey=type:addc461d1f10d07 nodeId=18 name=user mutable=false typeId=137 span=147:151 type=User
+  id=binding:0b0c94771576 nodeKey=node:7abebfc4521a235 typeKey=type:27afd946bb3613d nodeId=25 name=label mutable=false typeId=17 span=185:190 type=String
 symbols
   id=symbol:89f31eaf230bd nodeKey=node:9ffc38d169fb3d4 typeKey=type:65086d14233556d symbolId=0 nodeId=3 kind=interface name=Named owner= typeId=135 span=0:43 type=Named
   id=symbol:f5ec71b67ce18 nodeKey=node:571a54f97380c51 typeKey=type:1e90da063ee133a symbolId=1 nodeId=2 kind=fn name=name owner=Named typeId=136 span=18:41 type=fn() -> String

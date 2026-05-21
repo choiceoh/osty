@@ -158,7 +158,6 @@ pub struct FrontCheckedNode {
 }
 pub struct FrontCheckedBinding {
     pub nodeId: Int,
-    pub bindingId: Int,
     pub name: String,
     pub typeRepr: FrontTypeRepr,
     pub typeId: Int,
@@ -1226,10 +1225,8 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         typedNodes.push(FrontCheckedNode {nodeId: node.originAst, kind, typeRepr: tyToRepr(cx.env.tys, node.ty), typeId: node.ty, start: astNode.start, end: astNode.end})
     }
     let mut bindings: List<FrontCheckedBinding> = []
-    let mut bindingId = 0
     for b in cx.env.local.bindingRecords {
-        bindings.push(FrontCheckedBinding {nodeId: b.node, bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
-        bindingId = bindingId + 1
+        bindings.push(FrontCheckedBinding {nodeId: b.node, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
     }
     let mut symbols: List<FrontCheckedSymbol> = []
     let mut symbolId = 0
