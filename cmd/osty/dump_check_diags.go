@@ -1,6 +1,6 @@
 package main
 
-// Helpers for `osty check --dump-native-diags`. The flag surfaces the
+// Helpers for `osty check --dump-check-diags`. The flag surfaces the
 // bootstrapped native checker's per-context error histogram so callers
 // working against aggregate error counts (1700-style summaries) can
 // split the tail by diagnostic code without regenerating
@@ -21,7 +21,7 @@ import (
 	"github.com/osty/osty/internal/selfhost/api"
 )
 
-type nativeDiagTelemetry struct {
+type checkDiagTelemetry struct {
 	Assignments     int
 	Accepted        int
 	Errors          int
@@ -29,17 +29,17 @@ type nativeDiagTelemetry struct {
 	ErrorDetails    map[string]map[string]int
 }
 
-// dumpNativeDiagsFor prints the native checker's per-context histogram
+// dumpCheckDiagsFor prints the native checker's per-context histogram
 // for one already-checked scope (file, package, or workspace entry) to
 // stderr. Silent when the native checker was unavailable or reported
 // zero errors — no output is always preferable to a misleading "0 of 0"
 // banner.
-func dumpNativeDiagsFor(label string, chk *check.Result) {
+func dumpCheckDiagsFor(label string, chk *check.Result) {
 	if chk == nil || chk.NativeCheckerTelemetry == nil {
 		return
 	}
 	t := chk.NativeCheckerTelemetry
-	dumpNativeDiagTelemetry(label, nativeDiagTelemetry{
+	dumpCheckDiagTelemetry(label, checkDiagTelemetry{
 		Assignments:     t.Assignments,
 		Accepted:        t.Accepted,
 		Errors:          t.Errors,
@@ -48,11 +48,11 @@ func dumpNativeDiagsFor(label string, chk *check.Result) {
 	})
 }
 
-// dumpNativeDiagsForSummary is the native CLI-path sibling of
-// dumpNativeDiagsFor: it reads the already-materialized self-host
+// dumpCheckDiagsForSummary is the native CLI-path sibling of
+// dumpCheckDiagsFor: it reads the already-materialized self-host
 // summary directly instead of going through check.Result.
-func dumpNativeDiagsForSummary(label string, summary api.CheckSummary) {
-	dumpNativeDiagTelemetry(label, nativeDiagTelemetry{
+func dumpCheckDiagsForSummary(label string, summary api.CheckSummary) {
+	dumpCheckDiagTelemetry(label, checkDiagTelemetry{
 		Assignments:     summary.Assignments,
 		Accepted:        summary.Accepted,
 		Errors:          summary.Errors,
@@ -61,11 +61,11 @@ func dumpNativeDiagsForSummary(label string, summary api.CheckSummary) {
 	})
 }
 
-func dumpNativeDiagTelemetry(label string, t nativeDiagTelemetry) {
+func dumpCheckDiagTelemetry(label string, t checkDiagTelemetry) {
 	if t.Errors == 0 && t.Assignments == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "native checker telemetry: %s\n", label)
+	fmt.Fprintf(os.Stderr, "checker telemetry: %s\n", label)
 	fmt.Fprintf(os.Stderr, "  assignments: %d\n", t.Assignments)
 	fmt.Fprintf(os.Stderr, "  accepted:    %d\n", t.Accepted)
 	fmt.Fprintf(os.Stderr, "  tail:        %d (= assignments - accepted)\n", t.Assignments-t.Accepted)

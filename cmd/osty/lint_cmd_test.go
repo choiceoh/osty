@@ -32,7 +32,7 @@ func TestRunLintFileHappyPath(t *testing.T) {
 	}
 }
 
-func TestLintPackageNativeDiagnosticsCleanPackage(t *testing.T) {
+func TestLintPackageDiagnosticsCleanPackage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.osty"), []byte(`pub fn helper() -> Int { 1 }
 `), 0o644); err != nil {

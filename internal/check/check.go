@@ -47,7 +47,7 @@ type Result struct {
 	// NativeCheckerTelemetry carries the per-context error histogram the
 	// bootstrapped native checker produced alongside the aggregate summary
 	// diagnostic. Populated by host_boundary on the File / Package / Workspace
-	// entry points. Consumed by `osty check --dump-native-diags`; nil when
+	// entry points. Consumed by `osty check --dump-check-diags`; nil when
 	// the native checker was unavailable or reported no errors.
 	NativeCheckerTelemetry *NativeCheckerTelemetry
 

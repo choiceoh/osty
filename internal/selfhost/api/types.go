@@ -29,7 +29,7 @@ type CheckSummary struct {
 	// ErrorsByContext buckets error-severity diagnostics by the native
 	// checker's stable bucket key. For the typed checker this is usually
 	// the diagnostic code (for example E0700); consumed by
-	// `osty check --dump-native-diags`.
+	// `osty check --dump-check-diags`.
 	ErrorsByContext map[string]int `json:"errorsByContext,omitempty"`
 	// ErrorDetails optionally holds a second-level split under a given
 	// bucket. For the typed checker this is the rendered diagnostic

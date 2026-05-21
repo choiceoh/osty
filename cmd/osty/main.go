@@ -86,12 +86,12 @@ type cliFlags struct {
 	inspect    bool // check: emit one InspectRecord per expression (stdout)
 	aiRepair   bool // front-end: adapt AI-authored foreign syntax in memory
 	aiMode     airepair.Mode
-	// dumpNativeDiags prints the native checker's per-context error
+	// dumpCheckDiags prints the native checker's per-context error
 	// histogram (assignments/accepted/errors + breakdown) to stderr after
 	// a `check` / `typecheck` run. Legacy paths read it from
 	// `internal/check.Result`; self-host native CLI paths read the same
 	// counters directly from `selfhost.CheckSummary`. Off by default.
-	dumpNativeDiags bool
+	dumpCheckDiags bool
 	// suppressSummary silences the `N error(s), M warning(s)` trailer
 	// inside a single printDiags call. The package-diagnostic walker sets
 	// this per-file bucket and then prints one consolidated summary
@@ -409,15 +409,15 @@ func main() {
 			runLintPackage(path, flags)
 			return
 		case "typecheck":
-			if root, ok, abort := nativeWorkspaceRoot(path, flags); abort {
+			if root, ok, abort := workspaceRoot(path, flags); abort {
 				os.Exit(2)
 			} else if ok {
-				if runTypecheckWorkspaceNative(root, flags) != 0 {
+				if runTypecheckWorkspace(root, flags) != 0 {
 					os.Exit(1)
 				}
 				return
 			}
-			if runTypecheckPackageNative(path, flags) != 0 {
+			if runTypecheckPackageDir(path, flags) != 0 {
 				os.Exit(1)
 			}
 			return
@@ -443,10 +443,10 @@ func main() {
 				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
 				printPackageDiags(selected.pkg, diags, flags)
 				if flags.inspect && selected.file != nil && selected.file.File != nil {
-					runInspectPackageInput(nativePackageCheckInput(selected.pkg, nil), selected.file.Path, flags)
+					runInspectPackageInput(packageCheckInput(selected.pkg, nil), selected.file.Path, flags)
 				}
-				if flags.dumpNativeDiags {
-					dumpNativeDiagsFor(path, selected.chk)
+				if flags.dumpCheckDiags {
+					dumpCheckDiagsFor(path, selected.chk)
 				}
 				if hasError(diags) {
 					os.Exit(1)
@@ -529,11 +529,11 @@ func main() {
 			os.Exit(1)
 		}
 	case "check":
-		if runCheckFileNative(path, src, formatter, flags) != 0 {
+		if runCheckFile(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "typecheck":
-		if runTypecheckFileNative(path, src, formatter, flags) != 0 {
+		if runTypecheckFile(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "resolve":
@@ -574,7 +574,7 @@ func convertFlags(cf clicmd.CliFlags) cliFlags {
 	if cf.AiMode != "" {
 		f.aiMode = airepair.Mode(cf.AiMode)
 	}
-	f.dumpNativeDiags = cf.DumpNativeDiags
+	f.dumpCheckDiags = cf.DumpCheckDiags
 	return f
 }
 
@@ -594,7 +594,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
-	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check/typecheck: after the run, print the native checker's per-context error histogram to stderr")
+	flag.BoolVar(&f.dumpCheckDiags, "dump-check-diags", false, "check/typecheck: after the run, print the checker's per-context error histogram to stderr")
 	flag.Usage = usage
 	flag.Parse()
 	return f

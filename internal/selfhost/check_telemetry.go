@@ -143,7 +143,7 @@ func selfhostLastPathSegment(path string) string {
 // so we bucket errors by code and retain the rendered message as detail rows.
 // When posLookup is non-nil, each detail row is suffixed with `@Lnn:Cnn`
 // pointing at the diagnostic's primary span, which lets
-// `osty check --dump-native-diags` pinpoint individual parity failures
+// `osty check --dump-check-diags` pinpoint individual parity failures
 // instead of collapsing structurally-identical messages into one bucket.
 func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic, posLookup selfhostTokenPos) (map[string]int, map[string]map[string]int) {
 	if len(diags) == 0 {
