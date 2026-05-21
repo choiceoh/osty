@@ -1420,6 +1420,138 @@ static void *osty_gc_arena_free_take(size_t bytes, size_t align) {
   return NULL;
 }
 
+/* Heap-fallback bump-block pool. The arena free-list above keeps
+ * arena-backed blocks within the 4 GiB reservation. When peak live
+ * working set exceeds 4 GiB (toolchain test bundles, large
+ * `lir-proto-lower` MIR JSONs) the bump allocator falls through to
+ * `calloc` in `osty_gc_bump_block_new`'s second branch — those
+ * blocks used to be unconditionally `free`'d on release. glibc's
+ * allocator does not always release the underlying physical pages
+ * back to the OS even after `free`, but more importantly each
+ * release / calloc cycle thrashes anon-RSS while the kernel decides
+ * whether to reclaim. Pooling the data buffer + memzeroing it on
+ * reuse keeps the heap working set steady and avoids the calloc
+ * fast-path's zero-fill cost on warm churn.
+ *
+ * Pool shape: simple LIFO sorted by exact `total_bytes` match.
+ * Most heap-fallback blocks share the default 64 KiB +
+ * `OSTY_GC_SIZE_CLASS_ALIGN` shape so an exact-size LIFO has a
+ * near-100% hit rate without sweep / coalesce overhead. Pool
+ * capacity is capped (`OSTY_GC_HEAP_POOL_CAP_BYTES`) at 64 MiB by
+ * default to bound the worst-case retained-heap-pool footprint —
+ * overflow on push falls back to `free`. The cap can be raised via
+ * `OSTY_GC_HEAP_POOL_CAP_BYTES` env override; setting it to 0
+ * disables the pool entirely (restoring the pre-pool `free`-on-
+ * release behaviour).
+ *
+ * The pool node header lives in the freed buffer's first
+ * `sizeof(osty_gc_heap_pool_node)` bytes (same trick as the arena
+ * free-list). The header carries both `total_bytes` (entire raw
+ * `data_alloc` byte length, including the alignment slack the
+ * allocator over-reserves) so a future take can return it intact,
+ * and `next` for the LIFO link.
+ */
+typedef struct osty_gc_heap_pool_node {
+  struct osty_gc_heap_pool_node *next;
+  size_t total_bytes;
+} osty_gc_heap_pool_node;
+
+static osty_gc_heap_pool_node *osty_gc_heap_pool_head = NULL;
+static int64_t osty_gc_heap_pool_count = 0;
+static int64_t osty_gc_heap_pool_bytes = 0;
+static int64_t osty_gc_heap_pool_push_total = 0;
+static int64_t osty_gc_heap_pool_take_total = 0;
+static int64_t osty_gc_heap_pool_take_bytes_total = 0;
+static int64_t osty_gc_heap_pool_overflow_free_total = 0;
+static int64_t osty_gc_heap_pool_cap_bytes = (int64_t)(64 * 1024 * 1024);
+static bool osty_gc_heap_pool_cap_loaded = false;
+
+static int64_t osty_gc_heap_pool_cap_bytes_now(void) {
+  const char *value;
+  char *end = NULL;
+  long long parsed;
+
+  if (osty_gc_heap_pool_cap_loaded) {
+    return osty_gc_heap_pool_cap_bytes;
+  }
+  osty_gc_heap_pool_cap_loaded = true;
+  value = getenv("OSTY_GC_HEAP_POOL_CAP_BYTES");
+  if (value == NULL || value[0] == '\0') {
+    return osty_gc_heap_pool_cap_bytes;
+  }
+  parsed = strtoll(value, &end, 10);
+  if (end == value || (end != NULL && *end != '\0') || parsed < 0) {
+    osty_rt_abort("invalid OSTY_GC_HEAP_POOL_CAP_BYTES");
+  }
+  osty_gc_heap_pool_cap_bytes = (int64_t)parsed;
+  return osty_gc_heap_pool_cap_bytes;
+}
+
+/* Push `data_alloc` onto the heap pool. Returns true when accepted;
+ * false means the caller must `free(data_alloc)` itself (pool full
+ * / disabled / size too small to hold the node header). */
+static bool osty_gc_heap_pool_push(void *data_alloc, size_t total_bytes) {
+  osty_gc_heap_pool_node *node;
+  int64_t cap;
+
+  if (data_alloc == NULL || total_bytes < sizeof(osty_gc_heap_pool_node)) {
+    return false;
+  }
+  cap = osty_gc_heap_pool_cap_bytes_now();
+  if (cap == 0) {
+    return false;
+  }
+  if (total_bytes > (size_t)INT64_MAX) {
+    osty_rt_abort("GC heap-pool total bytes overflow");
+  }
+  if (osty_gc_heap_pool_bytes + (int64_t)total_bytes > cap) {
+    osty_gc_heap_pool_overflow_free_total += 1;
+    return false;
+  }
+  node = (osty_gc_heap_pool_node *)data_alloc;
+  node->total_bytes = total_bytes;
+  node->next = osty_gc_heap_pool_head;
+  osty_gc_heap_pool_head = node;
+  osty_gc_heap_pool_count += 1;
+  osty_gc_heap_pool_bytes += (int64_t)total_bytes;
+  osty_gc_heap_pool_push_total += 1;
+  return true;
+}
+
+/* Take a pooled buffer of exactly `total_bytes` and memzero its
+ * contents to mimic `calloc`. Returns NULL when no match exists in
+ * the pool (caller falls through to `calloc`). First-fit on exact
+ * size match keeps the per-take cost O(pool depth); pool depth is
+ * bounded by `OSTY_GC_HEAP_POOL_CAP_BYTES / OSTY_GC_BUMP_BLOCK_BYTES`
+ * so in practice this is sublinear in lifetime allocation count. */
+static void *osty_gc_heap_pool_take(size_t total_bytes) {
+  osty_gc_heap_pool_node *prev = NULL;
+  osty_gc_heap_pool_node *cur = osty_gc_heap_pool_head;
+
+  if (osty_gc_heap_pool_cap_bytes_now() == 0) {
+    return NULL;
+  }
+  while (cur != NULL) {
+    if (cur->total_bytes == total_bytes) {
+      osty_gc_heap_pool_node *next = cur->next;
+      if (prev != NULL) {
+        prev->next = next;
+      } else {
+        osty_gc_heap_pool_head = next;
+      }
+      osty_gc_heap_pool_count -= 1;
+      osty_gc_heap_pool_bytes -= (int64_t)total_bytes;
+      osty_gc_heap_pool_take_total += 1;
+      osty_gc_heap_pool_take_bytes_total += (int64_t)total_bytes;
+      memset(cur, 0, total_bytes);
+      return cur;
+    }
+    prev = cur;
+    cur = cur->next;
+  }
+  return NULL;
+}
+
 static void osty_gc_arena_init(void) {
   if (osty_gc_arena_base != NULL || osty_gc_arena_init_failed) {
     return;
@@ -1446,12 +1578,27 @@ static void osty_gc_arena_init(void) {
   osty_gc_arena_end = osty_gc_arena_base + OSTY_GC_ARENA_BYTES;
 }
 
+/* Force the next N arena_alloc calls to return NULL so the bump-
+ * block allocator falls through to its heap-fallback branch. Used
+ * by `TestRuntimeGCHeapPoolRecyclesHeapBumpBlocks` to exercise the
+ * heap-pool reuse path without first having to push the arena
+ * cursor past the 4 GiB cap (which is impractical inside a unit
+ * test). Production code never decrements this counter. */
+static int64_t osty_gc_debug_force_heap_fallback_remaining = 0;
+void osty_gc_debug_force_heap_fallback_set(int64_t count) {
+  osty_gc_debug_force_heap_fallback_remaining = count;
+}
+
 static void *osty_gc_arena_alloc(size_t bytes, size_t align) {
   uintptr_t cur;
   uintptr_t aligned;
   uintptr_t next;
   void *recycled;
 
+  if (osty_gc_debug_force_heap_fallback_remaining > 0) {
+    osty_gc_debug_force_heap_fallback_remaining -= 1;
+    return NULL;
+  }
   if (osty_gc_arena_base == NULL) {
     osty_gc_arena_init();
     if (osty_gc_arena_base == NULL) {
@@ -3424,13 +3571,23 @@ osty_gc_bump_block_new(size_t min_size, osty_gc_bump_block **blocks_head,
   } else {
     /* Arena init failed or exhausted — fall back to heap. The
      * data region is owned by `data_alloc` (the unaligned
-     * calloc'd base) so `osty_gc_bump_block_release` can free
-     * it later. The lookup fast path won't help these blocks
+     * pointer to the raw allocation) so `osty_gc_bump_block_release`
+     * can recycle it (via `osty_gc_heap_pool_push`) or free it
+     * later. The lookup fast path won't help these blocks
      * (outside the arena range) but the hash-based lookup
-     * still works for them. */
+     * still works for them.
+     *
+     * Recycle path: a previously released same-size buffer is
+     * consulted via `osty_gc_heap_pool_take` first. On a hit the
+     * buffer comes back memzero'd (caller no longer pays the
+     * `calloc` first-touch zero-fill on warm churn).
+     */
     size_t total_bytes = block_size + OSTY_GC_SIZE_CLASS_ALIGN;
-    unsigned char *raw = (unsigned char *)calloc(1, total_bytes);
+    unsigned char *raw = (unsigned char *)osty_gc_heap_pool_take(total_bytes);
     uintptr_t aligned;
+    if (raw == NULL) {
+      raw = (unsigned char *)calloc(1, total_bytes);
+    }
     if (raw == NULL) {
       free(block);
       osty_rt_abort("out of memory (gc bump block data)");
@@ -3586,7 +3743,11 @@ static void osty_gc_bump_block_release(osty_gc_bump_block *target,
   /* Reclaim the payload region. Two cases:
    *   1. Heap-backed (`data_alloc != NULL`) — arena_init had failed
    *      or the arena was exhausted at the time of allocation, so
-   *      the data region came from `calloc`. Return it via `free`.
+   *      the data region came from `calloc`. Push onto the heap
+   *      pool when it has capacity (caller pays no `calloc` zero-
+   *      fill on the next same-size alloc); fall through to `free`
+   *      when the pool is disabled, full, or the total length is
+   *      too small to host the pool's intrusive node header.
    *   2. Arena-backed (`data_alloc == NULL`) — push the range onto
    *      the arena free-list so subsequent `osty_gc_arena_alloc`
    *      calls can hand it out again. Pre-recycle behaviour leaked
@@ -3597,7 +3758,14 @@ static void osty_gc_bump_block_release(osty_gc_bump_block *target,
    *      release path.
    */
   if (block->data_alloc != NULL) {
-    free(block->data_alloc);
+    /* total_bytes mirrors the `block_size + OSTY_GC_SIZE_CLASS_ALIGN`
+     * total the heap-fallback branch of `osty_gc_bump_block_new`
+     * reserved. The pool indexes by exact `total_bytes` so the
+     * same-size shape lines up on every reuse. */
+    size_t total_bytes = (size_t)block->size + (size_t)OSTY_GC_SIZE_CLASS_ALIGN;
+    if (!osty_gc_heap_pool_push(block->data_alloc, total_bytes)) {
+      free(block->data_alloc);
+    }
   } else if (block->data != NULL && block->size > 0) {
     osty_gc_arena_free_push(block->data, block->size);
   }
@@ -21705,6 +21873,31 @@ int64_t osty_gc_debug_arena_free_take_total(void) {
 }
 int64_t osty_gc_debug_arena_free_take_bytes_total(void) {
   return osty_gc_arena_free_take_bytes_total;
+}
+
+/* Heap-fallback bump-block pool debug helpers. The pool intercepts
+ * `osty_gc_bump_block_release` for heap-backed blocks: instead of
+ * `free`-ing the data buffer back to libc, it caches the buffer for
+ * the next same-size heap-fallback allocation. Lets tests assert
+ * the pool is hit (no calloc/free churn) and the cap is honoured
+ * (no unbounded retention). */
+int64_t osty_gc_debug_heap_pool_count(void) {
+  return osty_gc_heap_pool_count;
+}
+int64_t osty_gc_debug_heap_pool_bytes(void) {
+  return osty_gc_heap_pool_bytes;
+}
+int64_t osty_gc_debug_heap_pool_push_total(void) {
+  return osty_gc_heap_pool_push_total;
+}
+int64_t osty_gc_debug_heap_pool_take_total(void) {
+  return osty_gc_heap_pool_take_total;
+}
+int64_t osty_gc_debug_heap_pool_take_bytes_total(void) {
+  return osty_gc_heap_pool_take_bytes_total;
+}
+int64_t osty_gc_debug_heap_pool_overflow_free_total(void) {
+  return osty_gc_heap_pool_overflow_free_total;
 }
 
 int64_t osty_gc_debug_survivor_bump_block_count(void) {
