@@ -1327,7 +1327,11 @@ func TestBundledRuntimeSchedulerWorkerScaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("worker scaling skipped in -short")
 	}
-	parallelClangBackendTest(t)
+	// Timing-sensitive: comparing 1-worker vs 4-worker wall-clock for
+	// a CPU-bound body. Other `t.Parallel()` siblings contending for
+	// the same cores depress the 1→4 speedup below the 2× threshold,
+	// so run serial — clang availability check only.
+	requireClangForBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -2156,7 +2160,11 @@ int main(void) {
 // collector is still walking the heap — and that a rooted object
 // survives while garbage is reclaimed.
 func TestBundledRuntimeSchedulerConcurrentIncrementalMarkOverlapsMutators(t *testing.T) {
-	parallelClangBackendTest(t)
+	// Timing-sensitive: the concurrent mark phase must let 4 worker
+	// threads tick during a ~20 ms window. Parallel siblings stealing
+	// CPU drop the tick count below the 100-tick floor, so run serial
+	// — clang availability check only.
+	requireClangForBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
