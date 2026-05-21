@@ -7203,8 +7203,14 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentT
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + aggName + "` is not implemented", label)
         return
     }
-    if lirAggregateHasWidenedPayload(l.out, aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + aggName + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
+    let widened = lirAggregateHasWidenedPayload(l.out, aggType)
+    let payloadTypeOrEmpty = if widened {
+        lirOptionResultPayloadStructRef(l.out, aggType.llvm)
+    } else {
+        ""
+    }
+    if widened && payloadTypeOrEmpty == "" {
+        lirLowerError(l, LirDiagUnsupported, label + " could not extract struct typedef from `" + aggType.llvm + "`", label + ".widened")
         return
     }
     let aggValue = lirLowerMirOperand(l, l.instrs, instr.args[0], aggName, aggType)
@@ -7231,6 +7237,13 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentT
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(abortSym, lirVoidType(), lirNoTypeParams(), false))
     l.instrs.push(lirCall("", lirVoidType(), "@" + abortSym, lirNoOperands()))
     lirCutBlockUnreachable(l, presentLabel)
+    if widened {
+        let structType = lirAggregateType(payloadTypeOrEmpty)
+        let payloadStruct = lirFresh(l)
+        l.instrs.push(lirExtractValue(payloadStruct, aggType, aggValue.value, [1]))
+        lirStoreMirResult(l, instr.dest, lirOperand(structType, payloadStruct), loc.typ, label + " result")
+        return
+    }
     let payloadI64 = lirFresh(l)
     l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
     let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
@@ -7240,10 +7253,13 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, absentT
     }
     lirStoreMirResult(l, instr.dest, lirOperand(destType, narrowed), loc.typ, label + " result")
 }
-// Widened struct payload — extractvalue would yield a struct, not
-// i64. The current i64-shaped payload propagation downstream would
-// hit a type mismatch. C2 needs a struct-payload-aware unwrap that
-// either copies the struct via alloca or handles the value type.
+// Widened struct payload arm: extractvalue [1] yields the payload
+// struct directly (e.g. `%Pair`), no i64 narrow needed. The dest
+// local's MIR type is the struct itself (e.g. "Pair") so
+// `lirStoreMirResult` writes the struct value into the local's slot
+// without coercion. The aggregate's payload typedef ref is sourced
+// from `lirOptionResultPayloadStructRef` so it matches the
+// `{ i64, %X }` shape `lirAlgebraicAggregateBody_module` emits.
 // `lirLowerMirAlgebraicUnwrapOr` lowers Option.unwrapOr(default) and
 // Result.unwrapOr(default) — the fallback variants. It checks the
 // canonical present tag, stores the payload on the present arm and the
@@ -7266,8 +7282,14 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, prese
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + aggName + "` is not implemented", label)
         return
     }
-    if lirAggregateHasWidenedPayload(l.out, aggType) {
-        lirLowerError(l, LirDiagUnsupported, label + " not implemented for widened payload `" + aggName + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)", label + ".widened")
+    let widened = lirAggregateHasWidenedPayload(l.out, aggType)
+    let payloadTypeOrEmpty = if widened {
+        lirOptionResultPayloadStructRef(l.out, aggType.llvm)
+    } else {
+        ""
+    }
+    if widened && payloadTypeOrEmpty == "" {
+        lirLowerError(l, LirDiagUnsupported, label + " could not extract struct typedef from `" + aggType.llvm + "`", label + ".widened")
         return
     }
     let aggValue = lirLowerMirOperand(l, l.instrs, instr.args[0], aggName, aggType)
@@ -7284,38 +7306,55 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, prese
         lirLowerError(l, LirDiagUnsupported, label + " destination type `" + loc.typ + "` is not implemented", label)
         return
     }
+    let slotType = if widened {
+        lirAggregateType(payloadTypeOrEmpty)
+    } else {
+        destType
+    }
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isPresentReg = lirFresh(l)
     l.instrs.push(lirBinary(isPresentReg, "icmp eq", lirIntType(64), discReg, presentTag))
     let mergeSlot = lirFresh(l)
-    l.instrs.push(lirAlloca(mergeSlot, destType, 0))
+    l.instrs.push(lirAlloca(mergeSlot, slotType, 0))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     let endLabel = lirFreshAuxLabel(l, label + ".end")
     lirCutBlockCondBr(l, isPresentReg, presentLabel, absentLabel, presentLabel)
-    let payloadI64 = lirFresh(l)
-    l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
-    let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
-    if narrowed == "" {
-        lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
-        return
+    if widened {
+        let payloadStruct = lirFresh(l)
+        l.instrs.push(lirExtractValue(payloadStruct, aggType, aggValue.value, [1]))
+        l.instrs.push(lirStore(lirOperand(slotType, payloadStruct), mergeSlot, 0))
+    } else {
+        let payloadI64 = lirFresh(l)
+        l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
+        let narrowed = lirNarrowI64ToType(l, payloadI64, slotType)
+        if narrowed == "" {
+            lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
+            return
+        }
+        l.instrs.push(lirStore(lirOperand(slotType, narrowed), mergeSlot, 0))
     }
-    l.instrs.push(lirStore(lirOperand(destType, narrowed), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = absentLabel
-    let fallback = lirLowerMirOperand(l, l.instrs, instr.args[1], loc.typ, destType)
+    let fallback = lirLowerMirOperand(l, l.instrs, instr.args[1], loc.typ, slotType)
     if fallback.value == "" {
         return
     }
-    l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
+    l.instrs.push(lirStore(lirOperand(slotType, fallback.value), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
-    l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
-    lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
+    l.instrs.push(lirLoad(merged, slotType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(slotType, merged), loc.typ, label + " result")
 }
-// Same diagnostic-only guard as lirLowerMirAlgebraicUnwrap (above).
-// Struct-payload-aware unwrapOr depends on C2 implementation.
+// Widened struct payload arm: the merge alloca is sized to the
+// struct payload (`%Pair`) instead of i64. Both arms store the
+// struct value directly — present-side via extractvalue [1] yielding
+// the struct, absent-side via the fallback operand (already a
+// struct-typed MIR operand). `lirStoreMirResult` writes the loaded
+// struct into the dest local's slot. The payload typedef ref is
+// sourced from `lirOptionResultPayloadStructRef` to match the
+// `{ i64, %X }` shape `lirAlgebraicAggregateBody_module` emits.
 // `lirLowerMirListRemoveAt` lowers `list.removeAt(idx) -> T` as a
 // 2-step pattern: per-lane `osty_rt_list_get_<suffix>(list, idx)`
 // captures the element at `idx` BEFORE the runtime splice drops it,
