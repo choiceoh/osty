@@ -577,7 +577,7 @@ fn frontCheckedBindingBodyJson(b: FrontCheckedBinding, start: Int, end: Int) -> 
     let typeKey = frontWireStableTypeKey(b.typeRepr)
     let nodeKey = frontWireStableNodeKey("", "binding:" + b.name, start, end)
     let id = frontWireStableID("binding", [nodeKey, b.name, frontWireBoolText(b.mutable), typeKey])
-    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{b.nodeId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>, m: FrontWireMapper) -> String {
     if symbols.len() == 0 {

@@ -121,9 +121,6 @@ func assertStableCheckIDs(t *testing.T, resp api.CheckResult) {
 
 	seenNonZeroNodeID := false
 	for _, node := range resp.TypedNodes {
-		if node.NodeID != node.Node {
-			t.Fatalf("typed node stable id mismatch: %#v", node)
-		}
 		if node.NodeID != 0 {
 			seenNonZeroNodeID = true
 		}
@@ -135,15 +132,15 @@ func assertStableCheckIDs(t *testing.T, resp api.CheckResult) {
 		t.Fatalf("typed nodes did not expose any non-zero stable node ids: %#v", resp.TypedNodes)
 	}
 
-	seenBindingIDs := map[int]bool{}
+	seenBindingIDs := map[string]bool{}
 	for _, binding := range resp.Bindings {
-		if binding.NodeID != binding.Node {
-			t.Fatalf("binding stable id mismatch: %#v", binding)
+		if binding.ID == "" {
+			t.Fatalf("binding missing stable id: %#v", binding)
 		}
-		if seenBindingIDs[binding.BindingID] {
-			t.Fatalf("duplicate binding id %d in %#v", binding.BindingID, resp.Bindings)
+		if seenBindingIDs[binding.ID] {
+			t.Fatalf("duplicate binding id %q in %#v", binding.ID, resp.Bindings)
 		}
-		seenBindingIDs[binding.BindingID] = true
+		seenBindingIDs[binding.ID] = true
 		if binding.Type == nil {
 			t.Fatalf("binding missing structured type: %#v", binding)
 		}
@@ -151,9 +148,6 @@ func assertStableCheckIDs(t *testing.T, resp api.CheckResult) {
 
 	seenSymbolIDs := map[int]bool{}
 	for _, symbol := range resp.Symbols {
-		if symbol.NodeID != symbol.Node {
-			t.Fatalf("symbol stable id mismatch: %#v", symbol)
-		}
 		if seenSymbolIDs[symbol.SymbolID] {
 			t.Fatalf("duplicate symbol id %d in %#v", symbol.SymbolID, resp.Symbols)
 		}
@@ -164,9 +158,6 @@ func assertStableCheckIDs(t *testing.T, resp api.CheckResult) {
 	}
 
 	for _, inst := range resp.Instantiations {
-		if inst.NodeID != inst.Node {
-			t.Fatalf("instantiation stable id mismatch: %#v", inst)
-		}
 		if len(inst.TypeArgIDs) != len(inst.TypeArgs) {
 			t.Fatalf("instantiation type arg ids = %#v, type args = %#v", inst.TypeArgIDs, inst.TypeArgs)
 		}

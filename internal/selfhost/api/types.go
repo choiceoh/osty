@@ -152,17 +152,16 @@ type CheckedNode struct {
 
 // CheckedBinding records a local binding that the bootstrapped checker typed.
 type CheckedBinding struct {
-	ID        string    `json:"id,omitempty"`
-	NodeKey   string    `json:"nodeKey,omitempty"`
-	NodeID    int       `json:"nodeId"`
-	BindingID int       `json:"bindingId"` // legacy sequential id
-	Name      string    `json:"name"`
-	Type      *TypeRepr `json:"type"`
-	TypeID    int       `json:"typeId"` // legacy checker-arena type id
-	TypeKey   string    `json:"typeKey,omitempty"`
-	Mutable   bool      `json:"mutable"`
-	Start     int       `json:"start"`
-	End       int       `json:"end"`
+	ID      string    `json:"id,omitempty"`
+	NodeKey string    `json:"nodeKey,omitempty"`
+	NodeID  int       `json:"nodeId"`
+	Name    string    `json:"name"`
+	Type    *TypeRepr `json:"type"`
+	TypeID  int       `json:"typeId"` // legacy checker-arena type id
+	TypeKey string    `json:"typeKey,omitempty"`
+	Mutable bool      `json:"mutable"`
+	Start   int       `json:"start"`
+	End     int       `json:"end"`
 }
 
 // CheckedSymbol records a declaration collected by the bootstrapped checker.
@@ -240,7 +239,6 @@ type CheckResultIndex struct {
 	TypedNodesByNodeID       map[int]*CheckedNode
 	TypedNodesByNodeKey      map[string]*CheckedNode
 	BindingsByStableID       map[string]*CheckedBinding
-	BindingsByID             map[int]*CheckedBinding
 	BindingsByNodeID         map[int][]*CheckedBinding
 	BindingsByNodeKey        map[string][]*CheckedBinding
 	SymbolsByStableID        map[string]*CheckedSymbol
@@ -254,9 +252,9 @@ type CheckResultIndex struct {
 }
 
 // EnsureStableIDs fills the content-derived identities for every checker
-// record. The integer NodeID / TypeID / BindingID / SymbolID fields remain for
-// legacy consumers, but new consumers should prefer the string IDs and keys:
-// they are derived from source span, record kind, names, and structured type
+// record. The integer NodeID / TypeID / SymbolID fields remain for legacy
+// consumers, but new consumers should prefer the string IDs and keys: they
+// are derived from source span, record kind, names, and structured type
 // shapes instead of checker arena allocation order.
 func (r *CheckResult) EnsureStableIDs() {
 	if r == nil {
@@ -305,7 +303,6 @@ func (r *CheckResult) Index() CheckResultIndex {
 			TypedNodesByNodeID:       map[int]*CheckedNode{},
 			TypedNodesByNodeKey:      map[string]*CheckedNode{},
 			BindingsByStableID:       map[string]*CheckedBinding{},
-			BindingsByID:             map[int]*CheckedBinding{},
 			BindingsByNodeID:         map[int][]*CheckedBinding{},
 			BindingsByNodeKey:        map[string][]*CheckedBinding{},
 			SymbolsByStableID:        map[string]*CheckedSymbol{},
@@ -323,7 +320,6 @@ func (r *CheckResult) Index() CheckResultIndex {
 		TypedNodesByNodeID:       make(map[int]*CheckedNode, len(r.TypedNodes)),
 		TypedNodesByNodeKey:      make(map[string]*CheckedNode, len(r.TypedNodes)),
 		BindingsByStableID:       make(map[string]*CheckedBinding, len(r.Bindings)),
-		BindingsByID:             make(map[int]*CheckedBinding, len(r.Bindings)),
 		BindingsByNodeID:         make(map[int][]*CheckedBinding),
 		BindingsByNodeKey:        make(map[string][]*CheckedBinding),
 		SymbolsByStableID:        make(map[string]*CheckedSymbol, len(r.Symbols)),
@@ -354,7 +350,6 @@ func (r *CheckResult) Index() CheckResultIndex {
 		if key := stableCheckedBindingNodeKey(rec); key != "" {
 			idx.BindingsByNodeKey[key] = append(idx.BindingsByNodeKey[key], rec)
 		}
-		idx.BindingsByID[rec.BindingID] = rec
 		idx.BindingsByNodeID[nodeID] = append(idx.BindingsByNodeID[nodeID], rec)
 	}
 	for i := range r.Symbols {

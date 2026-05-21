@@ -234,14 +234,13 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		}
 		start, end := mapper.offsets(binding.start, binding.end)
 		result.Bindings = append(result.Bindings, CheckedBinding{
-			NodeID:    binding.nodeId,
-			BindingID: binding.bindingId,
-			Name:      binding.name,
-			Type:      frontTypeReprToAPI(binding.typeRepr),
-			TypeID:    binding.typeId,
-			Mutable:   binding.mutable,
-			Start:     start,
-			End:       end,
+			NodeID:  binding.nodeId,
+			Name:    binding.name,
+			Type:    frontTypeReprToAPI(binding.typeRepr),
+			TypeID:  binding.typeId,
+			Mutable: binding.mutable,
+			Start:   start,
+			End:     end,
 		})
 	}
 	for _, symbol := range checked.symbols {

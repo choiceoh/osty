@@ -105,8 +105,8 @@ func dumpCheckSnapshot(r CheckResult) string {
 
 	b.WriteString("bindings\n")
 	for _, binding := range r.Bindings {
-		fmt.Fprintf(&b, "  id=%s nodeKey=%s typeKey=%s bindingId=%d nodeId=%d name=%s mutable=%t typeId=%d span=%d:%d type=%s\n",
-			shortCheckID(binding.ID), shortCheckID(binding.NodeKey), shortCheckID(binding.TypeKey), binding.BindingID, binding.NodeID, binding.Name, binding.Mutable, binding.TypeID, binding.Start, binding.End, checkSnapshotTypeString(binding.Type))
+		fmt.Fprintf(&b, "  id=%s nodeKey=%s typeKey=%s nodeId=%d name=%s mutable=%t typeId=%d span=%d:%d type=%s\n",
+			shortCheckID(binding.ID), shortCheckID(binding.NodeKey), shortCheckID(binding.TypeKey), binding.NodeID, binding.Name, binding.Mutable, binding.TypeID, binding.Start, binding.End, checkSnapshotTypeString(binding.Type))
 	}
 
 	b.WriteString("symbols\n")

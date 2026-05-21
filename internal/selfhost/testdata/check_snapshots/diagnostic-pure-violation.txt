@@ -10,7 +10,7 @@ typedNodes
   id=typed-node:7e899069d nodeKey=node:650466afaa8a5a9 typeKey=type:0cbe92b642f4e2f nodeId=12 typeId=2 kind=Call span=78:80 type=Int
   id=typed-node:bff73e1c9 nodeKey=node:06207226247d8ec typeKey=type:0cbe92b642f4e2f nodeId=14 typeId=2 kind=Block span=49:82 type=Int
 bindings
-  id=binding:2e6f5cce2dd9 nodeKey=node:468f9067f9e4bd4 typeKey=type:ff4343a0a88abb8 bindingId=0 nodeId=7 name=xs mutable=false typeId=136 span=59:61 type=List<UntypedInt>
+  id=binding:2e6f5cce2dd9 nodeKey=node:468f9067f9e4bd4 typeKey=type:ff4343a0a88abb8 nodeId=7 name=xs mutable=false typeId=136 span=59:61 type=List<UntypedInt>
 symbols
   id=symbol:66a5491bf4c48 nodeKey=node:cebd2ca3b324195 typeKey=type:ff113f463eecce4 symbolId=0 nodeId=4 kind=fn name=impure owner= typeId=135 span=0:24 type=fn() -> Int
   id=symbol:edca6562653ad nodeKey=node:da87a9c5de0b1c9 typeKey=type:ff113f463eecce4 symbolId=1 nodeId=15 kind=fn name=bad owner= typeId=135 span=33:82 type=fn() -> Int

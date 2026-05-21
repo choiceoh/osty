@@ -7,8 +7,8 @@ typedNodes
   id=typed-node:b56e41f63 nodeKey=node:ab31c47955150d2 typeKey=type:addc461d1f10d07 nodeId=10 typeId=135 kind=Ident span=91:95 type=User
   id=typed-node:fc919e5a0 nodeKey=node:4c84bd6cefe7767 typeKey=type:520c4bf26e2fabc nodeId=13 typeId=19 kind=Block span=39:101 type=()
 bindings
-  id=binding:bce7801e15e8 nodeKey=node:b0049a2b702e748 typeKey=type:addc461d1f10d07 bindingId=0 nodeId=3 name=user mutable=false typeId=135 span=49:53 type=User
-  id=binding:cf88212b883f nodeKey=node:12aeb24100020eb typeKey=type:50eaecf185276b1 bindingId=1 nodeId=9 name=age mutable=false typeId=1 span=85:88 type=Poison
+  id=binding:bce7801e15e8 nodeKey=node:b0049a2b702e748 typeKey=type:addc461d1f10d07 nodeId=3 name=user mutable=false typeId=135 span=49:53 type=User
+  id=binding:cf88212b883f nodeKey=node:12aeb24100020eb typeKey=type:50eaecf185276b1 nodeId=9 name=age mutable=false typeId=1 span=85:88 type=Poison
 symbols
   id=symbol:83a3a2ff347d8 nodeKey=node:95d51a212c26d2d typeKey=type:addc461d1f10d07 symbolId=0 nodeId=2 kind=struct name=User owner= typeId=135 span=0:28 type=User
   id=symbol:fa3a474531148 nodeKey=node:400970a6a9853d2 typeKey=type:27afd946bb3613d symbolId=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String

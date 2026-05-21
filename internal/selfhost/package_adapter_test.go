@@ -35,7 +35,7 @@ func TestCheckPackageStructuredSingleFileKeepsLetBindings(t *testing.T) {
 	if item == nil || value == nil {
 		t.Fatalf("missing item/value bindings in structured result: %#v", checked.Bindings)
 	}
-	if item.BindingID == value.BindingID {
+	if item.ID == "" || value.ID == "" || item.ID == value.ID {
 		t.Fatalf("binding ids should be stable and distinct: item=%+v value=%+v", *item, *value)
 	}
 	if item.TypeID < 0 || value.TypeID < 0 {
