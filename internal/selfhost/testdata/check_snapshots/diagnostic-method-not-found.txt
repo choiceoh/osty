@@ -2,17 +2,17 @@ summary assignments=1 accepted=1 errors=1
 errorsByContext E0703=1
 errorDetails E0703 no method `label` on type `User` @L4:C21=1
 typedNodes
-  id=typed-node:b78cfb3ed nodeKey=node:53b25d7ecdff87a typeKey=type:27afd946bb3613d node=5 nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
-  id=typed-node:8cf4577ad nodeKey=node:376e28592af0dc9 typeKey=type:addc461d1f10d07 node=7 nodeId=7 typeId=135 kind=StructLit span=61:76 type=User
-  id=typed-node:71017d305 nodeKey=node:b4407dfff4e4dce typeKey=type:addc461d1f10d07 node=10 nodeId=10 typeId=135 kind=Ident span=93:97 type=User
-  id=typed-node:afa66bade nodeKey=node:e5353e717457cf8 typeKey=type:520c4bf26e2fabc node=14 nodeId=14 typeId=19 kind=Block span=39:107 type=()
+  id=typed-node:b78cfb3ed nodeKey=node:53b25d7ecdff87a typeKey=type:27afd946bb3613d nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
+  id=typed-node:8cf4577ad nodeKey=node:376e28592af0dc9 typeKey=type:addc461d1f10d07 nodeId=7 typeId=135 kind=StructLit span=61:76 type=User
+  id=typed-node:71017d305 nodeKey=node:b4407dfff4e4dce typeKey=type:addc461d1f10d07 nodeId=10 typeId=135 kind=Ident span=93:97 type=User
+  id=typed-node:afa66bade nodeKey=node:e5353e717457cf8 typeKey=type:520c4bf26e2fabc nodeId=14 typeId=19 kind=Block span=39:107 type=()
 bindings
-  id=binding:bce7801e15e8 nodeKey=node:b0049a2b702e748 typeKey=type:addc461d1f10d07 bindingId=0 node=3 nodeId=3 name=user mutable=false typeId=135 span=49:53 type=User
-  id=binding:695f342d6c1a nodeKey=node:3a87cbd6fc03914 typeKey=type:50eaecf185276b1 bindingId=1 node=9 nodeId=9 name=label mutable=false typeId=1 span=85:90 type=Poison
+  id=binding:bce7801e15e8 nodeKey=node:b0049a2b702e748 typeKey=type:addc461d1f10d07 bindingId=0 nodeId=3 name=user mutable=false typeId=135 span=49:53 type=User
+  id=binding:695f342d6c1a nodeKey=node:3a87cbd6fc03914 typeKey=type:50eaecf185276b1 bindingId=1 nodeId=9 name=label mutable=false typeId=1 span=85:90 type=Poison
 symbols
-  id=symbol:83a3a2ff347d8 nodeKey=node:95d51a212c26d2d typeKey=type:addc461d1f10d07 symbolId=0 node=2 nodeId=2 kind=struct name=User owner= typeId=135 span=0:28 type=User
-  id=symbol:fa3a474531148 nodeKey=node:400970a6a9853d2 typeKey=type:27afd946bb3613d symbolId=1 node=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
-  id=symbol:e5420eab90bbb nodeKey=node:3842cd891441c4f typeKey=type:b4f942e1ed0777f symbolId=2 node=15 nodeId=15 kind=fn name=main owner= typeId=136 span=29:107 type=fn() -> ()
+  id=symbol:83a3a2ff347d8 nodeKey=node:95d51a212c26d2d typeKey=type:addc461d1f10d07 symbolId=0 nodeId=2 kind=struct name=User owner= typeId=135 span=0:28 type=User
+  id=symbol:fa3a474531148 nodeKey=node:400970a6a9853d2 typeKey=type:27afd946bb3613d symbolId=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
+  id=symbol:e5420eab90bbb nodeKey=node:3842cd891441c4f typeKey=type:b4f942e1ed0777f symbolId=2 nodeId=15 kind=fn name=main owner= typeId=136 span=29:107 type=fn() -> ()
 instantiations
 diagnostics
   code=E0703 severity=error span=97:103 line=4:21-4:27 message=no method `label` on type `User`

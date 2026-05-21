@@ -477,9 +477,6 @@ func nativeCheckSymbolTypes(checked api.CheckResult) map[int]string {
 			continue
 		}
 		node := sym.NodeID
-		if node == 0 {
-			node = sym.Node
-		}
 		if node < 0 {
 			continue
 		}

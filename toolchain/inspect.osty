@@ -273,8 +273,8 @@ fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<Str
         out.push("")
     }
     for tn in checked.typedNodes {
-        if tn.node >= 0 && tn.node < n {
-            out[tn.node] = frontTypeReprToString(tn.typeRepr)
+        if tn.nodeId >= 0 && tn.nodeId < n {
+            out[tn.nodeId] = frontTypeReprToString(tn.typeRepr)
         }
     }
     out
@@ -412,10 +412,10 @@ fn inspectThreadHintsThroughContainers(arena: AstArena, checked: FrontCheckResul
     }
     let bindingTypeByPattern = inspectBindingTypeByPattern(checked)
     for sym in checked.symbols {
-        if sym.node < 0 || sym.node >= n {
+        if sym.nodeId < 0 || sym.nodeId >= n {
             continue
         }
-        let declNode = arena.nodes[sym.node]
+        let declNode = arena.nodes[sym.nodeId]
         if sym.kind == "fn" {
             let sig = hintFnSignature(frontTypeReprToString(sym.typeRepr))
             if !sig.ok || sig.returnType == "" {
@@ -545,8 +545,8 @@ fn inspectBuildRecords(arena: AstArena, checked: FrontCheckResult, letPatterns: 
         if rule == "" {
             continue
         }
-        let hint = inspectHintForNode(hintsByNode, tn.node)
-        let span = inspectCoverSpan(arena, tn.node, tn.start, tn.end)
+        let hint = inspectHintForNode(hintsByNode, tn.nodeId)
+        let span = inspectCoverSpan(arena, tn.nodeId, tn.start, tn.end)
         let notes = inspectNotesForTypedNode(arena, instNotesByNode, tn)
         out.push(InspectRecord {start: span.start, end: span.end, nodeKind: tn.kind, rule, typeRepr: tn.typeRepr, hintName: hint, notes})
     }
@@ -931,7 +931,7 @@ fn inspectInstantiationNotesByNode(arena: AstArena, checked: FrontCheckResult) -
         notes.push("")
     }
     for inst in checked.instantiations {
-        if inst.node < 0 || inst.node >= n {
+        if inst.nodeId < 0 || inst.nodeId >= n {
             continue
         }
         if inst.typeArgs.len() == 0 {
@@ -941,7 +941,7 @@ fn inspectInstantiationNotesByNode(arena: AstArena, checked: FrontCheckResult) -
         for ta in inst.typeArgs {
             argStrs.push(frontTypeReprToString(ta))
         }
-        notes[inst.node] = "instantiated [" + strings.join(argStrs, ", ") + "]"
+        notes[inst.nodeId] = "instantiated [" + strings.join(argStrs, ", ") + "]"
     }
     notes
 }
@@ -955,8 +955,8 @@ fn inspectNotesForTypedNode(arena: AstArena, instNotesByNode: List<String>, tn: 
         return out
     }
     let n = arena.nodes.len()
-    if tn.node >= 0 && tn.node < n {
-        let callNode = arena.nodes[tn.node]
+    if tn.nodeId >= 0 && tn.nodeId < n {
+        let callNode = arena.nodes[tn.nodeId]
         if callNode.left >= 0 && callNode.left < n {
             let callee = arena.nodes[callNode.left]
             if callee.kind == AstNField {
@@ -964,8 +964,8 @@ fn inspectNotesForTypedNode(arena: AstArena, instNotesByNode: List<String>, tn: 
             }
         }
     }
-    if tn.node >= 0 && tn.node < instNotesByNode.len() {
-        let inst = instNotesByNode[tn.node]
+    if tn.nodeId >= 0 && tn.nodeId < instNotesByNode.len() {
+        let inst = instNotesByNode[tn.nodeId]
         if inst != "" {
             out.push(inst)
         }

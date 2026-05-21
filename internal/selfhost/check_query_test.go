@@ -129,9 +129,6 @@ func TestSymbolAtOffsetReturnsStructuredStableRecord(t *testing.T) {
 	if sym.Type == nil || sym.Type.Kind != "fn" {
 		t.Fatalf("symbol type = %#v, want structured fn TypeRepr", sym.Type)
 	}
-	if sym.NodeID != sym.Node {
-		t.Fatalf("symbol node ids = nodeId %d / node %d, want stable id mirrored to legacy alias", sym.NodeID, sym.Node)
-	}
 	idx := r.Index()
 	if got := idx.SymbolsByID[sym.SymbolID]; got == nil || got.Name != "helper" {
 		t.Fatalf("Index().SymbolsByID[%d] = %#v, want helper", sym.SymbolID, got)
