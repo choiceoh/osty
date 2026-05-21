@@ -1312,10 +1312,113 @@ static int64_t osty_gc_swept_bytes_total = 0;
  * the lock when `osty_concurrent_workers > 0`). */
 #define OSTY_GC_ARENA_BYTES ((size_t)1 << 32) /* 4 GiB virtual */
 
+/* Forward declaration — the abort path is defined later in the
+ * file (line ~1980-ish) but the arena free-list helpers below call
+ * it on overflow guards. The existing alloc fast paths also rely
+ * on this forward chain via `osty_gc_pattern_of` so the convention
+ * is established. */
+static void osty_rt_abort(const char *message);
+
 static unsigned char *osty_gc_arena_base = NULL;
 static unsigned char *osty_gc_arena_end = NULL;
 static unsigned char *osty_gc_arena_cursor = NULL;
 static bool osty_gc_arena_init_failed = false;
+
+/* Arena free-list — intrusive singly-linked list of arena ranges
+ * returned by a bump-block release. Without this, every arena-backed
+ * bump block released by GC sweep leaks its 4 KiB+ slot until the
+ * arena cursor reaches the 4 GiB cap; after exhaustion every new
+ * block calloc's from the heap (and that calloc's RSS sticks even
+ * when the block is later freed, since the kernel's brk/mmap pool
+ * holds onto large freed allocations). Compiling toolchain/ this
+ * way pushed osty-self anon-RSS past 8 GiB and the kernel global-OOM
+ * killer reaped the process before lowering finished. Recycling
+ * arena ranges keeps the working set inside the 4 GiB reservation
+ * (no heap fallback) for any workload whose peak live bump-block
+ * count fits in 4 GiB.
+ *
+ * The free node header lives inside the freed range's first
+ * `sizeof(osty_gc_arena_free_node)` bytes; the range is unused by
+ * any live object at that point (the block's `live_alloc_count`
+ * dropped to 0 before release). First-fit search with split-off:
+ * when the requested allocation is smaller than the node, the
+ * remainder is re-pushed as a fresh node so subsequent smaller
+ * requests can pick up the leftover.
+ *
+ * The minimum reusable range is `sizeof(osty_gc_arena_free_node)`
+ * (16 B on LP64). Sub-header ranges are left in place — they would
+ * have leaked under the pre-recycle behaviour too, so this is at
+ * worst a no-op.
+ */
+typedef struct osty_gc_arena_free_node {
+  struct osty_gc_arena_free_node *next;
+  size_t size;
+} osty_gc_arena_free_node;
+
+static osty_gc_arena_free_node *osty_gc_arena_free_list = NULL;
+static int64_t osty_gc_arena_free_count = 0;
+static int64_t osty_gc_arena_free_bytes = 0;
+static int64_t osty_gc_arena_free_push_total = 0;
+static int64_t osty_gc_arena_free_take_total = 0;
+static int64_t osty_gc_arena_free_take_bytes_total = 0;
+
+static void osty_gc_arena_free_push(void *base, size_t size) {
+  osty_gc_arena_free_node *node;
+
+  if (base == NULL || size < sizeof(osty_gc_arena_free_node)) {
+    return;
+  }
+  node = (osty_gc_arena_free_node *)base;
+  node->size = size;
+  node->next = osty_gc_arena_free_list;
+  osty_gc_arena_free_list = node;
+  if (size > (size_t)INT64_MAX) {
+    osty_rt_abort("GC arena free-list size overflow");
+  }
+  osty_gc_arena_free_count += 1;
+  osty_gc_arena_free_bytes += (int64_t)size;
+  osty_gc_arena_free_push_total += 1;
+}
+
+static void *osty_gc_arena_free_take(size_t bytes, size_t align) {
+  osty_gc_arena_free_node *prev = NULL;
+  osty_gc_arena_free_node *cur = osty_gc_arena_free_list;
+
+  while (cur != NULL) {
+    uintptr_t base = (uintptr_t)cur;
+    uintptr_t aligned = (base + (uintptr_t)align - 1u) & ~((uintptr_t)align - 1u);
+    size_t pad = (size_t)(aligned - base);
+    if (pad < SIZE_MAX - bytes && pad + bytes <= cur->size) {
+      size_t total = cur->size;
+      osty_gc_arena_free_node *next = cur->next;
+      if (prev != NULL) {
+        prev->next = next;
+      } else {
+        osty_gc_arena_free_list = next;
+      }
+      osty_gc_arena_free_count -= 1;
+      osty_gc_arena_free_bytes -= (int64_t)total;
+      osty_gc_arena_free_take_total += 1;
+      osty_gc_arena_free_take_bytes_total += (int64_t)bytes;
+      /* Re-push the trailing remainder when it's large enough to host
+       * another node header. The leading pad slice (between `base`
+       * and `aligned`) is rare in practice — arena allocs request
+       * `OSTY_GC_SIZE_CLASS_ALIGN`-aligned sizes and free ranges
+       * inherit that alignment — so it's not re-pushed; folding it
+       * back would need a coalescing pass to be useful. */
+      {
+        size_t used = pad + bytes;
+        if (total > used && total - used >= sizeof(osty_gc_arena_free_node)) {
+          osty_gc_arena_free_push((unsigned char *)cur + used, total - used);
+        }
+      }
+      return (void *)aligned;
+    }
+    prev = cur;
+    cur = cur->next;
+  }
+  return NULL;
+}
 
 static void osty_gc_arena_init(void) {
   if (osty_gc_arena_base != NULL || osty_gc_arena_init_failed) {
@@ -1347,12 +1450,23 @@ static void *osty_gc_arena_alloc(size_t bytes, size_t align) {
   uintptr_t cur;
   uintptr_t aligned;
   uintptr_t next;
+  void *recycled;
 
   if (osty_gc_arena_base == NULL) {
     osty_gc_arena_init();
     if (osty_gc_arena_base == NULL) {
       return NULL;
     }
+  }
+  /* Prefer a recycled range — the free-list contains arena slots
+   * returned by previously released bump blocks. Hitting the
+   * free-list keeps the cursor at the high-water mark instead of
+   * advancing it past the arena cap. First-fit; remainders are
+   * re-pushed by `osty_gc_arena_free_take` when significant.
+   */
+  recycled = osty_gc_arena_free_take(bytes, align);
+  if (recycled != NULL) {
+    return recycled;
   }
   cur = (uintptr_t)osty_gc_arena_cursor;
   aligned = (cur + align - 1) & ~(align - 1);
@@ -3469,13 +3583,23 @@ static void osty_gc_bump_block_release(osty_gc_bump_block *target,
   *block_count -= 1;
   *recycled_count_total += 1;
   *recycled_bytes_total += (int64_t)block->size;
-  /* Free the heap-fallback payload region if this block was
-   * heap-backed (arena_init failed or arena exhausted at the time
-   * of allocation). Arena-backed blocks have `data_alloc == NULL`;
-   * their virtual range stays committed in the arena (no free-list
-   * yet — see arena documentation). */
+  /* Reclaim the payload region. Two cases:
+   *   1. Heap-backed (`data_alloc != NULL`) — arena_init had failed
+   *      or the arena was exhausted at the time of allocation, so
+   *      the data region came from `calloc`. Return it via `free`.
+   *   2. Arena-backed (`data_alloc == NULL`) — push the range onto
+   *      the arena free-list so subsequent `osty_gc_arena_alloc`
+   *      calls can hand it out again. Pre-recycle behaviour leaked
+   *      these ranges until the cursor reached the 4 GiB cap. The
+   *      first `sizeof(osty_gc_arena_free_node)` bytes of the
+   *      reclaimed range hold the free-list header — safe because
+   *      `live_alloc_count == 0` is the precondition for this
+   *      release path.
+   */
   if (block->data_alloc != NULL) {
     free(block->data_alloc);
+  } else if (block->data != NULL && block->size > 0) {
+    osty_gc_arena_free_push(block->data, block->size);
   }
   free(block);
 }
@@ -21559,6 +21683,28 @@ int64_t osty_gc_debug_bump_recycled_block_count_total(void) {
 
 int64_t osty_gc_debug_bump_recycled_bytes_total(void) {
   return osty_gc_bump_recycled_bytes_total;
+}
+
+/* Arena free-list debug helpers. The free-list backs bump-block
+ * recycling: when a released arena-backed bump block returns its
+ * range to the free-list, subsequent arena allocs can reuse it
+ * instead of advancing the cursor. These counters let tests assert
+ * the recycling path is hot enough to keep cursor advancement
+ * sublinear in total bump-block churn. */
+int64_t osty_gc_debug_arena_free_count(void) {
+  return osty_gc_arena_free_count;
+}
+int64_t osty_gc_debug_arena_free_bytes(void) {
+  return osty_gc_arena_free_bytes;
+}
+int64_t osty_gc_debug_arena_free_push_total(void) {
+  return osty_gc_arena_free_push_total;
+}
+int64_t osty_gc_debug_arena_free_take_total(void) {
+  return osty_gc_arena_free_take_total;
+}
+int64_t osty_gc_debug_arena_free_take_bytes_total(void) {
+  return osty_gc_arena_free_take_bytes_total;
 }
 
 int64_t osty_gc_debug_survivor_bump_block_count(void) {

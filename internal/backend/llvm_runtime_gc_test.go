@@ -9494,3 +9494,99 @@ int main(void) {
 		t.Fatalf("phase 4 harness output mismatch\n got: %q\nwant: %q", got, want)
 	}
 }
+
+// TestRuntimeGCArenaFreeListRecyclesBumpBlockRanges locks the arena
+// free-list landing: a workload that allocates an object, drops the
+// root, and collects (sweeping the only bump block) must surface a
+// free-list push, and the next allocation must come from the
+// recycled range rather than advancing the arena cursor.
+//
+// Pre-arena-free-list, every released arena-backed bump block leaked
+// its range until the 4 GiB cursor hit OSTY_GC_ARENA_BYTES; lowering
+// the toolchain package pushed osty-self past 8 GiB anon-RSS and the
+// global OOM killer reaped the process before lir-proto-lower
+// finished. This test guards the recycle path so a regression would
+// resurface as the same OOM under tighter ulimits.
+func TestRuntimeGCArenaFreeListRecyclesBumpBlockRanges(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "arena_free_list_harness.c")
+	binaryPath := filepath.Join(dir, "arena_free_list_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_arena_free_count(void);
+int64_t osty_gc_debug_arena_free_push_total(void);
+int64_t osty_gc_debug_arena_free_take_total(void);
+int64_t osty_gc_debug_bump_block_count(void);
+int64_t osty_gc_debug_bump_recycled_block_count_total(void);
+
+int main(void) {
+    /* Phase 1: allocate one root, sweep it, allocate another. The
+     * first alloc forces a bump block out of the arena. After
+     * release+collect that block returns to the free-list, and the
+     * second alloc reuses the recycled range. */
+    int64_t push_before = osty_gc_debug_arena_free_push_total();
+    int64_t take_before = osty_gc_debug_arena_free_take_total();
+    int64_t recycled_before = osty_gc_debug_bump_recycled_block_count_total();
+
+    void *first = osty_gc_alloc_v1(7, 32, "first");
+    osty_gc_root_bind_v1(first);
+    osty_gc_root_release_v1(first);
+    osty_gc_debug_collect();
+
+    int64_t recycled_after_collect = osty_gc_debug_bump_recycled_block_count_total();
+    int64_t push_after_collect = osty_gc_debug_arena_free_push_total();
+    printf("recycle_happened:%d\n", recycled_after_collect > recycled_before);
+    printf("free_list_grew:%d\n", push_after_collect > push_before);
+
+    /* Phase 2: second alloc — should consume a free-list entry. The
+     * exact size match isn't guaranteed (block sizes vary with the
+     * size class of the requested object), so we only assert that
+     * the free-list take counter went up when a free-list entry of
+     * sufficient size is available. */
+    void *second = osty_gc_alloc_v1(7, 32, "second");
+    osty_gc_root_bind_v1(second);
+    int64_t take_after = osty_gc_debug_arena_free_take_total();
+    printf("free_list_reused:%d\n", take_after > take_before);
+    osty_gc_root_release_v1(second);
+    osty_gc_debug_collect();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"recycle_happened:1",  // bump block recycled by sweep
+		"free_list_grew:1",    // recycle pushed range onto arena free-list
+		"free_list_reused:1",  // next alloc consumed a free-list entry
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("arena free-list harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
