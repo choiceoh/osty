@@ -373,6 +373,19 @@ go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
 export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
 ```
 
+## Build phase timing (`OSTY_BUILD_PHASE_TIMING`, optional)
+
+When set to a truthy value (`1`, `true`, `yes`, `on`, case variants), `osty
+build` and `osty install-self` flush **wall-clock phase markers** to stderr on
+exit (lines like `phase-timing: <name> <duration>`). The gate is off by
+default so normal builds pay only a cached env check. Instrumentation spans
+the native backend and related pipeline phases (see `internal/backend/phase_timing.go`);
+`internal/resolve`, `internal/ir`, and `internal/selfhost` duplicate the same env
+gate (same stderr line shape; see `phase_timing.go` in each) so nested work is
+visible without import cycles. Use this when profiling `install-self` or large
+workspace builds to see whether the next bottleneck is front-end, MIR/IR, or
+link — not as a stable machine interface.
+
 ## LLVM workspace link (experimental)
 
 For manifest-driven **`osty build`** with `--backend llvm` emitting a **binary**, cross-package callees are normally lowered as unresolved `declare`s and fail at link time unless definitions are visible to the linker. Setting **`OSTY_CROSS_PKG_LINK=1`** (or `true`, `yes`, or `on`, case-insensitive) asks the CLI to compile each **other** workspace member package as a **library** object (skips emitting `main`, avoiding `_main` collisions), collect the `.o` paths, append them on `backend.Request.ExtraObjects`, and pass them to the final `clang` link.
@@ -502,9 +515,11 @@ For an agent-friendly ranked backlog, `osty airepair learn --json tmp/airepair-c
 
 To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/foreign_fn_tuple_index_case`
 
-Single-file `osty check`, `osty resolve`, `osty typecheck`, and `osty lint`
-run airepair in memory by default before parsing. You can still tune or disable it
-after the subcommand:
+Single-file `osty check`, `osty resolve`, `osty typecheck`, `osty lint`, and
+`osty pipeline` run the same **front-end** airepair pass in memory by default
+before parsing (policy: `runner.UsesFrontEndAIRepair` in
+`internal/runner/airepair_policy.go`, mirrored from `toolchain/airepair_flags.osty`).
+You can still tune or disable it after the subcommand:
 
 - `--airepair` — keep the default automatic in-memory airepair enabled
 - `--no-airepair` — disable automatic in-memory airepair for debugging/raw parser behavior
