@@ -22,6 +22,7 @@ import (
 // for Option<T> error arms (see emitQuestionExprOption in lower.go).
 func TestLLVMBackendBinaryRunsBareNoneAsCallArg(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn plus(n: Int?) -> Int { n ?? -1 }
@@ -52,6 +53,7 @@ fn main() {
 // Option aggregate.
 func TestLLVMBackendBinaryRunsBareNoneInListLiteral(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

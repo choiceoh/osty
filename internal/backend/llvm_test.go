@@ -1252,6 +1252,7 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 // binary's output so a regression on either side surfaces immediately.
 func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -1302,6 +1303,7 @@ func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
 
 func TestLLVMBackendBinaryRunsBundledRuntime(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn touch() {
@@ -1337,6 +1339,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdIoOutputFamily(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.io as io
@@ -1365,6 +1368,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdIoReadLine(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.io as io
@@ -1394,6 +1398,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdCompressGzipRoundTrip(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.compress as compress
@@ -1423,6 +1428,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvGetReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1449,6 +1455,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvVarsReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1480,6 +1487,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvRequireReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1516,6 +1524,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvRequireReportsMissingKey(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1558,6 +1567,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvCurrentDirReadsProcessWorkingDir(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1594,6 +1604,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvSetCurrentDirChangesProcessWorkingDir(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	targetDir := filepath.Join(t.TempDir(), "target")
 	if err := os.Mkdir(targetDir, 0o755); err != nil {
@@ -1638,6 +1649,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvSetCurrentDirReportsMissingPath(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	missingDir := filepath.Join(t.TempDir(), "missing")
 	backend := LLVMBackend{}
@@ -1668,6 +1680,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvSetMutatesProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1704,6 +1717,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdEnvUnsetMutatesProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.env
@@ -1740,6 +1754,7 @@ fn main() {
 
 func TestLLVMBackendBinaryTestingPropertyGeneratorSubset(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.testing as testing
@@ -1846,6 +1861,7 @@ fn main() {
 
 func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -1893,6 +1909,7 @@ fn main() {
 
 func TestLLVMBackendBinaryAutoCollectsOnPressure(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -1929,6 +1946,7 @@ fn main() {
 
 func TestLLVMBackendBinaryKeepsMapKeysSortedAliveUnderGC(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn sortedCount(words: List<String>) -> Int {
@@ -2005,6 +2023,7 @@ func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
 
 func TestLLVMBackendBinaryForInOverTemporaryManagedListSurvivesPressure(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -2035,6 +2054,7 @@ fn main() {
 
 func TestLLVMBackendBinaryManagedTemporaryCallArgSurvivesPressure(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -2071,6 +2091,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -2096,6 +2117,7 @@ func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
 
 func TestLLVMBackendBinaryMutReceiverMethodWritesBackToCaller(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Counter {
@@ -2134,6 +2156,7 @@ fn main() {
 
 func TestLLVMBackendBinaryCollectionsUseRuntimeContainers(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Pair {
@@ -2206,6 +2229,7 @@ fn main() {
 
 func TestLLVMBackendBinaryManagedAggregateContainersSurvivePressureGC(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Bucket {
@@ -2244,6 +2268,7 @@ fn main() {
 
 func TestLLVMBackendBinaryExtendedListSortedAndToSet(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -2285,6 +2310,7 @@ func TestLLVMBackendBinaryExtendedListSortedAndToSet(t *testing.T) {
 
 func TestLLVMBackendBinaryPtrBackedListToSetAndBoolPrint(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -2317,6 +2343,7 @@ fn main() {
 
 func TestLLVMBackendBinaryGenericEnumVariantFromLetContext(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -2346,6 +2373,7 @@ fn main() {
 
 func TestLLVMBackendBinaryGenericEnumVariantInferredFromPayload(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -2375,6 +2403,7 @@ fn main() {
 
 func TestLLVMBackendBinaryGenericEnumPayloadFreeVariantFromLetContext(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -2404,6 +2433,7 @@ fn main() {
 
 func TestLLVMBackendBinaryBuiltinResultFieldConstructors(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -2428,6 +2458,7 @@ func TestLLVMBackendBinaryBuiltinResultFieldConstructors(t *testing.T) {
 
 func TestLLVMBackendBinaryBuiltinResultConstructorsTrackLocalContext(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Holder {
@@ -2467,6 +2498,7 @@ fn main() {
 
 func TestLLVMBackendBinaryResultUnitErrUsesReturnContext(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn fail() -> Result<(), String> {
@@ -2496,6 +2528,7 @@ fn main() {
 
 func TestLLVMBackendBinaryLetStructPatternDestructuring(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -2548,6 +2581,7 @@ fn main() {
 // `internal/llvmgen/ir_module_test.go::TestGenerateModuleGenericIdentityMonomorphized`.
 func TestLLVMBackendBinaryRunsGenericIdentity(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn id<T>(x: T) -> T { x }
@@ -2620,6 +2654,7 @@ fn main() {
 // / indirect-call sequence survives clang and runs correctly.
 func TestLLVMBackendBinaryRunsInterfaceBoxingDispatch(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `interface Sized {

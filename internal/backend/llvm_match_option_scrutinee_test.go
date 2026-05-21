@@ -33,6 +33,7 @@ import (
 //   - List<String>.last() → Some(s: String) with String payload
 func TestLLVMBackendBinaryRunsMatchOptionScrutineeBindsPayload(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

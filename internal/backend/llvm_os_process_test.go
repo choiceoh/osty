@@ -39,6 +39,7 @@ func ostyStringListLiteral(values []string) string {
 
 func TestLLVMBackendBinaryRunsStdOsProcessSurface(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	prog, args, shellCmd := stdOsProcessCommands()
 	src := fmt.Sprintf(`use std.os
@@ -96,6 +97,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdOsExecWithSplitArgs(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	prog, args, _ := stdOsProcessCommands()
 	src := fmt.Sprintf(`use std.os
@@ -154,6 +156,7 @@ func stdCmdEnvCwdCommand() (program string, args []string, timeoutShell string) 
 
 func TestLLVMBackendBinaryRunsStdCmdBuilderSurface(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	tmp := t.TempDir()
 	prog, args, timeoutShell := stdCmdEnvCwdCommand()
@@ -227,6 +230,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdProcessStreamingSurface(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	if runtime.GOOS == "windows" {
 		t.Skip("std.process shell pipeline uses POSIX shell escaping in this test")
@@ -279,6 +283,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdOsExitUsesRequestedCode(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.os

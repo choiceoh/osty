@@ -41,6 +41,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdKeychainAvailability(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	req := newBackendRequest(t, EmitBinary, `use std.keychain
 use std.secrets

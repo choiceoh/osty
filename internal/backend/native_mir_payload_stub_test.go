@@ -1,9 +1,10 @@
 package backend
 
 import (
-	"os"
-	"path/filepath"
+	"errors"
 	"testing"
+
+	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
 // installNativeMIRPayloadStub installs a `tryNativeOwnedMIRPayloadLLVMIRText`
@@ -30,24 +31,22 @@ func installNativeMIRPayloadDeclineStub(t *testing.T) {
 }
 
 // requireRealLLVMEmission skips the test unless an `osty-self` binary is
-// reachable. The MIR-direct path bottoms out at `osty-native-lirproto`,
-// which forks `osty-self lir-proto-lower`; without that artifact, tests
-// that assert specific runtime symbols or optimisations cannot succeed.
+// reachable through `selfhostcache.ResolveBinary` — the same lookup the
+// LIR Proto subprocess uses at runtime (env override → in-tree build →
+// content-addressed cache). The MIR-direct path bottoms out at
+// `osty-native-lirproto`, which forks `osty-self lir-proto-lower`; without
+// that artifact the subprocess declines and tests that assert specific
+// runtime symbols or optimisations cannot succeed.
 func requireRealLLVMEmission(t *testing.T) {
 	t.Helper()
-	if path := os.Getenv("OSTY_SELF_BIN"); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			return
+	root, err := selfhostcache.LocateProjectRoot(".")
+	if err != nil {
+		t.Skipf("requires osty-self artifact (locate project root: %v)", err)
+	}
+	if _, _, err := selfhostcache.ResolveBinary(root); err != nil {
+		if errors.Is(err, selfhostcache.ErrNotCached) {
+			t.Skip("requires osty-self artifact (run `osty build toolchain/`); LIR Proto subprocess otherwise declines")
 		}
+		t.Skipf("requires osty-self artifact (resolve: %v)", err)
 	}
-	candidates := []string{
-		filepath.FromSlash("toolchain/.osty/out/debug/llvm/osty-self"),
-		filepath.FromSlash("toolchain/.osty/out/release/llvm/osty-self"),
-	}
-	for _, rel := range candidates {
-		if _, err := os.Stat(rel); err == nil {
-			return
-		}
-	}
-	t.Skip("requires osty-self artifact (run `osty build toolchain/`); LIR Proto subprocess otherwise declines")
 }

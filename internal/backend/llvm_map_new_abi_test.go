@@ -24,6 +24,7 @@ import (
 // scope so the native emitter is the one producing the IR.
 func TestLLVMBackendBinaryRunsMapLiteralInMain(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

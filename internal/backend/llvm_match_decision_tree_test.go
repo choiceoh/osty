@@ -22,6 +22,7 @@ import (
 // discriminant and binds the Ok payload as an SSA register.
 func TestLLVMBackendBinaryRunsResultMatchPayloadBinding(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn tryParse(s: String) -> Result<Int, Error> {
@@ -60,6 +61,7 @@ fn main() {
 // collapsing the switch to a no-op.
 func TestLLVMBackendBinaryRunsPrimitiveLiteralMatch(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -92,6 +94,7 @@ func TestLLVMBackendBinaryRunsPrimitiveLiteralMatch(t *testing.T) {
 // the MIR path silently took arm 0.
 func TestLLVMBackendBinaryRunsCharLiteralMatch(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn classify(c: Char) -> Int {
@@ -124,6 +127,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsBareEnumIdentMatch(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum AuthKind {
@@ -162,6 +166,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsCharMethodInterpolation(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn shout(s: String) -> String {
@@ -192,6 +197,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsInjectedStdBytesFrom(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.bytes

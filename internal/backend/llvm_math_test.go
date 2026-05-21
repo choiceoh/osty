@@ -8,6 +8,7 @@ import (
 
 func TestLLVMBackendBinaryRunsStdMathAndFloatMethods(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.math as math

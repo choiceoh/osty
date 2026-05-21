@@ -32062,7 +32062,13 @@ void *osty_rt_audit_fs_readToString(const char *path) {
     return box;
   }
   long fsize = ftell(f);
-  if (fsize < 0) {
+  /* Cap the read size defensively. `fopen(".", "rb")` succeeds on
+   * Linux and `ftell` after `SEEK_END` returns LLONG_MAX for
+   * directories, which would otherwise route into a multi-exabyte
+   * allocation and OOM-abort the process. The audit harness only
+   * exercises linkage — refuse non-regular / oversized inputs by
+   * returning the pre-built Err box instead of allocating. */
+  if (fsize < 0 || fsize > (long)(1L << 30)) {
     fclose(f);
     return box;
   }

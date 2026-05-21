@@ -25,6 +25,7 @@ import (
 // the stdlib spec for `.get`, distinct from `list[i]` which aborts).
 func TestLLVMBackendBinaryRunsListSafeGetOption(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -60,6 +61,7 @@ func TestLLVMBackendBinaryRunsListSafeGetOption(t *testing.T) {
 // the Some/None arms type-check cleanly.
 func TestLLVMBackendBinaryRunsListSafeGetMatch(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

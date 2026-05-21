@@ -13,6 +13,7 @@ import (
 // every element type).
 func TestLLVMBackendBinaryRunsListReverseInPlace(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -42,6 +43,7 @@ func TestLLVMBackendBinaryRunsListReverseInPlace(t *testing.T) {
 // elem_size + trace callback so GC bookkeeping stays intact.
 func TestLLVMBackendBinaryRunsListReversedNewList(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -73,6 +75,7 @@ func TestLLVMBackendBinaryRunsListReversedNewList(t *testing.T) {
 // value stays valid after the shift.
 func TestLLVMBackendBinaryRunsListRemoveAt(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -104,6 +107,7 @@ func TestLLVMBackendBinaryRunsListRemoveAt(t *testing.T) {
 // helper; other scalars use plain icmp / fcmp.
 func TestLLVMBackendBinaryRunsListIndexOf(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
