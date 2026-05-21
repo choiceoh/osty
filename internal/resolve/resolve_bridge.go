@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
@@ -42,7 +43,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
 	diags := nativeParseDiagnostics(pkg)
 	endDecl := beginResolvePhase("resolve.native.declIndexes")
-	declIndexes := make(map[string]map[int]ast.Node, len(pkg.Files))
+	declIndexes := make(map[string]*declOffsetIndex, len(pkg.Files))
 	// Pre-bucket result.Symbols by sym.File so per-file
 	// defineTopLevelSymbols iterates only its own symbols rather than
 	// the whole slice with a `sym.File != fi.path` filter for every
@@ -117,12 +118,12 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		// the skip predicate matches between the two loops, so a
 		// missing slot is unreachable, and a shared-map write here
 		// would race with the workers.
-		refsByID, refIdents := bridgeRefsForFile(refsForFile, symByTarget, files, fi, identIdx, declIndexes, fileScope)
+		refsByID, refIdents := bridgeRefsForFile(refsForFile, symByTarget, filesByPath, fi, identIdx, declIndexes, fileScope)
 		refsByID, refIdents = supplementUseAliasRefsFromIndex(pf.File, fileScope, identIdx, refsByID, refIdents)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
-		typeRefsByID, typeRefIdents := bridgeTypeRefsForFile(typeRefsForFile, symByTarget, files, fi, typeIdx, declIndexes, fileScope)
+		typeRefsByID, typeRefIdents := bridgeTypeRefsForFile(typeRefsForFile, symByTarget, filesByPath, fi, typeIdx, declIndexes, fileScope)
 		pf.TypeRefsByID = typeRefsByID
 		pf.TypeRefIdents = typeRefIdents
 
@@ -298,15 +299,6 @@ func duplicateUseDiag(pos token.Pos, name string, prev *Symbol, file string) *di
 
 // --- Offset helpers ---
 
-func nativeResolveFileInfoFor(files []nativeResolveFileInfo, path string) nativeResolveFileInfo {
-	for _, f := range files {
-		if f.path == path {
-			return f
-		}
-	}
-	return nativeResolveFileInfo{}
-}
-
 func nativeToOriginalOffset(fi nativeResolveFileInfo, mergedOffset int) (int, bool) {
 	rel := mergedOffset - fi.base
 	if rel < 0 || rel > len(fi.source) {
@@ -363,7 +355,36 @@ func buildIdentAndNamedTypeIndex(file *ast.File) (map[int]*ast.Ident, map[int]*a
 	return identIdx, typeIdx
 }
 
-func buildDeclIndex(file *ast.File) map[int]ast.Node {
+// declOffsetIndex holds the per-file `offset → ast.Node` map paired
+// with the sorted offset slice that `findNearestDecl` needs to do a
+// binary search in `O(log N)` instead of an `O(N)` map scan. Hot path:
+// `findOrCreateSymbol` / `findOrCreateTypeSymbol` call findNearestDecl
+// once per ref / typeRef — across the toolchain install-self build
+// (~200 files × ~10 k refs each) the linear scan over ~500 decls per
+// file was a measurable share of `resolve.native.bridgeLoop`.
+//
+// `sortedOffsets` is built once from the populated byOffset map after
+// `walkDeclChildren` / `indexStmtBindings` finish, so the slice and
+// the map stay in sync — both are read-only after construction and
+// safe to share across the parallel bridge workers.
+type declOffsetIndex struct {
+	byOffset      map[int]ast.Node
+	sortedOffsets []int
+}
+
+func newDeclOffsetIndexFromMap(byOffset map[int]ast.Node) *declOffsetIndex {
+	if len(byOffset) == 0 {
+		return &declOffsetIndex{byOffset: byOffset}
+	}
+	offsets := make([]int, 0, len(byOffset))
+	for off := range byOffset {
+		offsets = append(offsets, off)
+	}
+	sort.Ints(offsets)
+	return &declOffsetIndex{byOffset: byOffset, sortedOffsets: offsets}
+}
+
+func buildDeclIndex(file *ast.File) *declOffsetIndex {
 	idx := make(map[int]ast.Node, 32)
 	for _, u := range file.Uses {
 		if u != nil {
@@ -379,7 +400,7 @@ func buildDeclIndex(file *ast.File) map[int]ast.Node {
 	for _, s := range file.Stmts {
 		indexStmtBindings(s, idx)
 	}
-	return idx
+	return newDeclOffsetIndexFromMap(idx)
 }
 
 func indexFnGenerics(fn *ast.FnDecl, idx map[int]ast.Node) {
@@ -649,10 +670,23 @@ func bridgeRefs(
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	identIdx map[int]*ast.Ident,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.Ident) {
-	return bridgeRefsForFile(filterRefsForFile(refs, fi.path), nativeSymbolByTarget(symbols), files, fi, identIdx, declIndexes, fileScope)
+	return bridgeRefsForFile(filterRefsForFile(refs, fi.path), nativeSymbolByTarget(symbols), nativeResolveFilesByPath(files), fi, identIdx, declIndexes, fileScope)
+}
+
+// nativeResolveFilesByPath inverts the slice into a path → info map so
+// the per-ref bridge hot path can replace `nativeResolveFileInfoFor`'s
+// linear scan with a single O(1) lookup. Inputs are read-only after
+// `nativeResolveArtifacts`, so the map is safe to share across the
+// parallel bridge workers.
+func nativeResolveFilesByPath(files []nativeResolveFileInfo) map[string]nativeResolveFileInfo {
+	out := make(map[string]nativeResolveFileInfo, len(files))
+	for _, f := range files {
+		out[f.path] = f
+	}
+	return out
 }
 
 // bridgeRefsForFile is the file-scoped variant of bridgeRefs. Callers
@@ -664,10 +698,10 @@ func bridgeRefs(
 func bridgeRefsForFile(
 	refs []api.ResolvedRef,
 	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
-	files []nativeResolveFileInfo,
+	filesByPath map[string]nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	identIdx map[int]*ast.Ident,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.Ident) {
 	refsByID := make(map[ast.NodeID]*Symbol, len(refs))
@@ -687,7 +721,7 @@ func bridgeRefsForFile(
 		if ident == nil {
 			continue
 		}
-		sym := findOrCreateSymbol(symCache, ref, symByTarget, files, fi, declIndexes, fileScope)
+		sym := findOrCreateSymbol(symCache, ref, symByTarget, filesByPath, fi, declIndexes, fileScope)
 		refsByID[ident.ID] = sym
 		refIdents = append(refIdents, ident)
 	}
@@ -839,10 +873,10 @@ func bridgeTypeRefs(
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	typeIdx map[int]*ast.NamedType,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
-	return bridgeTypeRefsForFile(filterTypeRefsForFile(typeRefs, fi.path), nativeSymbolByTarget(symbols), files, fi, typeIdx, declIndexes, fileScope)
+	return bridgeTypeRefsForFile(filterTypeRefsForFile(typeRefs, fi.path), nativeSymbolByTarget(symbols), nativeResolveFilesByPath(files), fi, typeIdx, declIndexes, fileScope)
 }
 
 // bridgeTypeRefsForFile is the file-scoped variant of bridgeTypeRefs.
@@ -854,10 +888,10 @@ func bridgeTypeRefs(
 func bridgeTypeRefsForFile(
 	typeRefs []api.ResolvedTypeRef,
 	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
-	files []nativeResolveFileInfo,
+	filesByPath map[string]nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	typeIdx map[int]*ast.NamedType,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
 	typeRefsByID := make(map[ast.NodeID]*Symbol, len(typeRefs))
@@ -873,7 +907,7 @@ func bridgeTypeRefsForFile(
 		if nt == nil {
 			continue
 		}
-		sym := findOrCreateTypeSymbol(symCache, ref, symByTarget, files, fi, declIndexes, fileScope)
+		sym := findOrCreateTypeSymbol(symCache, ref, symByTarget, filesByPath, fi, declIndexes, fileScope)
 		typeRefsByID[nt.ID] = sym
 		typeRefIdents = append(typeRefIdents, nt)
 	}
@@ -895,9 +929,9 @@ func findOrCreateTypeSymbol(
 	cache map[nativeSymbolTarget]*Symbol,
 	ref api.ResolvedTypeRef,
 	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
-	files []nativeResolveFileInfo,
+	filesByPath map[string]nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) *Symbol {
 	key := nativeSymbolTarget{file: ref.TargetFile, node: ref.TargetNode, start: ref.TargetStart, end: ref.TargetEnd}
@@ -908,7 +942,7 @@ func findOrCreateTypeSymbol(
 		return &Symbol{StableID: ref.TargetSymbolID, PackageID: ref.PackageID, Name: ref.Name, Kind: SymBuiltin, Pub: true}
 	}
 	nativeSym := symByTarget[key]
-	targetFI := nativeResolveFileInfoFor(files, ref.TargetFile)
+	targetFI := filesByPath[ref.TargetFile]
 	if targetFI.path == "" && ref.TargetFile == "" {
 		targetFI = fi
 	}
@@ -962,9 +996,9 @@ func findOrCreateSymbol(
 	cache map[nativeSymbolTarget]*Symbol,
 	ref api.ResolvedRef,
 	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
-	files []nativeResolveFileInfo,
+	filesByPath map[string]nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
-	declIndexes map[string]map[int]ast.Node,
+	declIndexes map[string]*declOffsetIndex,
 	fileScope *Scope,
 ) *Symbol {
 	key := nativeSymbolTarget{file: ref.TargetFile, node: ref.TargetNode, start: ref.TargetStart, end: ref.TargetEnd}
@@ -972,7 +1006,7 @@ func findOrCreateSymbol(
 		return sym
 	}
 	nativeSym := symByTarget[key]
-	targetFI := nativeResolveFileInfoFor(files, ref.TargetFile)
+	targetFI := filesByPath[ref.TargetFile]
 	if targetFI.path == "" && ref.TargetFile == "" {
 		targetFI = fi
 	}
@@ -1048,17 +1082,22 @@ func nativeSymbolByTarget(symbols []api.ResolvedSymbol) map[nativeSymbolTarget]a
 	return out
 }
 
-func findNearestDecl(declIdx map[int]ast.Node, targetOff int) ast.Node {
-	bestOff := -1
-	for off := range declIdx {
-		if off <= targetOff && off > bestOff {
-			bestOff = off
-		}
+func findNearestDecl(declIdx *declOffsetIndex, targetOff int) ast.Node {
+	if declIdx == nil {
+		return nil
 	}
-	if bestOff >= 0 {
-		return declIdx[bestOff]
+	// Binary-search the sorted offsets for the largest off ≤ targetOff.
+	// `sort.SearchInts(s, k)` returns the smallest i with `s[i] >= k`, so
+	// `SearchInts(s, targetOff+1) - 1` gives the index of the largest
+	// offset ≤ targetOff; -1 means every offset exceeds the target.
+	if len(declIdx.sortedOffsets) == 0 {
+		return nil
 	}
-	return nil
+	i := sort.SearchInts(declIdx.sortedOffsets, targetOff+1) - 1
+	if i < 0 {
+		return nil
+	}
+	return declIdx.byOffset[declIdx.sortedOffsets[i]]
 }
 
 // --- Symbol construction from native symbols ---
@@ -1073,7 +1112,7 @@ func defineTopLevelSymbolsForFile(
 	scope *Scope,
 	symbolsByFile map[string][]api.ResolvedSymbol,
 	fi nativeResolveFileInfo,
-	declIdx map[int]ast.Node,
+	declIdx *declOffsetIndex,
 ) {
 	defineTopLevelSymbols(scope, symbolsByFile[fi.path], fi, declIdx)
 	if shared, ok := symbolsByFile[""]; ok && fi.path != "" {
@@ -1085,7 +1124,7 @@ func defineTopLevelSymbols(
 	scope *Scope,
 	symbols []api.ResolvedSymbol,
 	fi nativeResolveFileInfo,
-	declIdx map[int]ast.Node,
+	declIdx *declOffsetIndex,
 ) {
 	for _, sym := range symbols {
 		if sym.Depth != 0 {

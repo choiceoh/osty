@@ -40,10 +40,10 @@ func TestBridgeTypeRefsFiltersRecordsByFile(t *testing.T) {
 		[]nativeResolveFileInfo{current, other},
 		current,
 		map[int]*ast.NamedType{0: nt},
-		map[string]map[int]ast.Node{
-			other.path: {
+		map[string]*declOffsetIndex{
+			other.path: newDeclOffsetIndexFromMap(map[int]ast.Node{
 				0: &ast.StructDecl{Name: "FrontCheckResult", PosV: token.Pos{Offset: 0}},
-			},
+			}),
 		},
 		nil,
 	)
@@ -85,10 +85,10 @@ func TestBridgeRefsFiltersRecordsByFile(t *testing.T) {
 		[]nativeResolveFileInfo{current, other},
 		current,
 		map[int]*ast.Ident{0: ident},
-		map[string]map[int]ast.Node{
-			other.path: {
+		map[string]*declOffsetIndex{
+			other.path: newDeclOffsetIndexFromMap(map[int]ast.Node{
 				0: &ast.FnDecl{Name: "helper", PosV: token.Pos{Offset: 0}},
-			},
+			}),
 		},
 		nil,
 	)
@@ -113,9 +113,9 @@ func TestDefineTopLevelSymbolsFiltersRecordsByFile(t *testing.T) {
 			End:   len("Other"),
 		}},
 		current,
-		map[int]ast.Node{
+		newDeclOffsetIndexFromMap(map[int]ast.Node{
 			0: &ast.StructDecl{Name: "Current", PosV: token.Pos{Offset: 0}},
-		},
+		}),
 	)
 
 	if sym := scope.LookupLocal("Other"); sym != nil {
