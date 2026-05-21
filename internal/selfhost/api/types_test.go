@@ -5,18 +5,18 @@ import "testing"
 func TestCheckResultIndexUsesStableIDs(t *testing.T) {
 	result := CheckResult{
 		TypedNodes: []CheckedNode{
-			{Node: 0, NodeID: 0, Kind: "Root", TypeID: 7},
-			{Node: 901, NodeID: 42, Kind: "Call", TypeID: 8},
+			{NodeID: 0, Kind: "Root", TypeID: 7},
+			{NodeID: 42, Kind: "Call", TypeID: 8},
 		},
 		Bindings: []CheckedBinding{
-			{Node: 0, NodeID: 0, BindingID: 11, Name: "root", TypeID: 7},
-			{Node: 901, NodeID: 42, BindingID: 12, Name: "value", TypeID: 8},
+			{NodeID: 0, BindingID: 11, Name: "root", TypeID: 7},
+			{NodeID: 42, BindingID: 12, Name: "value", TypeID: 8},
 		},
 		Symbols: []CheckedSymbol{
-			{Node: 901, NodeID: 42, SymbolID: 21, Name: "value", TypeID: 8},
+			{NodeID: 42, SymbolID: 21, Name: "value", TypeID: 8},
 		},
 		Instantiations: []CheckInstantiation{
-			{Node: 901, NodeID: 42, InstantiationID: 31, Callee: "id", TypeArgIDs: []int{8}, ResultTypeID: 8},
+			{NodeID: 42, InstantiationID: 31, Callee: "id", TypeArgIDs: []int{8}, ResultTypeID: 8},
 		},
 	}
 	result.EnsureStableIDs()
@@ -58,21 +58,6 @@ func TestCheckResultIndexUsesStableIDs(t *testing.T) {
 	}
 	if got := idx.InstantiationsByStableID[result.Instantiations[0].ID]; got == nil || got.Callee != "id" {
 		t.Fatalf("instantiation stable id = %#v, want id", got)
-	}
-}
-
-func TestCheckResultIndexFallsBackToLegacyNodeAlias(t *testing.T) {
-	result := CheckResult{
-		TypedNodes: []CheckedNode{{Node: 77, Kind: "IntLit"}},
-		Bindings:   []CheckedBinding{{Node: 77, BindingID: 1, Name: "value"}},
-	}
-
-	idx := result.Index()
-	if got := idx.TypedNodesByNodeID[77]; got == nil || got.Kind != "IntLit" {
-		t.Fatalf("legacy typed node 77 = %#v, want IntLit", got)
-	}
-	if got := idx.BindingsByNodeID[77]; len(got) != 1 || got[0].Name != "value" {
-		t.Fatalf("legacy bindings by node 77 = %#v, want value", got)
 	}
 }
 

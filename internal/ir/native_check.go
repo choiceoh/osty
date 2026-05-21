@@ -39,7 +39,7 @@ func (l *lowerer) nativeIndex() (api.CheckResultIndex, bool) {
 func typedNodesByNodeID(nodes []api.CheckedNode) map[int][]*api.CheckedNode {
 	out := make(map[int][]*api.CheckedNode, len(nodes))
 	for i := range nodes {
-		id := nativeRecordNodeID(nodes[i].NodeID, nodes[i].Node)
+		id := nodes[i].NodeID
 		if id == 0 {
 			continue
 		}
@@ -96,12 +96,6 @@ func symbolsByByteRange(ss []api.CheckedSymbol) map[[2]int][]*api.CheckedSymbol 
 	return out
 }
 
-func nativeRecordNodeID(nodeID, legacyNode int) int {
-	if nodeID != 0 {
-		return nodeID
-	}
-	return legacyNode
-}
 
 func (l *lowerer) nativeCheckedType(e ast.Expr) Type {
 	_, ok := l.nativeIndex()

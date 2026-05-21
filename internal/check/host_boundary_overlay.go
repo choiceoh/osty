@@ -22,7 +22,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 		indexes = append(indexes, buildOverlaySegmentIndex(seg))
 	}
 	for _, rec := range checked.TypedNodes {
-		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Node, rec.Start, rec.End)
+		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Start, rec.End)
 		expr, ok := node.(ast.Expr)
 		if !ok {
 			continue
@@ -30,7 +30,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 		result.Types[expr] = typeReprToType(rec.Type)
 	}
 	for _, rec := range checked.Bindings {
-		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Node, rec.Start, rec.End)
+		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Start, rec.End)
 		if node == nil {
 			continue
 		}
@@ -41,7 +41,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 		result.LetTypes[target] = typeReprToType(rec.Type)
 	}
 	for _, rec := range checked.Instantiations {
-		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Node, rec.Start, rec.End)
+		node := overlayNodeForRecord(indexes, rec.NodeID, rec.Start, rec.End)
 		call, ok := node.(*ast.CallExpr)
 		if !ok || call == nil {
 			continue
@@ -99,15 +99,10 @@ func buildOverlaySegmentIndex(seg selfhostFileSegment) overlaySegmentIndex {
 	return idx
 }
 
-func overlayNodeForRecord(indexes []overlaySegmentIndex, nodeID, legacyNode, start, end int) ast.Node {
+func overlayNodeForRecord(indexes []overlaySegmentIndex, nodeID, start, end int) ast.Node {
 	for _, idx := range indexes {
 		if nodeID >= 0 {
 			if node, ok := idx.nativeNodes[nodeID]; ok {
-				return node
-			}
-		}
-		if legacyNode >= 0 {
-			if node, ok := idx.nativeNodes[legacyNode]; ok {
 				return node
 			}
 		}

@@ -1,10 +1,10 @@
 summary assignments=0 accepted=0 errors=0
 typedNodes
-  id=typed-node:3d354c652 nodeKey=node:b6e3a2daed64c0e typeKey=type:0cbe92b642f4e2f node=2 nodeId=2 typeId=2 kind=IntLit span=34:36 type=Int
-  id=typed-node:ea5c0ce48 nodeKey=node:31d75de96585a6b typeKey=type:520c4bf26e2fabc node=4 nodeId=4 typeId=19 kind=Block span=10:38 type=()
+  id=typed-node:3d354c652 nodeKey=node:b6e3a2daed64c0e typeKey=type:0cbe92b642f4e2f nodeId=2 typeId=2 kind=IntLit span=34:36 type=Int
+  id=typed-node:ea5c0ce48 nodeKey=node:31d75de96585a6b typeKey=type:520c4bf26e2fabc nodeId=4 typeId=19 kind=Block span=10:38 type=()
 bindings
-  id=binding:11bbeb1b4560 nodeKey=node:7e55f7d5861d8dd typeKey=type:0cbe92b642f4e2f bindingId=0 node=0 nodeId=0 name=answer mutable=false typeId=2 span=20:26 type=Int
+  id=binding:11bbeb1b4560 nodeKey=node:7e55f7d5861d8dd typeKey=type:0cbe92b642f4e2f bindingId=0 nodeId=0 name=answer mutable=false typeId=2 span=20:26 type=Int
 symbols
-  id=symbol:b682ed2ca7f2d nodeKey=node:b61dae7153803e3 typeKey=type:b4f942e1ed0777f symbolId=0 node=5 nodeId=5 kind=fn name=main owner= typeId=135 span=0:38 type=fn() -> ()
+  id=symbol:b682ed2ca7f2d nodeKey=node:b61dae7153803e3 typeKey=type:b4f942e1ed0777f symbolId=0 nodeId=5 kind=fn name=main owner= typeId=135 span=0:38 type=fn() -> ()
 instantiations
 diagnostics

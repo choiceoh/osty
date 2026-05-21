@@ -3,17 +3,17 @@ errorsByContext E0775=2
 errorDetails E0775 `#[pure]` function `bad` cannot allocate a list literal @L4:C14=1
 errorDetails E0775 `#[pure]` function `bad` cannot call a function that is not `#[pure]` @L5:C11=1
 typedNodes
-  id=typed-node:a08c373e0 nodeKey=node:9acea2dec56778f typeKey=type:0cbe92b642f4e2f node=1 nodeId=1 typeId=2 kind=IntLit span=21:22 type=Int
-  id=typed-node:3841a2ccd nodeKey=node:eb04cb8f98779ee typeKey=type:0cbe92b642f4e2f node=3 nodeId=3 typeId=2 kind=Block span=19:24 type=Int
-  id=typed-node:700baee84 nodeKey=node:c4e2dcbcd3d09ec typeKey=type:819354aa58f2166 node=8 nodeId=8 typeId=21 kind=IntLit span=65:66 type=UntypedInt
-  id=typed-node:0b55f7e33 nodeKey=node:e7dbda617f05f05 typeKey=type:ff4343a0a88abb8 node=9 nodeId=9 typeId=136 kind=List span=64:67 type=List<UntypedInt>
-  id=typed-node:7e899069d nodeKey=node:650466afaa8a5a9 typeKey=type:0cbe92b642f4e2f node=12 nodeId=12 typeId=2 kind=Call span=78:80 type=Int
-  id=typed-node:bff73e1c9 nodeKey=node:06207226247d8ec typeKey=type:0cbe92b642f4e2f node=14 nodeId=14 typeId=2 kind=Block span=49:82 type=Int
+  id=typed-node:a08c373e0 nodeKey=node:9acea2dec56778f typeKey=type:0cbe92b642f4e2f nodeId=1 typeId=2 kind=IntLit span=21:22 type=Int
+  id=typed-node:3841a2ccd nodeKey=node:eb04cb8f98779ee typeKey=type:0cbe92b642f4e2f nodeId=3 typeId=2 kind=Block span=19:24 type=Int
+  id=typed-node:700baee84 nodeKey=node:c4e2dcbcd3d09ec typeKey=type:819354aa58f2166 nodeId=8 typeId=21 kind=IntLit span=65:66 type=UntypedInt
+  id=typed-node:0b55f7e33 nodeKey=node:e7dbda617f05f05 typeKey=type:ff4343a0a88abb8 nodeId=9 typeId=136 kind=List span=64:67 type=List<UntypedInt>
+  id=typed-node:7e899069d nodeKey=node:650466afaa8a5a9 typeKey=type:0cbe92b642f4e2f nodeId=12 typeId=2 kind=Call span=78:80 type=Int
+  id=typed-node:bff73e1c9 nodeKey=node:06207226247d8ec typeKey=type:0cbe92b642f4e2f nodeId=14 typeId=2 kind=Block span=49:82 type=Int
 bindings
-  id=binding:2e6f5cce2dd9 nodeKey=node:468f9067f9e4bd4 typeKey=type:ff4343a0a88abb8 bindingId=0 node=7 nodeId=7 name=xs mutable=false typeId=136 span=59:61 type=List<UntypedInt>
+  id=binding:2e6f5cce2dd9 nodeKey=node:468f9067f9e4bd4 typeKey=type:ff4343a0a88abb8 bindingId=0 nodeId=7 name=xs mutable=false typeId=136 span=59:61 type=List<UntypedInt>
 symbols
-  id=symbol:66a5491bf4c48 nodeKey=node:cebd2ca3b324195 typeKey=type:ff113f463eecce4 symbolId=0 node=4 nodeId=4 kind=fn name=impure owner= typeId=135 span=0:24 type=fn() -> Int
-  id=symbol:edca6562653ad nodeKey=node:da87a9c5de0b1c9 typeKey=type:ff113f463eecce4 symbolId=1 node=15 nodeId=15 kind=fn name=bad owner= typeId=135 span=33:82 type=fn() -> Int
+  id=symbol:66a5491bf4c48 nodeKey=node:cebd2ca3b324195 typeKey=type:ff113f463eecce4 symbolId=0 nodeId=4 kind=fn name=impure owner= typeId=135 span=0:24 type=fn() -> Int
+  id=symbol:edca6562653ad nodeKey=node:da87a9c5de0b1c9 typeKey=type:ff113f463eecce4 symbolId=1 nodeId=15 kind=fn name=bad owner= typeId=135 span=33:82 type=fn() -> Int
 instantiations
 diagnostics
   code=E0775 severity=error span=64:67 line=4:14-4:17 message=`#[pure]` function `bad` cannot allocate a list literal

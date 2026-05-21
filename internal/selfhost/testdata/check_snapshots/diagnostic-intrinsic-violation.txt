@@ -4,11 +4,11 @@ errorsByContext E0773=1
 errorDetails E0770 runtime sublanguage surface used outside a privileged package: `#[intrinsic]` is a runtime-only annotation @L1:C1=1
 errorDetails E0773 `#[intrinsic]` function `bad` must have an empty body @L2:C17=1
 typedNodes
-  id=typed-node:d29660728 nodeKey=node:28aa8e4746a3dc1 typeKey=type:0cbe92b642f4e2f node=2 nodeId=2 typeId=2 kind=IntLit span=35:37 type=Int
-  id=typed-node:d1cd82bc0 nodeKey=node:4013449fff6a7f8 typeKey=type:0cbe92b642f4e2f node=4 nodeId=4 typeId=2 kind=Block span=29:39 type=Int
+  id=typed-node:d29660728 nodeKey=node:28aa8e4746a3dc1 typeKey=type:0cbe92b642f4e2f nodeId=2 typeId=2 kind=IntLit span=35:37 type=Int
+  id=typed-node:d1cd82bc0 nodeKey=node:4013449fff6a7f8 typeKey=type:0cbe92b642f4e2f nodeId=4 typeId=2 kind=Block span=29:39 type=Int
 bindings
 symbols
-  id=symbol:0866a9ff21ddc nodeKey=node:ddfbf48157208d0 typeKey=type:ff113f463eecce4 symbolId=0 node=5 nodeId=5 kind=fn name=bad owner= typeId=135 span=13:39 type=fn() -> Int
+  id=symbol:0866a9ff21ddc nodeKey=node:ddfbf48157208d0 typeKey=type:ff113f463eecce4 symbolId=0 nodeId=5 kind=fn name=bad owner= typeId=135 span=13:39 type=fn() -> Int
 instantiations
 diagnostics
   code=E0773 severity=error span=29:39 line=2:17-4:2 message=`#[intrinsic]` function `bad` must have an empty body

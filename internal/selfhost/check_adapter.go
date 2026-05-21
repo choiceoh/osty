@@ -220,7 +220,6 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		}
 		start, end := mapper.offsets(node.start, node.end)
 		result.TypedNodes = append(result.TypedNodes, CheckedNode{
-			Node:   node.node,
 			NodeID: node.nodeId,
 			Kind:   node.kind,
 			Type:   frontTypeReprToAPI(node.typeRepr),
@@ -235,7 +234,6 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		}
 		start, end := mapper.offsets(binding.start, binding.end)
 		result.Bindings = append(result.Bindings, CheckedBinding{
-			Node:      binding.node,
 			NodeID:    binding.nodeId,
 			BindingID: binding.bindingId,
 			Name:      binding.name,
@@ -252,7 +250,6 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		}
 		start, end := mapper.offsets(symbol.start, symbol.end)
 		result.Symbols = append(result.Symbols, CheckedSymbol{
-			Node:     symbol.node,
 			NodeID:   symbol.nodeId,
 			SymbolID: symbol.symbolId,
 			Kind:     symbol.kind,
@@ -270,7 +267,6 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		}
 		start, end := mapper.offsets(inst.start, inst.end)
 		result.Instantiations = append(result.Instantiations, CheckInstantiation{
-			Node:            inst.node,
 			NodeID:          inst.nodeId,
 			InstantiationID: inst.instantiationId,
 			Callee:          inst.callee,

@@ -141,7 +141,6 @@ func joinTypeReprStrings(ss []string, sep string) string {
 type CheckedNode struct {
 	ID      string    `json:"id,omitempty"`      // stable record identity
 	NodeKey string    `json:"nodeKey,omitempty"` // stable node identity
-	Node    int       `json:"node"`              // legacy alias for NodeID
 	NodeID  int       `json:"nodeId"`            // selfhost arena id, stable only within one check run
 	Kind    string    `json:"kind"`
 	Type    *TypeRepr `json:"type"`
@@ -155,7 +154,6 @@ type CheckedNode struct {
 type CheckedBinding struct {
 	ID        string    `json:"id,omitempty"`
 	NodeKey   string    `json:"nodeKey,omitempty"`
-	Node      int       `json:"node"` // legacy alias for NodeID
 	NodeID    int       `json:"nodeId"`
 	BindingID int       `json:"bindingId"` // legacy sequential id
 	Name      string    `json:"name"`
@@ -171,7 +169,6 @@ type CheckedBinding struct {
 type CheckedSymbol struct {
 	ID       string    `json:"id,omitempty"`
 	NodeKey  string    `json:"nodeKey,omitempty"`
-	Node     int       `json:"node"` // legacy alias for NodeID
 	NodeID   int       `json:"nodeId"`
 	SymbolID int       `json:"symbolId"` // legacy sequential id
 	Kind     string    `json:"kind"`
@@ -188,7 +185,6 @@ type CheckedSymbol struct {
 type CheckInstantiation struct {
 	ID              string     `json:"id,omitempty"`
 	NodeKey         string     `json:"nodeKey,omitempty"`
-	Node            int        `json:"node"` // legacy alias for NodeID
 	NodeID          int        `json:"nodeId"`
 	InstantiationID int        `json:"instantiationId"` // legacy sequential id
 	Callee          string     `json:"callee"`
@@ -347,11 +343,11 @@ func (r *CheckResult) Index() CheckResultIndex {
 		if key := stableCheckedNodeKey(rec); key != "" {
 			idx.TypedNodesByNodeKey[key] = rec
 		}
-		idx.TypedNodesByNodeID[checkRecordNodeID(rec.NodeID, rec.Node)] = rec
+		idx.TypedNodesByNodeID[rec.NodeID] = rec
 	}
 	for i := range r.Bindings {
 		rec := &r.Bindings[i]
-		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		nodeID := rec.NodeID
 		if id := stableCheckedBindingID(rec); id != "" {
 			idx.BindingsByStableID[id] = rec
 		}
@@ -363,7 +359,7 @@ func (r *CheckResult) Index() CheckResultIndex {
 	}
 	for i := range r.Symbols {
 		rec := &r.Symbols[i]
-		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		nodeID := rec.NodeID
 		if id := stableCheckedSymbolID(rec); id != "" {
 			idx.SymbolsByStableID[id] = rec
 		}
@@ -375,7 +371,7 @@ func (r *CheckResult) Index() CheckResultIndex {
 	}
 	for i := range r.Instantiations {
 		rec := &r.Instantiations[i]
-		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		nodeID := rec.NodeID
 		if id := stableCheckInstantiationID(rec); id != "" {
 			idx.InstantiationsByStableID[id] = rec
 		}
@@ -386,13 +382,6 @@ func (r *CheckResult) Index() CheckResultIndex {
 		idx.InstantiationsByNodeID[nodeID] = append(idx.InstantiationsByNodeID[nodeID], rec)
 	}
 	return idx
-}
-
-func checkRecordNodeID(nodeID, legacyNode int) int {
-	if nodeID != 0 {
-		return nodeID
-	}
-	return legacyNode
 }
 
 func stableCheckedNodeID(rec *CheckedNode) string {

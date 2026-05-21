@@ -32,7 +32,6 @@ func TestOverlaySelfhostResultPrefersNativeNodeIDForTypedNodes(t *testing.T) {
 
 	overlaySelfhostResult(result, nativeIDTestSource(file), api.CheckResult{
 		TypedNodes: []api.CheckedNode{{
-			Node:   0,
 			NodeID: 0,
 			Kind:   "Ident",
 			Type:   &api.TypeRepr{Kind: "primitive", Name: "Int"},
@@ -73,7 +72,6 @@ func TestOverlaySelfhostResultPrefersNativeNodeIDForInstantiations(t *testing.T)
 
 	overlaySelfhostResult(result, nativeIDTestSource(file), api.CheckResult{
 		Instantiations: []api.CheckInstantiation{{
-			Node:     18,
 			NodeID:   18,
 			Callee:   "id",
 			TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}},
@@ -111,7 +109,6 @@ func TestOverlaySelfhostResultPrefersNativeNodeIDForBindings(t *testing.T) {
 
 	overlaySelfhostResult(result, nativeIDTestSource(file), api.CheckResult{
 		Bindings: []api.CheckedBinding{{
-			Node:   39,
 			NodeID: 39,
 			Name:   "value",
 			Type:   &api.TypeRepr{Kind: "primitive", Name: "Bool"},

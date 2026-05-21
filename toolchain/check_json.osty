@@ -560,7 +560,7 @@ fn frontCheckedNodeBodyJson(n: FrontCheckedNode, start: Int, end: Int) -> String
     let typeKey = frontWireStableTypeKey(n.typeRepr)
     let nodeKey = frontWireStableNodeKey("", n.kind, start, end)
     let id = frontWireStableID("typed-node", [nodeKey, n.kind, typeKey])
-    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{n.node},\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{n.nodeId},\"kind\":" + frontJsonString(n.kind) + ",\"type\":" + frontTypeReprToWireJson(n.typeRepr) + ",\"typeId\":{n.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckedBindingsToWireJson(bindings: List<FrontCheckedBinding>, m: FrontWireMapper) -> String {
     if bindings.len() == 0 {
@@ -577,7 +577,7 @@ fn frontCheckedBindingBodyJson(b: FrontCheckedBinding, start: Int, end: Int) -> 
     let typeKey = frontWireStableTypeKey(b.typeRepr)
     let nodeKey = frontWireStableNodeKey("", "binding:" + b.name, start, end)
     let id = frontWireStableID("binding", [nodeKey, b.name, frontWireBoolText(b.mutable), typeKey])
-    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{b.node},\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{b.nodeId},\"bindingId\":{b.bindingId},\"name\":" + frontJsonString(b.name) + ",\"type\":" + frontTypeReprToWireJson(b.typeRepr) + ",\"typeId\":{b.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"mutable\":" + frontJsonBool(b.mutable) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckedSymbolsToWireJson(symbols: List<FrontCheckedSymbol>, m: FrontWireMapper) -> String {
     if symbols.len() == 0 {
@@ -595,7 +595,7 @@ fn frontCheckedSymbolBodyJson(s: FrontCheckedSymbol, start: Int, end: Int) -> St
     let kindTag = "symbol:" + s.kind + ":" + s.owner + ":" + s.name
     let nodeKey = frontWireStableNodeKey("", kindTag, start, end)
     let id = frontWireStableID("symbol", [nodeKey, s.kind, s.owner, s.name, typeKey])
-    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{s.node},\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
+    "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{s.nodeId},\"symbolId\":{s.symbolId},\"kind\":" + frontJsonString(s.kind) + ",\"name\":" + frontJsonString(s.name) + ",\"owner\":" + frontJsonString(s.owner) + ",\"type\":" + frontTypeReprToWireJson(s.typeRepr) + ",\"typeId\":{s.typeId},\"typeKey\":" + frontJsonString(typeKey) + ",\"start\":{start},\"end\":{end}\}"
 }
 fn frontCheckInstantiationsToWireJson(insts: List<FrontCheckInstantiation>, m: FrontWireMapper) -> String {
     if insts.len() == 0 {
@@ -624,7 +624,7 @@ fn frontCheckInstantiationBodyJson(i: FrontCheckInstantiation, start: Int, end: 
         idParts.push(k)
     }
     let id = frontWireStableID("instantiation", idParts)
-    let mut out = "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"node\":{i.node},\"nodeId\":{i.nodeId},\"instantiationId\":{i.instantiationId},\"callee\":" + frontJsonString(i.callee) + ",\"typeArgs\":" + typeArgsJson
+    let mut out = "\{\"id\":" + frontJsonString(id) + ",\"nodeKey\":" + frontJsonString(nodeKey) + ",\"nodeId\":{i.nodeId},\"instantiationId\":{i.instantiationId},\"callee\":" + frontJsonString(i.callee) + ",\"typeArgs\":" + typeArgsJson
     if i.typeArgIds.len() > 0 {
         let mut typeArgIdsParts: List<String> = []
         for tid in i.typeArgIds {

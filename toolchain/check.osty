@@ -149,7 +149,6 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
     }
 }
 pub struct FrontCheckedNode {
-    pub node: Int,
     pub nodeId: Int,
     pub kind: String,
     pub typeRepr: FrontTypeRepr,
@@ -158,7 +157,6 @@ pub struct FrontCheckedNode {
     pub end: Int,
 }
 pub struct FrontCheckedBinding {
-    pub node: Int,
     pub nodeId: Int,
     pub bindingId: Int,
     pub name: String,
@@ -169,7 +167,6 @@ pub struct FrontCheckedBinding {
     pub end: Int,
 }
 pub struct FrontCheckedSymbol {
-    pub node: Int,
     pub nodeId: Int,
     pub symbolId: Int,
     pub kind: String,
@@ -181,7 +178,6 @@ pub struct FrontCheckedSymbol {
     pub end: Int,
 }
 pub struct FrontCheckInstantiation {
-    pub node: Int,
     pub nodeId: Int,
     pub instantiationId: Int,
     pub callee: String,
@@ -1227,18 +1223,18 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             continue
         }
         let astNode = astArenaNodeAt(cx.ast.arena, node.originAst)
-        typedNodes.push(FrontCheckedNode {node: node.originAst, nodeId: node.originAst, kind, typeRepr: tyToRepr(cx.env.tys, node.ty), typeId: node.ty, start: astNode.start, end: astNode.end})
+        typedNodes.push(FrontCheckedNode {nodeId: node.originAst, kind, typeRepr: tyToRepr(cx.env.tys, node.ty), typeId: node.ty, start: astNode.start, end: astNode.end})
     }
     let mut bindings: List<FrontCheckedBinding> = []
     let mut bindingId = 0
     for b in cx.env.local.bindingRecords {
-        bindings.push(FrontCheckedBinding {node: b.node, nodeId: b.node, bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
+        bindings.push(FrontCheckedBinding {nodeId: b.node, bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
         bindingId = bindingId + 1
     }
     let mut symbols: List<FrontCheckedSymbol> = []
     let mut symbolId = 0
     for s in cx.env.local.symbolRecords {
-        symbols.push(FrontCheckedSymbol {node: s.node, nodeId: s.node, symbolId, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), typeId: s.ty, start: s.start, end: s.end})
+        symbols.push(FrontCheckedSymbol {nodeId: s.node, symbolId, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), typeId: s.ty, start: s.start, end: s.end})
         symbolId = symbolId + 1
     }
     let mut instantiations: List<FrontCheckInstantiation> = []
@@ -1250,7 +1246,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             typeArgReprs.push(tyToRepr(cx.env.tys, tyArg))
             typeArgIds.push(tyArg)
         }
-        instantiations.push(FrontCheckInstantiation {node: inst.node, nodeId: inst.node, instantiationId, callee: inst.callee, typeArgs: typeArgReprs, typeArgIds, resultType: tyToRepr(cx.env.tys, inst.resultTy), resultTypeId: inst.resultTy, start: inst.start, end: inst.end})
+        instantiations.push(FrontCheckInstantiation {nodeId: inst.node, instantiationId, callee: inst.callee, typeArgs: typeArgReprs, typeArgIds, resultType: tyToRepr(cx.env.tys, inst.resultTy), resultTypeId: inst.resultTy, start: inst.start, end: inst.end})
         instantiationId = instantiationId + 1
     }
     FrontCheckResult {summary, typedNodes, bindings, symbols, instantiations, diagnostics: cx.env.local.diagnostics}
