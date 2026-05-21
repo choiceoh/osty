@@ -119,11 +119,13 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
 - ✓ JSON value escape (`\"` / `\\` / `\n` / `\t` / `\r` / `\b` /
   `\f` / `\/` / `\uXXXX` + surrogate pair) 디코딩
   (`extractJsonStringValueAt`).
-- ✓ (partial) `CheckRequest.package` 모드 — byte-level scanner 가 첫
-  `"source":` key 를 찾으므로 package 모드 입력에서는 첫 file 의
-  source 가 자연스럽게 매치된다. **첫 파일만 검사** — cross-file
-  resolution 은 toolchain `frontCheckPackageToWireJson` 신설 후에
-  활성 (별도 batch).
+- ✓ `CheckRequest.package` 모드 — multi-file dispatch 가 `frontExtractPackageFiles`
+  로 `{source, name, path, base, sourceFileId}` 메타데이터 전체를 추출하고
+  `frontCheckPackageToWireJson` 으로 라우팅. 각 파일의 combined-buffer
+  시작 byte / line 을 기록한 `FrontPackageFileTable` 이 와이어 mapper 에
+  threading 되어 모든 record 의 `start` / `end` / `startLine` / `endLine`
+  이 file-local 좌표로 환산되고, diagnostic 은 추가로 `file` /
+  `sourceFileId` 필드 + telemetry suffix `<file>:@L<line>:C<col>` 를 받는다.
 - 잔여: 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
   (key-boundary 엄격 매칭 후속 batch).
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
