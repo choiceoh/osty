@@ -588,3 +588,119 @@ fn testCheckPackageToWireJsonConcatenatesFilesWithNewline() {
     let out = frontCheckPackageToWireJson("\{\"package\":\{\"files\":[\{\"source\":\"\"\},\{\"source\":\"\"\}]\}\}")
     testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
 }
+// ---------------------------------------------------------------------
+// Per-file token layout + metadata propagation tests (closure of
+// PR #1966 limits 1 + 3). `frontExtractPackageFiles` exposes the full
+// `{source, name, path, base, sourceFileId}` payload; the package
+// pipeline rebases token positions back to the owning file and
+// stamps diagnostics with `file` / `sourceFileId` + a
+// `<file>:@L<line>:C<col>` telemetry suffix.
+// ---------------------------------------------------------------------
+fn testExtractPackageFilesCarriesNameAndPath() {
+    let body = "\{\"package\":\{\"files\":[\{\"name\":\"a.osty\",\"path\":\"/repo/a.osty\",\"source\":\"fn a()\{\}\"\},\{\"name\":\"b.osty\",\"path\":\"/repo/b.osty\",\"source\":\"fn b()\{\}\"\}]\}\}"
+    let got = frontExtractPackageFiles(body)
+    testing.assertEq(got.len(), 2)
+    testing.assertEq(got[0].name, "a.osty")
+    testing.assertEq(got[0].path, "/repo/a.osty")
+    testing.assertEq(got[0].source, "fn a()\{\}")
+    testing.assertEq(got[1].name, "b.osty")
+    testing.assertEq(got[1].path, "/repo/b.osty")
+}
+// Per-file `name` + `path` must round-trip through the extractor.
+// Order is document order; sibling keys do not interfere with each
+// other regardless of position relative to `source`.
+fn testExtractPackageFilesCarriesBaseAndSourceFileId() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"fn a()\{\}\",\"base\":100,\"sourceFileId\":\"sfid-a\"\}]\}\}"
+    let got = frontExtractPackageFiles(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].base, 100)
+    testing.assertEq(got[0].sourceFileId, "sfid-a")
+}
+// `base` is a numeric value, `sourceFileId` is a string — the
+// extractor must decode both shapes without confusing the JSON
+// value-type scanner.
+fn testExtractPackageFilesNameSubstringInSourceIgnored() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"// \\\"name\\\":\\\"phantom.osty\\\"\\nfn a()\{\}\",\"name\":\"real.osty\"\}]\}\}"
+    let got = frontExtractPackageFiles(body)
+    testing.assertEq(got.len(), 1)
+    testing.assertEq(got[0].name, "real.osty")
+    testing.assert(strings.contains(got[0].source, "phantom.osty"))
+}
+// A `"name"` substring embedded inside a `source` string body
+// (escaped quotes) must NOT be confused for a sibling `name` key.
+// The JSON-aware scanner tracks string boundaries so the false
+// positive is impossible.
+fn testCheckPackageToWireJsonDiagnosticCarriesFileField() {
+    let body = "\{\"package\":\{\"files\":[\{\"name\":\"mismatch.osty\",\"path\":\"/repo/mismatch.osty\",\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"diagnostics\":["))
+    testing.assert(strings.contains(out, "\"file\":\"/repo/mismatch.osty\""))
+}
+// Force E0700 via mismatched let binding in a named file. The
+// diagnostic record must carry the file display name (preferring
+// `path` over `name`, mirroring `selfhostBuildPackageAst`).
+fn testCheckPackageToWireJsonDiagnosticPrefersPathOverName() {
+    let body = "\{\"package\":\{\"files\":[\{\"name\":\"basename.osty\",\"path\":\"/full/path.osty\",\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"file\":\"/full/path.osty\""))
+    testing.assert(!strings.contains(out, "\"file\":\"basename.osty\""))
+}
+// When both `path` and `name` are supplied, `path` wins. The
+// telemetry suffix follows the same rule.
+fn testCheckPackageToWireJsonDiagnosticFallsBackToNameWhenPathMissing() {
+    let body = "\{\"package\":\{\"files\":[\{\"name\":\"only-name.osty\",\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"file\":\"only-name.osty\""))
+}
+// `name` is used when `path` is empty — degenerates to the same
+// behaviour as the Go bridge for stdin-style requests.
+fn testCheckPackageToWireJsonTelemetrySuffixHasFilePrefix() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"/repo/mismatch.osty\",\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"errorsByContext\":"))
+    testing.assert(strings.contains(out, "/repo/mismatch.osty:@L"))
+}
+// Telemetry detail suffix matches `selfhostLayoutTokenPos` shape:
+// `<file>:@L<line>:C<col>` when the file display name is known.
+fn testCheckPackageToWireJsonSourceFileIdSurfaces() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"/repo/p.osty\",\"sourceFileId\":\"sfid-42\",\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"sourceFileId\":\"sfid-42\""))
+}
+// `sourceFileId` round-trips into every diagnostic record when
+// supplied — matches the Go `CheckDiagnosticRecord.SourceFileID`
+// JSON tag.
+fn testCheckPackageToWireJsonSecondFileGetsFileLocalPositions() {
+    let body = "\{\"package\":\{\"files\":[\{\"path\":\"first.osty\",\"source\":\"fn alpha() \{\}\"\},\{\"path\":\"second.osty\",\"source\":\"fn main() \{ let x: Int = \\\"hi\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"file\":\"second.osty\""))
+    testing.assert(strings.contains(out, "\"startLine\":1"))
+    testing.assert(strings.contains(out, "second.osty:@L1:C"))
+}
+// File 0 is `fn alpha() {}` (1 line). File 1's `fn main()` mismatch
+// sits on combined-buffer line 3 (file 0 line 1 + separator line 2
+// + file 1 line 1). Per-file rebasing maps that back to file 1
+// line 1, so the diagnostic `startLine` is 1 (not 3) and the
+// telemetry suffix reads `second.osty:@L1:Cxx`.
+fn testCheckPackageToWireJsonBaseAddsToFileLocalOffsets() {
+    let bodyWithoutBase = "\{\"package\":\{\"files\":[\{\"path\":\"a.osty\",\"source\":\"fn id<T>(value: T) -> T \{ value \}\"\}]\}\}"
+    let bodyWithBase = "\{\"package\":\{\"files\":[\{\"path\":\"a.osty\",\"base\":1000,\"source\":\"fn id<T>(value: T) -> T \{ value \}\"\}]\}\}"
+    let outWithout = frontCheckPackageToWireJson(bodyWithoutBase)
+    let outWith = frontCheckPackageToWireJson(bodyWithBase)
+    testing.assert(strings.contains(outWithout, "\"name\":\"value\""))
+    testing.assert(strings.contains(outWith, "\"name\":\"value\""))
+    let startWithout = extractIntFieldAfter(outWithout, "\"name\":\"value\"", "\"start\":")
+    let startWith = extractIntFieldAfter(outWith, "\"name\":\"value\"", "\"start\":")
+    testing.assertEq(startWithout, "9")
+    testing.assertEq(startWith, "1009")
+}
+// `base` from `PackageCheckFile.Base` adds a constant to every
+// per-file position. The Go-side `selfhostAppendTokenLayout` does
+// the same — `layout.starts = append(..., base + rt.byteOffset(...))`.
+fn testCheckPackageToWireJsonEmptyMetadataKeepsBareSuffix() {
+    let body = "\{\"package\":\{\"files\":[\{\"source\":\"fn main() \{ let x: Int = \\\"hello\\\" \}\"\}]\}\}"
+    let out = frontCheckPackageToWireJson(body)
+    testing.assert(strings.contains(out, "\"errorsByContext\":"))
+    testing.assert(strings.contains(out, "@L1:C"))
+    testing.assert(!strings.contains(out, "\"file\":"))
+}
