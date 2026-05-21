@@ -31786,3 +31786,29 @@ void osty_rt_stage0_declined(const char *name) {
         stderr);
   abort();
 }
+
+/* ============================================================ *
+ * stdlib name bridges — link-time aliases for bodiless stdlib  *
+ * functions whose IR call sites still emit the source name.    *
+ *                                                              *
+ * The bytes / strings / list intrinsics route through MIR's    *
+ * IntrinsicKind path so stage0 emits them as direct            *
+ * `osty_rt_*` runtime calls. `std.crypto.sha256` has no        *
+ * intrinsic mapping yet, so the IR carries the literal Osty    *
+ * symbol — `declare ptr @std.crypto.sha256(ptr)` — and the     *
+ * link fails because no compilation unit defines that symbol.  *
+ *                                                              *
+ * Same pattern as the runtime.cihost section above: a tiny C   *
+ * trampoline whose linker-visible name is the Osty source      *
+ * name (`std.crypto.sha256`) and whose body forwards to the    *
+ * existing `osty_rt_crypto_sha256` runtime helper. Once the    *
+ * MIR lowerer learns about `IntrinsicCryptoSha256` this        *
+ * trampoline becomes dead weight, but until then it is the     *
+ * only thing letting `osty install-self` link the toolchain's  *
+ * `frontWireStableID` -> `crypto.sha256(buf)` call.            *
+ * ============================================================ */
+void *osty_rt_crypto_sha256_stdlib_bridge(void *raw_data)
+    __asm__(OSTY_GC_SYMBOL("std.crypto.sha256"));
+void *osty_rt_crypto_sha256_stdlib_bridge(void *raw_data) {
+  return osty_rt_crypto_sha256(raw_data);
+}
