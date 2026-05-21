@@ -24,6 +24,7 @@ import (
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
@@ -547,8 +548,19 @@ func discoverNativeTests(pkg *resolve.Package, filters []string, benchMode bool)
 		}
 		if pf.Run != nil {
 			for _, fn := range selfhost.PackageFunctionsFromRun(pf.Run) {
+				// The user's `main` is filtered from discovery (it's not
+				// a test, and `isDiscoverableNativeTestFn` would reject
+				// it on the test/bench name-prefix check anyway). The
+				// link-time symbol collision between the user's `main`
+				// and the C test driver's `main` is handled at compile
+				// time by stripping `main` from the lowered MIR/IR —
+				// see `stripMainFromEntry` below. Pre-strip refactor
+				// rejected the whole package here with E_RUNNER; we
+				// keep the discovery filter as a no-op skip so test
+				// packages that happen to define `main` (binary-style
+				// packages like `toolchain/`) can run their tests.
 				if fn.Name == "main" {
-					return nil, fmt.Errorf("package %s already defines main; native test runner currently requires a library-style package", pkg.Dir)
+					continue
 				}
 				if !isDiscoverableNativeTestFn(fn, benchMode) {
 					continue
@@ -575,8 +587,13 @@ func discoverNativeTests(pkg *resolve.Package, filters []string, benchMode bool)
 			if fn.Recv != nil || len(fn.Generics) != 0 {
 				continue
 			}
+			// See discoverNativeTests above (the Run-path arm): `main`
+			// is a no-op skip at discovery time because the C test
+			// driver provides the binary's `main` and the lowered MIR/IR
+			// for the package gets its user `main` stripped by
+			// `stripMainFromEntry` before LLVM emission.
 			if fn.Name == "main" {
-				return nil, fmt.Errorf("package %s already defines main; native test runner currently requires a library-style package", pkg.Dir)
+				continue
 			}
 			// `testing` is the stdlib module helper name; skip it in
 			// either mode so it can't shadow a real test.
@@ -696,7 +713,7 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 		binName = "osty_test_bundle_probe"
 	}
 	layoutRoot := filepath.Join(tmpRoot, "bundle-"+binName)
-	if result, usedExternal, err := tryExternalPackageLLVMArtifacts(ctx, backend.EmitObject, backend.Layout{
+	if result, usedExternal, err := tryExternalPackageLLVMArtifactsForTests(ctx, backend.EmitObject, backend.Layout{
 		Root:    layoutRoot,
 		Profile: "test",
 	}, "", nil, nil, nil, sourcePath, pkg); usedExternal {
@@ -764,6 +781,7 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 		if entryFile != nil {
 			entry.Source = entryFile.Source
 		}
+		stripMainFromEntry(&entry)
 		return entry, nil
 	}
 	file, src, err := parseGenEmitFile(pkg)
@@ -777,7 +795,55 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 		return backend.Entry{}, err
 	}
 	entry.Source = src
+	stripMainFromEntry(&entry)
 	return entry, nil
+}
+
+// stripMainFromEntry removes the user's top-level `main` function from
+// the lowered MIR and IR carried on the test-bundle Entry. The C test
+// driver (`buildNativeTestDriver`) supplies the binary's `main` symbol;
+// leaving the user's `main` in the lowered object would cause a
+// duplicate-symbol error at link time and the runner used to refuse
+// such packages outright (E_RUNNER). Stripping at this stage matches
+// the cross-pkg dep library build's `stripMainForLibraryMode`
+// (`cmd/osty-native-llvmgen/main.go`) which removes `main` from the
+// MIR before LLVM emission for the same reason. Tests never call
+// the user's `main` so the strip is loss-free for test runs.
+//
+// The in-process backend path consumes `entry.MIR` / `entry.IR`
+// directly; the external subprocess path is wired separately by
+// `tryExternalPackageLLVMArtifactsForTests` so the subprocess's own
+// `stripMainForLibraryMode` arm runs.
+func stripMainFromEntry(entry *backend.Entry) {
+	if entry == nil {
+		return
+	}
+	if entry.MIR != nil {
+		filtered := entry.MIR.Functions[:0]
+		for _, fn := range entry.MIR.Functions {
+			if fn == nil {
+				continue
+			}
+			if fn.Name == "main" {
+				continue
+			}
+			filtered = append(filtered, fn)
+		}
+		entry.MIR.Functions = filtered
+	}
+	if entry.IR != nil {
+		filtered := entry.IR.Decls[:0]
+		for _, decl := range entry.IR.Decls {
+			if decl == nil {
+				continue
+			}
+			if fn, ok := decl.(*ir.FnDecl); ok && fn != nil && fn.Name == "main" {
+				continue
+			}
+			filtered = append(filtered, decl)
+		}
+		entry.IR.Decls = filtered
+	}
 }
 
 func linkNativeTestBundleBinary(ctx context.Context, assets nativeTestBundleAssets, tmpRoot string, bundle nativeTestBundle) (string, error) {

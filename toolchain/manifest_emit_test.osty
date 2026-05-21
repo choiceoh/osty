@@ -34,7 +34,7 @@ fn testRenderManifestDepLineLongWithPath() {
         ..defaultDep("local"),
         path: "../local",
     }
-    testing.assertEq(renderManifestDepLine(d), "local = { path = \"../local\" }\n")
+    testing.assertEq(renderManifestDepLine(d), "local = \{ path = \"../local\" \}\n")
 }
 fn testRenderManifestDepLineLongVersionPlusPath() {
     // Version + path => long form (mixed shape disqualifies short).
@@ -45,7 +45,7 @@ fn testRenderManifestDepLineLongVersionPlusPath() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "local = { version = \"1.0.0\", path = \"../local\" }\n",
+        "local = \{ version = \"1.0.0\", path = \"../local\" \}\n",
     )
 }
 fn testRenderManifestDepLineGitTagBranchRev() {
@@ -61,7 +61,7 @@ fn testRenderManifestDepLineGitTagBranchRev() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { git = \"https://example.com/x.git\", tag = \"v1.0.0\", branch = \"main\", rev = \"abc1234\" }\n",
+        "x = \{ git = \"https://example.com/x.git\", tag = \"v1.0.0\", branch = \"main\", rev = \"abc1234\" \}\n",
     )
 }
 fn testRenderManifestDepLinePackageRename() {
@@ -72,7 +72,7 @@ fn testRenderManifestDepLinePackageRename() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "alias = { version = \"1.0.0\", package = \"real-name\" }\n",
+        "alias = \{ version = \"1.0.0\", package = \"real-name\" \}\n",
     )
 }
 fn testRenderManifestDepLineRegistry() {
@@ -83,7 +83,7 @@ fn testRenderManifestDepLineRegistry() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { version = \"1.0.0\", registry = \"custom\" }\n",
+        "x = \{ version = \"1.0.0\", registry = \"custom\" \}\n",
     )
 }
 fn testRenderManifestDepLineOptional() {
@@ -94,7 +94,7 @@ fn testRenderManifestDepLineOptional() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { version = \"1.0.0\", optional = true }\n",
+        "x = \{ version = \"1.0.0\", optional = true \}\n",
     )
 }
 fn testRenderManifestDepLineFeatures() {
@@ -105,7 +105,7 @@ fn testRenderManifestDepLineFeatures() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { version = \"1.0.0\", features = [\"a\", \"b\"] }\n",
+        "x = \{ version = \"1.0.0\", features = [\"a\", \"b\"] \}\n",
     )
 }
 fn testRenderManifestDepLineDefaultFeaturesFalse() {
@@ -116,7 +116,7 @@ fn testRenderManifestDepLineDefaultFeaturesFalse() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { version = \"1.0.0\", default-features = false }\n",
+        "x = \{ version = \"1.0.0\", default-features = false \}\n",
     )
 }
 fn testRenderManifestDepLineCombined() {
@@ -131,13 +131,13 @@ fn testRenderManifestDepLineCombined() {
     }
     testing.assertEq(
         renderManifestDepLine(d),
-        "x = { version = \"1.0.0\", optional = true, features = [\"foo\"], default-features = false }\n",
+        "x = \{ version = \"1.0.0\", optional = true, features = [\"foo\"], default-features = false \}\n",
     )
 }
 fn testRenderManifestDepLineNoFieldsLongForm() {
     // No version, no path, no git — degenerate but still emits long form.
     let d = defaultDep("x")
-    testing.assertEq(renderManifestDepLine(d), "x = {  }\n")
+    testing.assertEq(renderManifestDepLine(d), "x = \{  \}\n")
 }
 fn testRenderManifestStringField() {
     testing.assertEq(renderManifestStringField("name", "demo"), "name = \"demo\"\n")
@@ -177,7 +177,7 @@ fn testRenderManifestDepsSectionHonorsDepLineForm() {
     let short = ManifestDepEmitSpec {..defaultDep("a"), versionReq: "1.0.0"}
     let long = ManifestDepEmitSpec {..defaultDep("b"), path: "../b"}
     let out = renderManifestDepsSection("dev-dependencies", [short, long])
-    let expected = "\n[dev-dependencies]\na = \"1.0.0\"\nb = { path = \"../b\" }\n"
+    let expected = "\n[dev-dependencies]\na = \"1.0.0\"\nb = \{ path = \"../b\" \}\n"
     testing.assertEq(out, expected)
 }
 fn testRenderManifestBinSectionBothEmpty() {
