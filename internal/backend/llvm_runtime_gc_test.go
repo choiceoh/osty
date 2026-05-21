@@ -9495,6 +9495,184 @@ int main(void) {
 	}
 }
 
+// TestRuntimeGCHeapPoolRecyclesHeapBumpBlocks locks the heap-fallback
+// bump-block pool landing: when the arena is exhausted (or forced
+// via the test-only `osty_gc_debug_force_heap_fallback_set`), bump
+// blocks `calloc` their data buffers from libc instead of carving
+// from the arena. Pre-pool, every released heap-backed block
+// `free`'d its buffer back to libc — glibc's allocator does not
+// reliably return those pages to the OS, so peak anon-RSS during a
+// long-running osty-self lowering would grow roughly linearly in
+// total heap-fallback churn. The pool recycles the buffer: a
+// released same-size buffer comes back memzero'd on the next
+// heap-fallback alloc, avoiding both the libc free/calloc cycle
+// and the calloc first-touch zero-fill cost.
+//
+// The test forces two consecutive heap-fallback allocations, drops
+// the first root, collects (releasing the block — its data buffer
+// should land in the pool), then allocates again. The third alloc
+// should consume the pooled buffer (`take_total > 0`) and the pool
+// stats should show one push + one take.
+func TestRuntimeGCHeapPoolRecyclesHeapBumpBlocks(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "heap_pool_harness.c")
+	binaryPath := filepath.Join(dir, "heap_pool_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+void osty_gc_debug_force_heap_fallback_set(int64_t count);
+int64_t osty_gc_debug_heap_pool_push_total(void);
+int64_t osty_gc_debug_heap_pool_take_total(void);
+int64_t osty_gc_debug_heap_pool_count(void);
+
+int main(void) {
+    /* Phase 1: force one heap-fallback alloc, release, collect.
+     * The released block's data buffer should land in the heap
+     * pool. */
+    int64_t push_before = osty_gc_debug_heap_pool_push_total();
+    int64_t take_before = osty_gc_debug_heap_pool_take_total();
+
+    osty_gc_debug_force_heap_fallback_set(1);
+    void *first = osty_gc_alloc_v1(7, 32, "first-heap");
+    osty_gc_root_bind_v1(first);
+    osty_gc_root_release_v1(first);
+    osty_gc_debug_collect();
+
+    int64_t push_after_first = osty_gc_debug_heap_pool_push_total();
+    int64_t pool_count_after_first = osty_gc_debug_heap_pool_count();
+    printf("pool_push_happened:%d\n", push_after_first > push_before);
+    printf("pool_count_after_release:%d\n", pool_count_after_first > 0 ? 1 : 0);
+
+    /* Phase 2: force another heap fallback. The new bump block's
+     * data buffer should come from the pool (matching size),
+     * draining the pool entry. */
+    osty_gc_debug_force_heap_fallback_set(1);
+    void *second = osty_gc_alloc_v1(7, 32, "second-heap");
+    osty_gc_root_bind_v1(second);
+
+    int64_t take_after_second = osty_gc_debug_heap_pool_take_total();
+    int64_t pool_count_after_second = osty_gc_debug_heap_pool_count();
+    printf("pool_take_happened:%d\n", take_after_second > take_before);
+    printf("pool_drained:%d\n", pool_count_after_second < pool_count_after_first ? 1 : 0);
+
+    osty_gc_root_release_v1(second);
+    osty_gc_debug_collect();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"pool_push_happened:1",       // released heap block was pooled, not freed
+		"pool_count_after_release:1", // pool depth incremented
+		"pool_take_happened:1",       // next heap-fallback alloc consumed a pooled buffer
+		"pool_drained:1",             // pool depth decremented
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("heap pool harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestRuntimeGCHeapPoolHonoursDisabledCap pins the pool's escape
+// hatch: setting `OSTY_GC_HEAP_POOL_CAP_BYTES=0` (the env override)
+// disables the pool entirely — pushes are rejected, releases fall
+// through to libc `free` exactly like the pre-pool behaviour. The
+// option exists so callers debugging memory regressions can A/B the
+// pool quickly without rebuilding the runtime.
+func TestRuntimeGCHeapPoolHonoursDisabledCap(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "heap_pool_disabled_harness.c")
+	binaryPath := filepath.Join(dir, "heap_pool_disabled_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#define _POSIX_C_SOURCE 200809L
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+void osty_gc_debug_force_heap_fallback_set(int64_t count);
+int64_t osty_gc_debug_heap_pool_push_total(void);
+int64_t osty_gc_debug_heap_pool_count(void);
+
+int main(void) {
+    /* Disable the pool via the env-override path before any
+     * allocation primes it. */
+    setenv("OSTY_GC_HEAP_POOL_CAP_BYTES", "0", 1);
+
+    int64_t push_before = osty_gc_debug_heap_pool_push_total();
+    osty_gc_debug_force_heap_fallback_set(1);
+    void *first = osty_gc_alloc_v1(7, 32, "first-heap");
+    osty_gc_root_bind_v1(first);
+    osty_gc_root_release_v1(first);
+    osty_gc_debug_collect();
+    int64_t push_after = osty_gc_debug_heap_pool_push_total();
+    int64_t pool_count_after = osty_gc_debug_heap_pool_count();
+    printf("pool_push_suppressed:%d\n", push_after == push_before ? 1 : 0);
+    printf("pool_empty:%d\n", pool_count_after == 0 ? 1 : 0);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"pool_push_suppressed:1",
+		"pool_empty:1",
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("heap pool disabled harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestRuntimeGCArenaFreeListRecyclesBumpBlockRanges locks the arena
 // free-list landing: a workload that allocates an object, drops the
 // root, and collects (sweeping the only bump block) must surface a
