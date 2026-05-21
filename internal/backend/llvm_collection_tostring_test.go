@@ -36,6 +36,7 @@ import (
 // pointer-as-integer output.
 func TestLLVMBackendBinaryRunsCollectionToString(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

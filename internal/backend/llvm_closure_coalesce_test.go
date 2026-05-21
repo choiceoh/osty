@@ -23,6 +23,7 @@ import (
 // `|n: Int?|` produces) in addition to the `TkNamed "Option"` shape.
 func TestLLVMBackendBinaryRunsClosureCoalesceInferredReturn(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -56,6 +57,7 @@ func TestLLVMBackendBinaryRunsClosureCoalesceInferredReturn(t *testing.T) {
 // combinator path all the way through monomorph + codegen.
 func TestLLVMBackendBinaryRunsMapUpdateCanonicalPattern(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

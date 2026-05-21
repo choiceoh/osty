@@ -18,6 +18,7 @@ import (
 // doubles use `fcmp oeq`; other scalars use `icmp eq`.
 func TestLLVMBackendBinaryRunsListContains(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

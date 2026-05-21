@@ -8,6 +8,7 @@ import (
 
 func TestLLVMBackendBinaryRunsWhileStyleForLoop(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

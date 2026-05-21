@@ -23,6 +23,7 @@ import (
 // TestGenerateDiscardedListPopNoLongerTripsLLVM015.
 func TestLLVMBackendBinaryRunsListPopReturnsRealValue(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -63,6 +64,7 @@ func TestLLVMBackendBinaryRunsListPopReturnsRealValue(t *testing.T) {
 // the new List.get safe-get path.
 func TestLLVMBackendBinaryRunsListPopString(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

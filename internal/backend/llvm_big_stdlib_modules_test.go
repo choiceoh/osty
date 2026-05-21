@@ -10,6 +10,7 @@ import (
 
 func TestLLVMBackendBinaryRunsStdZipStoredArchive(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	backend := LLVMBackend{}
@@ -47,6 +48,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdXlsxRowsEncode(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	backend := LLVMBackend{}
@@ -87,6 +89,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdImageMetadata(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	backend := LLVMBackend{}
@@ -126,6 +129,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdSmtpPlanning(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	backend := LLVMBackend{}
@@ -192,6 +196,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdKvFileStore(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	path := filepath.Join(t.TempDir(), "cache.jsonl")
@@ -249,6 +254,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdWatchDiffPlanning(t *testing.T) {
 	requireClangForBackendTest(t)
+	requireRealLLVMEmission(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 
 	backend := LLVMBackend{}

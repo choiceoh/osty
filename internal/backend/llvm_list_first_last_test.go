@@ -19,6 +19,7 @@ import (
 // ptrtoint / bitcast before insertvalue.
 func TestLLVMBackendBinaryRunsListFirstLastInt(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -50,6 +51,7 @@ func TestLLVMBackendBinaryRunsListFirstLastInt(t *testing.T) {
 // runtime get result to i64 before inserting.
 func TestLLVMBackendBinaryRunsListFirstLastString(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {

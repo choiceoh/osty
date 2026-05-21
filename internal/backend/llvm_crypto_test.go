@@ -26,6 +26,7 @@ func ostyEscapeTestString(s string) string {
 
 func TestLLVMBackendBinaryRunsStdCryptoDigestsAndHMAC(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.crypto
@@ -69,6 +70,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdCryptoRandomAndConstantTimeEq(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.crypto
@@ -97,6 +99,7 @@ fn main() {
 
 func TestLLVMBackendBinaryRunsStdCryptoLongInputs(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	dataText := strings.Repeat("abc", 1000)
 	keyText := strings.Repeat("a", 200)
@@ -143,6 +146,7 @@ fn main() {
 
 func TestLLVMBackendBinaryStdCryptoMatchesGoReferenceMatrix(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	type cryptoCase struct {
 		data string

@@ -9,6 +9,7 @@ import (
 
 func TestLLVMBackendBinaryRunsBreakAndContinueLoops(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -52,6 +53,7 @@ func TestLLVMBackendBinaryRunsBreakAndContinueLoops(t *testing.T) {
 
 func TestLLVMBackendBinaryManagedListLoopBreakAndContinueSurvivePressure(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {

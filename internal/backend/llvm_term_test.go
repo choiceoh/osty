@@ -8,6 +8,7 @@ import (
 
 func TestLLVMBackendBinaryRunsStdTermBasicSurface(t *testing.T) {
 	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.term
