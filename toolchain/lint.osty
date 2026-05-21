@@ -2061,7 +2061,7 @@ fn selfLintTypeHintsFromChecked(checked: FrontCheckResult) -> SelfLintTypeHints 
     let mut nodes: List<Int> = []
     let mut types: List<FrontTypeRepr> = []
     for tn in checked.typedNodes {
-        nodes.push(tn.node)
+        nodes.push(tn.nodeId)
         types.push(tn.typeRepr)
     }
     SelfLintTypeHints {enabled: true, nodes, types}
