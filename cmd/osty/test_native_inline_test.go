@@ -4,6 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 )
@@ -227,4 +230,118 @@ func mustResolveSingleFilePackage(t *testing.T, path string, src []byte) *resolv
 		}},
 	}
 	return pkg
+}
+
+// TestDiscoverNativeTestsAcceptsPackageWithMain locks the gate-lift:
+// the test runner used to refuse any package that defined a top-level
+// `main()` ("native test runner currently requires a library-style
+// package"). That gate blocked `osty test toolchain/` because the
+// toolchain CLI itself is a binary-style package (`toolchain/main.osty`
+// declares `fn main()`). The discovery pass now skips `main` silently
+// — same way it already skipped `testing` — and the link-time symbol
+// clash with the C test driver's `main` is handled later by
+// `stripMainFromEntry` filtering the lowered MIR + IR.
+func TestDiscoverNativeTestsAcceptsPackageWithMain(t *testing.T) {
+	src := []byte(`fn main() {
+    let _ = 1
+}
+
+fn testReal() {
+    let _ = 2
+}
+
+#[test]
+fn inline_case() {
+    let _ = 3
+}
+`)
+	pkg := mustResolveSingleFilePackage(t, "with_main_test.osty", src)
+	tests, err := discoverNativeTests(pkg, nil, false)
+	if err != nil {
+		t.Fatalf("discoverNativeTests returned error on package with main(): %v", err)
+	}
+	names := map[string]bool{}
+	for _, tc := range tests {
+		names[tc.Name] = true
+	}
+	if names["main"] {
+		t.Error(`main must NOT be discovered as a test`)
+	}
+	if !names["testReal"] || !names["inline_case"] {
+		t.Errorf("expected real tests to be discovered alongside main(), got %v", names)
+	}
+}
+
+// TestStripMainFromEntryRemovesMainFromMIRAndIR pins the lowering-side
+// half of the gate-lift: even though discovery accepts packages with
+// `main()`, the LLVM backend would still produce a duplicate-symbol
+// error when linked against the C test driver's `main`. The strip
+// helper removes `main` from both the MIR and IR carried on the
+// backend entry, mirroring `cmd/osty-native-llvmgen.stripMainForLibraryMode`
+// which the external subprocess path triggers via `TryPackageLibrary`.
+func TestStripMainFromEntryRemovesMainFromMIRAndIR(t *testing.T) {
+	entry := &backend.Entry{
+		MIR: &mir.Module{
+			Functions: []*mir.Function{
+				{Name: "main"},
+				{Name: "testReal"},
+				{Name: "helper"},
+			},
+		},
+		IR: &ir.Module{
+			Decls: []ir.Decl{
+				&ir.FnDecl{Name: "main"},
+				&ir.FnDecl{Name: "testReal"},
+				&ir.FnDecl{Name: "helper"},
+			},
+		},
+	}
+	stripMainFromEntry(entry)
+	if len(entry.MIR.Functions) != 2 {
+		t.Fatalf("after strip MIR.Functions count = %d, want 2 (main removed)", len(entry.MIR.Functions))
+	}
+	for _, fn := range entry.MIR.Functions {
+		if fn.Name == "main" {
+			t.Fatal("stripMainFromEntry left main in MIR.Functions")
+		}
+	}
+	if len(entry.IR.Decls) != 2 {
+		t.Fatalf("after strip IR.Decls count = %d, want 2 (main removed)", len(entry.IR.Decls))
+	}
+	for _, d := range entry.IR.Decls {
+		if fn, ok := d.(*ir.FnDecl); ok && fn.Name == "main" {
+			t.Fatal("stripMainFromEntry left main in IR.Decls")
+		}
+	}
+}
+
+// TestStripMainFromEntryHandlesNilSafely guards the defensive nil
+// branches; the helper is called unconditionally from
+// `prepareNativeTestBackendEntry` and must not panic on the legitimate
+// "MIR-only" or "IR-only" entry shapes the backend produces for
+// different lowering routes.
+func TestStripMainFromEntryHandlesNilSafely(t *testing.T) {
+	// nil entry
+	stripMainFromEntry(nil)
+	// nil MIR + IR
+	stripMainFromEntry(&backend.Entry{})
+	// IR present, MIR nil
+	stripMainFromEntry(&backend.Entry{IR: &ir.Module{Decls: []ir.Decl{&ir.FnDecl{Name: "main"}}}})
+	// MIR present, IR nil
+	stripMainFromEntry(&backend.Entry{MIR: &mir.Module{Functions: []*mir.Function{{Name: "main"}}}})
+	// nil entries inside Functions / Decls
+	entry := &backend.Entry{
+		MIR: &mir.Module{Functions: []*mir.Function{nil, {Name: "main"}, nil, {Name: "ok"}}},
+		IR:  &ir.Module{Decls: []ir.Decl{nil, &ir.FnDecl{Name: "main"}, nil, &ir.FnDecl{Name: "ok"}}},
+	}
+	stripMainFromEntry(entry)
+	if len(entry.MIR.Functions) != 1 || entry.MIR.Functions[0].Name != "ok" {
+		t.Fatalf("nil/main filter MIR result = %v, want [ok]", entry.MIR.Functions)
+	}
+	if len(entry.IR.Decls) != 1 {
+		t.Fatalf("nil/main filter IR result count = %d, want 1", len(entry.IR.Decls))
+	}
+	if fn, ok := entry.IR.Decls[0].(*ir.FnDecl); !ok || fn.Name != "ok" {
+		t.Fatalf("nil/main filter IR result = %v, want [ok]", entry.IR.Decls)
+	}
 }
