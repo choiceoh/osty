@@ -201,7 +201,13 @@ pub struct List<T> {
         }
         let mut start = 0
         for start + size <= n {
-            out.push(self.drop(start).take(size))
+            let mut window: List<T> = []
+            let mut j = start
+            for j < start + size {
+                window.push(self[j])
+                j = j + 1
+            }
+            out.push(window)
             start = start + step
         }
         out
@@ -229,19 +235,13 @@ pub struct List<T> {
         if self.isEmpty() {
             return None
         }
-        let mut first: T? = None
-        let mut tail: List<T> = []
-        let mut seenFirst = false
-        for item in self {
-            if !seenFirst {
-                first = Some(item)
-                seenFirst = true
-            } else {
-                tail.push(item)
-            }
+        let mut acc = self[0]
+        let mut i = 1
+        for i < self.len() {
+            acc = f(acc, self[i])
+            i = i + 1
         }
-        let acc = first.unwrap()
-        Some(tail.fold(acc, f))
+        Some(acc)
     }
 
     /// Running left fold — returns every intermediate accumulator.
