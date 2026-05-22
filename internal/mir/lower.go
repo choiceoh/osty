@@ -155,7 +155,83 @@ func (l *lowerer) run() {
 	l.buildLayouts()
 	l.emitDeclarations()
 	l.emitScript()
+	l.collectTupleLayouts()
 }
+
+// collectTupleLayouts populates Layouts.Tuples from every tuple type
+// reachable through the lowered functions' locals. Tuples are structural
+// (never declared), so buildLayouts — which only walks declared structs
+// / enums / interfaces — leaves the table empty; the LIR Proto backend
+// then rejects every tuple aggregate with "has no MIR layout". Walking
+// the final locals (params, temporaries, return slots) registers a
+// layout keyed by the canonical `(A, B)` type string, recursing so
+// nested tuples (`(Int, (Int, T))`) are covered too.
+func (l *lowerer) collectTupleLayouts() {
+	if l.out == nil || l.out.Layouts == nil {
+		return
+	}
+	var visit func(t Type)
+	visit = func(t Type) {
+		tt, ok := t.(*ir.TupleType)
+		if !ok || tt == nil {
+			return
+		}
+		for _, e := range tt.Elems {
+			visit(e)
+		}
+		key := tt.String()
+		if key == "" {
+			return
+		}
+		if _, dup := l.out.Layouts.Tuples[key]; dup {
+			return
+		}
+		tl := &TupleLayout{Key: key, Mangled: mangleTupleName(tt)}
+		for i, e := range tt.Elems {
+			tl.Fields = append(tl.Fields, FieldLayout{
+				Index: i,
+				Name:  fmt.Sprintf("_%d", i),
+				Type:  e,
+			})
+		}
+		l.out.Layouts.Tuples[key] = tl
+	}
+	for _, fn := range l.out.Functions {
+		if fn == nil {
+			continue
+		}
+		for i := range fn.Locals {
+			visit(fn.Locals[i].Type)
+		}
+	}
+}
+
+// mangleTupleName builds an LLVM-safe nominal name for a tuple type.
+// The canonical `(A, B)` key carries parens/spaces that an unquoted
+// LLVM `%name` identifier rejects, so each element's type string is
+// sanitized to `[A-Za-z0-9_]` and joined under a `Tuple.` prefix —
+// e.g. `(Int, Int)` → `Tuple.Int.Int`.
+func mangleTupleName(tt *ir.TupleType) string {
+	var b strings.Builder
+	b.WriteString("Tuple")
+	for _, e := range tt.Elems {
+		b.WriteByte('.')
+		s := "Unit"
+		if e != nil {
+			s = e.String()
+		}
+		for _, r := range s {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+				b.WriteRune(r)
+			default:
+				b.WriteByte('_')
+			}
+		}
+	}
+	return b.String()
+}
+
 
 // ==== pass 1: signatures + layouts ====
 
