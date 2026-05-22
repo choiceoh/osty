@@ -311,7 +311,7 @@ fn lirTestField(index: Int, name: String, typ: String) -> MirFieldLayout {
     MirFieldLayout {index, name, typ}
 }
 fn lirTestStructLayout(name: String, fields: List<MirFieldLayout>) -> MirStructLayout {
-    MirStructLayout {name, mangled: name, fields, size: 0, align: 0}
+    MirStructLayout {name, mangled: name, fields, size: 0, align: 0, builtinSource: "", builtinSourceArgs: []}
 }
 fn lirTestTupleLayout(key: String, fields: List<MirFieldLayout>) -> MirTupleLayout {
     MirTupleLayout {key, mangled: key, fields}
