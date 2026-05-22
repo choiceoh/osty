@@ -232,7 +232,6 @@ func mangleTupleName(tt *ir.TupleType) string {
 	return b.String()
 }
 
-
 // ==== pass 1: signatures + layouts ====
 
 func (l *lowerer) collectSignatures() {
