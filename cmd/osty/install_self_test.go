@@ -322,7 +322,12 @@ func main() { os.Exit(1) }
 
 	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", stub)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "OSTY_SELF_REGISTRY_OFFLINE=1")
+	// Opt into stage0 source bootstrap so the run actually reaches
+	// buildOstySelf and fails inside it — the path this test covers.
+	cmd.Env = append(os.Environ(),
+		"OSTY_SELF_REGISTRY_OFFLINE=1",
+		"OSTY_STAGE0_FALLBACK=1",
+	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected install-self to fail\n%s", out)
@@ -339,6 +344,65 @@ func main() { os.Exit(1) }
 	}
 	if strings.Contains(got, "OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP") {
 		t.Errorf("output should not mention retired bootstrap env var OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP:\n%s", got)
+	}
+}
+
+// TestRunInstallSelfWithoutStage0FallbackErrorsCleanly verifies that a
+// fresh project with no reachable registry and no OSTY_STAGE0_FALLBACK
+// opt-in does NOT silently fall back to the stage0 source bootstrap.
+// Instead it exits non-zero with a hint that names the three ways to
+// supply a prebuilt osty-self (registry / OSTY_SELF_BIN / the explicit
+// stage0 opt-in). This pins the gate that keeps the stage0 emitter off
+// the default install-self path.
+func TestRunInstallSelfWithoutStage0FallbackErrorsCleanly(t *testing.T) {
+	ostyBin := buildOstyBinaryForTest(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte("[package]\nname = \"fake\"\n"), 0o644); err != nil {
+		t.Fatalf("osty.toml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "toolchain"), 0o755); err != nil {
+		t.Fatalf("toolchain mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "toolchain", "main.osty"), []byte("// stub\n"), 0o644); err != nil {
+		t.Fatalf("main.osty: %v", err)
+	}
+	hostBin := fakeOstyBin(t, root, "should-not-be-built")
+
+	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", hostBin)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"OSTY_SELF_REGISTRY_OFFLINE=1",
+		"OSTY_STAGE0_FALLBACK=",
+		"OSTY_SELF_BIN=",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected install-self to fail without stage0 opt-in\n%s", out)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"stage0 source bootstrap is disabled",
+		"OSTY_SELF_REGISTRY_URL",
+		"OSTY_SELF_BIN",
+		"OSTY_STAGE0_FALLBACK=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	// The stage0 source bootstrap must not have run: its banner would
+	// only appear if buildOstySelf forked the host build.
+	if strings.Contains(got, "install-self tried the internal source bootstrap path") {
+		t.Errorf("stage0 bootstrap hint leaked despite opt-in being unset:\n%s", got)
+	}
+	// The cache entry must not exist — nothing was built.
+	key, err := selfhostcache.ComputeKey(root)
+	if err != nil {
+		t.Fatalf("compute key: %v", err)
+	}
+	if _, err := os.Stat(selfhostcache.CachePath(root, key)); err == nil {
+		t.Fatalf("cache entry created despite the run erroring out")
 	}
 }
 
