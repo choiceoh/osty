@@ -8,14 +8,14 @@ fn callStructPoint() -> MirStructLayout {
     let mut fields: List<MirFieldLayout> = []
     fields.push(callFieldI64(0, "x"))
     fields.push(callFieldI64(1, "y"))
-    MirStructLayout {name: "Point", mangled: "Point", fields: fields, size: 16, align: 8}
+    MirStructLayout {name: "Point", mangled: "Point", fields: fields, size: 16, align: 8, builtinSource: "", builtinSourceArgs: []}
 }
 fn callStructV3() -> MirStructLayout {
     let mut fields: List<MirFieldLayout> = []
     fields.push(callFieldI64(0, "x"))
     fields.push(callFieldI64(1, "y"))
     fields.push(callFieldI64(2, "z"))
-    MirStructLayout {name: "V3", mangled: "V3", fields: fields, size: 24, align: 8}
+    MirStructLayout {name: "V3", mangled: "V3", fields: fields, size: 24, align: 8, builtinSource: "", builtinSourceArgs: []}
 }
 fn callBuildLayouts() -> MirLayoutTable {
     let mut t = mirLayoutTable()

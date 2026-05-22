@@ -8,7 +8,7 @@ fn aPoint() -> MirStructLayout {
     let mut fields: List<MirFieldLayout> = []
     fields.push(aFieldI64(0, "x"))
     fields.push(aFieldI64(1, "y"))
-    MirStructLayout {name: "Point", mangled: "Point", fields: fields, size: 16, align: 8}
+    MirStructLayout {name: "Point", mangled: "Point", fields: fields, size: 16, align: 8, builtinSource: "", builtinSourceArgs: []}
 }
 fn aOptionInt() -> MirEnumLayout {
     let mut variants: List<MirVariantLayout> = []

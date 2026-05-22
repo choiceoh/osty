@@ -343,7 +343,11 @@ fn mirLowerBuildStructLayout(s: HirStructDecl) -> MirStructLayout {
         fields.push(MirFieldLayout {index: i, name: f.name, typ: hirTypeString(f.typ)})
         i = i + 1
     }
-    MirStructLayout {name: s.name, mangled: s.name, fields, size: 0, align: 0}
+    let mut bsArgs: List<String> = []
+    for a in s.builtinSourceArgs {
+        bsArgs.push(hirTypeString(a))
+    }
+    MirStructLayout {name: s.name, mangled: s.name, fields, size: 0, align: 0, builtinSource: s.builtinSource, builtinSourceArgs: bsArgs}
 }
 fn mirLowerBuildEnumLayout(e: HirEnumDecl) -> MirEnumLayout {
     let mut variants: List<MirVariantLayout> = []

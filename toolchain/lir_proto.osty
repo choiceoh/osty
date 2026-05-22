@@ -3528,7 +3528,7 @@ fn lirStoreIndexedListValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mir
     let proj = place.projections[0]
     let mut elemName = proj.typ
     if elemName == "" {
-        elemName = lirListElemTypeName(root.typ)
+        elemName = lirListElemTypeName(l, root.typ)
     }
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, context + " could not extract list element type from `" + root.typ + "`", context)
@@ -4731,7 +4731,7 @@ fn lirLowerMirPrintTextOperand(l: LirMirFunctionLowerer, op: MirOperand) -> LirO
     // and the map/set siblings) without requiring an MIR-level toString
     // call wrapping the operand.
     if strings.startsWith(op.typ, "List<") {
-        let elemName = lirListElemTypeName(op.typ)
+        let elemName = lirListElemTypeName(l, op.typ)
         let elemLir = lirContainerElemLaneType(elemName)
         if !(lirTypeIsZero(elemLir)) && !(lirTypeIsVoid(elemLir)) {
             let listSym = lirListToStringSymbolForLane(elemLir.llvm, lirContainerElemIsString(elemName))
@@ -5431,13 +5431,36 @@ fn lirContainerInnerArg(typeName: String, prefix: String) -> String {
     let inner = strings.trimPrefix(typeName, prefix)
     strings.trimSuffix(inner, ">")
 }
-// Element type name for List<T>/Set<T> ("List<Int>" -> "Int").
-fn lirListElemTypeName(typeName: String) -> String {
-    if strings.startsWith(typeName, "List<") {
-        return lirContainerInnerArg(typeName, "List<")
+// lirCanonBuiltinTypeName re-associates a monomorphized builtin-generic
+// struct with its surface form. `OSTY_STDLIB_BODY_LOWER` injects
+// `List<T>` / `Map<K,V>` / `Set<T>` as generic struct templates so the
+// monomorphizer can specialize their bodied methods; the resulting
+// specializations carry a mangled `_ZTS…` nominal name that the
+// runtime-intrinsic List/Map/Set lowering does not recognize. The MIR
+// struct layout records the originating template in `builtinSource`
+// (+ `builtinSourceArgs`), so a mangled name is rewritten back to e.g.
+// `List<Int>`. Names that already carry a `<…>` argument list, or that
+// match no builtin-source layout, are returned unchanged.
+fn lirCanonBuiltinTypeName(l: LirMirFunctionLowerer, name: String) -> String {
+    if strings.contains(name, "<") {
+        return name
     }
-    if strings.startsWith(typeName, "Set<") {
-        return lirContainerInnerArg(typeName, "Set<")
+    let layout = lirFindMirStructLayout(l, name)
+    if layout.builtinSource == "" {
+        return name
+    }
+    layout.builtinSource + "<" + strings.join(layout.builtinSourceArgs, ", ") + ">"
+}
+// Element type name for List<T>/Set<T> ("List<Int>" -> "Int"). Resolves
+// monomorphized builtin-source structs through lirCanonBuiltinTypeName
+// first so an injected `_ZTS…List…` receiver still yields its element.
+fn lirListElemTypeName(l: LirMirFunctionLowerer, typeName: String) -> String {
+    let canon = lirCanonBuiltinTypeName(l, typeName)
+    if strings.startsWith(canon, "List<") {
+        return lirContainerInnerArg(canon, "List<")
+    }
+    if strings.startsWith(canon, "Set<") {
+        return lirContainerInnerArg(canon, "Set<")
     }
     ""
 }
@@ -5542,7 +5565,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
     let elemName = if kind == "map.key" || kind == "map.kv" {
         lirMapKeyTypeName(instr.args[0].typ)
     } else {
-        lirListElemTypeName(instr.args[0].typ)
+        lirListElemTypeName(l, instr.args[0].typ)
     }
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
@@ -5640,7 +5663,7 @@ fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.push expects (list, elem)", "list.push")
         return
     }
-    let elemName = lirListElemTypeName(instr.args[0].typ)
+    let elemName = lirListElemTypeName(l, instr.args[0].typ)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.push")
         return
@@ -5771,7 +5794,7 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
             }
         }
     }
-    let elemName = lirListElemTypeName(instr.args[0].typ)
+    let elemName = lirListElemTypeName(l, instr.args[0].typ)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.get")
         return
@@ -5931,7 +5954,7 @@ fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.insert expects (list, idx, elem)", "list.insert")
         return
     }
-    let elemName = lirListElemTypeName(instr.args[0].typ)
+    let elemName = lirListElemTypeName(l, instr.args[0].typ)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", "list.insert")
         return
@@ -8047,15 +8070,16 @@ fn lirLowerMirLenRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, h
     if value.value == "" {
         return lirOperandInvalid()
     }
-    let symbol = if strings.startsWith(local.typ, "List<") {
+    let lenTyp = lirCanonBuiltinTypeName(l, local.typ)
+    let symbol = if strings.startsWith(lenTyp, "List<") {
         llvmListRuntimeLenSymbol()
-    } else if strings.startsWith(local.typ, "Map<") {
+    } else if strings.startsWith(lenTyp, "Map<") {
         llvmMapRuntimeLenSymbol()
-    } else if strings.startsWith(local.typ, "Set<") {
+    } else if strings.startsWith(lenTyp, "Set<") {
         llvmSetRuntimeLenSymbol()
-    } else if local.typ == "String" {
+    } else if lenTyp == "String" {
         mirRtStringSymbol("ByteLen")
-    } else if local.typ == "Bytes" {
+    } else if lenTyp == "Bytes" {
         mirRtBytesSymbol("len")
     } else {
         ""
@@ -8371,7 +8395,7 @@ fn lirClosureEnvTag(t: LirType) -> String {
 // (mir_generator.go:9348).
 fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let typeName = lirAggTypeNameFromRV(rv, hintName)
-    let elemName = lirListElemTypeName(typeName)
+    let elemName = lirListElemTypeName(l, typeName)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list aggregate target `" + typeName + "` is not a List<T>", "aggregate.list")
         return lirOperandInvalid()
@@ -8980,6 +9004,15 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     if lirIsRefBuiltinTypeName(name) {
         return LirType {llvm: "ptr", className: LirTypePtr}
     }
+    // A monomorphized builtin-generic struct (`_ZTS…List…`) injected by
+    // OSTY_STDLIB_BODY_LOWER is pointer-shaped exactly like the surface
+    // `List` / `Map` / `Set` it specializes. `lirIsRefBuiltinTypeName`
+    // prefix-matches, so the re-associated `List<Int>` form classifies
+    // as a ref-builtin without needing a separate head extractor.
+    let canonName = lirCanonBuiltinTypeName(l, name)
+    if canonName != name && lirIsRefBuiltinTypeName(canonName) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
     // Closure env aggregates and `fn(...) -> ...` function-value types
     // are pointer-shaped at the LLVM ABI boundary. A lifted closure
     // receives its captured environment by pointer (the bare MIR type
@@ -9091,7 +9124,8 @@ fn lirFindMirStructLayout(l: LirMirFunctionLowerer, name: String) -> MirStructLa
         }
     }
     let fields: List<MirFieldLayout> = []
-    MirStructLayout {name: "", mangled: "", fields, size: 0, align: 0}
+    let bsArgs: List<String> = []
+    MirStructLayout {name: "", mangled: "", fields, size: 0, align: 0, builtinSource: "", builtinSourceArgs: bsArgs}
 }
 fn lirFindMirTupleLayout(l: LirMirFunctionLowerer, name: String) -> MirTupleLayout {
     for layout in l.mirModule.layouts.tuples {

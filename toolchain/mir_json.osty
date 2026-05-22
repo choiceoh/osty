@@ -1471,7 +1471,7 @@ fn mirJsonLayoutStructsInto(items: List<MirJsonValue>, pos: Int, out: MirLayoutT
         return Ok(true)
     }
     let obj = mirJsonObject(items[pos], "struct-layout")?
-    out.structs.push(MirStructLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?, size: mirJsonIntField(obj, 4020781, "size", 0)?, align: mirJsonIntField(obj, 5031327, "align", 0)?})
+    out.structs.push(MirStructLayout {name: mirJsonStringField(obj, 4019667, "name", "")?, mangled: mirJsonStringField(obj, 7060648, "mangled", "")?, fields: mirJsonFieldLayouts(mirJsonArrayField(obj, 6045609, "fields")?)?, size: mirJsonIntField(obj, 4020781, "size", 0)?, align: mirJsonIntField(obj, 5031327, "align", 0)?, builtinSource: mirJsonStringField(obj, 13240822, "builtinSource", "")?, builtinSourceArgs: mirJsonTypeList(mirJsonArrayField(obj, 17438395, "builtinSourceArgs")?)?})
     return mirJsonLayoutStructsInto(items, pos + 1, out)
 }
 
