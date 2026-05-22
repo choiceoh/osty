@@ -8980,6 +8980,18 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     if lirIsRefBuiltinTypeName(name) {
         return LirType {llvm: "ptr", className: LirTypePtr}
     }
+    // Closure env aggregates and `fn(...) -> ...` function-value types
+    // are pointer-shaped at the LLVM ABI boundary. A lifted closure
+    // receives its captured environment by pointer (the bare MIR type
+    // `ClosureEnv`), and a function value is that same env pointer with
+    // the lifted fn pointer in slot 0. `lirLowerMirIndirectCall`
+    // reconstructs the callee signature from the call site, so the
+    // function type never needs a structural LLVM spelling. Mirrors
+    // `mir_generator.osty`'s builtin-container map where `ClosureEnv`
+    // already lowers to `ptr`.
+    if strings.startsWith(name, "ClosureEnv") || strings.startsWith(name, "fn(") {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
     for layout in l.mirModule.layouts.interfaces {
         if lirMirInterfaceLayoutMatches(layout, name) {
             lirDeclareIfaceType(l.out)
