@@ -122,7 +122,7 @@ func runInstallSelf(args []string, _ cliFlags) {
 			return
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "osty install-self: no prebuilt osty-self available; attempting source bootstrap: %v\n", resolveErr)
+		fmt.Fprintf(os.Stderr, "osty install-self: no prebuilt osty-self available: %v\n", resolveErr)
 	}
 
 	builtBin := ""
@@ -136,6 +136,22 @@ func runInstallSelf(args []string, _ cliFlags) {
 		}
 	}
 	if builtBin == "" {
+		// Stage0 source bootstrap is the chicken-and-egg fallback: it
+		// rebuilds osty-self from `toolchain/*.osty` through the Go-side
+		// stage0 emitter when no prebuilt osty-self can be resolved.
+		// It is opt-in only — the default install-self path resolves
+		// osty-self from the registry or local cache. A fresh clone with
+		// no reachable registry must explicitly request the slower
+		// stage0 bootstrap via OSTY_STAGE0_FALLBACK=1. Gating it here
+		// keeps the stage0 emitter (and its decline-stub cascade for
+		// stdlib-generic-method monomorph functions) off the default
+		// path, which is the prerequisite for eventually retiring the
+		// `--bootstrap-stage0` build mode entirely.
+		if !stage0SourceBootstrapEnabled() {
+			fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
+			printInstallSelfRegistryHint()
+			os.Exit(1)
+		}
 		endStage0Build := backend.BeginPhase("install-self.build-via-stage0")
 		builtBin, buildErr = buildOstySelf(context.Background(), hostOsty, root, tcAbs)
 		endStage0Build()
@@ -165,9 +181,45 @@ func printInstallSelfBootstrapHint() {
 	fmt.Fprintln(os.Stderr, "  - or point OSTY_SELF_BIN at an existing osty-self binary.")
 }
 
+// stage0SourceBootstrapEnv gates the chicken-and-egg stage0 source
+// bootstrap. When unset, `osty install-self` resolves osty-self from the
+// registry or local cache only; when truthy it additionally allows the
+// slower Go-side stage0 emitter to rebuild osty-self from toolchain
+// source. See docs/osty_self_bootstrap_design.md.
+const stage0SourceBootstrapEnv = "OSTY_STAGE0_FALLBACK"
+
+// stage0SourceBootstrapEnabled reports whether the user explicitly
+// opted into the stage0 source bootstrap. The accepted truthy spellings
+// match installSelfTryDirectBuildRequested so the two install-self env
+// gates parse consistently.
+func stage0SourceBootstrapEnabled() bool {
+	raw := strings.TrimSpace(os.Getenv(stage0SourceBootstrapEnv))
+	return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes") || strings.EqualFold(raw, "on")
+}
+
+// printInstallSelfRegistryHint guides the user toward a prebuilt
+// osty-self after registry/cache resolution came up empty and stage0
+// source bootstrap was not opted into.
+func printInstallSelfRegistryHint() {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "hint: install-self resolves a prebuilt osty-self from the registry or local cache.")
+	fmt.Fprintln(os.Stderr, "      To provide one:")
+	fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
+	fmt.Fprintln(os.Stderr, "  - or point OSTY_SELF_BIN at an existing osty-self binary,")
+	fmt.Fprintln(os.Stderr, "  - or set OSTY_STAGE0_FALLBACK=1 to bootstrap from toolchain source (slower).")
+}
+
 // buildOstySelf invokes the host `osty` binary with the standard
 // build flags used by the self-rebuild ratchet. Returns the absolute
 // path to the produced osty-self binary.
+//
+// This is the stage0 source-bootstrap path. It is reached only when no
+// prebuilt osty-self could be resolved AND the user opted in via
+// OSTY_STAGE0_FALLBACK=1 (see stage0SourceBootstrapEnabled). The
+// `--bootstrap-stage0` flag below makes the forked build skip the
+// native-owned LIR Proto subprocess (guaranteed to decline because
+// osty-self does not exist yet) and emit through the Go-side stage0
+// emitter instead.
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, hostOsty, "build", "--bootstrap-stage0", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
 	// Forward user env vars and enable LIST_ALL_DECLINES for the
