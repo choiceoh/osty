@@ -396,7 +396,7 @@ JSON 출력은 다음 결정성 조건을 만족해야 byte-equal 비교 가능:
 L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 
 - **M1** ✓ (PR1a [#1816](https://github.com/choiceoh/osty/pull/1816) 머지, 2026-05-16): walking skeleton — stub but builds + runs (`OSTY_STAGE0_FALLBACK=1` 경유)
-- **M2 부분 진척** (PR1c [#1826](https://github.com/choiceoh/osty/pull/1826) + PR2 [#1829](https://github.com/choiceoh/osty/pull/1829), 2026-05-16): empty source fixture byte parity (진짜 stdin readLine + manual naive JSON source 추출). PR3 의 cross-package wall (SPEC_GAPS::cross-pkg-module-resolution) 으로 multi-fixture parity 는 PR3-C-impl 후
+- **M2 부분 진척** (PR1c [#1826](https://github.com/choiceoh/osty/pull/1826) + PR2 [#1829](https://github.com/choiceoh/osty/pull/1829) 이후 확장, 2026-05-16~): empty source fixture byte parity; stdin 은 full-buffer (`readAllStdin`) + manual JSON `source` / `package` 추출 및 표준 escape 디코드 ([#1961](https://github.com/choiceoh/osty/pull/1961) 등). `package` 모드 multi-file + `imports` surface 는 Go `package_adapter` 와 동등하게 wired ([#1966](https://github.com/choiceoh/osty/pull/1966), [#1973](https://github.com/choiceoh/osty/pull/1973)). 대규모 multi-fixture **L3 parity** 같은 다음 gate 는 여전히 PR3 wall + `SPEC_GAPS::cross-pkg-module-resolution` + §4.2 코퍼스 추적
 - **M3** (PR M 머지): **L2** byte parity 100%. PR3-F 후
 - **M4** (PR M+1 머지): **L3** byte parity 100%. ← 본 plan completion
 

@@ -1292,12 +1292,14 @@ it at slice-add time.
 
 ## Phase 7: one-shot wiring behind a gate
 
+> **Implementation note (2026-05, PR [#1924](https://github.com/choiceoh/osty/pull/1924))**: The `OSTY_LLVM_LIR_PROTO` host env gate and `internal/llvmgen/lir_proto_gate.go` scaffold described in the original Phase-7 slice below are **removed**. `internal/backend/llvm.go::generateLLVMIR` now always tries the native-owned MIR payload subprocess first and documents that there is **no separate host-side env gate anymore** for LIR Proto routing. The checklist, `ErrLIRProtoNotWired` story, and pinned tests remain as **historical design context** for how the gate was introduced before the redundant layer was dropped.
+
 Deliverables:
 
 - Add an explicit gate, for example:
 
 ```text
-OSTY_LLVM_LIR_PROTO=1
+OSTY_LLVM_LIR_PROTO=1   # historical — no longer read by the tree after PR #1924
 ```
 
 - Route only the selected backend entry point through LIR Proto when the gate
@@ -1312,37 +1314,15 @@ Exit criteria:
 - Gate on: selected fixtures use LIR Proto and pass.
 - Unsupported prototype shapes fall back cleanly.
 
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
+**Original plan (historical)**: The first Phase-7 slice was meant to land a gate scaffold without the full runner. The tree briefly carried `internal/llvmgen/lir_proto_gate.go` with `LIRProtoEnvVar` (`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()`, and `ErrLIRProtoNotWired`, with `generateLLVMIR` prepending a sentinel warning when the gate was on. The native-owned fast path was fixed to forward outer warnings instead of overwriting them. **That env-gate layer is retired** (PR #1924): production dispatch no longer reads `OSTY_LLVM_LIR_PROTO`; MIR→LLVM IR goes through the native subprocess path documented in `internal/backend/llvm.go::generateLLVMIR`.
 
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
+The subsequent “real runner” work landed via `osty-native-llvmgen` / `nativelirproto` rather than extending `ErrLIRProtoNotWired` indefinitely.
 
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
+When this gate existed, two Go tests pinned it: `TestLLVMDispatchAppendsLIRProtoFallbackWarning` (gate-on sentinel) and `TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` (default unchanged), plus env-var parsing unit tests. **Those tests and `lir_proto_gate.go` were removed with PR #1924** because the env gate duplicated behavior the dispatcher already enforced.
 
 ## Phase 8: default-on decision
+
+> **Note**: Phase 7’s env gate is gone; “default-on” for LIR Proto in production is effectively the native subprocess path in `generateLLVMIR`, not an `OSTY_*` toggle.
 
 Deliverables:
 
