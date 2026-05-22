@@ -1167,7 +1167,17 @@ fn mirJsonInstr(value: MirJsonValue) -> Result<MirInstr, String> {
         let hasDest = mirJsonObjectGetNamed(obj, 4021183, "dest").isSome()
         let dest = if hasDest { mirJsonPlaceRequired(obj, 4021183, "dest")? } else { mirPlace(-1) }
         let callee = mirJsonCalleeRequired(obj, 6043926, "callee")?
-        return Ok(mirCallInstr(hasDest, dest, callee.symbol, callee.typ, mirJsonOperands(mirJsonArrayField(obj, 4020836, "args")?)?, span))
+        let args = mirJsonOperands(mirJsonArrayField(obj, 4020836, "args")?)?
+        // `callee.kind == "indirect"` (key 8083382) carries a function
+        // value operand rather than a mangled symbol — build the
+        // MirCalleeIndirect instr so the call dispatches through the
+        // operand. Without this branch every indirect call collapsed
+        // into a direct `mirCallInstr` with an empty `calleeSymbol`,
+        // which `mirValidateCallee` rejects as `fnRef empty symbol`.
+        if mirJsonStringKeyEq(callee.kind, 8083382) {
+            return Ok(mirIndirectCallInstr(hasDest, dest, callee.operand, args, span))
+        }
+        return Ok(mirCallInstr(hasDest, dest, callee.symbol, callee.typ, args, span))
     }
     if mirJsonStringKeyEq(kind, 9107999) {
         let hasDest = mirJsonObjectGetNamed(obj, 4021183, "dest").isSome()
