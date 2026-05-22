@@ -179,16 +179,18 @@ pub struct List<T> {
             process.abort("List.chunked: size must be positive, got {size}")
         }
         let mut out: List<List<T>> = []
-        let mut bucket: List<T> = []
-        for item in self {
-            bucket.push(item)
-            if bucket.len() >= size {
-                out.push(bucket)
-                bucket = []
+        let n = self.len()
+        let mut start = 0
+        for start < n {
+            let mut bucket: List<T> = []
+            let limit = if start + size < n { start + size } else { n }
+            let mut j = start
+            for j < limit {
+                bucket.push(self[j])
+                j = j + 1
             }
-        }
-        if !bucket.isEmpty() {
             out.push(bucket)
+            start = start + size
         }
         out
     }
