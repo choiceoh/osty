@@ -1,7 +1,6 @@
 package check
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,13 +32,13 @@ func EmbeddedCheckerFingerprint(repoRoot string) string {
 }
 
 // UseCachedDefaultNativeChecker wraps whichever checker `defaultNativeChecker`
-// would return (embedded by default, or an explicit subprocess override) in
-// the on-disk
-// cache layer. First-time builds pay the full check cost; second-and-later
-// builds with unchanged package inputs short-circuit to a JSON read
-// (~microseconds) instead of re-running the checker. Unchanged-package
-// granularity gives multi-second wins on incremental `osty check` / `osty
-// build` iterations where only one or two packages change per edit.
+// would return (managed subprocess after CLI startup, or
+// `OSTY_NATIVE_CHECKER_BIN` when set) in the on-disk cache layer. First-time
+// builds pay the full check cost; second-and-later builds with unchanged
+// package inputs short-circuit to a JSON read (~microseconds) instead of
+// re-running the checker. Unchanged-package granularity gives multi-second
+// wins on incremental `osty check` / `osty build` iterations where only one
+// or two packages change per edit.
 //
 // Calling this from cmd/osty build.go / run.go / query.go activates the
 // cache for the lifetime of the process; fingerprint validity is the
@@ -66,12 +65,11 @@ func UseCachedDefaultNativeChecker(cacheDir, validity string) {
 	}
 }
 
-// cachedNativeChecker wraps any nativeChecker (embedded, managed exec,
-// or future backends) with an on-disk JSON cache keyed by the
-// fingerprint of the input. First-time inputs pay the full cost of
-// `backing.CheckSourceStructured` / `backing.CheckPackageStructured`;
-// subsequent identical inputs hit the cache and return in
-// microseconds, which turns `osty check` / `osty build` on a clean
+// cachedNativeChecker wraps a native checker (subprocess exec today) with an
+// on-disk JSON cache keyed by the fingerprint of the input. First-time inputs
+// pay the full cost of `backing.CheckSourceStructured` /
+// `backing.CheckPackageStructured`; subsequent identical inputs hit the cache
+// and return in microseconds, which turns `osty check` / `osty build` on a clean
 // incremental edit from multi-second into near-zero.
 //
 // The on-disk entry is validity-scoped: callers pass a version tag
@@ -107,30 +105,11 @@ func (c cachedNativeChecker) CheckPackageStructured(input api.PackageCheckInput)
 	if res, ok := c.read(key); ok {
 		return res, nil
 	}
-	// The backing checker may or may not implement the package path;
-	// embedded does, the subprocess exec does, and anything else
-	// falls through to the single-source entry. We pick the package
-	// path explicitly so the subprocess round-trip isn't bypassed.
-	var (
-		res api.CheckResult
-		err error
-	)
-	if pc, ok := c.backing.(nativePackageChecker); ok {
-		res, err = pc.CheckPackageStructured(input)
-	} else {
-		// Backing doesn't implement the package path; fall back to
-		// concatenating file sources so the single-source entry sees
-		// a coherent snapshot. This mirrors how the managed checker
-		// exec splices the package together pre-subprocess.
-		var buf bytes.Buffer
-		for _, f := range input.Files {
-			buf.Write(f.Source)
-			if len(f.Source) > 0 && f.Source[len(f.Source)-1] != '\n' {
-				buf.WriteByte('\n')
-			}
-		}
-		res, err = c.backing.CheckSourceStructured(buf.Bytes())
+	pc, ok := c.backing.(nativePackageChecker)
+	if !ok {
+		return api.CheckResult{}, fmt.Errorf("check: cached checker backing %T does not implement package checks", c.backing)
 	}
+	res, err := pc.CheckPackageStructured(input)
 	if err == nil {
 		c.write(key, res)
 	}

@@ -207,9 +207,9 @@ that the cache layer keeps both modes interactive, which it does
   path, not a clean check.
 - **Shared cache validity key.** `checker_cache.go` keys cache entries on
   `EmbeddedCheckerFingerprint` (SHA of `internal/selfhost/generated.go`).
-  Subprocess and embedded therefore share entries. This is irrelevant for
-  cache=off and cache=cold measurements; for cache=warm it means the same
-  cached JSON answers both modes after the warmup primes it.
+  The on-disk JSON entries are shared across checker implementations that
+  speak the same `api.CheckResult` wire shape; for cache=warm it means the
+  same cached JSON answers after the warmup primes it.
 
 ## Out of scope (follow-up)
 

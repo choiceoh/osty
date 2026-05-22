@@ -207,10 +207,9 @@ func firstOpt(opts []Opts) Opts {
 // IDs. Keep SelfhostFile for compatibility paths that still need Types /
 // LetTypes / SymTypes keyed by Go AST and resolver symbols.
 //
-// Routes through NativePackageCheck so the production subprocess sees the
-// same single-file check that `osty check FILE` does. The subprocess re-
-// parses opt.Source — cheap for a single file and the only way to keep the
-// embedded path off this surface. Parse errors short-circuit before the
+// Routes through NativePackageCheck so the subprocess checker sees the same
+// single-file check that `osty check FILE` does. The subprocess re-parses
+// opt.Source — cheap for a single file. Parse errors short-circuit before the
 // subprocess call because `selfhost.CheckPackageStructured` rejects sources
 // whose parse arena carries any error.
 func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {

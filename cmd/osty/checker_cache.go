@@ -20,10 +20,10 @@ import (
 //
 // The cache lives at `<root>/.osty/cache/checker/<validity>/` so it is
 // trivially inspectable (`cat`, `ls`) and trivially invalidated (`rm
-// -rf .osty/cache/checker/`). The validity segment binds entries to the
-// embedded checker sources by default, so regenerating
-// `internal/selfhost/generated.go` transparently invalidates every record
-// without requiring a manual purge.
+// -rf .osty/cache/checker/`). The validity segment defaults to a digest of
+// `internal/selfhost/generated.go` (see `check.EmbeddedCheckerFingerprint`) so
+// regenerating that seed transparently invalidates every record without
+// requiring a manual purge.
 //
 // No-op when OSTY_CHECKER_CACHE=0. Idempotent: safe to call multiple
 // times in a process — once overrides take, subsequent calls just
