@@ -347,8 +347,19 @@ func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
 	got := string(data)
-	if !strings.Contains(got, "@printf") {
-		t.Fatalf("IR-only backend output missing %q:\n%s", "@printf", got)
+	// Updated assertion (post-PR #2002): the legacy backend that
+	// emitted `@printf` for `println(i)` was retired. The LIR Proto
+	// path lowers `println(Int)` through `osty_rt_int_to_string` +
+	// `osty_rt_io_write`. Match the runtime intrinsic shape; both
+	// pieces must appear so we're sure we're going through the
+	// Int-to-String → I/O path and not some no-op skipping the call.
+	for _, want := range []string{
+		"@osty_rt_int_to_string",
+		"@osty_rt_io_write",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("IR-only backend output missing %q:\n%s", want, got)
+		}
 	}
 	if !strings.Contains(got, "for.cond") && !strings.Contains(got, "bb1:") {
 		t.Fatalf("IR-only backend output missing loop label from either legacy or MIR path:\n%s", got)
@@ -1187,17 +1198,19 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5 prep
-// IR-only parity check that doesn't require clang. On `mir-backend`,
-// a program using `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on
-// a String must reach the MIR-direct emitter: the backend header tag
-// is the stable tell (`osty LLVM MIR backend`), and the runtime
-// symbols must all land in the emitted text.
-//
-// Paired with TestLLVMBackendBinaryMIRBackendStringCharsBytes: that
-// one locks in the actual runtime behavior through a linked binary
-// but needs clang and may be skipped. This one always runs and
-// catches any silent departure from the MIR emitter.
+// TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5
+// originally tested the post-MIR/pre-LIR-Proto "MIR backend" path
+// gated on the `mir-backend` feature flag, which has since been
+// retired in favor of the LIR Proto backend as the single Osty-
+// owned emit path. The header `osty LLVM MIR backend` no longer
+// exists; the equivalent today is the LIR Proto header
+// `osty LIR Proto`. The runtime symbols this test cares about
+// (`@osty_rt_strings_Chars` / `Bytes` / `ByteLen`) still land in
+// the emitted text via the LIR Proto path, so the substantive
+// coverage is preserved — only the header tag and the legacy
+// `define i32 @main()` / `ret i32 0` (the old C-ABI main) assertions
+// need updating. LIR Proto emits `define void @main()` because the
+// runtime startup wrapper handles the C-ABI return.
 func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 	t.Parallel()
 	requireRealLLVMEmission(t)
@@ -1227,15 +1240,14 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
 	ir := string(irBytes)
-	if !strings.Contains(ir, "osty LLVM MIR backend") {
-		t.Fatalf("mir-backend feature did not reach MIR emitter (header missing):\n%s", ir)
+	if !strings.Contains(ir, "osty LIR Proto") {
+		t.Fatalf("LIR Proto backend did not reach emitter (header missing):\n%s", ir)
 	}
 	for _, want := range []string{
 		"@osty_rt_strings_Chars",
 		"@osty_rt_strings_Bytes",
 		"@osty_rt_strings_ByteLen",
-		"define i32 @main()",
-		"ret i32 0",
+		"define void @main()",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)
