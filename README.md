@@ -53,7 +53,7 @@ native-only through the LLVM backend.
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
-| `osty-native-checker` LLVM self-build (`cmd/osty-native-checker/main.osty`) | **In progress** — `osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` builds and runs the LLVM binary; empty-input fixture stays byte-identical to the Go-built checker (M2). The Osty entry now serializes real check results through `tc.frontCheckSourceToWireJson` (M3, PR [#1938](https://github.com/choiceoh/osty/pull/1938)) instead of a stub, and M4 wires UTF-8 byte spans, diagnostic line/column fields, summary telemetry (`errorsByContext` / `errorDetails`), and sha256 stable IDs to match the Go selfhost adapter (PRs [#1940](https://github.com/choiceoh/osty/pull/1940), [#1942](https://github.com/choiceoh/osty/pull/1942)). Remaining work: `main.osty` still reads a single stdin line and uses a naive `"source"` JSON slice (escape-aware parsing is not there yet); production `osty-self` link without `OSTY_STAGE0_FALLBACK=1` and the broader cross-package resolution story are still tracked under [`SPEC_GAPS.md`](./SPEC_GAPS.md) (`cross-pkg-module-resolution`) and [`docs/llvm-selfhost-plan.md`](./docs/llvm-selfhost-plan.md). Milestone table: [`cmd/osty-native-checker/README.md`](./cmd/osty-native-checker/README.md). |
+| `osty-native-checker` LLVM self-build (`cmd/osty-native-checker/main.osty`) | **In progress** — `OSTY_STAGE0_FALLBACK=1 osty build --backend llvm cmd/osty-native-checker/` builds and runs the LLVM binary; empty-input fixture stays byte-identical to the Go-built checker (M2). The Osty entry now serializes real check results through `tc.frontCheckSourceToWireJson` (M3, PR [#1938](https://github.com/choiceoh/osty/pull/1938)) instead of a stub, and M4 wires UTF-8 byte spans, diagnostic line/column fields, summary telemetry (`errorsByContext` / `errorDetails`), and sha256 stable IDs to match the Go selfhost adapter (PRs [#1940](https://github.com/choiceoh/osty/pull/1940), [#1942](https://github.com/choiceoh/osty/pull/1942)). Remaining work: `main.osty` still reads a single stdin line and uses a naive `"source"` JSON slice (escape-aware parsing is not there yet); production `osty-self` link without `OSTY_STAGE0_FALLBACK=1` and the broader cross-package resolution story are still tracked under [`SPEC_GAPS.md`](./SPEC_GAPS.md) (`cross-pkg-module-resolution`) and [`docs/llvm-selfhost-plan.md`](./docs/llvm-selfhost-plan.md). Milestone table: [`cmd/osty-native-checker/README.md`](./cmd/osty-native-checker/README.md). |
 
 Status note (revalidated 2026-04-28): the universal
 LLVM CLI wedge called out in older status docs is closed. A hello-world
@@ -313,7 +313,8 @@ available. The published layout is:
 <base>/<binary-url>              # osty-self binary
 ```
 
-Consumer-side env vars:
+Consumer-side env vars (registry-specific subset; see the full
+matrix in the next section):
 
 | Var | Purpose |
 |---|---|
@@ -327,6 +328,55 @@ unconditionally. The signature check is opt-in via
 `OSTY_SELF_TRUSTED_KEY` — once set the fetcher fails closed on
 missing signatures (`ErrSignatureMissing`) so a registry compromise
 cannot silently downgrade clients.
+
+### Bootstrap env-var reference
+
+All env vars touching `osty install-self` / `osty build` /
+`internal/toolchain` bootstrap paths in one place. Truthy spellings
+for boolean gates are `1` / `true` / `yes` / `on` (case-insensitive)
+unless noted; empty / unset means disabled. Authoritative sources are
+linked.
+
+**osty-self resolution** ([`internal/toolchain/selfhostcache`](./internal/toolchain/selfhostcache)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_BIN` | Absolute path to a prebuilt `osty-self` binary. Skips every other lookup. |
+| `OSTY_SELF_REGISTRY_URL` | Registry base URL. Unset ⇒ `selfhostcache.DefaultRegistryURL`. |
+| `OSTY_SELF_REGISTRY_OFFLINE` | Disables the registry fetcher (CI / air-gap). |
+| `OSTY_SELF_TRUSTED_KEY` | Ed25519 public key (64-char hex) for manifest signature verification. |
+
+**Stage0 source bootstrap** ([`cmd/osty/install_self.go`](./cmd/osty/install_self.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_STAGE0_FALLBACK` | **Single source of truth** for the chicken-and-egg bootstrap. When `=1`: `install-self` runs the stage0 source-bootstrap path (Go-side emitter) when no prebuilt `osty-self` is resolvable, AND `buildNativeChecker` detours to `go build ./cmd/osty-native-checker` instead of the LLVM build path (which would need the very `osty-self` we are trying to produce). `just bootstrap` bakes this in. The previous `--bootstrap-stage0` CLI flag was retired in favour of this gate. |
+| `OSTY_STAGE0_LIST_ALL_DECLINES` | Stage0 emitter prints every stdlib-generic-method decline as a warning instead of just summary counts. Useful when diagnosing decline cascades. Auto-set by `install-self` when stage0 fallback runs. |
+
+**Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_NATIVE_CHECKER_BIN` | Absolute path to a prebuilt Go-built `osty-native-checker`. Wins over the managed slot and the LLVM-built variant when set. Used by `OSTY_NATIVE_CHECKER_BIN=$PWD/.osty/bin/osty-native-checker` after `just build-checker`. |
+| `OSTY_NATIVE_CHECKER_LLVM_BIN` | Absolute path to a prebuilt LLVM-built `osty-native-checker-llvm`. Consulted by `ResolveNativeCheckerLLVM` before falling back to the in-tree build output at `cmd/osty-native-checker/.osty/out/debug/llvm/`. |
+| `OSTY_BUILDING_NATIVE_CHECKER` | **Internal**, set by `buildNativeChecker` on its subprocess fork to abort nested re-entries (recursion guard). Do NOT set this manually. |
+
+**Diagnostic & debug**:
+
+| Var | Purpose |
+|---|---|
+| `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
+| `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
+
+**Common recipes** (pick one row per scenario):
+
+| Scenario | Env |
+|---|---|
+| Fresh clone, online | _(none — `just bootstrap` handles it; registry is the default)_ |
+| Fresh clone, offline / air-gapped | `OSTY_SELF_REGISTRY_OFFLINE=1` (stage0 fallback baked in via `just bootstrap`) |
+| Manually verify the prebuilt-only path | `OSTY_STAGE0_FALLBACK= just bootstrap` (registry must be reachable) |
+| Pin a specific `osty-self` | `OSTY_SELF_BIN=/path/to/osty-self` |
+| CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 
 ### Cache maintenance
 

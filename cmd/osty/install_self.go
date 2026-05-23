@@ -147,8 +147,10 @@ func runInstallSelf(args []string, _ cliFlags) {
 		// stage0 bootstrap via OSTY_STAGE0_FALLBACK=1. Gating it here
 		// keeps the stage0 emitter (and its decline-stub cascade for
 		// stdlib-generic-method monomorph functions) off the default
-		// path, which is the prerequisite for eventually retiring the
-		// `--bootstrap-stage0` build mode entirely.
+		// path. The legacy `--bootstrap-stage0` CLI flag was retired
+		// in favour of this env-var gate so the install-self side and
+		// the forked `osty build` side now read a single source of
+		// truth.
 		if !stage0SourceBootstrapEnabled() {
 			fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
 			printInstallSelfRegistryHint()
@@ -234,12 +236,14 @@ func printInstallSelfRegistryHint() {
 // This is the stage0 source-bootstrap path. It is reached only when no
 // prebuilt osty-self could be resolved AND the user opted in via
 // OSTY_STAGE0_FALLBACK=1 (see stage0SourceBootstrapEnabled). The
-// `--bootstrap-stage0` flag below makes the forked build skip the
-// native-owned LIR Proto subprocess (guaranteed to decline because
-// osty-self does not exist yet) and emit through the Go-side stage0
-// emitter instead.
+// forked `osty build` reads the same env var and switches into stage0
+// mode (skipping the native-owned LIR Proto subprocess, which is
+// guaranteed to decline because osty-self does not exist yet, and
+// emitting through the Go-side stage0 emitter instead). The previous
+// `--bootstrap-stage0` CLI flag was retired in favour of the env-var
+// gate so the dual-parse cannot drift.
 func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, hostOsty, "build", "--bootstrap-stage0", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
+	cmd := exec.CommandContext(ctx, hostOsty, "build", "--backend=llvm", "--emit", "binary", "--force", toolchainDir)
 	// Forward user env vars and enable LIST_ALL_DECLINES for the
 	// install-self bootstrap build. The cascade
 	// of stdlib-generic-method monomorph functions (Result.unwrapOr,
@@ -250,6 +254,13 @@ func buildOstySelf(ctx context.Context, hostOsty, root, toolchainDir string) (st
 	cmd.Env = os.Environ()
 	if os.Getenv(stage0.ListAllDeclinesEnv) == "" {
 		cmd.Env = append(cmd.Env, stage0.ListAllDeclinesEnv+"=1")
+	}
+	// Defensive: install-self only reaches this point when the user
+	// opted in via OSTY_STAGE0_FALLBACK=1, so the env var is normally
+	// already in `os.Environ()`. Guarantee its presence on the child
+	// in case the caller mutated env between gates.
+	if os.Getenv(stage0SourceBootstrapEnv) == "" {
+		cmd.Env = append(cmd.Env, stage0SourceBootstrapEnv+"=1")
 	}
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout

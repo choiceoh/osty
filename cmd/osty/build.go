@@ -57,8 +57,17 @@ func runBuild(args []string, flags cliFlags) {
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	fs.BoolVar(&force, "force", false, "ignore the build cache; rebuild every input")
-	var bootstrapStage0 bool
-	fs.BoolVar(&bootstrapStage0, "bootstrap-stage0", false, "internal: allow the install-self bootstrap stage0 emitter when osty-self is missing")
+	// Stage0 source-bootstrap mode is now sourced exclusively from the
+	// `OSTY_STAGE0_FALLBACK=1` env var (see `stage0SourceBootstrapEnabled`).
+	// The previously-public `--bootstrap-stage0` flag was retired because
+	// it duplicated the env-var gate that install-self already used, and
+	// the two parses occasionally drifted (e.g. flag honored on the build
+	// fork but env var read on the install-self side). One source of
+	// truth — the env var — is propagated naturally through `os.Environ()`
+	// to subprocess forks (install-self → osty build) and to
+	// `internal/toolchain.buildNativeChecker`, removing the chicken-and-egg
+	// failure mode that PR #1988 fixed surgically.
+	bootstrapStage0 := stage0SourceBootstrapEnabled()
 	var aiRepairModeName string
 	registerAIRepairCommandFlags(fs, &flags.aiRepair, &aiRepairModeName)
 	var backendName string
@@ -534,9 +543,10 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 		// link step. Otherwise nil — the default matches the pre–PR-G2
 		// baseline. See cmd/osty/cross_pkg_deps.go and ARCHITECTURE.md.
 		//
-		// Skip the native-owned external path entirely under
-		// `--bootstrap-stage0`. The caller is install-self's source
-		// bootstrap which already knows `osty-self` is unavailable;
+		// Skip the native-owned external path entirely under stage0
+		// fallback mode (`OSTY_STAGE0_FALLBACK=1`). The caller is
+		// install-self's source bootstrap which already knows
+		// `osty-self` is unavailable;
 		// invoking `nativellvmgen.TryPackage` here re-parses + re-
 		// resolves the entire package in a subprocess that is
 		// guaranteed to decline, then falls through to the in-process
