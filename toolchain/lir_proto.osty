@@ -2425,11 +2425,29 @@ fn lirAlgebraicAggregateBody_module(out: LirModule, mir: MirModule, name: String
     if payloadInner == "" {
         return lirBraced("i64, i64")
     }
+    // Builtin-source structs (`List<T>` / `Map<K,V>` / `Set<T>`
+    // monomorph specializations carrying `builtinSource != ""`) are
+    // pointer-shaped at the LLVM ABI — embedding their struct typedef
+    // as the Option/Result payload leaves the aggregate unsized
+    // because the underlying runtime struct has no LLVM body.
+    // Default to the i64 payload path (caller ptrtoint's the ptr).
+    if lirMirStructIsBuiltinSource(mir, payloadInner) {
+        return lirBraced("i64, i64")
+    }
     let structRef = lirMirStructTypeRefByName(mir, payloadInner)
     if structRef == "" {
         return lirBraced("i64, i64")
     }
     lirBraced("i64, " + structRef)
+}
+
+fn lirMirStructIsBuiltinSource(mir: MirModule, name: String) -> Bool {
+    for layout in mir.layouts.structs {
+        if lirMirStructLayoutMatches(layout, name) {
+            return layout.builtinSource != ""
+        }
+    }
+    false
 }
 // Ensure the struct typedef is forward-declared at the top of the
 // module so this Option<S> typedef can reference it. The composite
@@ -5127,6 +5145,18 @@ fn lirEmitAlgebraicStruct(l: LirMirFunctionLowerer, aggType: LirType, disc: Int,
     value
 }
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
+    // Widened-payload `Option<V>` (V is a struct / pointer-shaped
+    // composite — common for `Map<K, V>::get` returning
+    // `Option<List<T>>` after monomorph) cannot route through the i64
+    // payload path. Detect widened layouts and emit the struct variant
+    // with a `zeroinitializer` payload so the caller does not have to
+    // care which path applies.
+    if lirAggregateHasWidenedPayload(l.out, optType) {
+        let structRef = lirOptionResultPayloadStructRef(l.out, optType.llvm)
+        if structRef != "" {
+            return lirEmitAlgebraicStruct(l, optType, 1, lirOperand(lirAggregateType(structRef), "zeroinitializer"), "Option.None")
+        }
+    }
     lirEmitAlgebraicI64(l, optType, 1, "0", "Option.None")
 }
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
@@ -5465,8 +5495,13 @@ fn lirListElemTypeName(l: LirMirFunctionLowerer, typeName: String) -> String {
     ""
 }
 // Key/value type names for Map<K, V> ("Map<String, Int>" -> "String"/"Int").
-fn lirMapKeyTypeName(typeName: String) -> String {
-    let inner = lirContainerInnerArg(typeName, "Map<")
+// Resolves a monomorphized builtin-source struct through
+// lirCanonBuiltinTypeName first so an injected `_ZTS…Map…` receiver
+// still yields its key/value, matching how lirListElemTypeName handles
+// the same `List` mangling.
+fn lirMapKeyTypeName(l: LirMirFunctionLowerer, typeName: String) -> String {
+    let canon = lirCanonBuiltinTypeName(l, typeName)
+    let inner = lirContainerInnerArg(canon, "Map<")
     if inner == "" {
         return ""
     }
@@ -5476,8 +5511,9 @@ fn lirMapKeyTypeName(typeName: String) -> String {
     }
     strings.trimSpace(strings.slice(inner, 0, comma))
 }
-fn lirMapValueTypeName(typeName: String) -> String {
-    let inner = lirContainerInnerArg(typeName, "Map<")
+fn lirMapValueTypeName(l: LirMirFunctionLowerer, typeName: String) -> String {
+    let canon = lirCanonBuiltinTypeName(l, typeName)
+    let inner = lirContainerInnerArg(canon, "Map<")
     if inner == "" {
         return ""
     }
@@ -5563,7 +5599,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
         return lirContainerReceiverInvalid()
     }
     let elemName = if kind == "map.key" || kind == "map.kv" {
-        lirMapKeyTypeName(instr.args[0].typ)
+        lirMapKeyTypeName(l, instr.args[0].typ)
     } else {
         lirListElemTypeName(l, instr.args[0].typ)
     }
@@ -5593,7 +5629,7 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
     }
     let mut out = LirContainerReceiver {receiverReg: recv.value, elemTypeName: elemName, elemLir, isString: lirContainerElemIsString(elemName), valueTypeName: "", valueLir: lirTypeInvalid(), valueIsString: false, ok: true}
     if kind == "map.kv" {
-        let valueName = lirMapValueTypeName(instr.args[0].typ)
+        let valueName = lirMapValueTypeName(l, instr.args[0].typ)
         if valueName == "" {
             lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "` (" + lirReceiverParseTraceMessage(instr.args[0].typ) + ")", label)
             return lirContainerReceiverInvalid()
@@ -6067,8 +6103,8 @@ fn lirLowerMirMapNew(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "map.new destination local out of range", "map.new")
         return
     }
-    let keyName = lirMapKeyTypeName(loc.typ)
-    let valueName = lirMapValueTypeName(loc.typ)
+    let keyName = lirMapKeyTypeName(l, loc.typ)
+    let valueName = lirMapValueTypeName(l, loc.typ)
     if keyName == "" || valueName == "" {
         lirLowerError(l, LirDiagUnsupported, "map.new destination type `" + loc.typ + "` is not Map<K, V>", "map.new")
         return
