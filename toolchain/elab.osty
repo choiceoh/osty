@@ -2839,9 +2839,10 @@ fn elabInferList(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
     let mut coreElems: List<Int> = []
     let mut elemTy = outerElem
+    let outerElemIsVar = tyKindAt(tys, outerElem) == TkVar
     let mut i = 0
     for elemIdx in elemIdxs {
-        if tyIsBad(tys, elemTy) && i == 0 {
+        if (tyIsBad(tys, elemTy) || outerElemIsVar) && i == 0 {
             let r = elabInfer(cx, elemIdx)
             elemTy = r.ty
             coreElems.push(r.node)

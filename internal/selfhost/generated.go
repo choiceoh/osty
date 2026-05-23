@@ -43327,13 +43327,23 @@ func elabInferList(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	// Osty: /tmp/selfhost_merged.osty:20390:5
 	elemTy := outerElem
 	_ = elemTy
+	// Surgical hand-edit (CLAUDE.md LLVM self-host critical-path exception):
+	// equivalent to toolchain/elab.osty `outerElemIsVar` branch. When the
+	// expected element type is a bare TyVar (e.g. flatMap's `List<R>` with R
+	// unbound), the lone `tyIsBad` check below would fall into elabCheck
+	// against the TyVar, which never binds R from the literal — leaving the
+	// monomorph mangler with `?` for R. Routing the first elem through
+	// elabInfer instead refines elemTy to the concrete element type so the
+	// outer unify can bind R. See toolchain/elab.osty:elabInferList.
+	outerElemIsVar := func() bool { _, ok := tyKindAt(tys, outerElem).(*TyKind_TkVar); return ok }()
+	_ = outerElemIsVar
 	// Osty: /tmp/selfhost_merged.osty:20391:5
 	i := 0
 	_ = i
 	// Osty: /tmp/selfhost_merged.osty:20392:5
 	for _, elemIdx := range elemIdxs {
 		// Osty: /tmp/selfhost_merged.osty:20393:9
-		if tyIsBad(tys, elemTy) && i == 0 {
+		if (tyIsBad(tys, elemTy) || outerElemIsVar) && i == 0 {
 			// Osty: /tmp/selfhost_merged.osty:20395:13
 			r := elabInfer(cx, elemIdx)
 			_ = r

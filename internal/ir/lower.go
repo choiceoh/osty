@@ -4327,7 +4327,7 @@ func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
 	// stdlib higher-order method table the closure backfill
 	// uses, so chained `map/filter/andThen/...` chains lower
 	// without their middle nodes being marked as ErrType.
-	if mc.T == nil || mc.T == ErrTypeVal || containsClosureResultSentinel(mc.T) {
+	if mc.T == nil || mc.T == ErrTypeVal || containsClosureResultSentinel(mc.T) || containsTypeVar(mc.T) || hasPoisonedTypeArg(mc.T) {
 		if recovered := recoverHigherOrderMethodReturnType(recvT, mc.Name, mc.Args); recovered != nil {
 			mc.T = recovered
 		}
@@ -4363,10 +4363,15 @@ func containsClosureResultSentinel(t Type) bool {
 	return false
 }
 
-// fillFlatMapTypeArgs sets `mc.TypeArgs = [T, R]` for a flatMap call
-// when the recovered return type carries a concrete element. Other
-// methods are intentionally left alone — broader fill triggers
-// monomorph regressions on scan/groupBy.
+// fillFlatMapTypeArgs sets `mc.TypeArgs = [R]` for a flatMap call when
+// the recovered return type carries a concrete element. The convention
+// at the MethodCall stage is method-local TypeArgs only —
+// `RewriteStdlibMethodCallsites` prepends the receiver's owner args
+// when it rewrites the call into the injected free-fn shape, so
+// duplicating the owner T here pushes the arity to 3 vs the free fn's
+// [T, R] generics list and the monomorph request bails. Other methods
+// are intentionally left alone — broader fill triggers monomorph
+// regressions on scan/groupBy.
 func fillFlatMapTypeArgs(mc *MethodCall, recvT Type) {
 	if mc == nil || mc.T == nil {
 		return
@@ -4399,7 +4404,7 @@ func fillFlatMapTypeArgs(mc *MethodCall, recvT Type) {
 			return
 		}
 	}
-	mc.TypeArgs = []Type{t, r}
+	mc.TypeArgs = []Type{r}
 }
 
 // recoverHigherOrderMethodReturnType derives the return type of
@@ -4619,12 +4624,14 @@ func flatMapElemFromArg(e Expr) Type {
 		}
 	}
 	// Closure body inference fallback: when the checker left the
-	// closure's recorded return type poisoned (`<error>`), walk the
-	// AST body of a closure literal and pull a recoverable list type
-	// from its tail expression.
-	if t == nil || t == ErrTypeVal {
+	// closure's recorded return type poisoned (`<error>`), or carrying
+	// a residual TyVar that the outer unification never resolved, walk
+	// the AST body of a closure literal and pull a recoverable list
+	// type from its tail expression.
+	tNeedsFallback := t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t)
+	if tNeedsFallback {
 		if cl, ok := e.(*Closure); ok && cl != nil && cl.Body != nil && cl.Body.Result != nil {
-			if bt := cl.Body.Result.Type(); bt != nil && bt != ErrTypeVal {
+			if bt := cl.Body.Result.Type(); bt != nil && bt != ErrTypeVal && !hasPoisonedTypeArg(bt) && !containsTypeVar(bt) {
 				t = bt
 			}
 		}
@@ -4633,7 +4640,7 @@ func flatMapElemFromArg(e Expr) Type {
 		return nil
 	}
 	if nt, ok := t.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") && len(nt.Args) >= 1 {
-		if r := nt.Args[0]; r != nil && r != ErrTypeVal && !hasPoisonedTypeArg(r) {
+		if r := nt.Args[0]; r != nil && r != ErrTypeVal && !hasPoisonedTypeArg(r) && !containsTypeVar(r) {
 			return r
 		}
 	}

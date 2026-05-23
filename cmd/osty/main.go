@@ -68,6 +68,7 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
+	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/types"
 	"golang.org/x/term"
 )
@@ -107,6 +108,21 @@ func main() {
 	// wins and the production factory lazily resolves the managed binary on
 	// the first check (cheap when none happens, e.g. for `osty fmt`).
 	check.UseManagedSubprocessChecker(".")
+
+	// Propagate the resolved checker path to subprocesses
+	// (`osty-native-llvmgen`, `osty-native-lirproto`) via
+	// `OSTY_NATIVE_CHECKER_BIN`. Without this the subprocesses run
+	// their own `toolchain.EnsureNativeChecker` starting from the
+	// emitted package's temp-dir, which has no managed-slot binary —
+	// the check phase returns empty, IR lowering loses generic type
+	// info, and monomorph mangles unresolved type vars as `?` (breaks
+	// clang on shapes like `xs.flatMap(|x| [x, x])`). Resolve eagerly
+	// here so child processes inherit a working override.
+	if os.Getenv("OSTY_NATIVE_CHECKER_BIN") == "" {
+		if path, err := toolchain.EnsureNativeChecker("."); err == nil && path != "" {
+			_ = os.Setenv("OSTY_NATIVE_CHECKER_BIN", path)
+		}
+	}
 
 	parsed := clicmd.ParseArgs(os.Args[1:])
 	if !parsed.IsOk() {
