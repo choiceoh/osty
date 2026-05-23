@@ -679,12 +679,54 @@ func cloneStdlibTypeDecl(key stdlibTypeKey, d ir.Decl, moduleTypes map[string]bo
 		if shouldQualifyStdlibTypeName(key.Module, x.Name, moduleTypes) {
 			x.Name = qualifiedStdlibTypeName(key.Module, x.Name)
 		}
+		// Builtin reference types (`Map<K,V>`, `Set<T>`, …) route their
+		// primitive operations through runtime intrinsics — `Map.get` /
+		// `Map.insert` / `Map.clear` / `Set.insert` / etc. carry no
+		// `.osty` body. When monomorph specializes the type, those
+		// bodyless methods produce empty `_ZTS…<Type>__<method>` fn
+		// decls that the LIR Proto backend rejects with "no blocks".
+		// Strip them from the injected clone so monomorph never sees
+		// them; call sites still resolve via the `check_env.osty`
+		// registry and the MIR lowerer's intrinsic dispatch.
+		if isBuiltinReferenceType(x.Name) {
+			x.Methods = keepBodiedMethods(x.Methods)
+		}
 	case *ir.EnumDecl:
 		if shouldQualifyStdlibTypeName(key.Module, x.Name, moduleTypes) {
 			x.Name = qualifiedStdlibTypeName(key.Module, x.Name)
 		}
 	}
 	return cp
+}
+
+// isBuiltinReferenceType reports whether name is a pointer-shaped
+// builtin generic whose primitive operations are runtime intrinsics
+// rather than bodied Osty methods. Used by `cloneStdlibTypeDecl` to
+// drop bodyless method declarations so monomorph does not emit empty
+// `_ZTS…__<method>` fn decls.
+func isBuiltinReferenceType(name string) bool {
+	switch name {
+	case "Map", "Set":
+		return true
+	}
+	return false
+}
+
+func keepBodiedMethods(methods []*ir.FnDecl) []*ir.FnDecl {
+	if len(methods) == 0 {
+		return methods
+	}
+	out := methods[:0]
+	for _, m := range methods {
+		if m == nil {
+			continue
+		}
+		if m.Body == nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func qualifyStdlibDeclTypes(d ir.Decl, module string, moduleTypes map[string]bool) {
