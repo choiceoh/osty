@@ -8,8 +8,6 @@ import (
 )
 
 func TestPrepareEntryRewritesStdEncodingSingletonMethods(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	req := newBackendRequest(t, EmitLLVMIR, `use std.bytes
 use std.encoding
 

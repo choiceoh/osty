@@ -118,7 +118,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 케이스 13개를 추가해 §2.1.A의 분류가 여전히 유효한지 재측정. 베이스라인 (`examples/<mod>_e2e/`) 14개도
 같은 환경에서 재실행. 환경: Linux x86_64 / clang 18.1.3 / LLVM 18 / Go 1.26.2 toolchain /
 `OSTY_NATIVE_CHECKER_BIN=.osty/bin/osty-native-checker` / `OSTY_SELF_BIN=toolchain/.osty/out/debug/llvm/osty-self`
-(stage0 부트스트랩 4분 12초) / `OSTY_STDLIB_BODY_LOWER=1`.
+(stage0 부트스트랩 4분 12초) / production stdlib body injection (unconditional `finalizeEntryIR`).
 
 | 모듈 | 2026-05-05 분류 | 2026-05-23 결과 | 변화 | 갭 분류 (현재) |
 |---|---|---|---|---|
@@ -359,7 +359,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | # | 항목 | 작업 |
 |---|---|---|
 | 14 | unspec 모듈 (62개) | LANG_SPEC_v0.5/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
-| 15 | OSTY_STDLIB_BODY_LOWER | ✅ default-on (2026-05-23, PR3-C 종착점). escape hatch (`OSTY_STDLIB_BODY_LOWER=0`) 유지 → 다음 PR 에서 게이트 자체 제거 |
+| 15 | OSTY_STDLIB_BODY_LOWER | ✅ **removed** (2026-05-23) — stdlib body injection is unconditional in `finalizeEntryIR`; env toggle retired |
 | 16 | `Set` 빈약 / `Deque`/`PriorityQueue` 부재 | spec §10.6 확장 제안  |
 
 ## 5. 평가 함정 카탈로그 (재정리)
@@ -416,7 +416,7 @@ unspec 모듈 62개는 stdlib에 들어갔지만 LANG_SPEC에 등재 안 됨. su
 3. **JSON/encoding/crypto runtime+link 트리오** — 5/23 audit에서 모두 lower+link 단계에 진입했으나 (a) `osty_std_json__parse` 심볼 emit 부재, (b) `encoding.hexEncode`/`crypto.sha256` 런타임 `exit -1`. 한 사이클로 link emit 보강 + runtime impl 디버그.
 4. **compress 회귀 또는 매트릭스 오기 정리** — `std.compress.gzip.encode` 링커 미해결. 이전 audit이 "PASS direct" 라 표기한 근거 재확인 필요. 표면 11 LOC + 본문 0이라 LLVM symbol shim이 사실상 부재일 가능성 큼.
 5. **uuid/regex LLVM bridge shim** — `internal/llvmgen/stdlib_uuid_shim.go` + `stdlib_regex_shim.go` (1–2주, 2026-05-05 priority 그대로).
-6. **OSTY_STDLIB_BODY_LOWER default-on flip** (memory blocker `project_stdlib_injection_hang` 해소 후).
+6. ~~**OSTY_STDLIB_BODY_LOWER default-on flip**~~ → **완료 (2026-05-23)** — env toggle 제거, `finalizeEntryIR`에서 항상 주입.
 7. **unspec 62개 모듈 정책 결정** (stdlib 잔류 vs community package 분리).
 8. **그 다음에야** db driver / smtp TLS 등 Tier 2 작업.
 

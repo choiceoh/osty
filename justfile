@@ -57,25 +57,7 @@ build-all: build build-checker build-lirproto
 # triggers. Override on the command line (`OSTY_STAGE0_FALLBACK= just
 # bootstrap`) when you want to verify the prebuilt-only path instead.
 bootstrap: build-all
-    # `OSTY_STDLIB_BODY_LOWER=0` is the escape hatch from PR #1998's
-    # default-on flip. The stage0 source bootstrap path is sensitive to
-    # bodied stdlib injection because the toolchain itself calls into
-    # bodied methods (e.g. `Map<String, Int>.update`) whose injected
-    # form collides with the builtin-receiver dispatcher's intrinsic
-    # path — the symbol falls through to `mangleMethodSymbol(typeName,
-    # method)` (`_ZTSN…MapISslEE__update`) without a matching `define`.
-    # Disabling injection here keeps the existing bootstrap shape
-    # working until the conflict between `builtinNonGenericMethods` +
-    # `RewriteStdlibMethodCallsites` is resolved at the IR layer; user
-    # `osty build` continues to get the default-on path.
-    #
-    # Both env vars use the `${VAR:-1}` / `${VAR:-0}` form so a caller
-    # can override on the command line — for example,
-    # `OSTY_STAGE0_FALLBACK= just bootstrap` to verify the prebuilt-only
-    # path that the comment block above advertises. Hard-coding the
-    # values would silently override caller intent and make that
-    # documented contract impossible.
-    OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" OSTY_STDLIB_BODY_LOWER="${OSTY_STDLIB_BODY_LOWER:-0}" {{bin}} install-self
+    OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" {{bin}} install-self
 
 # cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
 # osty-self path for the current toolchain SHA + host triple. With

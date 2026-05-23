@@ -19,34 +19,6 @@ import (
 // list is a compiler/backend coverage bug that must be fixed at the MIR layer.
 var ErrMIRCoverageIncomplete = errors.New("backend: MIR coverage incomplete")
 
-// stdlibBodyLoweringEnabled reports whether the `PrepareEntry` step
-// should inject Osty-bodied stdlib functions into the user module.
-//
-// Default: ON. The pipeline reached PR3-C steady state in PR #1997
-// (flatMap end-to-end), so the rollout gate is flipped — bodied
-// stdlib methods now monomorphize out of `toolchain/`-authored
-// sources in the default build. Most common combinators
-// (`map`, `filter`, `len`) already had `osty_rt_list_*` runtime
-// intrinsics covering them in OFF mode; the ones that did NOT and
-// would fall through with "no such symbol" at link time
-// (`flatMap`, `scan`, `chunked`, `windowed`, `zip`, …) are what
-// gated this flip. With injection ON those bodies are emitted out
-// of `internal/stdlib/modules/collections.osty`.
-//
-// Escape hatch: `OSTY_STDLIB_BODY_LOWER=0` (or `off` / `false`) still
-// disables injection so regression bisection and the install-self
-// stage0 bootstrap can opt out when a fresh-clone path or unrelated
-// stdlib-injected body trips an unrelated backend gap. The escape
-// hatch will be retired once we have one full release with the
-// default-on path proven through CI.
-func stdlibBodyLoweringEnabled() bool {
-	switch os.Getenv("OSTY_STDLIB_BODY_LOWER") {
-	case "0", "false", "off":
-		return false
-	}
-	return true
-}
-
 // PrepareEntry lowers a checked front-end source unit into the backend-neutral
 // IR contract. Validation failures are returned as an error because they
 // indicate a broken lowering contract rather than a user-visible backend gap.
@@ -194,29 +166,31 @@ func LowerGraphPackageIR(packageName, sourcePath string, graph *resolve.PackageG
 	return LowerPackageIR(packageName, sourcePath, pkg, entryFile, chk)
 }
 
-// finalizeEntryIR runs the post-HIR-lowering pipeline (stdlib injection gate,
+// finalizeEntryIR runs the post-HIR-lowering pipeline (stdlib injection,
 // monomorphize, optimize, validate) shared by LowerEntryIR and LowerPackageIR.
 // Splitting MIR into LowerEntryMIR lets the incremental query graph cache the
 // HIR and MIR boundaries independently without changing PrepareEntry /
 // PreparePackage behavior for existing callers.
 func finalizeEntryIR(entry Entry, mod *ir.Module) (Entry, error) {
-	if stdlibBodyLoweringEnabled() {
-		endInject := BeginPhase("ir.injectStdlib")
-		reg := stdlib.LoadCached()
-		injected, injectionErrs := injectReachableStdlibBodies(mod, reg)
-		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
-		mod.Decls = append(mod.Decls, injected...)
-		// Option B Phase 1: inject built-in generic type decls
-		// (Map<K,V>, Option<T>, List<T>, Set<T>, Result<T,E>) so
-		// ir.Monomorphize can specialize their methods per user-code
-		// instantiation. Without this step the monomorphizer never
-		// sees the generic templates and falls back to per-helper
-		// hand-emit at the LLVM layer.
-		injectedTypes, typeIssues := injectReachableStdlibTypes(mod, reg)
-		entry.IRIssues = append(entry.IRIssues, typeIssues...)
-		mod.Decls = append(mod.Decls, injectedTypes...)
-		endInject()
-	}
+	// Always inject reachable Osty-bodied stdlib functions and built-in
+	// generic type templates (PR3-C steady state). Runtime intrinsics
+	// alone do not cover every combinator the stdlib implements in
+	// `internal/stdlib/modules/*.osty`.
+	endInject := BeginPhase("ir.injectStdlib")
+	reg := stdlib.LoadCached()
+	injected, injectionErrs := injectReachableStdlibBodies(mod, reg)
+	entry.IRIssues = append(entry.IRIssues, injectionErrs...)
+	mod.Decls = append(mod.Decls, injected...)
+	// Option B Phase 1: inject built-in generic type decls
+	// (Map<K,V>, Option<T>, List<T>, Set<T>, Result<T,E>) so
+	// ir.Monomorphize can specialize their methods per user-code
+	// instantiation. Without this step the monomorphizer never
+	// sees the generic templates and falls back to per-helper
+	// hand-emit at the LLVM layer.
+	injectedTypes, typeIssues := injectReachableStdlibTypes(mod, reg)
+	entry.IRIssues = append(entry.IRIssues, typeIssues...)
+	mod.Decls = append(mod.Decls, injectedTypes...)
+	endInject()
 	endMono := BeginPhase("ir.Monomorphize")
 	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
 		mod = monoMod

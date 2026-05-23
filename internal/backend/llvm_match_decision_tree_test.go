@@ -209,8 +209,6 @@ fn main() {
     println(data.toHex())
 }
 `)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Emit returned error: %v", err)

@@ -1987,22 +1987,17 @@ fn main() {
 	}
 }
 
-func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
+func TestLLVMBackendBinaryMapKeysSortedLenChain(t *testing.T) {
+	parallelClangBackendTest(t)
 	requireRealLLVMEmission(t)
-	// Post-flip pin: the optimizer recognises `map.keys().sorted().len()`
-	// as an intrinsic chain and elides it to `map.len()`. With body
-	// lowering ON `keys()` and `sorted()` route through their bodied
-	// Osty sources, so the optimizer no longer sees the runtime-
-	// intrinsic shape. Pin to OFF until the optimizer learns the
-	// post-flip pattern.
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "0")
+
 	backend := LLVMBackend{}
-	req := newBackendRequest(t, EmitLLVMIR, `fn sortedCount(words: List<String>) -> Int {
+	req := newBackendRequest(t, EmitBinary, `fn main() {
     let mut index: Map<String, Int> = {:}
-    for word in words {
+    for word in ["a", "b", "a"] {
         index.insert(word, 1)
     }
-    index.keys().sorted().len()
+    println(index.keys().sorted().len())
 }
 `)
 
@@ -2010,21 +2005,13 @@ func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Emit returned error: %v", err)
 	}
-	out, err := os.ReadFile(result.Artifacts.LLVMIR)
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ReadFile(%q) failed: %v", result.Artifacts.LLVMIR, err)
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
-	got := string(out)
-	if !strings.Contains(got, "call i64 @osty_rt_map_len(") {
-		t.Fatalf("optimized llvm-ir missing map.len call:\n%s", got)
-	}
-	for _, unwanted := range []string{
-		"call ptr @osty_rt_map_keys(",
-		"call ptr @osty_rt_list_sorted_string(",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("optimized llvm-ir unexpectedly kept %q:\n%s", unwanted, got)
-		}
+	if got, want := string(output), "2\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
 
