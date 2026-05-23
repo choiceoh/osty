@@ -20,13 +20,23 @@ import (
 var ErrMIRCoverageIncomplete = errors.New("backend: MIR coverage incomplete")
 
 // stdlibBodyLoweringEnabled reports whether the `PrepareEntry` step
-// should inject Osty-bodied stdlib functions into the user module. The
-// feature is off by default during rollout — users opt in by setting
-// `OSTY_STDLIB_BODY_LOWER=1`. Once the pipeline is stable the default
-// flips and this gate is removed.
+// should inject Osty-bodied stdlib functions into the user module.
+//
+// Default: ON. The pipeline reached PR3-C steady state in PR #1997
+// (flatMap end-to-end), so the rollout gate is flipped — bodied
+// stdlib methods (`xs.map(...)`, `xs.flatMap(...)`, etc.) now monomorphize
+// out of `toolchain/`-authored sources in the default build instead of
+// falling through to a runtime intrinsic that does not exist.
+//
+// Escape hatch: `OSTY_STDLIB_BODY_LOWER=0` (or `off` / `false`) still
+// disables injection so regression bisection and the install-self
+// stage0 bootstrap can opt out when a fresh-clone path or unrelated
+// stdlib-injected body trips an unrelated backend gap. The escape
+// hatch will be retired once we have one full release with the
+// default-on path proven through CI.
 func stdlibBodyLoweringEnabled() bool {
 	switch os.Getenv("OSTY_STDLIB_BODY_LOWER") {
-	case "", "0", "false", "off":
+	case "0", "false", "off":
 		return false
 	}
 	return true
