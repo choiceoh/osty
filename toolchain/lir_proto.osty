@@ -8664,8 +8664,24 @@ fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName:
         lirLowerError(l, LirDiagInvalidInput, "struct aggregate field count does not match layout", "aggregate.struct")
         return lirOperandInvalid()
     }
-    let aggregateType = if lirTypeIsZero(hint) {
-        lirLowerMirType(l, structName)
+    // When the dest hint disagrees with the struct's own LLVM shape
+    // (e.g. dest is a cross-pkg interface lowered to `ptr` by the
+    // PR #2004 opaque-ptr fallback but the aggregate IS a real
+    // struct), use the struct's typedef for the insertvalue chain
+    // and let the caller's store/select handle the interface
+    // semantics. Without this override the insertvalue gets typed as
+    // `ptr undef` which LLVM rejects: "insertvalue operand must be
+    // aggregate type". Concrete trigger: `fn new(msg) -> Error {
+    // BasicError { msg } }` injected from std.error — `_return`
+    // local is Error (→ ptr) but the literal is BasicError (→ real
+    // struct).
+    let structTyp = lirLowerMirType(l, structName)
+    let aggregateType = if lirTypeIsZero(hint) || hint.className == LirTypePtr {
+        if lirTypeIsZero(structTyp) {
+            hint
+        } else {
+            structTyp
+        }
     } else {
         hint
     }
@@ -9462,6 +9478,20 @@ fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
         return true
     }
     if layout.mangled != "" && "%" + layout.mangled == name {
+        return true
+    }
+    // Cross-pkg suffix match: an injected stdlib body references a
+    // local struct by its BARE name (`BasicError`) but the layout was
+    // registered with the qualified key (`error.BasicError`) at
+    // injection time. Without this fallback the MIR aggregate type
+    // misses the layout in lirLowerMirType → falls through to the
+    // PR #2004 opaque-ptr fallback → constructor emits insertvalue
+    // on a `ptr` which LLVM rejects as not aggregate-typed.
+    let suffix = "." + name
+    if layout.name != "" && strings.endsWith(layout.name, suffix) {
+        return true
+    }
+    if layout.mangled != "" && strings.endsWith(layout.mangled, suffix) {
         return true
     }
     false
