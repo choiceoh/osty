@@ -50,11 +50,19 @@ jobs:
           go-version: '1.26'
 
       - name: Install just
+        # Use the upstream install script rather than a hand-pinned
+        # tarball URL: `releases/latest/download/just-1.50.0-...tar.gz`
+        # 404s the moment casey/just cuts a release past 1.50.0,
+        # because the `latest` redirect points at the new tag and the
+        # old asset stops existing there. Aligned with the per-PR
+        # `fresh-clone-source-bootstrap.yml` gate (PR #1992).
         run: |
-          curl -fsSL https://github.com/casey/just/releases/latest/download/just-1.50.0-x86_64-unknown-linux-musl.tar.gz \
-              | tar -xz -C "$HOME/.local/bin" just
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+              | bash -s -- --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/just" --version
 
       - name: Install LLVM toolchain (clang/lld for the link step)
         run: |
