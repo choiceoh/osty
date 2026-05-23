@@ -24,9 +24,14 @@ var ErrMIRCoverageIncomplete = errors.New("backend: MIR coverage incomplete")
 //
 // Default: ON. The pipeline reached PR3-C steady state in PR #1997
 // (flatMap end-to-end), so the rollout gate is flipped — bodied
-// stdlib methods (`xs.map(...)`, `xs.flatMap(...)`, etc.) now monomorphize
-// out of `toolchain/`-authored sources in the default build instead of
-// falling through to a runtime intrinsic that does not exist.
+// stdlib methods now monomorphize out of `toolchain/`-authored
+// sources in the default build. Most common combinators
+// (`map`, `filter`, `len`) already had `osty_rt_list_*` runtime
+// intrinsics covering them in OFF mode; the ones that did NOT and
+// would fall through with "no such symbol" at link time
+// (`flatMap`, `scan`, `chunked`, `windowed`, `zip`, …) are what
+// gated this flip. With injection ON those bodies are emitted out
+// of `internal/stdlib/modules/collections.osty`.
 //
 // Escape hatch: `OSTY_STDLIB_BODY_LOWER=0` (or `off` / `false`) still
 // disables injection so regression bisection and the install-self

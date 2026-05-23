@@ -249,6 +249,68 @@ func defaultManagedProjectRoot(start string) (string, error) {
 	return root, nil
 }
 
+// ProbeManagedNativeChecker returns the managed native-checker path
+// if it already exists, or "" if no build has populated the slot yet.
+// Probe-only: does NOT trigger a build. Use this from CLI entry
+// points that need to propagate `OSTY_NATIVE_CHECKER_BIN` to
+// subprocesses without paying for an LLVM build on cold caches —
+// `EnsureNativeChecker` fires the full build path and is wrong for
+// cheap commands like `osty fmt` / `osty --help`.
+func ProbeManagedNativeChecker(start string) string {
+	root, err := managedProjectRootFunc(start)
+	if err != nil {
+		return ""
+	}
+	path := ManagedNativeCheckerPath(root)
+	if path == "" {
+		return ""
+	}
+	if !fileExists(path) {
+		return ""
+	}
+	return path
+}
+
+// InvalidateAllManagedNativeCheckers removes every cached
+// native-checker artifact under `<projectRoot>/<toolchainDirName>/*/`.
+// Use after `install-self` produces a new `osty-self` so that any
+// `--osty-bin <other-host>` invocation (which pins a different
+// toolchain version stamp under a sibling subdirectory) also picks
+// up the LLVM-built variant on its next build, rather than continuing
+// to serve a stale Go-built fallback from its own slot.
+//
+// `InvalidateManagedNativeChecker(projectRoot)` only touches the
+// current process's `Version()` slot — sufficient when the install
+// runs from the same host that subsequent builds use, but pre-PR
+// #1999 it silently left a stale fallback in any other version slot
+// the project had accumulated (typical when devs switch between two
+// `osty` builds during bootstrap iteration).
+//
+// Best-effort: a missing tree returns nil; per-entry remove errors
+// are collected into a joined error so the caller can warn but the
+// loop processes every slot.
+func InvalidateAllManagedNativeCheckers(projectRoot string) error {
+	toolchainDir := filepath.Join(projectRoot, toolchainDirName)
+	entries, err := os.ReadDir(toolchainDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("scan managed toolchain dir %s: %w", toolchainDir, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slot := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName())
+		if err := os.Remove(slot); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("invalidate %s: %w", slot, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func defaultSourceRepoRoot() (string, error) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {

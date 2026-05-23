@@ -41,7 +41,16 @@ pub struct MonomorphTypeRequest {
 /// encodings; Osty's canonical `Int` is platform-independent i64 and
 /// maps to `l` (C `long`) to distinguish it from explicit `Int64` (`x`).
 pub fn monomorphPrimCode(name: String) -> String {
-    if name == "Int" {
+    // `UntypedInt` / `UntypedFloat` are the literal-default placeholders
+    // the checker emits when a numeric literal flows into a position
+    // that has not pinned a concrete int / float kind yet (e.g. `R`
+    // resolves to `UntypedInt` for `xs.scan(0, |a, b| a + b)`). The Go-
+    // side snapshot maps them to `l` / `d` so `?` never reaches the
+    // Itanium mangler — see `internal/ir/monomorph_snapshot.go`. Keep
+    // this Osty table in lockstep, otherwise the selfhost path (which
+    // calls `monomorphPrimCode` here from `monomorph_pass.osty`) still
+    // emits `?` mangled codes that clang rejects at link time.
+    if name == "Int" || name == "UntypedInt" {
         return "l"
     }
     if name == "Int8" {
@@ -71,7 +80,7 @@ pub fn monomorphPrimCode(name: String) -> String {
     if name == "Byte" {
         return "h"
     }
-    if name == "Float" {
+    if name == "Float" || name == "UntypedFloat" {
         return "d"
     }
     if name == "Float32" {

@@ -109,17 +109,14 @@ func main() {
 	// the first check (cheap when none happens, e.g. for `osty fmt`).
 	check.UseManagedSubprocessChecker(".")
 
-	// Propagate the resolved checker path to subprocesses
-	// (`osty-native-llvmgen`, `osty-native-lirproto`) via
-	// `OSTY_NATIVE_CHECKER_BIN`. Without this the subprocesses run
-	// their own `toolchain.EnsureNativeChecker` starting from the
-	// emitted package's temp-dir, which has no managed-slot binary —
-	// the check phase returns empty, IR lowering loses generic type
-	// info, and monomorph mangles unresolved type vars as `?` (breaks
-	// clang on shapes like `xs.flatMap(|x| [x, x])`). Resolve eagerly
-	// here so child processes inherit a working override.
+	// Probe (cheap) the managed checker slot first and propagate via
+	// `OSTY_NATIVE_CHECKER_BIN` if already cached. If empty, defer the
+	// decision until after subcommand parsing — only commands that
+	// actually need the checker (build / check / run) should pay for
+	// `EnsureNativeChecker`. Commands like `osty fmt` / `osty --help`
+	// stay cheap on cold caches.
 	if os.Getenv("OSTY_NATIVE_CHECKER_BIN") == "" {
-		if path, err := toolchain.EnsureNativeChecker("."); err == nil && path != "" {
+		if path := toolchain.ProbeManagedNativeChecker("."); path != "" {
 			_ = os.Setenv("OSTY_NATIVE_CHECKER_BIN", path)
 		}
 	}
@@ -136,6 +133,26 @@ func main() {
 	flags := convertFlags(parsed.Flags)
 	cmd := parsed.Name
 	args := append([]string{cmd}, parsed.RawRest...)
+	// Eager-build the managed checker for subcommands that will spawn
+	// codegen subprocesses (`osty-native-llvmgen`, `osty-native-lirproto`)
+	// so child processes inherit a working `OSTY_NATIVE_CHECKER_BIN`
+	// override. Without this, the subprocesses each run their own
+	// `EnsureNativeChecker` from a temp dir, which has no managed slot
+	// — the check phase returns empty, IR lowering loses generic type
+	// info, and monomorph mangles unresolved type vars as `?` (breaks
+	// clang on shapes like `xs.flatMap(|x| [x, x])`).
+	//
+	// Restricted to commands that actually drive codegen — `fmt`,
+	// `--help`, `install-self`, etc. don't spawn the codegen
+	// subprocess chain and so don't need the eager build. The probe-
+	// only path above (line 116-122) already propagates the env when
+	// the slot is already populated, so this only fires on cold cache
+	// for the codegen-driving subcommands.
+	if os.Getenv("OSTY_NATIVE_CHECKER_BIN") == "" && commandSpawnsCodegenSubprocesses(cmd) {
+		if path, err := toolchain.EnsureNativeChecker("."); err == nil && path != "" {
+			_ = os.Setenv("OSTY_NATIVE_CHECKER_BIN", path)
+		}
+	}
 	// fmt has its own flag parser because --check/--write only make
 	// sense in that subcommand. Most front-end subcommands take exactly
 	// one file path as their second positional arg.
@@ -1257,6 +1274,30 @@ func printScopeNode(s *resolve.Scope, depth int) {
 	for _, child := range s.Children() {
 		printScopeNode(child, depth+1)
 	}
+}
+
+// commandSpawnsCodegenSubprocesses reports whether the subcommand
+// will fork `osty-native-llvmgen` or `osty-native-lirproto` during
+// its execution. These subprocesses each need a managed native
+// checker for typechecking the package they emit; without an
+// inherited `OSTY_NATIVE_CHECKER_BIN`, each one re-enters
+// `EnsureNativeChecker` from its own temp dir, walks up to find
+// the project root, and either spawns the LLVM build subprocess
+// (slow) or relies on the recursion-guard Go shell (correctness-
+// degraded). Eager-resolving from the outer process amortises the
+// build into one place and propagates the env down to every child.
+//
+// Subcommands that don't spawn codegen (`osty fmt`, `osty --help`,
+// `osty install-self`, etc.) skip the eager resolve so cold-cache
+// invocations stay cheap. The probe-only path at the top of `main`
+// still propagates the env when the slot is already populated, so
+// repeat invocations of cheap commands never trigger a build.
+func commandSpawnsCodegenSubprocesses(cmd string) bool {
+	switch cmd {
+	case "build", "check", "typecheck", "run", "gen", "test", "bench":
+		return true
+	}
+	return false
 }
 
 func usage() {

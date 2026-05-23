@@ -716,7 +716,12 @@ func keepBodiedMethods(methods []*ir.FnDecl) []*ir.FnDecl {
 	if len(methods) == 0 {
 		return methods
 	}
-	out := methods[:0]
+	// Allocate a fresh slice instead of compacting in place with
+	// `methods[:0]` so the filtered-out method decls are not held
+	// alive by the backing array, and so callers that retain a
+	// reference to `methods` (or reslice it later) cannot see the
+	// stripped entries reappear past `len(out)` via reslicing.
+	out := make([]*ir.FnDecl, 0, len(methods))
 	for _, m := range methods {
 		if m == nil {
 			continue

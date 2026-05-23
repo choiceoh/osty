@@ -7,5 +7,13 @@ use std.testing
 fn testListMapClosure() {
     let xs = [1, 2, 3, 4]
     let doubled = xs.map(|x| x * 2)
+    // Length-only assertion is false-PASS prone: a broken
+    // implementation that preserves length while emitting wrong
+    // values would still pass. Assert every element so the test
+    // actually verifies the closure was applied.
     testing.assertEq(doubled.len(), 4)
+    testing.assertEq(doubled[0], 2)
+    testing.assertEq(doubled[1], 4)
+    testing.assertEq(doubled[2], 6)
+    testing.assertEq(doubled[3], 8)
 }

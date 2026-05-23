@@ -68,7 +68,14 @@ bootstrap: build-all
     # working until the conflict between `builtinNonGenericMethods` +
     # `RewriteStdlibMethodCallsites` is resolved at the IR layer; user
     # `osty build` continues to get the default-on path.
-    OSTY_STAGE0_FALLBACK=1 OSTY_STDLIB_BODY_LOWER=0 {{bin}} install-self
+    #
+    # Both env vars use the `${VAR:-1}` / `${VAR:-0}` form so a caller
+    # can override on the command line — for example,
+    # `OSTY_STAGE0_FALLBACK= just bootstrap` to verify the prebuilt-only
+    # path that the comment block above advertises. Hard-coding the
+    # values would silently override caller intent and make that
+    # documented contract impossible.
+    OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" OSTY_STDLIB_BODY_LOWER="${OSTY_STDLIB_BODY_LOWER:-0}" {{bin}} install-self
 
 # cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
 # osty-self path for the current toolchain SHA + host triple. With

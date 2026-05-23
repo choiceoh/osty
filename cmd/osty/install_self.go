@@ -152,7 +152,23 @@ func runInstallSelf(args []string, _ cliFlags) {
 		// the forked `osty build` side now read a single source of
 		// truth.
 		if !stage0SourceBootstrapEnabled() {
-			fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
+			// Two code paths reach this branch with builtBin still
+			// empty: (a) prebuilt resolution failed (`resolveErr != nil`)
+			// and we never ran the selfhost rebuild; (b) `--force` was
+			// passed, prebuilt resolution succeeded, but the selfhost
+			// rebuild on lines 132-138 set `buildErr` and left builtBin
+			// empty. Surface the actual failure cause instead of always
+			// reporting "no prebuilt" — that wording misleads users
+			// debugging a force-rebuild failure into chasing registry
+			// problems they do not have.
+			switch {
+			case resolveErr == nil && buildErr != nil:
+				fmt.Fprintf(os.Stderr, "osty install-self: selfhost build failed and stage0 source bootstrap is disabled: %v\n", buildErr)
+			case resolveErr != nil:
+				fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
+			default:
+				fmt.Fprintln(os.Stderr, "osty install-self: unable to produce osty-self and stage0 source bootstrap is disabled")
+			}
 			printInstallSelfRegistryHint()
 			os.Exit(1)
 		}
@@ -184,8 +200,18 @@ func runInstallSelf(args []string, _ cliFlags) {
 	// surface the failure as a warning, not a hard error, because the
 	// install itself succeeded.
 	if tookStage0Path {
-		if err := toolchain.InvalidateManagedNativeChecker(root); err != nil {
-			fmt.Fprintf(os.Stderr, "osty install-self: warning: failed to invalidate stage0 native checker slot (next build will keep the Go-built variant): %v\n", err)
+		// Sweep ALL version-stamped slots, not just the current
+		// process's. `--osty-bin <other-host>` runs install-self
+		// through a different binary whose toolchain version stamp
+		// resolves to a sibling `.osty/toolchain/<other-version>/`
+		// subdirectory. Pre-PR #1999 `InvalidateManagedNativeChecker`
+		// only cleared the current process's slot, so subsequent
+		// builds with the host that ran install-self stayed pinned to
+		// their own Go-built fallback. The broad sweep is safe
+		// because the install just produced a fresh osty-self, so
+		// any cached checker for any version is now obsolete.
+		if err := toolchain.InvalidateAllManagedNativeCheckers(root); err != nil {
+			fmt.Fprintf(os.Stderr, "osty install-self: warning: failed to invalidate stage0 native checker slot(s) (next build may keep the Go-built variant): %v\n", err)
 		}
 	}
 	fmt.Printf("installed:   %s\n", cachedPath)

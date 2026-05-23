@@ -4611,6 +4611,12 @@ func recoverListHigherOrderReturn(listName string, elem Type, method string, arg
 
 // flatMapElemFromArg extracts the element type R of `List<R>` from a
 // `flatMap` argument's closure or named-fn return.
+//
+// Accepts only `List<R>` returns. `List<T>.flatMap` is declared as
+// `fn(T) -> List<R>`; an `Iter<R>` return would not type-check
+// against that signature, and silently re-typing a poisoned `Iter`
+// closure as if it were `List` would feed an invalid R into
+// monomorph and mask the underlying checker mismatch.
 func flatMapElemFromArg(e Expr) Type {
 	if e == nil {
 		return nil
@@ -4639,7 +4645,7 @@ func flatMapElemFromArg(e Expr) Type {
 	if t == nil {
 		return nil
 	}
-	if nt, ok := t.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") && len(nt.Args) >= 1 {
+	if nt, ok := t.(*NamedType); ok && nt != nil && nt.Name == "List" && len(nt.Args) >= 1 {
 		if r := nt.Args[0]; r != nil && r != ErrTypeVal && !hasPoisonedTypeArg(r) && !containsTypeVar(r) {
 			return r
 		}

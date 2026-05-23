@@ -37,7 +37,20 @@ func TestStdlibBodyLoweringEnabledDefaultOn(t *testing.T) {
 	// this test in a shell that exports `OSTY_STDLIB_BODY_LOWER=0`
 	// would make it fail, which is the correct behavior — "default"
 	// means unset.
+	//
+	// Save/restore the env so any caller that exports the flag (e.g.
+	// a developer running `go test` from a shell with the escape
+	// hatch set) sees their environment intact after this test; the
+	// pre-PR #1999 form dropped the value for the rest of the run.
+	prev, hadPrev := os.LookupEnv("OSTY_STDLIB_BODY_LOWER")
 	os.Unsetenv("OSTY_STDLIB_BODY_LOWER")
+	t.Cleanup(func() {
+		if hadPrev {
+			os.Setenv("OSTY_STDLIB_BODY_LOWER", prev)
+		} else {
+			os.Unsetenv("OSTY_STDLIB_BODY_LOWER")
+		}
+	})
 	if !stdlibBodyLoweringEnabled() {
 		t.Fatalf("unset env yields disabled, want enabled default (post-flip)")
 	}
