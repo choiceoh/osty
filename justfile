@@ -240,6 +240,12 @@ repair-check: build
 airepair-capture: build
     bash scripts/airepair-update-backlog.sh {{bin}}
 
+# Grade AI-authored .osty files. Layout: <cases-dir>/<agent-name>/*.osty
+# Writes tmp/agent-eval/{scorecard.md,scorecard.json,per-file.ndjson}.
+# See scripts/agent-eval.sh for the scoring rubric (compile/clean/lint).
+agent-eval cases out="tmp/agent-eval": build
+    bash scripts/agent-eval.sh --osty {{bin}} --out-dir {{out}} {{cases}}
+
 ci: build
     {{bin}} ci .
 
