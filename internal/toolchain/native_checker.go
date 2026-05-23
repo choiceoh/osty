@@ -121,25 +121,6 @@ func ManagedNativeCheckerPath(projectRoot string) string {
 	return filepath.Join(projectRoot, toolchainDirName, Version(), NativeCheckerBinaryName())
 }
 
-// recursionFallbackCheckerPath returns the slot the recursion-guard
-// detour writes its Go-built shell to during a nested
-// `osty build --backend llvm cmd/osty-native-checker/` invocation.
-//
-// The recursion case (`OSTY_BUILDING_NATIVE_CHECKER=1`) needs a
-// checker so the subprocess's own frontend can typecheck the checker
-// source — but writing the Go shell to the canonical managed slot
-// makes it persist past the subprocess: if the outer LLVM build
-// fails, the next `EnsureNativeChecker` call finds the cached Go
-// shell, short-circuits on `fileExists(path)`, and silently downgrades
-// the production checker to the Go fallback. Routing the fallback to
-// a sibling path keeps the canonical slot empty until a real LLVM
-// build promotes its artifact there, so failed LLVM builds surface
-// as the expected "managed slot still empty → retry the build"
-// behavior on the next call instead of an undetectable downgrade.
-func recursionFallbackCheckerPath(projectRoot string) string {
-	return filepath.Join(projectRoot, toolchainDirName, Version(), NativeCheckerBinaryName()+".recursion-fallback")
-}
-
 // InvalidateManagedNativeChecker deletes the cached managed checker
 // artifact (if present) so the next `EnsureNativeChecker` call rebuilds
 // it from scratch. Used by `osty install-self` to retire a Go-built
@@ -158,53 +139,6 @@ func InvalidateManagedNativeChecker(projectRoot string) error {
 		return fmt.Errorf("invalidate managed native checker %s: %w", path, err)
 	}
 	return nil
-}
-
-// InvalidateAllManagedNativeCheckers removes every cached
-// native-checker artifact under `<projectRoot>/<toolchainDirName>/*/`.
-// Use after `install-self` produces a new `osty-self` so that any
-// `--osty-bin <other-host>` invocation (which pins a different
-// toolchain version stamp under a sibling subdirectory) also picks
-// up the LLVM-built variant on its next build, rather than continuing
-// to serve a stale Go-built fallback from its own slot.
-//
-// `InvalidateManagedNativeChecker(projectRoot)` only touches the
-// current process's `Version()` slot — sufficient when the install
-// runs from the same host that subsequent builds use, but pre-PR
-// #1999 it silently left a stale fallback in any other version slot
-// the project had accumulated (typical when devs switch between two
-// `osty` builds during bootstrap iteration).
-//
-// Best-effort: a missing tree returns nil; per-entry remove errors
-// are collected into a joined error so the caller can warn but the
-// loop processes every slot.
-func InvalidateAllManagedNativeCheckers(projectRoot string) error {
-	toolchainDir := filepath.Join(projectRoot, toolchainDirName)
-	entries, err := os.ReadDir(toolchainDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("scan managed toolchain dir %s: %w", toolchainDir, err)
-	}
-	var errs []error
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		slot := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName())
-		if err := os.Remove(slot); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("invalidate %s: %w", slot, err))
-		}
-		// Also clear the recursion-fallback slot — if a previous
-		// build crashed mid-way, the fallback could persist and
-		// the next subprocess would prefer it over rebuilding.
-		fallback := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName()+".recursion-fallback")
-		if err := os.Remove(fallback); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("invalidate %s: %w", fallback, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // ManagedNativeCheckerLLVMPath returns the conventional location
@@ -284,18 +218,6 @@ func EnsureNativeChecker(start string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Recursion-guard detour: when we are the LLVM-build subprocess
-	// spawned by an outer EnsureNativeChecker, prefer the sibling
-	// "recursion-fallback" slot the subprocess wrote into. This keeps
-	// the canonical managed slot untouched until the outer LLVM build
-	// produces a real artifact, so a failed LLVM build does not leak
-	// the Go shell into the persistent cache.
-	if os.Getenv(RecursionGuardEnv) == "1" {
-		fallback := recursionFallbackCheckerPath(root)
-		if fileExists(fallback) {
-			return fallback, nil
-		}
-	}
 	path := ManagedNativeCheckerPath(root)
 	if fileExists(path) {
 		return path, nil
@@ -304,11 +226,6 @@ func EnsureNativeChecker(start string) (string, error) {
 	nativeCheckerBuildMu.Lock()
 	defer nativeCheckerBuildMu.Unlock()
 
-	if os.Getenv(RecursionGuardEnv) == "1" {
-		if fallback := recursionFallbackCheckerPath(root); fileExists(fallback) {
-			return fallback, nil
-		}
-	}
 	if fileExists(path) {
 		return path, nil
 	}
@@ -317,14 +234,6 @@ func EnsureNativeChecker(start string) (string, error) {
 	}
 	if err := installNativeChecker(path); err != nil {
 		return "", err
-	}
-	if os.Getenv(RecursionGuardEnv) == "1" {
-		// In the recursion case installNativeChecker wrote the Go
-		// shell to the recursion-fallback slot, not `path`. Return
-		// that slot so the caller's frontend has a usable checker.
-		if fallback := recursionFallbackCheckerPath(root); fileExists(fallback) {
-			return fallback, nil
-		}
 	}
 	return path, nil
 }
@@ -340,10 +249,10 @@ func defaultManagedProjectRoot(start string) (string, error) {
 	return root, nil
 }
 
-// ProbeManagedNativeChecker returns the path of the managed
-// native-checker artifact if it already exists, or empty if none is
-// cached. Probe-only: does NOT trigger a build. Use this from CLI
-// entry points that need to propagate `OSTY_NATIVE_CHECKER_BIN` to
+// ProbeManagedNativeChecker returns the managed native-checker path
+// if it already exists, or "" if no build has populated the slot yet.
+// Probe-only: does NOT trigger a build. Use this from CLI entry
+// points that need to propagate `OSTY_NATIVE_CHECKER_BIN` to
 // subprocesses without paying for an LLVM build on cold caches —
 // `EnsureNativeChecker` fires the full build path and is wrong for
 // cheap commands like `osty fmt` / `osty --help`.
@@ -360,6 +269,46 @@ func ProbeManagedNativeChecker(start string) string {
 		return ""
 	}
 	return path
+}
+
+// InvalidateAllManagedNativeCheckers removes every cached
+// native-checker artifact under `<projectRoot>/<toolchainDirName>/*/`.
+// Use after `install-self` produces a new `osty-self` so that any
+// `--osty-bin <other-host>` invocation (which pins a different
+// toolchain version stamp under a sibling subdirectory) also picks
+// up the LLVM-built variant on its next build, rather than continuing
+// to serve a stale Go-built fallback from its own slot.
+//
+// `InvalidateManagedNativeChecker(projectRoot)` only touches the
+// current process's `Version()` slot — sufficient when the install
+// runs from the same host that subsequent builds use, but pre-PR
+// #1999 it silently left a stale fallback in any other version slot
+// the project had accumulated (typical when devs switch between two
+// `osty` builds during bootstrap iteration).
+//
+// Best-effort: a missing tree returns nil; per-entry remove errors
+// are collected into a joined error so the caller can warn but the
+// loop processes every slot.
+func InvalidateAllManagedNativeCheckers(projectRoot string) error {
+	toolchainDir := filepath.Join(projectRoot, toolchainDirName)
+	entries, err := os.ReadDir(toolchainDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("scan managed toolchain dir %s: %w", toolchainDir, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slot := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName())
+		if err := os.Remove(slot); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("invalidate %s: %w", slot, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func defaultSourceRepoRoot() (string, error) {
@@ -428,37 +377,7 @@ func buildNativeChecker(dest string) error {
 	// to `internal/selfhost/generated.go` and has no `osty-self`
 	// dependency — sufficient to typecheck `toolchain/*.osty` and
 	// `cmd/osty-native-checker/main.osty` so the build can complete.
-	if stage0FallbackEnabled() {
-		// Stage0 opt-in: caller explicitly wants the Go shell in the
-		// production slot for the duration of the install-self
-		// bootstrap. The install-self flow invalidates the slot via
-		// `InvalidateManagedNativeChecker` once `osty-self` becomes
-		// resolvable, so this Go shell is intentionally transient.
-		return buildNativeCheckerViaGo(root, dest)
-	}
-	if os.Getenv(RecursionGuardEnv) == "1" {
-		// Recursion detour: route the Go shell to a sibling
-		// "recursion-fallback" slot instead of the canonical managed
-		// slot. The outer LLVM build that spawned us has not finished
-		// yet — if it later fails, the Go shell here would otherwise
-		// remain in the canonical slot and silently downgrade every
-		// subsequent `osty check`/`osty build` to the Go fallback,
-		// hiding the LLVM build failure. The fallback slot is only
-		// visible to subprocesses running under `RecursionGuardEnv`
-		// (see `EnsureNativeChecker`); outside the recursion the
-		// canonical slot stays empty until a real LLVM artifact is
-		// promoted into it.
-		mgrRoot, err := managedProjectRootFunc(".")
-		if err == nil {
-			fallback := recursionFallbackCheckerPath(mgrRoot)
-			if dirErr := os.MkdirAll(filepath.Dir(fallback), 0o755); dirErr == nil {
-				return buildNativeCheckerViaGo(root, fallback)
-			}
-		}
-		// On the rare path where we can't compute the managed root,
-		// fall back to the original behavior — the recursion guard
-		// still prevents an infinite loop, and the failure mode is
-		// the pre-fix one rather than a worse mis-resolution.
+	if stage0FallbackEnabled() || os.Getenv(RecursionGuardEnv) == "1" {
 		return buildNativeCheckerViaGo(root, dest)
 	}
 	if err := verifyOstySelfCached(root); err != nil {

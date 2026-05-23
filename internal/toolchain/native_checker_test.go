@@ -134,11 +134,6 @@ func TestBuildNativeCheckerRecursionGuardDetoursToGoBuild(t *testing.T) {
 	// is the one being exercised, not the stage0 branch.
 	t.Setenv(Stage0FallbackEnv, "")
 	sourceRepoRootFunc = func() (string, error) { return root, nil }
-	// Route managed-project-root resolution at `root` too so the
-	// recursion-fallback slot lands under our temp dir.
-	oldManagedRoot := managedProjectRootFunc
-	managedProjectRootFunc = func(string) (string, error) { return root, nil }
-	t.Cleanup(func() { managedProjectRootFunc = oldManagedRoot })
 	verifyCalls := 0
 	verifyOstySelfCached = func(string) error {
 		verifyCalls++
@@ -159,20 +154,12 @@ func TestBuildNativeCheckerRecursionGuardDetoursToGoBuild(t *testing.T) {
 	if goBuildCalls != 1 {
 		t.Fatalf("goBuildNativeChecker calls = %d, want 1", goBuildCalls)
 	}
-	// Post-PR #1999: the recursion-guard detour writes to the sibling
-	// fallback slot under the managed root, NOT to dest. This keeps
-	// the canonical slot empty until a real LLVM build succeeds, so
-	// a later failure does not leak the Go shell into the cache.
-	fallback := recursionFallbackCheckerPath(root)
-	body, err := os.ReadFile(fallback)
+	body, err := os.ReadFile(dest)
 	if err != nil {
-		t.Fatalf("read recursion-fallback slot %s: %v", fallback, err)
+		t.Fatalf("read managed dest: %v", err)
 	}
 	if string(body) != "recursion-guard go-built checker" {
-		t.Fatalf("recursion-fallback body = %q, want recursion-guard go-built checker", body)
-	}
-	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		t.Fatalf("canonical dest %s should not exist under recursion guard, got err=%v", dest, err)
+		t.Fatalf("managed dest body = %q, want recursion-guard go-built checker", body)
 	}
 }
 
