@@ -249,9 +249,22 @@ After `git clone` + `go build -o .bin/osty ./cmd/osty`:
 
 ```sh
 just bootstrap   # builds osty + native-checker + native-lirproto, then
-                 # `osty install-self` builds osty-self and promotes it
-                 # into .osty/cache/self-host/<sha>-<triple>/
+                 # `OSTY_STAGE0_FALLBACK=1 osty install-self` builds
+                 # osty-self and promotes it into .osty/cache/self-host/
+                 # <sha>-<triple>/.
 ```
+
+`just bootstrap` bakes in `OSTY_STAGE0_FALLBACK=1` because the
+production native-checker build path (PR #1954) gates on a resolvable
+`osty-self`, which fresh clones do not have. The env var (PR #1980)
+tells `install-self` to take the stage0 source-bootstrap path AND
+tells `buildNativeChecker` to detour to `go build
+./cmd/osty-native-checker` (PR #1988), sidestepping the chicken-and-
+egg. After `install-self` succeeds, the Go-built native checker slot
+is invalidated so the next `osty build` produces the LLVM variant
+from live `toolchain/*.osty`. Override with `OSTY_STAGE0_FALLBACK=
+just bootstrap` to verify the prebuilt-only path (registry / cache
+hit) end-to-end.
 
 Subsequent `osty build` / `osty run` / `osty test` invocations resolve
 the binary through the cache and skip the slow toolchain rebuild.
@@ -281,8 +294,10 @@ in order:
 When all four miss, the resolver returns the canonical `osty-self
 not found` decline so the upstream backend dispatcher can fall back
 to its decline handler. **Fresh clones therefore work out of the
-box** without exporting any env var — `just bootstrap` consults the
-upstream registry directly.
+box** — `just bootstrap` first consults the upstream registry, and
+when offline / registry-unreachable falls through to the stage0
+source-bootstrap path (the env var is baked into the recipe — see
+the "One-shot bootstrap" section above).
 
 ### Network fetch + signing
 

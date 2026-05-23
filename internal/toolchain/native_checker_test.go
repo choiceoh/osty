@@ -146,6 +146,43 @@ func TestFilterEnvRemovesInheritedRecursionGuard(t *testing.T) {
 	}
 }
 
+// TestInvalidateManagedNativeCheckerDeletesArtifact pins the
+// post-stage0 upgrade hook: after `osty install-self` populates the
+// cache with a freshly bootstrapped `osty-self`, the helper must
+// retire the Go-built native checker so the next `osty build` rebuilds
+// the LLVM variant. Missing-file is silent; any other error surfaces.
+func TestInvalidateManagedNativeCheckerDeletesArtifact(t *testing.T) {
+	root := t.TempDir()
+	dest := ManagedNativeCheckerPath(root)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(dest, []byte("go-built"), 0o755); err != nil {
+		t.Fatalf("seed managed checker: %v", err)
+	}
+
+	if err := InvalidateManagedNativeChecker(root); err != nil {
+		t.Fatalf("InvalidateManagedNativeChecker: %v", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("dest %q must not exist after invalidate (stat err: %v)", dest, err)
+	}
+}
+
+// TestInvalidateManagedNativeCheckerIsSilentWhenAbsent guards the
+// happy-path install-self flow: if the stage0 path was taken but the
+// managed checker slot was never populated (e.g. sub-osty build short-
+// circuited via a different code path), invalidate is a no-op instead
+// of an error. That way install-self never surfaces a spurious warning
+// in the common case.
+func TestInvalidateManagedNativeCheckerIsSilentWhenAbsent(t *testing.T) {
+	root := t.TempDir()
+	// Never create the managed checker slot.
+	if err := InvalidateManagedNativeChecker(root); err != nil {
+		t.Fatalf("InvalidateManagedNativeChecker on absent slot returned error: %v", err)
+	}
+}
+
 // TestBuildNativeCheckerStage0FallbackDetoursToGoBuild pins the
 // fresh-clone bootstrap fix: with `OSTY_STAGE0_FALLBACK=1`,
 // `buildNativeChecker` must short-circuit to the Go-build path and

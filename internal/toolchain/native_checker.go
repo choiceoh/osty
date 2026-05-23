@@ -121,6 +121,26 @@ func ManagedNativeCheckerPath(projectRoot string) string {
 	return filepath.Join(projectRoot, toolchainDirName, Version(), NativeCheckerBinaryName())
 }
 
+// InvalidateManagedNativeChecker deletes the cached managed checker
+// artifact (if present) so the next `EnsureNativeChecker` call rebuilds
+// it from scratch. Used by `osty install-self` to retire a Go-built
+// fallback (placed by the stage0 bootstrap path) once `osty-self`
+// becomes resolvable — the next `osty build` will then re-enter
+// `buildNativeChecker` and produce the LLVM-built variant from live
+// `toolchain/*.osty` sources, which is the steady-state production
+// configuration described in `cmd/osty-native-checker/README.md`.
+//
+// A missing file is not an error. Any other error (e.g. permission
+// denied) is returned so the caller can decide whether to surface a
+// warning.
+func InvalidateManagedNativeChecker(projectRoot string) error {
+	path := ManagedNativeCheckerPath(projectRoot)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("invalidate managed native checker %s: %w", path, err)
+	}
+	return nil
+}
+
 // ManagedNativeCheckerLLVMPath returns the conventional location
 // `osty build --backend llvm cmd/osty-native-checker/` writes its
 // artifact to (`<project>/cmd/osty-native-checker/.osty/out/{debug,release}/llvm/osty-native-checker-llvm`).

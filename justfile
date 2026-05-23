@@ -47,8 +47,17 @@ build-all: build build-checker build-lirproto
 # Subsequent compiles look the binary up via
 # `selfhostcache.ResolveBinary` instead of re-running the slow
 # toolchain build.
+#
+# OSTY_STAGE0_FALLBACK=1 is baked in: post-PR #1954, the production
+# native-checker build path gates on a resolvable `osty-self`, which
+# fresh clones do not have. The env var (introduced by #1980, wired
+# through buildNativeChecker by #1988) tells install-self to take the
+# stage0 source-bootstrap path AND tells buildNativeChecker to detour
+# to `go build ./cmd/osty-native-checker` so the chicken-and-egg never
+# triggers. Override on the command line (`OSTY_STAGE0_FALLBACK= just
+# bootstrap`) when you want to verify the prebuilt-only path instead.
 bootstrap: build-all
-    {{bin}} install-self
+    OSTY_STAGE0_FALLBACK=1 {{bin}} install-self
 
 # cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
 # osty-self path for the current toolchain SHA + host triple. With
