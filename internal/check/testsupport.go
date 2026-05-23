@@ -10,10 +10,11 @@ import (
 	"testing"
 )
 
-// Test helpers for migrating individual test packages off the embedded
-// default checker toward the production managed subprocess.
+// Test helpers for packages that need a subprocess native checker in tests.
 //
-// Migration recipe:
+// Production installs the managed checker from cmd/osty/main.go; individual
+// `go test` packages must opt in explicitly so cold builds do not run from
+// every package's TestMain.
 //
 //  1. Add a TestMain to the test package (or reuse an existing one) that
 //     calls BuildSharedNativeCheckerForTests once and installs it via
@@ -24,12 +25,7 @@ import (
 //  3. Tests using either helper must NOT call t.Parallel() — the factory
 //     is a package var and concurrent swaps would race.
 //
-// Why this exists: the production CLI flips to the managed subprocess at
-// startup (cmd/osty/main.go calls UseManagedSubprocessChecker), but test
-// binaries don't, so they run against the frozen embedded seed
-// (internal/selfhost/generated.go). Migrating tests off embedded is a
-// prerequisite for gate (b-hard) — deleting embeddedNativeChecker entirely.
-// See SUBPROCESS_SWITCHOVER.md.
+// See SUBPROCESS_SWITCHOVER.md (gate b-hard).
 
 var (
 	sharedTestCheckerOnce sync.Once

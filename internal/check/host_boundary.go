@@ -23,9 +23,9 @@ import (
 
 const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
 
-// The checker targets an Osty-native request/response boundary. The default
-// host implementation uses the embedded selfhost checker in-process; callers
-// can opt into an external executable by setting OSTY_NATIVE_CHECKER_BIN.
+// The checker targets an Osty-native request/response boundary. Production
+// installs a subprocess implementation via UseManagedSubprocessChecker;
+// OSTY_NATIVE_CHECKER_BIN selects an explicit executable before that hook runs.
 //
 // The result and request types are api.CheckResult / api.CheckRequest so the
 // in-process embedded path and the subprocess exec path speak identical
@@ -113,9 +113,10 @@ var productionNativeCheckerFactory = func() (nativeChecker, string) {
 // is now sourced from live `toolchain/*.osty` instead of
 // `internal/selfhost/generated.go`.
 //
-// Tests do not call this and continue to use the embedded factory — the
-// managed binary build would otherwise add seconds and clutter
-// `internal/check/.osty/` on every package's test run.
+// Test packages that exercise the factory should install a subprocess checker
+// from TestMain (see internal/check/main_test.go and testsupport.go). The
+// managed LLVM build is intentionally not triggered from every `go test`
+// package — that would add seconds and clutter `.osty/` trees.
 func UseManagedSubprocessChecker(start string) {
 	productionNativeCheckerFactory = func() (nativeChecker, string) {
 		path, err := toolchain.EnsureNativeChecker(start)
@@ -129,9 +130,9 @@ func UseManagedSubprocessChecker(start string) {
 var nativeCheckerFactory = defaultNativeChecker
 
 // NativePackageCheck routes a structured package-check request through the
-// production native checker (managed subprocess after CLI startup invokes
-// UseManagedSubprocessChecker, embedded otherwise; OSTY_NATIVE_CHECKER_BIN
-// overrides both). Returns the raw api.CheckResult directly, skipping the
+// configured native checker (explicit OSTY_NATIVE_CHECKER_BIN, else the
+// factory from UseManagedSubprocessChecker in production, else nil with a
+// note). Returns the raw api.CheckResult directly, skipping the
 // *Result wrapper that Package() builds for diagnostic-rendering callers.
 //
 // Use from CLI code paths that previously called
@@ -358,8 +359,8 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 	}
 	// Per-package native checker calls are the slowest stage of
 	// `osty check` / `osty build` on multi-package workspaces: each
-	// CheckPackageStructured round-trip either forks a subprocess
-	// (managed checker) or runs the embedded self-host checker, both
+	// CheckPackageStructured round-trip forks the configured subprocess
+	// checker (managed LLVM binary or test-installed shell), typically
 	// O(tens of ms) per package and trivially CPU-independent across
 	// packages since the input is a read-only view of the resolved
 	// workspace. Run them in parallel across a bounded worker pool
@@ -369,7 +370,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*r
 	//
 	// Opt-out via OSTY_CHECK_PARALLEL=0 for debugging ordering-
 	// dependent bugs. Cap at GOMAXPROCS so we don't oversubscribe
-	// when embedded; subprocess workers scale down gracefully via
+	// when the checker is in-process (rare); subprocess workers scale down gracefully via
 	// the OS scheduler.
 	type pkgJob struct {
 		path       string

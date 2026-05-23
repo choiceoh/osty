@@ -33,7 +33,8 @@ func EmbeddedCheckerFingerprint(repoRoot string) string {
 }
 
 // UseCachedDefaultNativeChecker wraps whichever checker `defaultNativeChecker`
-// would return (embedded by default, or an explicit subprocess override) in
+// would return (managed subprocess after CLI startup, or an explicit
+// OSTY_NATIVE_CHECKER_BIN override) in
 // the on-disk
 // cache layer. First-time builds pay the full check cost; second-and-later
 // builds with unchanged package inputs short-circuit to a JSON read
@@ -66,8 +67,8 @@ func UseCachedDefaultNativeChecker(cacheDir, validity string) {
 	}
 }
 
-// cachedNativeChecker wraps any nativeChecker (embedded, managed exec,
-// or future backends) with an on-disk JSON cache keyed by the
+// cachedNativeChecker wraps any nativeChecker (subprocess exec, or future
+// backends) with an on-disk JSON cache keyed by the
 // fingerprint of the input. First-time inputs pay the full cost of
 // `backing.CheckSourceStructured` / `backing.CheckPackageStructured`;
 // subsequent identical inputs hit the cache and return in

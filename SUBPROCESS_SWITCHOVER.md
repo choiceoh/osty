@@ -2,7 +2,7 @@
 
 - **Scope**: Performance baseline for the embedded vs subprocess native-checker decision.
 - **Type**: Reference / decision data
-- **Status**: Gate (a) **shipped** — CLI startup installs the managed subprocess checker as the production default via `check.UseManagedSubprocessChecker`, and every package-input check path (`osty check` / `lint` / `typecheck` / `build` / `run` / `test` / `ci` / `lsp` / `pipeline`) now routes through `check.NativePackageCheck` so the factory selection is consistent across commands. Gate (b) **partial** — the production factory no longer falls back to embedded on managed-build failure (a missing Go toolchain or broken build now surfaces as a clear diagnostic instead of silently re-routing to the frozen in-process checker). Full embedded code removal still depends on migrating the test infrastructure off the embedded default.
+- **Status**: Gate (a) **shipped** — CLI startup installs the managed subprocess checker as the production default via `check.UseManagedSubprocessChecker`, and every package-input check path (`osty check` / `lint` / `typecheck` / `build` / `run` / `test` / `ci` / `lsp` / `pipeline`) now routes through `check.NativePackageCheck` so the factory selection is consistent across commands. Gate (b-soft) **shipped** — the production factory no longer silently falls back to an in-process checker on managed-build failure. Gate (b-hard) **shipped** — `embeddedNativeChecker` was removed from the factory; the subprocess binary (LLVM-built in production via `toolchain.EnsureNativeChecker`, Go-built shell from `go build ./cmd/osty-native-checker` in focused tests) is the only factory-backed implementation. The frozen `internal/selfhost/generated.go` seed remains for direct `selfhost.CheckSourceStructured` / snapshot callers, not for the default CLI router.
 
 ## Why this baseline exists
 
@@ -12,8 +12,11 @@ the same `nativeChecker` interface:
 - **embedded** — in-process via `internal/selfhost` (the frozen 68k-line
   `internal/selfhost/generated.go` seed). Removed in gate (b-hard); see
   history below.
-- **subprocess** — forks `OSTY_NATIVE_CHECKER_BIN`, JSON request via stdin,
-  JSON response on stdout. Now the only checker the factory ever returns.
+- **subprocess** — forks the configured checker binary, JSON request via stdin,
+  JSON response on stdout. Production resolves the managed LLVM artifact under
+  `.osty/toolchain/<ver>/` (see `toolchain.EnsureNativeChecker`); tests typically
+  use a one-off `go build` of `cmd/osty-native-checker` (Go shell). Now the only
+  checker the factory ever returns.
 
 Today's default (CLI startup, after gate (a) flip) is **subprocess** via
 `check.UseManagedSubprocessChecker(".")` in `cmd/osty/main.go`, which lazily
@@ -30,14 +33,18 @@ directly (`runCheckPackageDir`, `runWorkspaceCheck`,
 so the same factory selection that built the bench data feeds every
 `osty check` / `osty lint` / `osty typecheck` invocation.
 
-Tests inside `internal/check/` and downstream packages keep the embedded
-default — `UseManagedSubprocessChecker` is called only from CLI startup,
-not from `TestMain`, so `go test ./...` from inside the repo doesn't
-trigger managed binary builds that would otherwise add seconds and
-clutter every test package's `.osty/toolchain/...`.
+Tests inside `internal/check/` install the subprocess checker once from
+`TestMain` (`BuildSharedNativeCheckerForTests` + `InstallSubprocessCheckerForPackageTests`)
+so this package exercises the same factory path as production without
+embedding the managed LLVM build in every `go test` invocation.
 
-Gate (b-hard) prerequisites — migrating tests off that embedded default —
-have begun. `internal/check/testsupport.go` exposes three helpers:
+Other downstream test packages (`internal/ir/`, `internal/backend/`, …)
+should follow the migration recipe below when they call `check.Package` /
+`NativePackageCheck`.
+
+Gate (b-hard) follow-up — migrating remaining downstream test packages that
+call `check.Package` / `NativePackageCheck` without a `TestMain` hook — is
+ongoing. `internal/check/testsupport.go` exposes three helpers:
 
 - `BuildSharedNativeCheckerForTests()` — builds `cmd/osty-native-checker`
   once per test binary into a temp dir, returning its absolute path.

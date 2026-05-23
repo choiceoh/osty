@@ -40,11 +40,16 @@ Each stage produces diagnostics as it goes; they accumulate in a single
 ### Self-hosted toolchain (Osty-authored compiler core)
 
 The repo ships ~110 `.osty` files under `toolchain/` that reimplement
-the compiler pipeline in Osty itself. These are merged into a single
-bootstrap core by `internal/selfhost/bundle/bundle.go`, compiled to
-Go via the frozen seed in `internal/selfhost/generated.go`, and wired
-through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
-`format_adapter.go`) so the Go CLI can consume native results. Key modules:
+the compiler pipeline in Osty itself. They are the **source of truth** for
+the native checker and LLVM backend. A frozen Go transcription in
+`internal/selfhost/generated.go` still exists for in-process helpers and
+parity tests (`selfhost.CheckSourceStructured` / `CheckStructuredFromRun`),
+while **production type checking** routes through the LLVM-built
+`osty-native-checker` subprocess (JSON wire types in `internal/selfhost/api`)
+after `cmd/osty` calls `check.UseManagedSubprocessChecker` — see
+`SUBPROCESS_SWITCHOVER.md`. Adapter layers (`check_adapter.go`, `parse.go`,
+`resolve_adapter.go`, `format_adapter.go`) bridge structured results back
+into Go `diag` / AST consumers. Key modules:
 
 | Module | Lines | Purpose |
 |---|---|---|
@@ -109,23 +114,37 @@ Builder/derive policy: `builder_policy.osty` (~60 lines), `check_bridge.osty` (~
 
 Test files: ~59 `*_test.osty` covering all production modules.
 
-### Default path: self-host arena (since Phase 1c.1, updated 2026-04-27)
+### Default path: native checker subprocess (updated 2026-05)
 
-`osty check` and `osty typecheck` now dispatch to the **self-host arena
-pipeline** by default: `parser.ParseRun` produces a selfhost `FrontendRun`
-(no astbridge lowering), then `selfhost.CheckStructuredFromRun` runs the
-Osty-native resolver + checker in one pass, emitting structured records
-that `selfhost.CheckDiagnosticsAsDiag` lifts into the CLI's `diag.Diagnostic`
-shape. The Go-hosted `--legacy` check/typecheck escape hatch, the `check.File`
-entrypoint, and the no-op `--native` flag have all been removed; the self-host
-pipeline is the only path. `osty resolve` is also self-host-first. Package
-and workspace loaders for `pipeline`, `build`, `run`, `doc`, `lsp`, and
-`cihost` use arena-first `FrontendRun` parsing. Some compatibility wrappers
-still call `EnsureFiles` / `MaterializeCanonicalSources` to hand downstream
-passes the old `*ast.File` shape, while bump-free native paths use the
-structured adapters directly. The remaining astbridge cleanup is therefore
-lint/formatter/LSP/backend consumer work, not the
-check/typecheck happy path.
+**Type checking in the CLI** is subprocess-first: `cmd/osty/main.go` installs
+`check.UseManagedSubprocessChecker(".")` at startup. Every factory-routed
+call (`check.NativePackageCheck`, `check.Package` / `check.Workspace`,
+`check.SelfhostFile`, `check.SelfhostRun`) resolves the checker via
+`nativeCheckerFactory()` — production uses `toolchain.EnsureNativeChecker` to
+build or reuse the **LLVM** `cmd/osty-native-checker/` artifact (needs a
+resolvable `osty-self`; see `README.md` and `cmd/osty-native-checker/README.md`).
+`OSTY_NATIVE_CHECKER_BIN` overrides the path for debugging or CI prebuilds.
+
+The subprocess speaks JSON on stdin/stdout (`api.CheckRequest` →
+`api.CheckResult`). The Go front-end still **loads and resolves** packages
+(`resolve.LoadPackageForNative`, workspace graphs, `packageCheckInput` import
+surfaces); the checker binary runs lex → parse → resolve → check over that
+wire input. Workspace checks optionally parallelize per-package subprocess
+round-trips (`OSTY_CHECK_PARALLEL`, default on).
+
+**In-process selfhost** (`parser.ParseRun` → `FrontendRun`,
+`selfhost.CheckStructuredFromRun` in `check_adapter.go`) remains for tests,
+snapshot matrices, and callers that intentionally execute the frozen
+`generated.go` checker without spawning the native binary. It is **not**
+the production `osty check` router after the subprocess switchover
+(`SUBPROCESS_SWITCHOVER.md` gate b-hard).
+
+The Go-hosted `--legacy` check/typecheck escape hatch, the `check.File`
+entrypoint, and the no-op `--native` flag are removed. `osty resolve` stays
+self-host-first for name resolution. Package/workspace loaders for
+`pipeline`, `build`, `run`, `doc`, `lsp`, and `cihost` still mix arena-first
+parsing with compatibility paths that materialize `*ast.File` for consumers
+that have not finished astbridge cleanup (lint / formatter / LSP / backend).
 
 ## Package cheat sheet
 

@@ -6,17 +6,20 @@ matching responsibilities, built from disjoint sources.
 
 ## Targets
 
-| target | command | source | status |
+| target | command | source | role |
 |---|---|---|---|
-| Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `.bin/osty build --bootstrap-stage0 --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **M4 byte parity — bricks A/B/C all wired (byte offsets, telemetry, sha256 stable IDs)** |
+| LLVM-built (managed) | `osty build --backend llvm cmd/osty-native-checker/` (via `toolchain.EnsureNativeChecker` from the CLI) | `main.osty` + `tc.frontCheckPackageToWireJson` / `tc.frontCheckSourceToWireJson` | **Production default** — `cmd/osty` calls `check.UseManagedSubprocessChecker`, which resolves this binary (needs a working `osty-self` cache or override; see below). |
+| Go-built (shell) | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | **Tests and ad-hoc debugging** — `internal/check.BuildSharedNativeCheckerForTests` builds this shell so `go test` packages can install a subprocess checker without compiling the LLVM target. |
 
 ## Why two targets
 
 The LLVM-built target is the **smallest meaningful unit of true self-hosting**
 under the plan tracked in [docs/llvm-selfhost-plan.md](../../docs/llvm-selfhost-plan.md).
-The Go-built target remains the production checker until the LLVM-built one
-reaches behavior parity (plan §12 M3/M4).
+The Go-built shell remains a **fast, hermetic** subprocess for Go test binaries
+and manual JSON experiments; production `osty check` / `lint` / `typecheck` /
+`build` routes through the managed **LLVM** artifact so checker behavior tracks
+`toolchain/*.osty` instead of the frozen seed (`ARCHITECTURE.md`,
+`SUBPROCESS_SWITCHOVER.md`).
 
 ## Current state (2026-05-19)
 

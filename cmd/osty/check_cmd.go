@@ -268,8 +268,8 @@ func printStructuredPackageTypes(result api.CheckResult, files []api.PackageChec
 // runCheckPackageDir is the DIR sibling of runCheckFile.
 // Loads the package via LoadPackageForNative (no eager *ast.File
 // materialization), routes the structured check through
-// check.NativePackageCheck (factory-selected: managed subprocess in
-// production, embedded fallback otherwise), and converts the resulting
+// check.NativePackageCheck (factory-selected: managed LLVM subprocess after
+// CLI startup, or OSTY_NATIVE_CHECKER_BIN override), and converts the resulting
 // CheckDiagnosticRecord slice into per-file *diag.Diagnostic values so
 // printPackageDiags keeps its file-bucketed rendering. Returns the
 // subcommand exit code.
