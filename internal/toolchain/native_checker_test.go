@@ -146,6 +146,109 @@ func TestFilterEnvRemovesInheritedRecursionGuard(t *testing.T) {
 	}
 }
 
+// TestBuildNativeCheckerStage0FallbackDetoursToGoBuild pins the
+// fresh-clone bootstrap fix: with `OSTY_STAGE0_FALLBACK=1`,
+// `buildNativeChecker` must short-circuit to the Go-build path and
+// MUST NOT call `verifyOstySelfCached`. Pre-fix this combo failed with
+// "LLVM-built osty-native-checker requires a resolvable osty-self" on
+// every fresh clone — the chicken-and-egg PR #1954 reintroduced.
+func TestBuildNativeCheckerStage0FallbackDetoursToGoBuild(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, NativeCheckerBinaryName())
+
+	oldRepoRoot := sourceRepoRootFunc
+	oldVerify := verifyOstySelfCached
+	oldGoBuild := goBuildNativeChecker
+	t.Cleanup(func() {
+		sourceRepoRootFunc = oldRepoRoot
+		verifyOstySelfCached = oldVerify
+		goBuildNativeChecker = oldGoBuild
+	})
+
+	t.Setenv(Stage0FallbackEnv, "1")
+	sourceRepoRootFunc = func() (string, error) { return root, nil }
+	verifyCalls := 0
+	verifyOstySelfCached = func(string) error {
+		verifyCalls++
+		return errors.New("must not be called under stage0 fallback")
+	}
+	goBuildCalls := 0
+	goBuildNativeChecker = func(rootArg, outPath string) error {
+		goBuildCalls++
+		if rootArg != root {
+			t.Fatalf("goBuildNativeChecker root = %q, want %q", rootArg, root)
+		}
+		return os.WriteFile(outPath, []byte("go-built native checker"), 0o755)
+	}
+
+	if err := buildNativeChecker(dest); err != nil {
+		t.Fatalf("buildNativeChecker: %v", err)
+	}
+	if verifyCalls != 0 {
+		t.Fatalf("verifyOstySelfCached called %d times under stage0 fallback, want 0", verifyCalls)
+	}
+	if goBuildCalls != 1 {
+		t.Fatalf("goBuildNativeChecker calls = %d, want 1", goBuildCalls)
+	}
+	body, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read managed dest: %v", err)
+	}
+	if string(body) != "go-built native checker" {
+		t.Fatalf("managed dest body = %q, want go-built native checker", body)
+	}
+}
+
+// TestStage0FallbackEnabledAcceptsCanonicalTruthyValues guards parser
+// drift between this gate and `cmd/osty/install_self.go::
+// stage0SourceBootstrapEnabled`. The two helpers MUST recognise the
+// same truthy spellings so `OSTY_STAGE0_FALLBACK=true osty install-self`
+// works end-to-end without the install-self side accepting the env var
+// while the native-checker side rejects it (or vice versa).
+func TestStage0FallbackEnabledAcceptsCanonicalTruthyValues(t *testing.T) {
+	for _, value := range []string{"1", "true", "TRUE", "True", "yes", "YES", "on", "On"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(Stage0FallbackEnv, value)
+			if !stage0FallbackEnabled() {
+				t.Fatalf("stage0FallbackEnabled() = false for %q, want true", value)
+			}
+		})
+	}
+	for _, value := range []string{"", "0", "false", "no", "off", "random"} {
+		t.Run("disabled-"+value, func(t *testing.T) {
+			t.Setenv(Stage0FallbackEnv, value)
+			if stage0FallbackEnabled() {
+				t.Fatalf("stage0FallbackEnabled() = true for %q, want false", value)
+			}
+		})
+	}
+}
+
+// TestBuildNativeCheckerViaGoSurfacesMissingArtifact protects against
+// the silent-success case where `go build` reports zero but the
+// expected binary is missing (e.g. cross-compile target mismatch).
+// The function must reject that case loudly so install-self does not
+// promote a non-existent file into the managed slot.
+func TestBuildNativeCheckerViaGoSurfacesMissingArtifact(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, NativeCheckerBinaryName())
+
+	oldGoBuild := goBuildNativeChecker
+	t.Cleanup(func() { goBuildNativeChecker = oldGoBuild })
+	goBuildNativeChecker = func(string, string) error {
+		// Pretend `go build` succeeded but never wrote the file.
+		return nil
+	}
+
+	err := buildNativeCheckerViaGo(root, dest)
+	if err == nil {
+		t.Fatal("buildNativeCheckerViaGo returned nil, want missing-artifact error")
+	}
+	if !strings.Contains(err.Error(), "did not produce") {
+		t.Fatalf("err = %v, want missing-artifact message", err)
+	}
+}
+
 func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
 	root := t.TempDir()
 	dest := filepath.Join(root, NativeCheckerBinaryName())
@@ -157,6 +260,12 @@ func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
 		verifyOstySelfCached = oldVerify
 	})
 
+	// Explicitly clear the stage0 fallback gate — it would short-circuit
+	// `buildNativeChecker` to the Go-build path before the cache-miss
+	// check could fire, masking this regression test if the surrounding
+	// environment happened to leak `OSTY_STAGE0_FALLBACK=1` from an
+	// install-self invocation.
+	t.Setenv(Stage0FallbackEnv, "")
 	sourceRepoRootFunc = func() (string, error) { return root, nil }
 	verifyOstySelfCached = func(string) error {
 		return errors.New("osty-self not cached: run `osty install-self` first")
