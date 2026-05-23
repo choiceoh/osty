@@ -1,0 +1,16 @@
+// Matrix §2.1.A retest: json.parse was "FAIL" (body lower failed).
+// No specific fix landed since 5/5, but rerun to confirm.
+
+use std.testing
+use std.json
+
+fn testJsonParseObject() {
+    let src = "\{\"k\":1\}"
+    let result = json.parse(src)
+    testing.assertTrue(result.isOk())
+}
+
+fn testJsonParseScalar() {
+    let result = json.parse("42")
+    testing.assertTrue(result.isOk())
+}

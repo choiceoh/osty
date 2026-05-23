@@ -1,0 +1,15 @@
+// Confirm the Deneb-ported stdlib modules at least lex/parse/resolve/check.
+// They are tier 3 ⭐⭐⭐ (Surface-rich, unspec). LLVM lowering of their
+// public surfaces is not the goal here — just "do the imports survive".
+
+use std.testing
+use std.aiagents
+use std.markdown
+use std.redact
+use std.search
+use std.media
+use std.httpretry
+
+fn testDenebPortsImport() {
+    testing.assertTrue(true)
+}

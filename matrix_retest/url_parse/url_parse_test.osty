@@ -1,0 +1,9 @@
+// Matrix §2.1.A retest: url.parse was "FAIL".
+
+use std.testing
+use std.url
+
+fn testUrlParse() {
+    let result = url.parse("https://example.com/path?q=1")
+    testing.assertTrue(result.isOk())
+}

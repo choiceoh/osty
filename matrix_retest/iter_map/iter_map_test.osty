@@ -1,0 +1,11 @@
+// Matrix §2.1.A retest: iter.map(closure) was "FAIL". After PR
+// #1981 (closure-taking collections lowering complete), this should
+// pass with OSTY_STDLIB_BODY_LOWER=1.
+
+use std.testing
+
+fn testListMapClosure() {
+    let xs = [1, 2, 3, 4]
+    let doubled = xs.map(|x| x * 2)
+    testing.assertEq(doubled.len(), 4)
+}

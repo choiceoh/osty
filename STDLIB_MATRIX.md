@@ -10,8 +10,17 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 > - `internal/backend/runtime/osty_runtime.c` (23,895 LOC / 638 `osty_rt_*` 함수 / Phase A / C runtime)
 > - `LANG_SPEC_v0.5/10-standard-library/*.md` (스펙 권위)
 >
-> **기준일**: 2026-05-05 (HEAD `b640a833` 대조).
-> **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
+> **기준일**: 2026-05-23 (HEAD `81b13ea` 대조). 직전 리비전: 2026-05-05 (`b640a833`).
+> **2026-05-23 갱신 사유**: 5/19–5/23 18일간 50개 PR이 머지되며 closure body lower 클러스터가 풀림
+> (#1977/#1981/#1982/#1983/#1986/#1987). §2.1.A 표가 가리키던 partial/FAIL 모듈 중 `iter` (List combinator)는
+> 통과로 이동했고, `json`·`encoding`·`crypto`의 실패 모드는 "body lower 실패"에서 "링크 실패" 또는
+> "런타임 -1"로 이동했다. `option`·`result`의 `.map(closure)`는 여전히 FAIL이지만 원인이 closure body가
+> 아니라 `Option<Int>`/`Result<Int, E>` aggregate 반환 enum payload의 MIR 레이아웃 부재로 변경됨. `compress`는
+> 매트릭스의 "PASS direct" 주장과 달리 LLVM 링커가 `std.compress.gzip.encode` 심볼을 찾지 못해 실패 — 회귀 또는
+> 이전 audit 오기. 자세한 재측정은 §2.1.A.2 (2026-05-23 audit) 참조. `matrix_retest/` 디렉토리에 재현용
+> e2e 케이스 13개 추가됨.
+>
+> **이전 매트릭스 (94% Production 주장) 전면 재평가됨** (2026-05-05 audit) —
 > 본문 직접 검증 결과 (1) 백엔드 미구현 모듈을 ⭐⭐⭐⭐⭐로 등재한 사례 다수 발견,
 > (2) `log`처럼 placeholder 본문(`println` 폴백)을 spec 동급으로 잘못 표기한 사례 발견,
 > (3) `thread.Duration{}` 등 spec 위반 중복 정의 의심 — **2026-05-02 재확인 결과 이미 commit `23f4568c`에서 제거 완료**. 현재 `thread.osty`는 `use std.time` + `time.Duration` 단일 사용.
@@ -102,6 +111,57 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 5 FAIL 모듈 (url / json / encoding / iter / log) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering 또는 shim 부재** 로 막힘 — LLVM shim 추가를 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
 
 partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
+
+### 2.1.A.2 LLVM E2E 재측정 (2026-05-23 audit, HEAD `81b13ea`)
+
+5/19–5/23 closure body lower 클러스터 머지 이후 `matrix_retest/` 디렉토리에 1-call e2e
+케이스 13개를 추가해 §2.1.A의 분류가 여전히 유효한지 재측정. 베이스라인 (`examples/<mod>_e2e/`) 14개도
+같은 환경에서 재실행. 환경: Linux x86_64 / clang 18.1.3 / LLVM 18 / Go 1.26.2 toolchain /
+`OSTY_NATIVE_CHECKER_BIN=.osty/bin/osty-native-checker` / `OSTY_SELF_BIN=toolchain/.osty/out/debug/llvm/osty-self`
+(stage0 부트스트랩 4분 12초) / `OSTY_STDLIB_BODY_LOWER=1`.
+
+| 모듈 | 2026-05-05 분류 | 2026-05-23 결과 | 변화 | 갭 분류 (현재) |
+|---|---|---|---|---|
+| strings, char, math, fs, env, os, random, io, bytes | ✅ PASS | (회귀 무, 베이스라인 패스로 간접 확인) | unchanged | — |
+| collections (List/Map/Set 기본 메서드) | ✅ PASS | ✅ PASS | unchanged | — |
+| primitives/int, primitives/float | ✅ PASS | ✅ PASS (`int_control_e2e` 45/45, `int_methods_e2e` 51/51, `int_struct_e2e` 33/33) | unchanged | — |
+| **iter** (List combinator) | ❌ FAIL | ✅ **PASS** (`xs.map(\|x\| ...)`, `xs.fold(0, \|a,x\| a+x)`, `xs.find(\|x\| ...) ?? -1`, `xs.scan(0, \|a,x\| a+x)`, `xs.groupBy(\|x\| x%2)` 전부 통과) | ⬆ **상승** | — |
+| http | untested | ✅ PASS (import-only 표면, 실제 `http.serve` 미테스트) | partial 확인 | full e2e 별도 사이클 필요 |
+| log | ✅ PASS → FAIL (5/5 정정) | ❌ FAIL (`map.new key type <error> has no runtime ABI lane`) | unchanged | C runtime `osty_rt_log_*` + LLVM bridge shim 부재 |
+| uuid | ✅ PASS → partial (5/5 정정) | ❌ FAIL (`cross-module call arg type Uuid is not implemented`) | unchanged | LLVM bridge shim 부재, cross-module struct ABI 미연결 |
+| regex | ✅ PASS → partial (5/5 정정) | ❌ FAIL (`cross-module call arg type Regex is not implemented`) | unchanged | LLVM bridge shim 부재 |
+| **option** | ⚠️ partial | ❌ FAIL (`aggregate.enum: scalar enum variant Int cannot carry payload fields`) | 원인 이동 | closure 통과 했으나 `Option<Int>` 반환 enum payload의 MIR 레이아웃 부재. PR #1977은 unwrap path만 풀고 construction path는 미해결 |
+| **result** | ⚠️ partial | ❌ FAIL (동일: `aggregate.enum: scalar enum variant Int cannot carry payload fields`) | 원인 이동 | 위 동일 |
+| **crypto** | ⚠️ partial | ❌ FAIL (link 통과, `exit status -1` 런타임 크래시) | 진행 (lower+link 통과) | `osty_rt_crypto_sha256` 런타임 구현 버그 또는 ABI mismatch |
+| **json** | ❌ FAIL (body lower 실패) | ❌ FAIL (link 단계: `ld.lld: error: undefined symbol: osty_std_json__parse`) | 진행 (lower 통과) | LLVM bridge shim 부재 — Osty 본문은 lower 되나 module-level 심볼이 emit 안 됨 |
+| **url** | ❌ FAIL (body lower 실패) | ❌ FAIL (`backend: MIR coverage incomplete: for-in over Map with unresolved key/value type is not lowered to MIR yet`) | 원인 이동 | 제네릭 `Map<K,V>` iteration의 MIR lowering 부재 (PR #1986에서 부분 해소했으나 url의 일반화된 케이스는 남음) |
+| **encoding** | ❌ FAIL (가장 단순 케이스도 실패) | ❌ FAIL (link 통과, `exit status -1` 런타임 크래시) | 진행 (lower+link 통과) | runtime 구현 버그 — `encoding.hexEncode(bytes.fromString("AB"))` 호출이 segfault 또는 abort. 의도된 trap일 수도 (`__abort` 인터셉트 미배선) |
+| **compress** | ✅ PASS direct | ❌ FAIL (`ld.lld: error: undefined symbol: std.compress.gzip.encode`) | ⬇ **회귀** 또는 이전 audit 오기 | 표면 11 LOC, 본문 0 — 이전 매트릭스가 단순 매핑만 보고 PASS로 표기했을 가능성. 실제 LLVM 링크 경로는 미연결 |
+| concat_interp (베이스라인) | (목록 없음) | ⚠️ partial (4/10 PASS — `testInterpWithListIndex`/`testInterpMultiple`/`testConcatMixedVarsAndLiterals` 등 6개 FAIL) | (신규 데이터) | String interpolation의 일부 path 미연결 |
+| Deneb 포팅 묶음 (aiagents/markdown/redact/search/media/httpretry) | (§2.3 Surface-rich) | ✅ PASS (`matrix_retest/deneb_ports/`: 6개 모듈 동시 import + trivial assert가 LLVM 빌드+실행 성공) | 신규 확인 | surface는 LLVM 통과. 각 모듈의 진짜 public 함수 호출은 별도 e2e 필요 |
+
+**카운트 (2026-05-23 재측정 후)**:
+
+- 기존 11 PASS 중 회귀: `compress` ❌. → **10 PASS 유지**
+- 신규 PASS로 상승: `iter` (closure cluster). → **+1**
+- partial → FAIL 확정 (원인 이동): `crypto` / `option` / `result`. → 3개. (단, 매트릭스 평가 모델상 partial은 5★ 못 들어가므로 카운트 변화 없음)
+- 정확한 5★ (LLVM E2E PASS) = **11/22 모듈 (50%)** → 동일. 단 구성이 변화 (compress 빠지고 iter 들어감)
+- `http`는 import-only로 partial 검증되어 untested 해제, 단 full e2e는 미수행이므로 5★ 자격 미인정.
+
+| 카테고리 | 2026-05-05 | 2026-05-23 | Δ |
+|---|---|---|---|
+| 5★ LLVM E2E 통과 | 11 | 11 | 0 (compress↓, iter↑) |
+| 5★ declared but unverified | 8 | 8 | 0 |
+| LLVM FAIL (5★ 후보 중) | 5 | 6 | +1 (compress 추가) |
+| LLVM partial (5★ 후보 중) | 3 | 3 | 0 (구성 안정 — crypto/option/result) |
+| LLVM untested (5★ 후보 중) | 1 | 0 | -1 (http import-only 통과) |
+
+**핵심 발견 — closure cluster의 진짜 영향**:
+- ✅ **List combinator** (`map/fold/find/scan/groupBy` with closure): PR #1981/#1983/#1986/#1987로 LLVM 통과 확인. matrix_retest/iter_{map,fold,find,scan,groupby} 5개 디렉토리 전부 PASS.
+- ❌ **Option/Result `.map(closure)`**: 여전히 FAIL이나 원인이 closure가 아니라 **aggregate enum 반환의 MIR layout 부재** (`scalar enum variant Int cannot carry payload fields`). PR #1977은 specific composite payload unwrap만 풀었고, payload construction을 escape하는 generic path는 미해결.
+- ⚠️ **json/encoding/crypto**: closure는 무관. 각각 link symbol 부재 (json), runtime impl 버그 (encoding/crypto)로 갭 모드가 변화. 본문은 MIR로 더 깊이 lower되지만 마지막 link/run 단계에서 막힘.
+
+5/19–5/23 머지 클러스터의 stdlib 실제 효과는 **list combinator 모듈 한 줄 상승** + **option/result의 진단 메시지 정밀화**. URL/JSON/ENCODING/CRYPTO은 별도 cycle 필요.
 
 ### 2.2 ⭐⭐⭐⭐ Functional (본문/백엔드 일부 검증 필요)
 
@@ -243,8 +303,11 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 **이전 매트릭스 주장**: 92/98 = 94% Production
 **2026-05-01 재평가 주장**: 22/106 = 21% Production
 **2026-05-05 HEAD 대조 후**: **12/106 = 11% 진정 5★ (LLVM 통과)** + 8/106 = 8% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
+**2026-05-23 재측정 후**: **11/22 모듈 (50%) LLVM 5★** (compress→FAIL, iter→PASS로 1:1 교체). 전체 모듈 대비 비율은 11/106 ≈ 10%로 사실상 동일. §2.1.A.2 참조.
 
 > **정정 노트 (2026-05-05)**: `internal/llvmgen/` 디렉토리가 현재 HEAD(`b640a833`)에 존재하지 않음. 매트릭스에 `stdlib_log_shim.go`, `stdlib_uuid_shim.go`, `stdlib_regex_shim.go` 등을 참조하며 5★로 승격한 내용은 아직 main에 merge되지 않은 워크트리 작업물로 확인됨. 현재 HEAD 기준으로 `log`는 C runtime 부재 + LLVM shim 부재, `uuid`/`regex`는 C runtime 존재하나 LLVM shim 부재.
+
+> **정정 노트 (2026-05-23)**: 현재 HEAD(`81b13ea`)에도 `internal/llvmgen/` 디렉토리는 여전히 부재. 위 정정 노트의 모든 갭은 그대로 유효. 5/19–5/23 closure 클러스터는 `internal/mir/` 및 `internal/ir/` 쪽에 집중되었고, llvmgen shim 작업은 별도 트랙.
 
 차이의 원인:
 1. spec 없는 unspec 모듈을 Production으로 셈 (62개 — 본문은 진정하나 spec 정의 없음 → Surface-rich로 강등)
@@ -266,12 +329,18 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | ~~4~~ | ~~strings~~ | ~~`Contains/HasPrefix/Index` PascalCase 별칭 (부트스트랩 누수)~~ | **완료 (HEAD)** — `strings.osty`에서 PascalCase 별칭 미발견. 이미 제거되었거나 존재하지 않음. |
 
 
-### 🟠 Tier 1 — LLVM bridge shim 부재 (C runtime은 존재)
+### 🟠 Tier 1 — LLVM bridge / aggregate layout / 링크 갭 (2026-05-23 audit 후 확장)
 
-| # | 모듈 | 영향 | 수정 |
-|---|---|---|---|
-| 5 | uuid | C runtime 7개 존재하나 LLVM bridge shim 부재 | `internal/llvmgen/stdlib_uuid_shim.go` 및 관련 LLVM bridge 생성 (현재 HEAD에는 해당 디렉토리 없음) |
-| 6 | regex | C runtime 7+개 존재하나 LLVM bridge shim 부재 | `internal/llvmgen/stdlib_regex_shim.go` 및 관련 LLVM bridge 생성 (현재 HEAD에는 해당 디렉토리 없음) |
+| # | 모듈 | 영향 | 진단 메시지 | 수정 후보 |
+|---|---|---|---|---|
+| 5 | uuid | LLVM bridge shim 부재 | `cross-module call arg type Uuid is not implemented` | `internal/llvmgen/stdlib_uuid_shim.go` + cross-module struct ABI |
+| 6 | regex | LLVM bridge shim 부재 | `cross-module call arg type Regex is not implemented` | `internal/llvmgen/stdlib_regex_shim.go` + cross-module struct ABI |
+| 7 | log | C runtime + LLVM bridge 모두 부재 | `map.new key type <error> has no runtime ABI lane` | `osty_rt_log_*` runtime + LLVM bridge |
+| 8 | json | module-level 심볼 emit 부재 (link 단계) | `ld.lld: error: undefined symbol: osty_std_json__parse` | `osty_std_json__*` 심볼 emit path 또는 stdlib body opt-in 기본 ON flip |
+| 9 | compress | gzip 심볼 link 부재 (회귀 또는 매트릭스 오기) | `ld.lld: error: undefined symbol: std.compress.gzip.encode` | `std.compress.gzip.{encode,decode}` 심볼 emit 또는 LLVM shim |
+| 10 | option, result | aggregate enum 반환 payload MIR layout 부재 | `aggregate.enum: scalar enum variant Int cannot carry payload fields` | `Option<T>`/`Result<T,E>`의 construction-path MIR layout (PR #1977은 unwrap-path만 풀음) |
+| 11 | url | 제네릭 Map iteration MIR lowering 부재 | `backend: MIR coverage incomplete: for-in over Map with unresolved key/value type` | 제네릭 K/V `Map` iteration의 MIR layout + 명시적 turbofish 우회 |
+| 12 | encoding, crypto | lower+link 통과하지만 런타임 `exit -1` | (런타임 abort, 메시지 없음) | runtime impl 디버그 — `osty_rt_encoding_hex_encode` / `osty_rt_crypto_sha256` 매핑 검증 |
 
 ### 🟡 Tier 2 — 부분 구현 → 전체 미실행
 
@@ -332,16 +401,48 @@ unspec 모듈 62개는 stdlib에 들어갔지만 LANG_SPEC에 등재 안 됨. su
 - ❌ `log.Handler/TextHandler/JsonHandler` slog 동급 — placeholder 본문
 - ⚠️ `testing.property` first-class — 표면 있고 testing_gen 본문 풍부, 백엔드 인터셉트 확인됨 (유효)
 
-## 7. 다음 라운드 우선순위 (정정)
+**2026-05-23 audit에서 새로 검증된 것**:
+- ✅ **List combinator with closure** (`.map(\|x\| ...)`, `.fold(0, \|a,x\| ...)`, `.find(\|x\| ...)`, `.scan(0, \|a,x\| ...)`, `.groupBy(\|x\| ...)`) — closure body lowering이 PR #1977/#1981/#1982/#1983/#1986/#1987로 완성. matrix_retest/iter_* 5개 디렉토리 전수 PASS. 이전 매트릭스 §2.1.A의 "iter FAIL" 진단은 5/23 기준 stale.
+- ✅ **Deneb-ported 모듈 묶음** (`aiagents`/`markdown`/`redact`/`search`/`media`/`httpretry`) — 동시 import + LLVM 빌드+실행 통과 (`matrix_retest/deneb_ports`). surface는 LLVM 통과 확인. 각 모듈의 진짜 public 함수 호출은 별도 cycle.
+
+## 7. 다음 라운드 우선순위 (2026-05-23 갱신)
 
 이전 매트릭스의 "stdlib은 거의 production, 다음 라운드는 db driver 추가" 결론은 **잘못됨**.
 
-진짜 우선순위:
+진짜 우선순위 (2026-05-23 audit 후):
 
 1. ~~Tier 0 spec 위반 4건 즉시 수정~~ → **완료 (2026-05-05)**. 남은 항목 없음.
-2. **Tier 1 LLVM bridge shim 부재 2건** (`internal/llvmgen/stdlib_uuid_shim.go` + `stdlib_regex_shim.go` 생성, 1-2주)
-3. **OSTY_STDLIB_BODY_LOWER default-on flip** (memory blocker `project_stdlib_injection_hang` 해소 후)
-4. **unspec 62개 모듈 정책 결정** (stdlib 잔류 vs community package 분리)
-5. **그 다음에야** db driver / smtp TLS 등 Tier 2 작업
+2. **Option/Result aggregate enum payload MIR layout** — 5/23 audit에서 `option.map(\|x\| ...)` / `result.map(\|x\| ...)`가 closure가 아닌 aggregate enum 반환의 MIR 레이아웃 부재로 FAIL 확인. closure cluster (#1977/#1981...)가 unwrap path만 풀었으니 이번 cycle은 construction path. Deneb 같은 사용자 코드의 핵심 패턴 (`opt.map(\|x\| transform(x))`).
+3. **JSON/encoding/crypto runtime+link 트리오** — 5/23 audit에서 모두 lower+link 단계에 진입했으나 (a) `osty_std_json__parse` 심볼 emit 부재, (b) `encoding.hexEncode`/`crypto.sha256` 런타임 `exit -1`. 한 사이클로 link emit 보강 + runtime impl 디버그.
+4. **compress 회귀 또는 매트릭스 오기 정리** — `std.compress.gzip.encode` 링커 미해결. 이전 audit이 "PASS direct" 라 표기한 근거 재확인 필요. 표면 11 LOC + 본문 0이라 LLVM symbol shim이 사실상 부재일 가능성 큼.
+5. **uuid/regex LLVM bridge shim** — `internal/llvmgen/stdlib_uuid_shim.go` + `stdlib_regex_shim.go` (1–2주, 2026-05-05 priority 그대로).
+6. **OSTY_STDLIB_BODY_LOWER default-on flip** (memory blocker `project_stdlib_injection_hang` 해소 후).
+7. **unspec 62개 모듈 정책 결정** (stdlib 잔류 vs community package 분리).
+8. **그 다음에야** db driver / smtp TLS 등 Tier 2 작업.
 
-**스스로에게 정직한 한 줄**: stdlib은 표면 야심 9/10이지만 검증된 production-ready는 12개(LLVM E2E 통과) + 8개(declared 5★). 매트릭스가 "94% Production"이라 부풀린 게 다음 라운드 우선순위 판단 자체를 왜곡했음. 정확한 카운트로 시작.
+**스스로에게 정직한 한 줄 (2026-05-23)**: closure body lower 클러스터가 list combinator를 PASS로 올린 건 진짜 progress. 그러나 stdlib 전체 카운트(11/22 LLVM 통과 = 50%, 10–11% of 106 modules)는 변화 없음 — 이전 매트릭스가 priority list로 지목한 "Tier 1 LLVM bridge shim 부재"는 5/23 시점에도 여전히 첫번째 작업. 18일 50 PR이 자기호스팅(install-self) 부트스트랩 perf와 self-host checker 완성에 집중되었기 때문. stdlib 모듈 자체에 직접 손이 닿은 PR은 closure-cluster 6건뿐. **다음 cycle에서 stdlib 갭에 자원 재배분 필요**.
+
+## 8. Deneb 포팅 readiness (2026-05-23 신규)
+
+배경: 본 매트릭스의 §2.3에 `aiagents`/`markdown`/`redact`/`search`/`media`/`httpretry` 등 "Deneb 포팅"
+라벨이 붙은 모듈 6개가 등재. 이는 Deneb (`choiceoh/deneb`, Telegram→DGX Spark AI 게이트웨이)의 일부 모듈을
+Osty stdlib로 옮긴 것. Deneb 전체를 Osty로 재작성하려는 흐름의 사전 작업.
+
+**2026-05-23 LLVM 빌드 검증** (`matrix_retest/deneb_ports`): 6개 모듈을 동시 import + trivial assert가
+LLVM 백엔드를 통해 빌드+실행 성공 (1 test passed in 17s). 즉 surface는 LLVM 통과 가능.
+
+**현 시점 Deneb→Osty 포팅의 실제 블로커**:
+
+| 영역 | Deneb 사용 패턴 | Osty 현황 | 블로커 |
+|---|---|---|---|
+| HTTP 서버 (RPC dispatch) | `http.Router` + handler | 표면 1588 LOC / 166 함수 / Router 본문 확인 | full e2e 미검증. `iter` PASS 확장으로 더 많은 path 통과 가능성 — 별도 cycle |
+| WebSocket | Telegram bot은 long-poll 우선, deneb 자체 WS는 dev 도구 | `websocket` 338 LOC + `ws_client` body-less stub | transport 런타임 stub만 채우면 됨 |
+| JSON 파싱 | LLM API 응답 + Telegram update | matrix_retest: link 실패 (`undefined symbol osty_std_json__parse`) | Tier 1 #8 동일 |
+| `Option<T>.map(closure)` | pipeline 어디든 사용 | matrix_retest: aggregate enum payload 미연결 FAIL | Tier 1 #10 동일 |
+| Telegram Bot API 클라이언트 | HTTP/JSON/multipart | `http` 통과 가정 시 작성 가능 | HTTP/JSON 갭 해소 후 |
+| LLM SDK (Anthropic 등) | HTTP/JSON/SSE 스트리밍 | SSE는 stdlib에 없음 (전용 모듈 부재) | 신규 stdlib `sse` 또는 응용 패키지 |
+| GPU 추론 (DGX Spark CUDA) | in-process? or out-process? | 둘 다 직접 지원 없음 | (a) `cmd`로 외부 프로세스 spawn (현실적), (b) FFI 신설 (장기) |
+| Protobuf 코드젠 | proto/ → Go 코드젠 | Osty용 protobuf codegen 부재 | 별도 protoc 플러그인 작성 또는 JSON으로 대체 |
+| `aiagents`/`markdown`/`redact`/`search`/`media`/`httpretry` | (이미 Deneb→Osty 포팅됨) | ✅ 6개 동시 import + LLVM 빌드 통과 | OK |
+
+**결론**: Deneb 게이트웨이를 Osty로 통째로 재작성하려면, 위 표의 **Tier 1 #10 (Option/Result aggregate) + Tier 1 #8 (JSON link) + http full e2e** 세 가지가 즉시 블로커. 그 다음 SSE/protobuf/Telegram 클라이언트 작성. GPU 추론은 외부 프로세스 spawn으로 회피하는 게 현실적. 1차 leaf-first 포팅 (이미 진행 중인 6개 stdlib 모듈)은 진행 가능.

@@ -1,0 +1,11 @@
+// Matrix §2.1.A retest: encoding.hexEncode was "FAIL".
+
+use std.testing
+use std.encoding
+use std.bytes
+
+fn testHexEncode() {
+    let bs = bytes.fromString("AB")
+    let hex = encoding.hexEncode(bs)
+    testing.assertEq(hex, "4142")
+}

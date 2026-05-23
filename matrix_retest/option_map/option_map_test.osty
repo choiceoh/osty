@@ -1,0 +1,17 @@
+// Matrix §2.1.A retest: option.map(closure) was "partial" — closure
+// body lower failed. After PR #1977 (Option/Result widened payload
+// unwrap), this should pass on the LLVM backend.
+
+use std.testing
+
+fn testOptionMapClosure() {
+    let some: Int? = Some(21)
+    let doubled = some.map(|x| x * 2)
+    testing.assertEq(doubled, Some(42))
+}
+
+fn testOptionMapNone() {
+    let none: Int? = None
+    let mapped = none.map(|x| x * 2)
+    testing.assertTrue(mapped.isNone())
+}

@@ -1,0 +1,10 @@
+// Matrix §2.1.A retest: List.fold(closure). PR #1981 directly
+// unblocks this.
+
+use std.testing
+
+fn testListFoldClosure() {
+    let xs = [1, 2, 3, 4]
+    let sum = xs.fold(0, |a, x| a + x)
+    testing.assertEq(sum, 10)
+}
