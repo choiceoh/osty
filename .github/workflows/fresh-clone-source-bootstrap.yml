@@ -58,11 +58,20 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang lld
 
       - name: Install just
+        # Use the upstream install script instead of a hand-pinned
+        # tarball URL — the prior `releases/latest/download/
+        # just-1.50.0-x86_64-...tar.gz` form 404s the moment just
+        # cuts a release past 1.50.0 because the `latest` redirect
+        # points to a release that no longer has a `1.50.0` asset.
+        # `https://just.systems/install.sh` resolves the actual
+        # latest tag and downloads its matching tarball.
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL https://github.com/casey/just/releases/latest/download/just-1.50.0-x86_64-unknown-linux-musl.tar.gz \
-              | tar -xz -C "$HOME/.local/bin" just
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+              | bash -s -- --to "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/just" --version
 
       - name: Shallow clone in scratch dir
         # Deliberately NOT actions/checkout — we want the exact path
