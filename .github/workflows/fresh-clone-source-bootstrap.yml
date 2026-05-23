@@ -42,10 +42,15 @@ jobs:
 
     steps:
       - name: Set up Go
+        # Explicit Go version (not `go-version-file: go.mod`) because
+        # this workflow clones the repo in a later step into a scratch
+        # dir — `go.mod` is not present at the actions/setup-go default
+        # workspace at this point. Keep the version pin in lockstep
+        # with `bootstrap-smoke-test.yml` and `go.mod`.
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: '1.26'
+          cache: false
 
       - name: Install LLVM toolchain (clang/lld for the link step)
         run: |
