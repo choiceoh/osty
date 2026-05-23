@@ -201,18 +201,19 @@ func ResolveNativeCheckerLLVM(projectRoot string) string {
 // clones do not yet have. This keeps `osty install-self` working
 // end-to-end on a fresh clone without forcing the user to manually
 // pre-stage a checker via `OSTY_NATIVE_CHECKER_BIN`.
+//
+// Recursion detour: when `OSTY_BUILDING_NATIVE_CHECKER=1` is set (we are
+// the `osty build --backend llvm cmd/osty-native-checker/` subprocess
+// trying to typecheck the checker's own source), `buildNativeChecker`
+// ALSO detours to the Go-build path. Without this the inner subprocess
+// errored out with a recursion-guard message and the post-install
+// chicken-and-egg "first `osty build` after `install-self` triggers a
+// fresh LLVM build of the native checker" path was broken (see PR #1995
+// CI gate failure). The detour produces a Go-built checker in the
+// managed slot just long enough for the inner subprocess to typecheck;
+// the outer process then overwrites the slot with the LLVM artifact it
+// just built, so the steady-state remains LLVM-built.
 func EnsureNativeChecker(start string) (string, error) {
-	if os.Getenv(RecursionGuardEnv) == "1" {
-		return "", fmt.Errorf(
-			"managed osty-native-checker build re-entered EnsureNativeChecker via %s=1; "+
-				"the LLVM build subprocess (`osty build --backend llvm cmd/osty-native-checker/`) "+
-				"depends on the same managed checker it is trying to produce. "+
-				"Pre-build the artifact, set OSTY_NATIVE_CHECKER_BIN to an existing binary, "+
-				"or set OSTY_STAGE0_FALLBACK=1 to bootstrap via the Go-built checker shell "+
-				"before triggering the managed path",
-			RecursionGuardEnv,
-		)
-	}
 	root, err := managedProjectRootFunc(start)
 	if err != nil {
 		return "", err
@@ -292,17 +293,29 @@ func buildNativeChecker(dest string) error {
 	if err != nil {
 		return err
 	}
-	// Stage0 source bootstrap: the user has explicitly opted into the
-	// chicken-and-egg `osty install-self` recovery path
-	// (`OSTY_STAGE0_FALLBACK=1`). No `osty-self` exists yet — that's
-	// what install-self is currently building — so the LLVM path
-	// cannot run. Build the Go-side native checker shell instead;
-	// it has no `osty-self` dependency (delegates straight to
-	// `internal/selfhost/generated.go`) and is sufficient to typecheck
-	// the toolchain during install-self. Once install-self completes
-	// the slot is cached, and post-bootstrap `osty build` invocations
-	// reuse it without re-entering this branch.
-	if stage0FallbackEnabled() {
+	// Two flavours of "LLVM path is unavailable, build the Go-side shell":
+	//
+	// 1. Stage0 source bootstrap (`OSTY_STAGE0_FALLBACK=1`): the user
+	//    explicitly opted into the install-self recovery path. No
+	//    `osty-self` exists yet — that's literally what install-self is
+	//    currently producing — so the LLVM path cannot run.
+	//
+	// 2. Recursion detour (`OSTY_BUILDING_NATIVE_CHECKER=1`): we are
+	//    the LLVM-build subprocess spawned by `buildNativeChecker`
+	//    itself, and now we need a checker to typecheck the checker's
+	//    own source. Spawning another LLVM-build subprocess would
+	//    loop forever. Build the Go-side shell into the managed slot
+	//    just long enough for our outer caller to read; that outer
+	//    caller (the original `osty check` / `osty build` that
+	//    triggered our existence) then overwrites the slot with the
+	//    LLVM artifact it produces from us, so the steady state remains
+	//    LLVM-built.
+	//
+	// Either flavour produces a Go-built shell that delegates straight
+	// to `internal/selfhost/generated.go` and has no `osty-self`
+	// dependency — sufficient to typecheck `toolchain/*.osty` and
+	// `cmd/osty-native-checker/main.osty` so the build can complete.
+	if stage0FallbackEnabled() || os.Getenv(RecursionGuardEnv) == "1" {
 		return buildNativeCheckerViaGo(root, dest)
 	}
 	if err := verifyOstySelfCached(root); err != nil {
