@@ -4327,7 +4327,7 @@ func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
 	// stdlib higher-order method table the closure backfill
 	// uses, so chained `map/filter/andThen/...` chains lower
 	// without their middle nodes being marked as ErrType.
-	if mc.T == nil || mc.T == ErrTypeVal {
+	if mc.T == nil || mc.T == ErrTypeVal || containsClosureResultSentinel(mc.T) {
 		if recovered := recoverHigherOrderMethodReturnType(recvT, mc.Name, mc.Args); recovered != nil {
 			mc.T = recovered
 		}
@@ -4339,6 +4339,28 @@ func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
 	if mc.Name == "flatMap" && mc.T != nil && mc.T != ErrTypeVal {
 		fillFlatMapTypeArgs(mc, recvT)
 	}
+}
+
+// containsClosureResultSentinel reports whether t carries the
+// `?closure_result` placeholder the AST-side surface-shape recovery
+// inserts when `xs.map(fn) / xs.flatMap(fn)` cannot resolve the
+// closure return at parse time. The sentinel is a NamedType, not a
+// TypeVar or ErrType, so the usual recovery conditions miss it.
+func containsClosureResultSentinel(t Type) bool {
+	if t == nil {
+		return false
+	}
+	if nt, ok := t.(*NamedType); ok && nt != nil {
+		if nt.Name == "?closure_result" {
+			return true
+		}
+		for _, a := range nt.Args {
+			if containsClosureResultSentinel(a) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fillFlatMapTypeArgs sets `mc.TypeArgs = [T, R]` for a flatMap call
