@@ -5,5 +5,16 @@ use std.testing
 fn testListGroupByClosure() {
     let xs = [1, 2, 3, 4]
     let groups = xs.groupBy(|x| x % 2)
+    // Bucket-count-only would false-PASS for any 2-bucket
+    // result (e.g. one bucket per element). Assert per-key
+    // contents: odd → [1, 3], even → [2, 4].
     testing.assertEq(groups.len(), 2)
+    let odd = groups.getOr(1, [])
+    testing.assertEq(odd.len(), 2)
+    testing.assertEq(odd[0], 1)
+    testing.assertEq(odd[1], 3)
+    let even = groups.getOr(0, [])
+    testing.assertEq(even.len(), 2)
+    testing.assertEq(even[0], 2)
+    testing.assertEq(even[1], 4)
 }

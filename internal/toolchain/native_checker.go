@@ -160,6 +160,53 @@ func InvalidateManagedNativeChecker(projectRoot string) error {
 	return nil
 }
 
+// InvalidateAllManagedNativeCheckers removes every cached
+// native-checker artifact under `<projectRoot>/<toolchainDirName>/*/`.
+// Use after `install-self` produces a new `osty-self` so that any
+// `--osty-bin <other-host>` invocation (which pins a different
+// toolchain version stamp under a sibling subdirectory) also picks
+// up the LLVM-built variant on its next build, rather than continuing
+// to serve a stale Go-built fallback from its own slot.
+//
+// `InvalidateManagedNativeChecker(projectRoot)` only touches the
+// current process's `Version()` slot — sufficient when the install
+// runs from the same host that subsequent builds use, but pre-PR
+// #1999 it silently left a stale fallback in any other version slot
+// the project had accumulated (typical when devs switch between two
+// `osty` builds during bootstrap iteration).
+//
+// Best-effort: a missing tree returns nil; per-entry remove errors
+// are collected into a joined error so the caller can warn but the
+// loop processes every slot.
+func InvalidateAllManagedNativeCheckers(projectRoot string) error {
+	toolchainDir := filepath.Join(projectRoot, toolchainDirName)
+	entries, err := os.ReadDir(toolchainDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("scan managed toolchain dir %s: %w", toolchainDir, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slot := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName())
+		if err := os.Remove(slot); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("invalidate %s: %w", slot, err))
+		}
+		// Also clear the recursion-fallback slot — if a previous
+		// build crashed mid-way, the fallback could persist and
+		// the next subprocess would prefer it over rebuilding.
+		fallback := filepath.Join(toolchainDir, e.Name(), NativeCheckerBinaryName()+".recursion-fallback")
+		if err := os.Remove(fallback); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("invalidate %s: %w", fallback, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // ManagedNativeCheckerLLVMPath returns the conventional location
 // `osty build --backend llvm cmd/osty-native-checker/` writes its
 // artifact to (`<project>/cmd/osty-native-checker/.osty/out/{debug,release}/llvm/osty-native-checker-llvm`).

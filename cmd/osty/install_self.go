@@ -200,8 +200,18 @@ func runInstallSelf(args []string, _ cliFlags) {
 	// surface the failure as a warning, not a hard error, because the
 	// install itself succeeded.
 	if tookStage0Path {
-		if err := toolchain.InvalidateManagedNativeChecker(root); err != nil {
-			fmt.Fprintf(os.Stderr, "osty install-self: warning: failed to invalidate stage0 native checker slot (next build will keep the Go-built variant): %v\n", err)
+		// Sweep ALL version-stamped slots, not just the current
+		// process's. `--osty-bin <other-host>` runs install-self
+		// through a different binary whose toolchain version stamp
+		// resolves to a sibling `.osty/toolchain/<other-version>/`
+		// subdirectory. Pre-PR #1999 `InvalidateManagedNativeChecker`
+		// only cleared the current process's slot, so subsequent
+		// builds with the host that ran install-self stayed pinned to
+		// their own Go-built fallback. The broad sweep is safe
+		// because the install just produced a fresh osty-self, so
+		// any cached checker for any version is now obsolete.
+		if err := toolchain.InvalidateAllManagedNativeCheckers(root); err != nil {
+			fmt.Fprintf(os.Stderr, "osty install-self: warning: failed to invalidate stage0 native checker slot(s) (next build may keep the Go-built variant): %v\n", err)
 		}
 	}
 	fmt.Printf("installed:   %s\n", cachedPath)
