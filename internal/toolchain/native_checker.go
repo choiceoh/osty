@@ -25,6 +25,24 @@ const toolchainDirName = ".osty/toolchain"
 // nested build.
 const RecursionGuardEnv = "OSTY_BUILDING_NATIVE_CHECKER"
 
+// Stage0FallbackEnv mirrors `cmd/osty/install_self.go::stage0SourceBootstrapEnv`
+// so `buildNativeChecker` can detect the chicken-and-egg bootstrap mode
+// without importing the cmd package. When the user has opted into the
+// stage0 source bootstrap (`OSTY_STAGE0_FALLBACK=1`), no `osty-self` is
+// available — by definition, that's what install-self is trying to
+// produce — so the LLVM-built native checker path (which gates on a
+// resolvable `osty-self`) cannot run. In that mode `buildNativeChecker`
+// falls back to `go build ./cmd/osty-native-checker`, producing the
+// Go-side shell (which delegates to `internal/selfhost/generated.go`)
+// instead. The slot is populated once and subsequent `osty build`
+// invocations short-circuit on the cached artifact.
+//
+// Kept in lockstep with the install-self gate: the truthy spellings
+// must accept the same set (1 / true / yes / on) the install-self CLI
+// recognises, so `OSTY_STAGE0_FALLBACK=1 osty install-self` works
+// end-to-end on a fresh clone.
+const Stage0FallbackEnv = "OSTY_STAGE0_FALLBACK"
+
 var (
 	nativeCheckerBuildMu sync.Mutex
 
@@ -34,6 +52,7 @@ var (
 	renameManagedFile      = os.Rename
 	removeManagedFile      = os.Remove
 	verifyOstySelfCached   = defaultVerifyOstySelfCached
+	goBuildNativeChecker   = defaultGoBuildNativeChecker
 )
 
 // Version returns the toolchain version stamp used to scope managed artifacts.
@@ -151,16 +170,25 @@ func ResolveNativeCheckerLLVM(projectRoot string) string {
 // Build path (post LLVM-flip): the managed artifact is the LLVM-built
 // `cmd/osty-native-checker/` package. The Go-built shell at
 // `cmd/osty-native-checker/main.go` is no longer reachable from production —
-// it survives only for `internal/check/testsupport.BuildSharedNativeCheckerForTests`
-// and out-of-band `OSTY_NATIVE_CHECKER_BIN` overrides. See
+// it survives only for `internal/check/testsupport.BuildSharedNativeCheckerForTests`,
+// out-of-band `OSTY_NATIVE_CHECKER_BIN` overrides, and the chicken-and-egg
+// `OSTY_STAGE0_FALLBACK=1` bootstrap path described below. See
 // `docs/llvm-selfhost-plan.md` for the trajectory that drove this flip.
+//
+// Stage0 fallback: when `OSTY_STAGE0_FALLBACK=1` is set,
+// `buildNativeChecker` instead drives `go build ./cmd/osty-native-checker`
+// because the LLVM build path requires an `osty-self` binary that fresh
+// clones do not yet have. This keeps `osty install-self` working
+// end-to-end on a fresh clone without forcing the user to manually
+// pre-stage a checker via `OSTY_NATIVE_CHECKER_BIN`.
 func EnsureNativeChecker(start string) (string, error) {
 	if os.Getenv(RecursionGuardEnv) == "1" {
 		return "", fmt.Errorf(
 			"managed osty-native-checker build re-entered EnsureNativeChecker via %s=1; "+
 				"the LLVM build subprocess (`osty build --backend llvm cmd/osty-native-checker/`) "+
 				"depends on the same managed checker it is trying to produce. "+
-				"Pre-build the artifact or set OSTY_NATIVE_CHECKER_BIN to an existing binary "+
+				"Pre-build the artifact, set OSTY_NATIVE_CHECKER_BIN to an existing binary, "+
+				"or set OSTY_STAGE0_FALLBACK=1 to bootstrap via the Go-built checker shell "+
 				"before triggering the managed path",
 			RecursionGuardEnv,
 		)
@@ -219,12 +247,19 @@ func defaultSourceRepoRoot() (string, error) {
 // Prerequisites (caller surfaces failures as a single focused error):
 //
 //  1. `osty-self` is resolvable via `selfhostcache.ResolveBinary` —
-//     stage0 fallback is not honoured by the production build path,
-//     so a fresh worktree must run `osty install-self` once first.
+//     a fresh worktree must run `osty install-self` once first
+//     (or set `OSTY_STAGE0_FALLBACK=1` to bootstrap via the Go-side
+//     checker shell; see `Stage0FallbackEnv` for the trajectory).
 //  2. The host osty executable that called us (`os.Executable()`) can
 //     reinvoke itself with `build --backend llvm <pkg>` — i.e. we are
 //     running inside an `osty` CLI process, not a test binary that
 //     happens to import this package without exposing a build mode.
+//
+// Stage0 fallback short-circuit: when `OSTY_STAGE0_FALLBACK=1` is set
+// the function detours to `buildNativeCheckerViaGo` BEFORE the
+// `osty-self` requirement is enforced. This is the fresh-clone
+// bootstrap path — by definition `osty-self` is still missing in that
+// scenario, so the LLVM build cannot proceed.
 //
 // The chicken-and-egg case (managed-checker build needs the checker
 // to typecheck the package source) is handled by setting
@@ -236,6 +271,19 @@ func buildNativeChecker(dest string) error {
 	root, err := sourceRepoRootFunc()
 	if err != nil {
 		return err
+	}
+	// Stage0 source bootstrap: the user has explicitly opted into the
+	// chicken-and-egg `osty install-self` recovery path
+	// (`OSTY_STAGE0_FALLBACK=1`). No `osty-self` exists yet — that's
+	// what install-self is currently building — so the LLVM path
+	// cannot run. Build the Go-side native checker shell instead;
+	// it has no `osty-self` dependency (delegates straight to
+	// `internal/selfhost/generated.go`) and is sufficient to typecheck
+	// the toolchain during install-self. Once install-self completes
+	// the slot is cached, and post-bootstrap `osty build` invocations
+	// reuse it without re-entering this branch.
+	if stage0FallbackEnabled() {
+		return buildNativeCheckerViaGo(root, dest)
 	}
 	if err := verifyOstySelfCached(root); err != nil {
 		return err
@@ -280,6 +328,67 @@ func buildNativeChecker(dest string) error {
 		return fmt.Errorf("stage LLVM native checker artifact: %w", err)
 	}
 	return installManagedBinary(tmpPath, dest, "osty-native-checker")
+}
+
+// stage0FallbackEnabled reports whether the caller has opted into the
+// chicken-and-egg source bootstrap. The accepted truthy spellings match
+// `cmd/osty/install_self.go::stage0SourceBootstrapEnabled` so the two
+// install-self env gates parse consistently.
+func stage0FallbackEnabled() bool {
+	raw := strings.TrimSpace(os.Getenv(Stage0FallbackEnv))
+	return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes") || strings.EqualFold(raw, "on")
+}
+
+// buildNativeCheckerViaGo compiles `cmd/osty-native-checker/main.go` with
+// `go build` and promotes the resulting binary into the managed slot.
+// This is the bootstrap fallback path used when the LLVM-built variant
+// is unreachable because `osty-self` does not yet exist (i.e. the user
+// is running `osty install-self` on a fresh clone with
+// `OSTY_STAGE0_FALLBACK=1`).
+//
+// Identical in spirit to `internal/check/testsupport.go`'s
+// `BuildSharedNativeCheckerForTests` — both go through `go build` and
+// both link `internal/selfhost/generated.go` as the checker core — but
+// `internal/check` imports `internal/toolchain`, so this package can't
+// share that helper without a cycle. Keep the two invocations in sync.
+func buildNativeCheckerViaGo(root, dest string) error {
+	tmpDir, err := os.MkdirTemp(filepath.Dir(dest), "osty-native-checker-go-*")
+	if err != nil {
+		return fmt.Errorf("create managed native checker temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, NativeCheckerBinaryName())
+	if err := goBuildNativeChecker(root, tmpPath); err != nil {
+		return err
+	}
+	if !fileExists(tmpPath) {
+		return fmt.Errorf("go build of osty-native-checker did not produce expected artifact at %s", tmpPath)
+	}
+	return installManagedBinary(tmpPath, dest, "osty-native-checker")
+}
+
+// defaultGoBuildNativeChecker invokes the host Go toolchain to compile
+// `cmd/osty-native-checker` into outPath. Substitutable as a package var
+// (`goBuildNativeChecker`) so tests can swap in a synthetic binary
+// producer without spawning a real Go build.
+func defaultGoBuildNativeChecker(root, outPath string) error {
+	cmd := exec.Command("go", "build", "-o", outPath, "github.com/osty/osty/cmd/osty-native-checker")
+	cmd.Dir = root
+	// Strip RecursionGuardEnv if inherited — `go build` does not spawn
+	// `osty build`, so the guard is irrelevant here, but leaving an
+	// inherited `=1` in env would surprise anyone reading the build's
+	// environment dump for debugging.
+	cmd.Env = filterEnv(os.Environ(), RecursionGuardEnv)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = "<no output>"
+		}
+		return fmt.Errorf("go build osty-native-checker (stage0 fallback): %w (%s)", err, msg)
+	}
+	return nil
 }
 
 func defaultVerifyOstySelfCached(root string) error {
