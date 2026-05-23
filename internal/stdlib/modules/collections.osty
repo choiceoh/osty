@@ -277,10 +277,15 @@ pub struct List<T> {
     /// sub-lists.
     pub fn flatMap<R>(self, f: fn(T) -> List<R>) -> List<R> {
         let mut out: List<R> = []
-        for item in self {
-            for r in f(item) {
-                out.push(r)
+        let mut i = 0
+        for i < self.len() {
+            let inner = f(self[i])
+            let mut j = 0
+            for j < inner.len() {
+                out.push(inner[j])
+                j = j + 1
             }
+            i = i + 1
         }
         out
     }
