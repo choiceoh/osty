@@ -4646,7 +4646,12 @@ func refineExpectedFromOtherArgs(expected *FnType, recvT Type, method string, ar
 		return
 	}
 	if nt, ok := recvT.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") {
-		if method == "fold" && closureIdx == 1 && len(args) == 2 && len(expected.Params) >= 1 {
+		if (method == "fold" || method == "scan") && closureIdx == 1 && len(args) == 2 && len(expected.Params) >= 1 {
+			// `fold<A>(init: A, fn(A, T) -> A) -> A` and
+			// `scan<A>(init: A, fn(A, T) -> A) -> List<A>` share
+			// the closure shape — fill `A` from the init arg's
+			// concrete type so the closure's first param +
+			// return resolve before backfill.
 			if expected.Params[0] == nil {
 				if initT := safeExprType(args[0].Value); initT != ErrTypeVal {
 					expected.Params[0] = initT
@@ -4747,9 +4752,11 @@ func expectedClosureFnTypeForList(elem Type, method string, argIdx, argCount int
 		if argIdx == 0 && argCount == 1 {
 			return &FnType{Params: []Type{elem}}
 		}
-	case "filter", "any", "all", "forEach":
+	case "filter", "any", "all", "forEach", "find", "partition":
 		// `filter(fn(T) -> Bool) -> List<T>`, similar shape for
-		// the others.
+		// the others. `find(fn(T) -> Bool) -> T?` and
+		// `partition(fn(T) -> Bool) -> (List<T>, List<T>)` share
+		// the predicate shape.
 		if argIdx == 0 && argCount == 1 {
 			ret := TBool
 			if method == "forEach" {
@@ -4757,11 +4764,13 @@ func expectedClosureFnTypeForList(elem Type, method string, argIdx, argCount int
 			}
 			return &FnType{Params: []Type{elem}, Return: ret}
 		}
-	case "fold":
-		// `fold<A>(init: A, f: fn(A, T) -> A) -> A` — closure is
-		// the second arg. A is derivable from the init arg —
-		// callers thread it via `expectedClosureFnTypeForBuiltinAtArg`
-		// which has access to the full MethodCall arg list.
+	case "fold", "scan":
+		// `fold<A>(init: A, f: fn(A, T) -> A) -> A` and
+		// `scan<A>(init: A, f: fn(A, T) -> A) -> List<A>` share
+		// the closure shape — only the return wrapping differs.
+		// `A` is derivable from the init arg —
+		// `expectedClosureFnTypeForBuiltinAtArg` patches it from
+		// the surrounding args.
 		if argIdx == 1 && argCount == 2 {
 			return &FnType{Params: []Type{nil, elem}}
 		}
@@ -4769,6 +4778,19 @@ func expectedClosureFnTypeForList(elem Type, method string, argIdx, argCount int
 		// `reduce(fn(T, T) -> T) -> T?`.
 		if argIdx == 0 && argCount == 1 {
 			return &FnType{Params: []Type{elem, elem}, Return: elem}
+		}
+	case "flatMap":
+		// `flatMap<R>(fn(T) -> List<R>) -> List<R>` — R is not
+		// known here; backfillClosure leaves Return nil and only
+		// fills the param slot, matching how `map` is handled.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}}
+		}
+	case "groupBy":
+		// `groupBy<K>(key: fn(T) -> K) -> Map<K, List<T>>` — K is
+		// not known here; like `map`, leave Return nil.
+		if argIdx == 0 && argCount == 1 {
+			return &FnType{Params: []Type{elem}}
 		}
 	}
 	return nil
