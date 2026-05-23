@@ -14,6 +14,7 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/backend/stage0"
+	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
@@ -127,6 +128,7 @@ func runInstallSelf(args []string, _ cliFlags) {
 
 	builtBin := ""
 	var buildErr error
+	tookStage0Path := false
 	if force && resolveErr == nil {
 		endSelfhostBuild := backend.BeginPhase("install-self.build-via-selfhost")
 		builtBin, buildErr = buildOstySelfWithSelfhost(context.Background(), resolvedSelf, hostOsty, root, tcAbs)
@@ -155,6 +157,7 @@ func runInstallSelf(args []string, _ cliFlags) {
 		endStage0Build := backend.BeginPhase("install-self.build-via-stage0")
 		builtBin, buildErr = buildOstySelf(context.Background(), hostOsty, root, tcAbs)
 		endStage0Build()
+		tookStage0Path = true
 	}
 	if buildErr != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", buildErr)
@@ -168,6 +171,21 @@ func runInstallSelf(args []string, _ cliFlags) {
 		os.Exit(1)
 	}
 	endPromote()
+	// Stage0 fallback bootstrap populates `.osty/toolchain/<ver>/
+	// osty-native-checker` with the Go-built shell (the chicken-and-egg
+	// escape hatch wired by PR #1988). Now that `osty-self` is in the
+	// content-addressed cache, the LLVM-built native checker is
+	// buildable — but the next `osty build` would hit the cached
+	// Go-built artifact and skip the upgrade. Invalidate the slot so
+	// the next invocation re-enters `buildNativeChecker` and produces
+	// the LLVM variant from live `toolchain/*.osty`. Best-effort:
+	// surface the failure as a warning, not a hard error, because the
+	// install itself succeeded.
+	if tookStage0Path {
+		if err := toolchain.InvalidateManagedNativeChecker(root); err != nil {
+			fmt.Fprintf(os.Stderr, "osty install-self: warning: failed to invalidate stage0 native checker slot (next build will keep the Go-built variant): %v\n", err)
+		}
+	}
 	fmt.Printf("installed:   %s\n", cachedPath)
 }
 

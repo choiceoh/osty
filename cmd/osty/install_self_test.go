@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
@@ -446,6 +447,109 @@ func TestRunInstallSelfStage0FallbackAttemptsSourceBootstrap(t *testing.T) {
 	}
 	if string(body) != "fresh stage0 osty-self" {
 		t.Fatalf("cached body = %q", body)
+	}
+}
+
+// TestRunInstallSelfStage0FallbackInvalidatesNativeCheckerSlot pins the
+// post-bootstrap LLVM-checker upgrade path: after stage0 fallback
+// populates osty-self into the cache, the Go-built native checker
+// dropped into `.osty/toolchain/<ver>/` by the sub-osty build is
+// retired so the next `osty build` produces the LLVM variant. Without
+// this, fresh-clone users would be permanently stuck on the frozen
+// `internal/selfhost/generated.go` seed even after osty-self exists.
+func TestRunInstallSelfStage0FallbackInvalidatesNativeCheckerSlot(t *testing.T) {
+	ostyBin := buildOstyBinaryForTest(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte("[package]\nname = \"fake\"\n"), 0o644); err != nil {
+		t.Fatalf("osty.toml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "toolchain"), 0o755); err != nil {
+		t.Fatalf("toolchain mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "toolchain", "main.osty"), []byte("// stub\n"), 0o644); err != nil {
+		t.Fatalf("main.osty: %v", err)
+	}
+	// Pre-seed the managed native checker slot to mimic what the sub-osty
+	// build's `buildNativeCheckerViaGo` path would have written. The
+	// install-self post-hook must delete this file.
+	managedCheckerPath := toolchain.ManagedNativeCheckerPath(root)
+	if err := os.MkdirAll(filepath.Dir(managedCheckerPath), 0o755); err != nil {
+		t.Fatalf("mkdir managed checker dir: %v", err)
+	}
+	if err := os.WriteFile(managedCheckerPath, []byte("stale go-built checker"), 0o755); err != nil {
+		t.Fatalf("seed managed checker: %v", err)
+	}
+	hostBin := fakeOstyBin(t, root, "fresh stage0 osty-self")
+
+	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", hostBin)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"OSTY_STAGE0_FALLBACK=1",
+		"OSTY_SELF_REGISTRY_OFFLINE=1",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install-self stage0 fallback: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "installed:") {
+		t.Fatalf("install-self did not report cache install:\n%s", out)
+	}
+	if _, statErr := os.Stat(managedCheckerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed checker slot %q must be invalidated after stage0 fallback (stat err: %v)", managedCheckerPath, statErr)
+	}
+}
+
+// TestRunInstallSelfWithResolvedSelfDoesNotInvalidateNativeCheckerSlot
+// guards the non-stage0 path: when install-self resolved osty-self from
+// the registry/cache without entering the stage0 source bootstrap, the
+// managed native checker slot is whatever it was (presumably the
+// LLVM-built artifact) and must not be wiped.
+func TestRunInstallSelfWithResolvedSelfDoesNotInvalidateNativeCheckerSlot(t *testing.T) {
+	ostyBin := buildOstyBinaryForTest(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte("[package]\nname = \"fake\"\n"), 0o644); err != nil {
+		t.Fatalf("osty.toml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "toolchain"), 0o755); err != nil {
+		t.Fatalf("toolchain mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "toolchain", "main.osty"), []byte("// stub\n"), 0o644); err != nil {
+		t.Fatalf("main.osty: %v", err)
+	}
+	// Pre-seed a managed checker we want preserved.
+	managedCheckerPath := toolchain.ManagedNativeCheckerPath(root)
+	if err := os.MkdirAll(filepath.Dir(managedCheckerPath), 0o755); err != nil {
+		t.Fatalf("mkdir managed checker dir: %v", err)
+	}
+	if err := os.WriteFile(managedCheckerPath, []byte("good LLVM-built checker"), 0o755); err != nil {
+		t.Fatalf("seed managed checker: %v", err)
+	}
+	// Pre-seed an OSTY_SELF_BIN so install-self resolves osty-self
+	// without ever entering the stage0 path.
+	prebuilt := filepath.Join(t.TempDir(), "prebuilt-self")
+	if err := os.WriteFile(prebuilt, []byte("prebuilt osty-self"), 0o755); err != nil {
+		t.Fatalf("seed prebuilt self: %v", err)
+	}
+
+	cmd := exec.Command(ostyBin, "install-self")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"OSTY_SELF_BIN="+prebuilt,
+		"OSTY_SELF_REGISTRY_OFFLINE=1",
+		"OSTY_STAGE0_FALLBACK=",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install-self with prebuilt self: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(managedCheckerPath)
+	if err != nil {
+		t.Fatalf("managed checker must still exist (was invalidated unexpectedly): %v", err)
+	}
+	if string(body) != "good LLVM-built checker" {
+		t.Fatalf("managed checker body = %q, want preserved 'good LLVM-built checker'", body)
 	}
 }
 
