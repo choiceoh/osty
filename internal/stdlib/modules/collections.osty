@@ -15,10 +15,18 @@ pub struct List<T> {
         self.len() == 0
     }
     pub fn first(self) -> T? {
-        self.get(0)
+        if self.isEmpty() {
+            None
+        } else {
+            Some(self[0])
+        }
     }
     pub fn last(self) -> T? {
-        self.get(self.len() - 1)
+        if self.isEmpty() {
+            None
+        } else {
+            Some(self[self.len() - 1])
+        }
     }
     pub fn get(self, index: Int) -> T?
 
@@ -27,10 +35,12 @@ pub struct List<T> {
     }
     pub fn indexOf(self, item: T) -> Int?
     pub fn find(self, pred: fn(T) -> Bool) -> T? {
-        for item in self {
-            if pred(item) {
-                return Some(item)
+        let mut i = 0
+        for i < self.len() {
+            if pred(self[i]) {
+                return Some(self[i])
             }
+            i = i + 1
         }
         None
     }
@@ -169,16 +179,18 @@ pub struct List<T> {
             process.abort("List.chunked: size must be positive, got {size}")
         }
         let mut out: List<List<T>> = []
-        let mut bucket: List<T> = []
-        for item in self {
-            bucket.push(item)
-            if bucket.len() >= size {
-                out.push(bucket)
-                bucket = []
+        let n = self.len()
+        let mut start = 0
+        for start < n {
+            let mut bucket: List<T> = []
+            let limit = if start + size < n { start + size } else { n }
+            let mut j = start
+            for j < limit {
+                bucket.push(self[j])
+                j = j + 1
             }
-        }
-        if !bucket.isEmpty() {
             out.push(bucket)
+            start = start + size
         }
         out
     }
@@ -201,7 +213,13 @@ pub struct List<T> {
         }
         let mut start = 0
         for start + size <= n {
-            out.push(self.drop(start).take(size))
+            let mut window: List<T> = []
+            let mut j = start
+            for j < start + size {
+                window.push(self[j])
+                j = j + 1
+            }
+            out.push(window)
             start = start + step
         }
         out
@@ -229,19 +247,13 @@ pub struct List<T> {
         if self.isEmpty() {
             return None
         }
-        let mut first: T? = None
-        let mut tail: List<T> = []
-        let mut seenFirst = false
-        for item in self {
-            if !seenFirst {
-                first = Some(item)
-                seenFirst = true
-            } else {
-                tail.push(item)
-            }
+        let mut acc = self[0]
+        let mut i = 1
+        for i < self.len() {
+            acc = f(acc, self[i])
+            i = i + 1
         }
-        let acc = first.unwrap()
-        Some(tail.fold(acc, f))
+        Some(acc)
     }
 
     /// Running left fold — returns every intermediate accumulator.
@@ -250,7 +262,8 @@ pub struct List<T> {
     ///
     ///     [1, 2, 3].scan(0, |a, x| a + x) == [0, 1, 3, 6]
     pub fn scan<A>(self, init: A, f: fn(A, T) -> A) -> List<A> {
-        let mut out: List<A> = [init]
+        let mut out: List<A> = []
+        out.push(init)
         let mut acc = init
         for item in self {
             acc = f(acc, item)

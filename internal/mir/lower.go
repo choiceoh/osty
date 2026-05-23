@@ -232,7 +232,6 @@ func mangleTupleName(tt *ir.TupleType) string {
 	return b.String()
 }
 
-
 // ==== pass 1: signatures + layouts ====
 
 func (l *lowerer) collectSignatures() {
@@ -4447,7 +4446,28 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		for i, e := range x.Elems {
 			fields[i] = bs.lowerExprAsOperand(e)
 		}
-		return &AggregateRV{Kind: AggTuple, Fields: fields, T: x.T}
+		tt := x.T
+		// A tuple literal's type is always `(typeof e0, typeof e1, ...)`.
+		// The selfhost checker can poison `x.T` to a non-tuple shape
+		// inside an injected generic stdlib body (`List.zip` builds
+		// `(self[i], other[i])` and the literal came back typed `Int`).
+		// Reconstruct from the lowered element operands so the tuple
+		// AggregateRV carries a layout-resolvable `(A, B)` type.
+		if _, ok := tt.(*ir.TupleType); !ok {
+			elems := make([]ir.Type, len(fields))
+			recovered := true
+			for i, op := range fields {
+				if op == nil || op.Type() == nil || isPoisonType(op.Type()) {
+					recovered = false
+					break
+				}
+				elems[i] = op.Type()
+			}
+			if recovered {
+				tt = &ir.TupleType{Elems: elems}
+			}
+		}
+		return &AggregateRV{Kind: AggTuple, Fields: fields, T: tt}
 	case *ir.ListLit:
 		lt := hint
 		if lt == nil || isPoisonType(lt) {
