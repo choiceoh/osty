@@ -1,0 +1,9 @@
+// Matrix retest: List.scan(closure). PR #1987 directly unblocks this.
+
+use std.testing
+
+fn testListScanClosure() {
+    let xs = [4, 1, 3, 2]
+    let prefix = xs.scan(0, |a, x| a + x)
+    testing.assertEq(prefix.len(), 5)
+}

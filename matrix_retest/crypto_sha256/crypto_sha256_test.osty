@@ -1,0 +1,11 @@
+// Matrix §2.1.A retest: crypto.sha256(bytes) was "partial" — body
+// lower failed. PR #1967 aliased sha256 for osty-self link, but
+// general user-call path may still fail.
+
+use std.testing
+use std.crypto
+
+fn testSha256Empty() {
+    let h = crypto.sha256(b"")
+    testing.assertEq(h.len(), 32)
+}

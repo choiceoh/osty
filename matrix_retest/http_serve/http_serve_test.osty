@@ -1,0 +1,11 @@
+// Matrix §2.1.A retest: http was "untested" (1588 LOC, 166 functions,
+// closure/List dependency high). Closure unblock may help.
+// Just import + trivial reference, no real server start.
+
+use std.testing
+use std.http
+
+fn testHttpModuleImports() {
+    let s = "/api"
+    testing.assertEq(s.len(), 4)
+}

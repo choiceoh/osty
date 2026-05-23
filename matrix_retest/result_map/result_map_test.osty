@@ -1,0 +1,16 @@
+// Matrix §2.1.A retest: result.map(closure) was "partial".
+// Should pass after PR #1977.
+
+use std.testing
+
+fn testResultMapOk() {
+    let ok: Result<Int, String> = Ok(21)
+    let doubled = ok.map(|x| x * 2)
+    testing.assertEq(doubled, Ok(42))
+}
+
+fn testResultMapErr() {
+    let err: Result<Int, String> = Err("nope")
+    let mapped = err.map(|x| x * 2)
+    testing.assertTrue(mapped.isErr())
+}

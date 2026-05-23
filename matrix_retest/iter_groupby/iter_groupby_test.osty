@@ -1,0 +1,9 @@
+// Matrix retest: List.groupBy(closure). PR #1986/#1987 unblock.
+
+use std.testing
+
+fn testListGroupByClosure() {
+    let xs = [1, 2, 3, 4]
+    let groups = xs.groupBy(|x| x % 2)
+    testing.assertEq(groups.len(), 2)
+}

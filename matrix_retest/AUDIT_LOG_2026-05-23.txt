@@ -1,0 +1,58 @@
+===== Matrix retest results 03:12:56 =====
+--- BASELINES (matrix §2.1.A says PASS) ---
+[BASE] rc=1  examples/log_e2e  ::  FAIL	4/4 tests failed in 27.28s (seed 0x43BE36D0F5D713FB)
+       ↳ FAIL	testInfoEmits	1ms osty test: testInfoEmits: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testInfoEmits.map.new: map.new key type `<error>` has no runtime ABI lane FAIL	testDebugEmits	1ms 
+[BASE] rc=1  examples/uuid_e2e  ::  FAIL	5/5 tests failed in 26.92s (seed 0x3313CF3D4F1432A5)
+       ↳ FAIL	testV4Generates	1ms osty test: testV4Generates: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testV4ToStringNonEmpty.call.cross: cross-module call arg type `Uuid` is not implemented (primitive miss; ref-builtin miss; option/result miss; 0 interface layout(s); 1 struct layout(s); 0 tuple layout(s); 1 enum layout(s)) FAIL	testNilZero	1ms 
+[BASE] rc=1  examples/regex_e2e  ::  FAIL	5/5 tests failed in 25.60s (seed 0xB1BE1736B63C110F)
+       ↳ FAIL	testCompileBasic	1ms osty test: testCompileBasic: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testMatchesPositive.call.cross: cross-module call arg type `Regex` is not implemented (primitive miss; ref-builtin miss; option/result miss; 0 interface layout(s); 4 struct layout(s); 0 tuple layout(s); 1 enum layout(s)) FAIL	testReplaceAll	1ms 
+[BASE] rc=0  examples/int_control_e2e  ::  ok	45 tests passed in 14.97s (seed 0xC0BCFEE7BB000966)
+[BASE] rc=0  examples/int_methods_e2e  ::  ok	51 tests passed in 17.01s (seed 0xEE0F18E2A688C751)
+[BASE] rc=0  examples/int_struct_e2e  ::  ok	33 tests passed in 16.81s (seed 0xC9C86370E2C3F725)
+[BASE] rc=1  examples/encoding_url_e2e  ::  FAIL	3/3 tests failed in 31.27s (seed 0x1B03CE2D672106C6)
+       ↳ FAIL	testUrlEncodeUnreservedPassthrough	1ms FAIL	testUrlEncodeReservedChars	4ms FAIL	testUrlEncodeSpace	33ms 
+[BASE] rc=1  examples/encoding_base64_e2e  ::  FAIL	3/3 tests failed in 31.23s (seed 0x9A5DD8AB6DEA0558)
+       ↳ FAIL	testStandardEncodeTwoBytes	1ms FAIL	testStandardEncodeOneByte	1ms FAIL	testStandardEncodeHello	1ms 
+[BASE] rc=1  examples/encoding_e2e  ::  FAIL	2/3 tests failed in 31.41s (seed 0x7A7B5C8DDA076BB2)
+       ↳ FAIL	testHexEncodeBasic	11ms FAIL	testHexEncodeMultiByte	22ms FAIL	2/3 tests failed in 31.41s (seed 0x7A7B5C8DDA076BB2) 
+[BASE] rc=1  examples/compress_e2e  ::  FAIL	4/4 tests failed in 30.87s (seed 0xC6B868224D43E20)
+       ↳ FAIL	testGzipEncodeProducesNonEmpty	1ms osty test: testGzipEncodeProducesNonEmpty: link test binary: clang -target x86_64-unknown-linux-gnu -O3 -flto=thin -fuse-ld=lld -Wl,-mllvm,-import-instr-limit=500 /tmp/osty-test-2495207148/link-compress_test_osty_73c6986aee93e02e/compress_test_osty_73c6986aee93e02e_driver.o /tmp/osty-test-2495207148/bundle-compress_test_osty/.osty/out/test/llvm/main.o /tmp/osty-test-2495207148/bundle-compress_test_osty/.osty/out/test/llvm/runtime/osty_runtime.o -pthread -lz -o /tmp/osty-test-2495207148/link-compress_test_osty_73c6986aee93e02e/compress_test_osty_73c6986aee93e02e: ld.lld: error: undefined symbol: std.compress.gzip.encode ld.lld: error: undefined symbol: std.compress.gzip.decode 
+[BASE] rc=1  examples/json_e2e  ::  FAIL	4/4 tests failed in 26.22s (seed 0xB6938BE395833D16)
+       ↳ FAIL	testParseTrue	1ms osty test: testParseTrue: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported osty_std_json__parseVal.aggregate.tuple: tuple aggregate type `Int` has no MIR layout FAIL	testParseInt	1ms 
+[BASE] rc=1  examples/concat_interp_e2e  ::  FAIL	6/10 tests failed in 30.51s (seed 0x31D0AA137A54B7E8)
+       ↳ FAIL	testInterpWithListIndex	1ms FAIL	testInterpMultiple	2ms FAIL	testConcatMixedVarsAndLiterals	1ms 
+[BASE] rc=0  examples/multi_file_e2e  ::  ok	7 tests passed in 16.41s (seed 0xA3B76EED37FF7A5E)
+[BASE] rc=1  examples/log_e2e  ::  FAIL	4/4 tests failed in 25.35s (seed 0xE5B3C4141AB707A9)
+       ↳ FAIL	testErrorEmits	1ms osty test: testErrorEmits: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testInfoEmits.map.new: map.new key type `<error>` has no runtime ABI lane FAIL	testWarnEmits	1ms 
+[BASE] rc=1  examples/uuid_e2e  ::  FAIL	5/5 tests failed in 24.74s (seed 0x67C7DD58A656AB2F)
+       ↳ FAIL	testNilZero	1ms osty test: testNilZero: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testV4ToStringNonEmpty.call.cross: cross-module call arg type `Uuid` is not implemented (primitive miss; ref-builtin miss; option/result miss; 0 interface layout(s); 1 struct layout(s); 0 tuple layout(s); 1 enum layout(s)) FAIL	testRoundTrip	1ms 
+--- RETESTS (closure-cluster + previously FAIL/partial) ---
+[RETEST] rc=1  matrix_retest/option_map  ::  FAIL	2/2 tests failed in 25.82s (seed 0x114829642D937FD9)
+       ↳ FAIL	testOptionMapClosure	1ms osty test: testOptionMapClosure: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testOptionMapClosure.aggregate.enum: scalar enum variant `Int` cannot carry payload fields; MIR payload requires the Osty-owned LIR Proto backend; Go MIR emitter fallback has been removed; hint: route through the Osty-owned MIR/LIR Proto backend path; backend-route: mir-direct; osty-self lir-proto-lower-mir-json: unsupported testOptionMapClosure.aggregate.enum: scalar enum variant `Int` cannot carry payload fields; MIR payload requires the Osty-owned LIR Proto backend; Go MIR emitter fallback has been removed FAIL	testOptionMapNone	1ms 
+[RETEST] rc=1  matrix_retest/result_map  ::  FAIL	2/2 tests failed in 25.64s (seed 0x98063369E01B830B)
+       ↳ FAIL	testResultMapErr	1ms osty test: testResultMapErr: llvm backend: code generation is not implemented yet: LLVM000 unsupported-source: native LIR Proto subprocess declined MIR coverage for route mir-direct; reasons: osty-self lir-proto-lower-mir-json: unsupported testResultMapOk.aggregate.enum: scalar enum variant `Int` cannot carry payload fields; MIR payload requires the Osty-owned LIR Proto backend; Go MIR emitter fallback has been removed; hint: route through the Osty-owned MIR/LIR Proto backend path; backend-route: mir-direct; osty-self lir-proto-lower-mir-json: unsupported testResultMapOk.aggregate.enum: scalar enum variant `Int` cannot carry payload fields; MIR payload requires the Osty-owned LIR Proto backend; Go MIR emitter fallback has been removed FAIL	testResultMapOk	1ms 
+[RETEST] rc=0  matrix_retest/iter_map  ::  ok	1 tests passed in 30.63s (seed 0x8DA5B1CE4697C66E)
+[RETEST] rc=0  matrix_retest/iter_fold  ::  ok	1 tests passed in 31.25s (seed 0x16639F0703AB0B1D)
+[RETEST] rc=0  matrix_retest/iter_find  ::  ok	1 tests passed in 32.53s (seed 0xBCE91866E7A0B6AD)
+[RETEST] rc=0  matrix_retest/iter_scan  ::  ok	1 tests passed in 32.32s (seed 0x9CB63465BAFBE31F)
+[RETEST] rc=0  matrix_retest/iter_groupby  ::  ok	1 tests passed in 32.70s (seed 0xE33C36A318F02947)
+[RETEST] rc=1  matrix_retest/json_parse  ::  osty test: parse errors in .
+       ↳ 
+[RETEST] rc=1  matrix_retest/url_parse  ::  FAIL	1/1 tests failed in 26.30s (seed 0x7348BCDE024415F2)
+       ↳ FAIL	testUrlParse	1ms osty test: testUrlParse: backend: MIR coverage incomplete FAIL	1/1 tests failed in 26.30s (seed 0x7348BCDE024415F2) 
+[RETEST] rc=1  matrix_retest/encoding_hex  ::  osty test: parse errors in .
+       ↳ 
+[RETEST] rc=1  matrix_retest/crypto_sha256  ::  FAIL	1/1 tests failed in 17.59s (seed 0x6D28C79738F2B497)
+       ↳ FAIL	testSha256Empty	6ms FAIL	1/1 tests failed in 17.59s (seed 0x6D28C79738F2B497) 
+[RETEST] rc=0  matrix_retest/http_serve  ::  ok	1 tests passed in 17.37s (seed 0x34AC9DEEE21D8E80)
+===== DONE 03:23:50 =====
+===== Fixed retest 03:25:29 =====
+rc=1  matrix_retest/json_parse  ::  FAIL	2/2 tests failed in 32.82s (seed 0x453153FB1C326BF)
+    FAIL	testJsonParseScalar	1ms
+    FAIL	testJsonParseObject	1ms
+    FAIL	2/2 tests failed in 32.82s (seed 0x453153FB1C326BF)
+rc=1  matrix_retest/encoding_hex  ::  FAIL	1/1 tests failed in 33.20s (seed 0x55C36CA769C5D1E)
+    FAIL	testHexEncode	11ms
+    FAIL	1/1 tests failed in 33.20s (seed 0x55C36CA769C5D1E)
+rc=0  matrix_retest/deneb_ports  ::  ok	1 tests passed in 17.15s (seed 0xCC8899DDD9D475C6)
+===== DONE 03:26:53 =====
