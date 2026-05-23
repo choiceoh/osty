@@ -4327,11 +4327,79 @@ func (l *lowerer) backfillClosureArgsFromMethodCall(mc *MethodCall) {
 	// stdlib higher-order method table the closure backfill
 	// uses, so chained `map/filter/andThen/...` chains lower
 	// without their middle nodes being marked as ErrType.
-	if mc.T == nil || mc.T == ErrTypeVal {
+	if mc.T == nil || mc.T == ErrTypeVal || containsClosureResultSentinel(mc.T) {
 		if recovered := recoverHigherOrderMethodReturnType(recvT, mc.Name, mc.Args); recovered != nil {
 			mc.T = recovered
 		}
 	}
+	// flatMap-specific: when the checker leaves TypeArgs empty or
+	// poisoned, monomorph mangles `R` as `?` and clang rejects the
+	// `_Z…flatMapIl?E…` symbol. Derive `[T, R]` from the receiver +
+	// recovered return so monomorph specializes.
+	if mc.Name == "flatMap" && mc.T != nil && mc.T != ErrTypeVal {
+		fillFlatMapTypeArgs(mc, recvT)
+	}
+}
+
+// containsClosureResultSentinel reports whether t carries the
+// `?closure_result` placeholder the AST-side surface-shape recovery
+// inserts when `xs.map(fn) / xs.flatMap(fn)` cannot resolve the
+// closure return at parse time. The sentinel is a NamedType, not a
+// TypeVar or ErrType, so the usual recovery conditions miss it.
+func containsClosureResultSentinel(t Type) bool {
+	if t == nil {
+		return false
+	}
+	if nt, ok := t.(*NamedType); ok && nt != nil {
+		if nt.Name == "?closure_result" {
+			return true
+		}
+		for _, a := range nt.Args {
+			if containsClosureResultSentinel(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fillFlatMapTypeArgs sets `mc.TypeArgs = [T, R]` for a flatMap call
+// when the recovered return type carries a concrete element. Other
+// methods are intentionally left alone — broader fill triggers
+// monomorph regressions on scan/groupBy.
+func fillFlatMapTypeArgs(mc *MethodCall, recvT Type) {
+	if mc == nil || mc.T == nil {
+		return
+	}
+	nt, ok := mc.T.(*NamedType)
+	if !ok || nt == nil || nt.Name != "List" || len(nt.Args) < 1 {
+		return
+	}
+	r := nt.Args[0]
+	if r == nil || r == ErrTypeVal || hasPoisonedTypeArg(r) || containsTypeVar(r) {
+		return
+	}
+	rNt, ok2 := recvT.(*NamedType)
+	if !ok2 || rNt == nil || !rNt.Builtin || len(rNt.Args) < 1 {
+		return
+	}
+	t := rNt.Args[0]
+	if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
+		return
+	}
+	if len(mc.TypeArgs) > 0 {
+		clean := true
+		for _, ta := range mc.TypeArgs {
+			if ta == nil || ta == ErrTypeVal || hasPoisonedTypeArg(ta) || containsTypeVar(ta) {
+				clean = false
+				break
+			}
+		}
+		if clean {
+			return
+		}
+	}
+	mc.TypeArgs = []Type{t, r}
 }
 
 // recoverHigherOrderMethodReturnType derives the return type of
@@ -4522,10 +4590,52 @@ func recoverListHigherOrderReturn(listName string, elem Type, method string, arg
 			pair := &TupleType{Elems: []Type{elem, elem}}
 			return &NamedType{Name: listName, Args: []Type{pair}, Builtin: true}
 		}
+	case "flatMap":
+		if len(args) == 1 {
+			if r := flatMapElemFromArg(args[0].Value); r != nil {
+				return &NamedType{Name: listName, Args: []Type{r}, Builtin: true}
+			}
+		}
 	case "len":
 		return TInt
 	case "isEmpty":
 		return TBool
+	}
+	return nil
+}
+
+// flatMapElemFromArg extracts the element type R of `List<R>` from a
+// `flatMap` argument's closure or named-fn return.
+func flatMapElemFromArg(e Expr) Type {
+	if e == nil {
+		return nil
+	}
+	t := closureReturnType(e)
+	if t == nil {
+		if et := e.Type(); et != nil {
+			if ft, ok := et.(*FnType); ok && ft != nil && ft.Return != nil {
+				t = ft.Return
+			}
+		}
+	}
+	// Closure body inference fallback: when the checker left the
+	// closure's recorded return type poisoned (`<error>`), walk the
+	// AST body of a closure literal and pull a recoverable list type
+	// from its tail expression.
+	if t == nil || t == ErrTypeVal {
+		if cl, ok := e.(*Closure); ok && cl != nil && cl.Body != nil && cl.Body.Result != nil {
+			if bt := cl.Body.Result.Type(); bt != nil && bt != ErrTypeVal {
+				t = bt
+			}
+		}
+	}
+	if t == nil {
+		return nil
+	}
+	if nt, ok := t.(*NamedType); ok && nt != nil && (nt.Name == "List" || nt.Name == "Iter") && len(nt.Args) >= 1 {
+		if r := nt.Args[0]; r != nil && r != ErrTypeVal && !hasPoisonedTypeArg(r) {
+			return r
+		}
 	}
 	return nil
 }
