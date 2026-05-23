@@ -2,6 +2,7 @@ package mir
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"strconv"
@@ -170,15 +171,9 @@ func (l *lowerer) collectTupleLayouts() {
 	if l.out == nil || l.out.Layouts == nil {
 		return
 	}
+	seen := map[string]bool{}
 	var visit func(t Type)
-	visit = func(t Type) {
-		tt, ok := t.(*ir.TupleType)
-		if !ok || tt == nil {
-			return
-		}
-		for _, e := range tt.Elems {
-			visit(e)
-		}
+	registerTuple := func(tt *ir.TupleType) {
 		key := tt.String()
 		if key == "" {
 			return
@@ -196,6 +191,50 @@ func (l *lowerer) collectTupleLayouts() {
 		}
 		l.out.Layouts.Tuples[key] = tl
 	}
+	visit = func(t Type) {
+		if t == nil {
+			return
+		}
+		// `seen` guards against unbounded recursion through self-
+		// referential types (e.g. linked-list `Cons<T>`) and avoids
+		// repeated work on shapes that appear in many locals.
+		key := t.String()
+		if key != "" {
+			if seen[key] {
+				return
+			}
+			seen[key] = true
+		}
+		switch tt := t.(type) {
+		case *ir.TupleType:
+			if tt != nil {
+				for _, e := range tt.Elems {
+					visit(e)
+				}
+				registerTuple(tt)
+			}
+		case *ir.NamedType:
+			// `List<(Int, Int)>`, `Option<(A, B)>`, `Map<K, (A, B)>`
+			// etc. carry tuples in their args. The reviewer concern
+			// (PR #1982 P1) was that a top-level-only check left
+			// these unregistered and LIR Proto then rejected the
+			// tuple aggregate at the use site.
+			if tt != nil {
+				for _, a := range tt.Args {
+					visit(a)
+				}
+			}
+		case *ir.FnType:
+			// Function signatures can also surface tuples in params
+			// or return types (e.g. `fn(Int) -> (A, B)`).
+			if tt != nil {
+				for _, p := range tt.Params {
+					visit(p)
+				}
+				visit(tt.Return)
+			}
+		}
+	}
 	for _, fn := range l.out.Functions {
 		if fn == nil {
 			continue
@@ -211,9 +250,22 @@ func (l *lowerer) collectTupleLayouts() {
 // LLVM `%name` identifier rejects, so each element's type string is
 // sanitized to `[A-Za-z0-9_]` and joined under a `Tuple.` prefix —
 // e.g. `(Int, Int)` → `Tuple.Int.Int`.
+//
+// Suffix-disambiguator: a pure sanitize-and-join is lossy
+// (`pkg.B` and `pkg_B` collapse to the same `pkg_B`), and
+// `lirModuleDeclareTypeDef` deduplicates typedefs by name — without
+// disambiguation a second tuple layout sharing the sanitized name
+// would silently bind to the wrong aggregate shape. A 64-bit FNV
+// hash of the canonical type-string key (paren/space/etc all
+// preserved) appended as a `_X<16hex>` suffix makes the mapping
+// injective while keeping the human-readable prefix.
 func mangleTupleName(tt *ir.TupleType) string {
 	var b strings.Builder
 	b.WriteString("Tuple")
+	key := ""
+	if tt != nil {
+		key = tt.String()
+	}
 	for _, e := range tt.Elems {
 		b.WriteByte('.')
 		s := "Unit"
@@ -229,6 +281,9 @@ func mangleTupleName(tt *ir.TupleType) string {
 			}
 		}
 	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	fmt.Fprintf(&b, "_X%016x", h.Sum64())
 	return b.String()
 }
 

@@ -12,6 +12,35 @@ import (
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
+// installSelfTestEnv returns the parent environment with the
+// caller-listed keys stripped, plus the overrides appended. Use
+// instead of `append(os.Environ(), "KEY=VAL")` for subprocess
+// invocations that need to *override* env values: duplicate keys are
+// allowed in `os.Environ()` form and child `getenv` typically returns
+// the FIRST match, so an unfiltered append silently loses the
+// override when the parent shell already exported the same key. Tests
+// that depend on `OSTY_STAGE0_FALLBACK` / `OSTY_SELF_BIN` semantics
+// MUST go through this helper so the harness is hermetic across the
+// dev shells engineers actually run them in.
+func installSelfTestEnv(t *testing.T, overrides ...string) []string {
+	t.Helper()
+	strip := map[string]bool{}
+	for _, kv := range overrides {
+		if eq := strings.IndexByte(kv, '='); eq > 0 {
+			strip[kv[:eq]] = true
+		}
+	}
+	parent := os.Environ()
+	out := make([]string, 0, len(parent)+len(overrides))
+	for _, kv := range parent {
+		if eq := strings.IndexByte(kv, '='); eq > 0 && strip[kv[:eq]] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, overrides...)
+}
+
 // TestInstallSelfUsageMessage exercises the helper that some future
 // help-text generator will consult. Cheap correctness check that the
 // usage string mentions the canonical flags.
@@ -325,7 +354,7 @@ func main() { os.Exit(1) }
 	cmd.Dir = root
 	// Opt into stage0 source bootstrap so the run actually reaches
 	// buildOstySelf and fails inside it — the path this test covers.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
 		"OSTY_STAGE0_FALLBACK=1",
 	)
@@ -372,7 +401,7 @@ func TestRunInstallSelfWithoutStage0FallbackErrorsCleanly(t *testing.T) {
 
 	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", hostBin)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
 		"OSTY_STAGE0_FALLBACK=",
 		"OSTY_SELF_BIN=",
@@ -424,7 +453,7 @@ func TestRunInstallSelfStage0FallbackAttemptsSourceBootstrap(t *testing.T) {
 
 	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", hostBin)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_STAGE0_FALLBACK=1",
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
 	)
@@ -484,7 +513,7 @@ func TestRunInstallSelfStage0FallbackInvalidatesNativeCheckerSlot(t *testing.T) 
 
 	cmd := exec.Command(ostyBin, "install-self", "--osty-bin", hostBin)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_STAGE0_FALLBACK=1",
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
 	)
@@ -535,7 +564,7 @@ func TestRunInstallSelfWithResolvedSelfDoesNotInvalidateNativeCheckerSlot(t *tes
 
 	cmd := exec.Command(ostyBin, "install-self")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_SELF_BIN="+prebuilt,
 		"OSTY_SELF_REGISTRY_OFFLINE=1",
 		"OSTY_STAGE0_FALLBACK=",
@@ -572,7 +601,7 @@ func TestRunInstallSelfForceUsesResolvedSelfhostWithoutStage0Fallback(t *testing
 
 	cmd := exec.Command(ostyBin, "install-self", "--force", "--osty-bin", hostBin)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_SELF_BIN="+selfBin,
 		"OSTY_STAGE0_FALLBACK=",
 		"OSTY_STAGE0_LIST_ALL_DECLINES=",
@@ -636,7 +665,7 @@ func TestRunInstallSelfForceUsesStaleLocalSelfhostWithoutStage0Fallback(t *testi
 
 	cmd := exec.Command(ostyBin, "install-self", "--force", "--osty-bin", hostBin)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = installSelfTestEnv(t,
 		"OSTY_STAGE0_FALLBACK=",
 		"OSTY_STAGE0_LIST_ALL_DECLINES=",
 		"OSTY_SELF_BIN=",
