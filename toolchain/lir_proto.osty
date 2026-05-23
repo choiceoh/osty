@@ -2319,6 +2319,15 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
             return LirType {llvm: typeName, className: LirTypeAggregate}
         }
     }
+    // Cross-package nominal type fallback — same rationale as the
+    // function-context `lirLowerMirType` path. Treat unknown
+    // PascalCase nominals as opaque `ptr` so cross-pkg struct typedef
+    // fields (and other module-level sites) referencing e.g.
+    // `Error` from `std.error` resolve to a sized type instead of
+    // tripping the unsupported-type diagnostic.
+    if lirIsLikelyCrossPkgNominalName(name) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
     diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "` (" + lirTypeLowerTraceMessage(mir, name) + ")", path))
     LirType {llvm: "", className: LirTypeUnknown}
 }
@@ -8655,8 +8664,24 @@ fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName:
         lirLowerError(l, LirDiagInvalidInput, "struct aggregate field count does not match layout", "aggregate.struct")
         return lirOperandInvalid()
     }
-    let aggregateType = if lirTypeIsZero(hint) {
-        lirLowerMirType(l, structName)
+    // When the dest hint disagrees with the struct's own LLVM shape
+    // (e.g. dest is a cross-pkg interface lowered to `ptr` by the
+    // PR #2004 opaque-ptr fallback but the aggregate IS a real
+    // struct), use the struct's typedef for the insertvalue chain
+    // and let the caller's store/select handle the interface
+    // semantics. Without this override the insertvalue gets typed as
+    // `ptr undef` which LLVM rejects: "insertvalue operand must be
+    // aggregate type". Concrete trigger: `fn new(msg) -> Error {
+    // BasicError { msg } }` injected from std.error — `_return`
+    // local is Error (→ ptr) but the literal is BasicError (→ real
+    // struct).
+    let structTyp = lirLowerMirType(l, structName)
+    let aggregateType = if lirTypeIsZero(hint) || hint.className == LirTypePtr {
+        if lirTypeIsZero(structTyp) {
+            hint
+        } else {
+            structTyp
+        }
     } else {
         hint
     }
@@ -9339,7 +9364,82 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     if strings.contains(name, "(") {
         return LirType {llvm: name, className: LirTypeFunction}
     }
+    // Cross-package nominal type fallback. A reference to a type
+    // declared in another package (e.g. `Error` from `std.error`
+    // when called from a `use std.keychain` site) has no layout entry
+    // in the current module's MIR — none of the prior checks match
+    // because layouts only cover types declared in THIS package.
+    //
+    // Without a fallback every cross-pkg call that mentions such a
+    // type — argument or return — declines emit with
+    // `cross-module call arg type T is not implemented` or emits a
+    // declare with an empty return type that clang rejects
+    // (`declare  @std.error.new(ptr)`). Both are blocking for the
+    // body-lowered std.keychain path, which inlines `Err(error.new(...))`
+    // and surfaces a cross-pkg call returning Error.
+    //
+    // ABI-correct fallback: cross-pkg nominal types are passed as
+    // pointers at the LLVM boundary. Interface values are boxed
+    // (`{ptr data, ptr vtable}`) but at the call site we already
+    // have the boxed pointer; user structs flow as heap pointers;
+    // enums flow as their discriminant (i64) but those don't escape
+    // the package without a layout. Treating unknown nominals as
+    // opaque `ptr` matches what the runtime / cross-pkg dispatch
+    // already does for the cases that work today and unblocks the
+    // ones that didn't.
+    //
+    // The fallback fires only after every layout-driven check has
+    // had a chance to succeed, so locally-declared types still get
+    // their proper LLVM shape. PascalCase head-character check keeps
+    // typos and lowercase miscategorizations (`int`, etc.) from
+    // silently becoming `ptr`. Names containing a `.` are also
+    // accepted — fully qualified cross-pkg refs like `osty.Error`.
+    if lirIsLikelyCrossPkgNominalName(name) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
     LirType {llvm: "", className: LirTypeUnknown}
+}
+// lirIsLikelyCrossPkgNominalName: heuristic for "this looks like a
+// nominal type name from another package we couldn't find a layout
+// for". PascalCase head (or a `.`-qualified path with a PascalCase
+// last segment) is the syntactic marker that the name refers to a
+// type declared in another package.
+fn lirIsLikelyCrossPkgNominalName(name: String) -> Bool {
+    if name.len() == 0 {
+        return false
+    }
+    // Reject obvious non-nominal forms: ref-builtin generics like
+    // `List<...>` start uppercase but already lowered above; getting
+    // here means lirIsRefBuiltinTypeName returned false. Still skip
+    // any name with `<` to be conservative — leaving it to the
+    // legacy Unknown path lets the existing diagnostic fire when an
+    // unrecognized generic head genuinely is a bug.
+    if strings.contains(name, "<") || strings.contains(name, ">") {
+        return false
+    }
+    // Pull the last `.`-separated segment for fully qualified paths
+    // (`std.error.Error` → `Error`); otherwise the whole name is the
+    // candidate segment.
+    let segment = if strings.contains(name, ".") {
+        let parts = strings.split(name, ".")
+        parts[parts.len() - 1]
+    } else {
+        name
+    }
+    if segment.len() == 0 {
+        return false
+    }
+    // PascalCase head check via the first ASCII character. Compare
+    // against "A".."Z" via slice equality instead of byteAt() (not
+    // available on String in the bootstrap stdlib coverage).
+    let head = strings.slice(segment, 0, 1)
+    head == "A" || head == "B" || head == "C" || head == "D" ||
+        head == "E" || head == "F" || head == "G" || head == "H" ||
+        head == "I" || head == "J" || head == "K" || head == "L" ||
+        head == "M" || head == "N" || head == "O" || head == "P" ||
+        head == "Q" || head == "R" || head == "S" || head == "T" ||
+        head == "U" || head == "V" || head == "W" || head == "X" ||
+        head == "Y" || head == "Z"
 }
 // Option<T> / Maybe<T> / Result<T, E> all lower to the canonical
 // `{ i64 disc, i64 payload }` aggregate production uses for every
@@ -9378,6 +9478,20 @@ fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
         return true
     }
     if layout.mangled != "" && "%" + layout.mangled == name {
+        return true
+    }
+    // Cross-pkg suffix match: an injected stdlib body references a
+    // local struct by its BARE name (`BasicError`) but the layout was
+    // registered with the qualified key (`error.BasicError`) at
+    // injection time. Without this fallback the MIR aggregate type
+    // misses the layout in lirLowerMirType → falls through to the
+    // PR #2004 opaque-ptr fallback → constructor emits insertvalue
+    // on a `ptr` which LLVM rejects as not aggregate-typed.
+    let suffix = "." + name
+    if layout.name != "" && strings.endsWith(layout.name, suffix) {
+        return true
+    }
+    if layout.mangled != "" && strings.endsWith(layout.mangled, suffix) {
         return true
     }
     false

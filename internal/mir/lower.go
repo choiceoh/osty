@@ -8258,6 +8258,47 @@ func (l *lowerer) structFromType(t ir.Type, fallbackName string) *lookupStruct {
 	if layout != nil {
 		return &lookupStruct{layout: layout}
 	}
+	// Cross-pkg fallback: an injected stdlib fn body (e.g.
+	// `error.new` whose body literal is `BasicError { message }`)
+	// sees a struct lit whose typeName is the BARE name
+	// (`BasicError`), but the layout was registered under the
+	// qualified key (`error.BasicError`) when stdlib types were
+	// injected. The bare-name lookup misses and `lowerStructLit`
+	// falls through to source-order — which loses the field-name →
+	// shorthand mapping and materializes unit placeholders for every
+	// shorthand field. End-effect: `BasicError { unit }` and the
+	// LIR backend hits "struct field coercion is not supported".
+	//
+	// Suffix-match the layout/decl key as `<anything>.<name>`. The
+	// qualifier is the originating package which an injected body
+	// doesn't (and shouldn't) carry. Conservative: only fires when
+	// the bare-name lookup failed AND the suffix is the entire tail
+	// after the last `.`. Single match wins; mixed-pkg ambiguity
+	// (two stdlib pkgs both exporting `Error`) skips the fallback
+	// rather than guess.
+	suffix := "." + name
+	matched := map[string]struct{}{}
+	var (
+		matchLayout *StructLayout
+		matchDecl   *ir.StructDecl
+	)
+	if l.out != nil && l.out.Layouts != nil {
+		for k, v := range l.out.Layouts.Structs {
+			if strings.HasSuffix(k, suffix) {
+				matched[k] = struct{}{}
+				matchLayout = v
+			}
+		}
+	}
+	for k, v := range l.structs {
+		if strings.HasSuffix(k, suffix) {
+			matched[k] = struct{}{}
+			matchDecl = v
+		}
+	}
+	if len(matched) == 1 {
+		return &lookupStruct{decl: matchDecl, layout: matchLayout}
+	}
 	return &lookupStruct{}
 }
 

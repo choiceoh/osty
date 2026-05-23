@@ -3966,6 +3966,31 @@ fn mirLowerFindStructLayoutIndex(l: MirLowerer, name: String) -> Int {
         }
         i = i + 1
     }
+    // Cross-pkg fallback: an injected stdlib fn body (e.g.
+    // `error.new` whose body literal is `BasicError { message }`)
+    // sees a struct lit whose `typeName` is the BARE name
+    // (`BasicError`), but the layout was registered with the
+    // qualified key (`error.BasicError`) at injection time. Without
+    // this fallback the layout lookup misses → the lowerer falls
+    // through to source-order without the field-name → shorthand
+    // mapping, and `mirLowerBuildStructLitFields` materializes a
+    // unit-const placeholder for every shorthand field instead of
+    // reading the in-scope local. End-effect: `error.new(message)`
+    // ends up constructing `BasicError { unit }` and the LIR backend
+    // hits `struct field coercion is not supported` because the
+    // unit literal doesn't match the layout's `String` field.
+    //
+    // Match by suffix: try `<anything>.<name>`. The qualifier is
+    // the originating package name, which the injected body
+    // doesn't (and shouldn't) know about.
+    let suffix = "." + name
+    i = 0
+    for sl in l.out.layouts.structs {
+        if strings.endsWith(sl.name, suffix) {
+            return i
+        }
+        i = i + 1
+    }
     -1
 }
 /// mirLowerVariantLitInto lowers an enum variant construction like

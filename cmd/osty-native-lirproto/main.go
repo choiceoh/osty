@@ -475,7 +475,12 @@ func stageInput(req nativelirproto.Request) (string, string, func(), error) {
 	if err != nil {
 		return "", "", nil, err
 	}
-	cleanup := func() { os.RemoveAll(root) }
+	cleanup := func() {
+		if os.Getenv("OSTY_KEEP_TMP") != "" {
+			return
+		}
+		os.RemoveAll(root)
+	}
 
 	if req.MIR != nil {
 		data, err := json.Marshal(req.MIR)
