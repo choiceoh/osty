@@ -34,6 +34,22 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return fmt.Errorf("decode llvmgen request: %w", err)
 	}
+	// Install the managed-subprocess checker so the in-process
+	// `check.PackageGraph` call inside `preparePackageEntry` resolves
+	// against the same Osty-native checker the host uses. Without this
+	// the default factory returns `(nil, "no native checker
+	// installed")`, every check call returns an empty Result, and IR
+	// lowering falls back to AST-only inference — which can leave
+	// generic method calls like `xs.flatMap(|x| [x, x])` with a
+	// `List<R>` return whose `R` is still a TyVar, surfacing as `?`
+	// in the monomorph-mangled symbol and breaking clang.
+	//
+	// The host (`cmd/osty/main.go`) exports `OSTY_NATIVE_CHECKER_BIN`
+	// before invoking us so the env-override branch wins; we still
+	// install the managed-subprocess factory as a defensive fallback
+	// when the env var is unset (e.g. an integration test invoking
+	// this binary directly).
+	check.UseManagedSubprocessChecker(".")
 	if req.MIR != nil {
 		return runMIRRequest(req, stdout)
 	}
