@@ -389,6 +389,11 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 G 번호 없이 일반 이슈 트래커에서 처리. 언어 surface 변경은 정식 버전
 업 (minor / major) 과 함께 문서화.
 
+### `selfhost-seed-retirement` — `internal/selfhost/generated.go` (70k LOC frozen seed) 의 점진적 retirement trajectory
+
+별도 plan 문서로 관리: [`docs/selfhost-seed-retirement-trajectory.md`](docs/selfhost-seed-retirement-trajectory.md).
+44 importer + 4 phase (lex / parse / resolve / check) 의 audit + 6 단계 retirement step 시퀀스가 정리돼 있음. 이 gap 항목은 trajectory 진행에 따라 step 별로 PR 가 떨어질 때마다 cross-link 한다. seed regen 부활은 여전히 금지 — retirement 는 "대체로 unreachable 화" 경로뿐이다.
+
 ---
 
 ## Resolved in v0.5
