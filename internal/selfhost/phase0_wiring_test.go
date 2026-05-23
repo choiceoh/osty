@@ -1118,22 +1118,26 @@ func TestVerifySelfRebuildStage1IgnoresStaleInTreeSelfBinary(t *testing.T) {
 		t.Fatalf("read verify-self-rebuild: %v", err)
 	}
 	text := string(src)
-	// PR #1935 ("make stage0 bootstrap explicit") replaced the
-	// implicit `OSTY_STAGE0_FALLBACK=1` env-var signal with an
-	// explicit `--bootstrap-stage0` CLI flag on the driver invocation.
-	// The two remaining env vars (`OSTY_SELF_REGISTRY_OFFLINE=1` +
-	// `OSTY_STAGE0_LIST_ALL_DECLINES=1`) are still required for the
-	// stage1 stale-binary recovery path, and the new flag carries the
-	// stage0 bootstrap opt-in that the env var used to.
+	// History: PR #1935 swapped the implicit `OSTY_STAGE0_FALLBACK=1`
+	// env-var signal for an explicit `--bootstrap-stage0` CLI flag.
+	// The flag was retired again (post-PR #1989) in favour of the
+	// env-var gate, so install-self and the forked `osty build` now
+	// share a single source of truth. The stage1 recovery path keeps
+	// `OSTY_SELF_REGISTRY_OFFLINE=1` + `OSTY_STAGE0_LIST_ALL_DECLINES=1`
+	// + `OSTY_STAGE0_FALLBACK=1` as the env-var trio. The
+	// `--bootstrap-stage0` CLI flag MUST NOT reappear — its dual-parse
+	// drift is what motivated the second swap.
 	for _, needle := range []string{
 		`rm -f "$toolchain_dir/.osty/out/debug/llvm/osty-self"`,
 		`rm -f "$toolchain_dir/.osty/out/release/llvm/osty-self"`,
-		"OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_LIST_ALL_DECLINES=1",
-		"--bootstrap-stage0",
+		"OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 OSTY_STAGE0_FALLBACK=1",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("verify-self-rebuild missing stage1 stale self-binary guard %q", needle)
 		}
+	}
+	if strings.Contains(text, "--bootstrap-stage0") {
+		t.Fatalf("verify-self-rebuild reintroduced `--bootstrap-stage0` CLI flag; the env-var gate is the single source of truth post-retirement")
 	}
 }
 

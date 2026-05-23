@@ -1,0 +1,140 @@
+# Per-PR fresh-clone source-bootstrap gate.
+#
+# Companion to `bootstrap-smoke-test.yml`, which exercises the
+# REGISTRY path on a weekly schedule. This workflow runs on every PR
+# + push to main and exercises the OFFLINE / SOURCE path that
+# fresh-clone contributors hit when they have no registry access:
+#
+#   OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap
+#
+# `just bootstrap` bakes in `OSTY_STAGE0_FALLBACK=1` (see PR #1989),
+# so the recipe is exactly what a new contributor runs.
+#
+# Why this gate exists: PR #1954 silently broke this path by gating
+# `EnsureNativeChecker` on a resolvable `osty-self` that fresh clones
+# do not have. The bug landed and only surfaced via manual reports
+# weeks later, fixed in PR #1988. With this gate in place, the same
+# regression would have failed CI on the introducing PR — the
+# offline path is now a tracked, blocking signal.
+#
+# Cost target: ~5-10 minutes per run. Skipped on `[skip ci]` /
+# docs-only PRs (paths-filter below).
+
+name: Fresh-clone source bootstrap
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-clone-source-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-bootstrap:
+    name: Fresh clone → offline → stage0 source bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install LLVM toolchain (clang/lld for the link step)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends clang lld
+
+      - name: Install just
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/casey/just/releases/latest/download/just-1.50.0-x86_64-unknown-linux-musl.tar.gz \
+              | tar -xz -C "$HOME/.local/bin" just
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Shallow clone in scratch dir
+        # Deliberately NOT actions/checkout — we want the exact path
+        # `git clone https://github.com/choiceoh/osty` walks for a new
+        # contributor. The PR's HEAD ref is what we want to exercise;
+        # `${{ github.event.pull_request.head.sha }}` is empty on push
+        # so fall back to `github.sha`.
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/scratch"
+          cd "$RUNNER_TEMP/scratch"
+          sha="${PR_SHA:-$PUSH_SHA}"
+          # Full clone (not --depth 1) so the SHA we want is reachable.
+          git clone "$REPO_URL" osty
+          cd osty
+          git checkout "$sha"
+          git rev-parse HEAD
+
+      - name: Offline source bootstrap (`OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap`)
+        # `just bootstrap` already exports `OSTY_STAGE0_FALLBACK=1`
+        # internally (PR #1989), so the only env vars we set here
+        # are the registry shutoff + clearing anything stale.
+        env:
+          OSTY_SELF_REGISTRY_OFFLINE: "1"
+          OSTY_SELF_BIN: ""
+          OSTY_SELF_TRUSTED_KEY: ""
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          just bootstrap 2>&1 | tee "$RUNNER_TEMP/source-bootstrap.log"
+
+      - name: Verify cache artifact is populated
+        # After `install-self` succeeds the content-addressed cache
+        # must contain exactly one `osty-self` for the host triple.
+        # Missing here means the stage0 emitter declined silently or
+        # the cache promote step failed.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          shopt -s nullglob
+          matches=(.osty/cache/self-host/*/osty-self)
+          if [ "${#matches[@]}" -eq 0 ]; then
+            echo "::error::no osty-self in .osty/cache/self-host/ after install-self"
+            ls -la .osty/cache/self-host/ || true
+            exit 1
+          fi
+          echo "cache hit: ${matches[*]}"
+          file "${matches[@]}"
+
+      - name: Verify managed native checker slot was invalidated (PR #1989 contract)
+        # After a successful stage0 fallback bootstrap, install-self
+        # MUST retire the Go-built fallback checker so the next
+        # `osty build` produces the LLVM variant. If this file is
+        # present after `just bootstrap` finishes, the post-stage0
+        # invalidation hook regressed.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          shopt -s nullglob
+          stragglers=(.osty/toolchain/*/osty-native-checker)
+          if [ "${#stragglers[@]}" -ne 0 ]; then
+            echo "::error::stale Go-built native checker in managed slot — install-self invalidation regressed"
+            ls -la .osty/toolchain/*/ || true
+            exit 1
+          fi
+          echo "managed slot empty as expected"
+
+      - name: Smoke-test the bootstrapped osty-self with a tiny example
+        # Proves the cached osty-self is actually executable end-to-end.
+        # The dispatcher path is the same one production `osty build`
+        # walks, so a working `osty check examples/calc` is a
+        # reasonable single-shot validator.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          ./.bin/osty check examples/calc 2>&1 | tee "$RUNNER_TEMP/check.log"
