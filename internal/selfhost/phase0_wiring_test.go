@@ -970,7 +970,13 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 		"fn lirLowerMirAbort(l: LirMirFunctionLowerer, instr: MirInstr)",
 		"l.instrs.push(lirCallWithAttrs(\"\", lirVoidType(), \"@osty_rt_panic\", args, \"\", lirRuntimePanicAttrs()))",
 		"let fields: List<MirFieldLayout> = []",
-		"MirStructLayout {name: \"\", mangled: \"\", fields, size: 0, align: 0}",
+		// MirStructLayout sentinel — pin the empty-name + size:0
+		// prefix only. PR #1981 widened the struct with
+		// `builtinSource` / `builtinSourceArgs`; pinning the full
+		// field list would force this guard to churn every time the
+		// struct grows a new field. The "empty layout" semantic that
+		// `lirFindMirStructLayout` returns on miss is what matters.
+		"MirStructLayout {name: \"\", mangled: \"\", fields, size: 0, align: 0,",
 		"MirTupleLayout {key: \"\", mangled: \"\", fields}",
 		"return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), lirNoTypeParams(), \"set.new\")",
 		"l.instrs.push(lirCall(listReg, lirPtrType(), \"@\" + newSym, lirNoOperands()))",
