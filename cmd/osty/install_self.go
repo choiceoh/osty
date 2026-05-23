@@ -152,7 +152,23 @@ func runInstallSelf(args []string, _ cliFlags) {
 		// the forked `osty build` side now read a single source of
 		// truth.
 		if !stage0SourceBootstrapEnabled() {
-			fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
+			// Two code paths reach this branch with builtBin still
+			// empty: (a) prebuilt resolution failed (`resolveErr != nil`)
+			// and we never ran the selfhost rebuild; (b) `--force` was
+			// passed, prebuilt resolution succeeded, but the selfhost
+			// rebuild on lines 132-138 set `buildErr` and left builtBin
+			// empty. Surface the actual failure cause instead of always
+			// reporting "no prebuilt" — that wording misleads users
+			// debugging a force-rebuild failure into chasing registry
+			// problems they do not have.
+			switch {
+			case resolveErr == nil && buildErr != nil:
+				fmt.Fprintf(os.Stderr, "osty install-self: selfhost build failed and stage0 source bootstrap is disabled: %v\n", buildErr)
+			case resolveErr != nil:
+				fmt.Fprintln(os.Stderr, "osty install-self: no prebuilt osty-self and stage0 source bootstrap is disabled")
+			default:
+				fmt.Fprintln(os.Stderr, "osty install-self: unable to produce osty-self and stage0 source bootstrap is disabled")
+			}
 			printInstallSelfRegistryHint()
 			os.Exit(1)
 		}

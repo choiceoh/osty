@@ -17,8 +17,10 @@
 # regression would have failed CI on the introducing PR — the
 # offline path is now a tracked, blocking signal.
 #
-# Cost target: ~5-10 minutes per run. Skipped on `[skip ci]` /
-# docs-only PRs (paths-filter below).
+# Cost target: ~5-10 minutes per run. Runs on every PR — no
+# paths filter is applied, because a "docs-only" PR can still
+# touch installer scripts or just-recipes that the bootstrap
+# walks, and the bootstrap is cheap enough to keep universal.
 
 name: Fresh-clone source bootstrap
 
@@ -79,7 +81,16 @@ jobs:
         # contributor. The PR's HEAD ref is what we want to exercise;
         # `${{ github.event.pull_request.head.sha }}` is empty on push
         # so fall back to `github.sha`.
+        #
+        # Fork PR handling: when a PR is opened from a fork, the
+        # head SHA points to a commit that exists only in the fork.
+        # Cloning the BASE repo and then `git checkout <fork-sha>`
+        # fails because the object isn't reachable. Fetching the
+        # GitHub-synthesized `refs/pull/<N>/head` ref makes the
+        # head commit available in the base clone, so the checkout
+        # works identically for same-repo and fork PRs.
         env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_SHA: ${{ github.sha }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -91,7 +102,13 @@ jobs:
           # Full clone (not --depth 1) so the SHA we want is reachable.
           git clone "$REPO_URL" osty
           cd osty
-          git checkout "$sha"
+          if [ -n "${PR_NUMBER:-}" ]; then
+            # Fetch the PR head ref so fork-PR commits become reachable.
+            git fetch origin "refs/pull/${PR_NUMBER}/head:pr-head"
+            git checkout "$sha"
+          else
+            git checkout "$sha"
+          fi
           git rev-parse HEAD
 
       - name: Offline source bootstrap (`OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap`)

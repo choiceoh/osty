@@ -9058,7 +9058,12 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     // function type never needs a structural LLVM spelling. Mirrors
     // `mir_generator.osty`'s builtin-container map where `ClosureEnv`
     // already lowers to `ptr`.
-    if strings.startsWith(name, "ClosureEnv") || strings.startsWith(name, "fn(") {
+    // Exact match for the builtin `ClosureEnv` type name. A
+    // `startsWith` form would also pointer-erase user-defined types
+    // like `ClosureEnvState` / `ClosureEnvStats`, which `mir_generator`
+    // / `onb_abi` already treat with `==`. `fn(` is a structural
+    // function-value spelling and is correct as a prefix match.
+    if name == "ClosureEnv" || strings.startsWith(name, "fn(") {
         return LirType {llvm: "ptr", className: LirTypePtr}
     }
     for layout in l.mirModule.layouts.interfaces {

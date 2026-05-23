@@ -116,10 +116,19 @@ func main() {
 	// emitted package's temp-dir, which has no managed-slot binary —
 	// the check phase returns empty, IR lowering loses generic type
 	// info, and monomorph mangles unresolved type vars as `?` (breaks
-	// clang on shapes like `xs.flatMap(|x| [x, x])`). Resolve eagerly
-	// here so child processes inherit a working override.
+	// clang on shapes like `xs.flatMap(|x| [x, x])`).
+	//
+	// Probe-only: read the managed slot if it already exists, but
+	// never trigger a build here. Pre-PR #1999 this called
+	// `EnsureNativeChecker(".")` unconditionally, which fired
+	// `installNativeChecker` (a full LLVM build of the checker) the
+	// first time any user ran `osty fmt` / `osty --help` / etc. —
+	// commands that have no business waiting on a checker build. Now
+	// cold-cache cheap commands stay cheap; the codegen subprocess
+	// path still builds-on-demand inside its own `EnsureNativeChecker`
+	// call when it actually needs the checker.
 	if os.Getenv("OSTY_NATIVE_CHECKER_BIN") == "" {
-		if path, err := toolchain.EnsureNativeChecker("."); err == nil && path != "" {
+		if path := toolchain.ProbeManagedNativeChecker("."); path != "" {
 			_ = os.Setenv("OSTY_NATIVE_CHECKER_BIN", path)
 		}
 	}

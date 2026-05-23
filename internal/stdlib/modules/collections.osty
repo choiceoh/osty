@@ -35,10 +35,12 @@ pub struct List<T> {
     }
     pub fn indexOf(self, item: T) -> Int?
     pub fn find(self, pred: fn(T) -> Bool) -> T? {
+        let n = self.len()
         let mut i = 0
-        for i < self.len() {
-            if pred(self[i]) {
-                return Some(self[i])
+        for i < n {
+            let item = self[i]
+            if pred(item) {
+                return Some(item)
             }
             i = i + 1
         }
@@ -247,9 +249,10 @@ pub struct List<T> {
         if self.isEmpty() {
             return None
         }
+        let n = self.len()
         let mut acc = self[0]
         let mut i = 1
-        for i < self.len() {
+        for i < n {
             acc = f(acc, self[i])
             i = i + 1
         }
@@ -277,11 +280,13 @@ pub struct List<T> {
     /// sub-lists.
     pub fn flatMap<R>(self, f: fn(T) -> List<R>) -> List<R> {
         let mut out: List<R> = []
+        let n = self.len()
         let mut i = 0
-        for i < self.len() {
+        for i < n {
             let inner = f(self[i])
+            let m = inner.len()
             let mut j = 0
-            for j < inner.len() {
+            for j < m {
                 out.push(inner[j])
                 j = j + 1
             }
