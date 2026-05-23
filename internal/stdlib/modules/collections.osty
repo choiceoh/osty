@@ -262,7 +262,8 @@ pub struct List<T> {
     ///
     ///     [1, 2, 3].scan(0, |a, x| a + x) == [0, 1, 3, 6]
     pub fn scan<A>(self, init: A, f: fn(A, T) -> A) -> List<A> {
-        let mut out: List<A> = [init]
+        let mut out: List<A> = []
+        out.push(init)
         let mut acc = init
         for item in self {
             acc = f(acc, item)
