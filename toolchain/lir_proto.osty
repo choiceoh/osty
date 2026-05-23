@@ -5391,23 +5391,45 @@ fn lirLowerMirStringIsEmpty(l: LirMirFunctionLowerer, instr: MirInstr) {
 // `emitStringConcatN`. ConcatN exists so a `"a" + b + c` site allocates one
 // fresh String instead of N-1 intermediate String buffers.
 fn lirLowerMirStringConcat(l: LirMirFunctionLowerer, instr: MirInstr) {
-    if instr.args.len() < 2 {
-        lirLowerError(l, LirDiagInvalidInput, "string.concat expects at least two arguments", "string.concat")
-        return
-    }
-    if instr.args.len() == 2 {
-        lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Concat"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.concat")
+    if instr.args.len() < 1 {
+        lirLowerError(l, LirDiagInvalidInput, "string.concat expects at least one argument", "string.concat")
         return
     }
     let mut parts: List<LirOperand> = []
     for arg in instr.args {
-        let mut value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, lirPtrType())
+        // String interpolation: `"v={n}"` arrives here with the
+        // interpolated expressions already lowered as MIR operands
+        // typed with their natural shape (Int, Float, Bool, Char,
+        // Byte, …). The runtime ConcatN takes an array of `ptr`
+        // (each pointing to a C string), so non-String parts must be
+        // CONVERTED to their decimal / textual representation before
+        // the array store — not bit-cast / inttoptr'd, which would
+        // store the raw value as a pointer address and either
+        // miscompile (`store ptr 42, ptr %slot`) or crash at runtime.
+        //
+        // We pick the to_string runtime helper from `arg.typ`
+        // (the MIR-level type spelling) rather than from the LIR
+        // operand's type, because for constants the LIR operand
+        // inherits the hint we pass to `lirLowerMirOperand` — passing
+        // `lirPtrType()` here makes `lirHintOrDefaultIntType` return
+        // ptr-typed operand `LirOperand{typ: ptr, value: "42"}` and
+        // the `className != LirTypePtr` check below misses the
+        // conversion site entirely. The MIR type is the source of
+        // truth, so we lower the operand with NO hint (zero LirType)
+        // and let the conversion decide based on `arg.typ`.
+        let mut value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, LirType {llvm: "", className: LirTypeUnknown})
         if value.value == "" {
             return
         }
-        if value.typ.className != LirTypePtr {
+        if !lirStringEq(arg.typ, "String") && value.typ.className != LirTypePtr {
             let ptrType = lirPtrType()
-            if value.typ.className == LirTypeUnknown {
+            let toStringSym = lirRuntimeToStringSymbolForType(value.typ)
+            if toStringSym != "" {
+                lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(toStringSym, value.typ))
+                let convDest = lirFresh(l)
+                l.instrs.push(lirCall(convDest, lirPtrType(), "@" + toStringSym, [value]))
+                value = LirOperand {typ: ptrType, value: convDest}
+            } else if value.typ.className == LirTypeUnknown {
                 value = LirOperand {typ: ptrType, value: value.value}
             } else {
                 let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, ptrType, lirPrimitiveTypeIsUnsigned(arg.typ))
@@ -5421,6 +5443,37 @@ fn lirLowerMirStringConcat(l: LirMirFunctionLowerer, instr: MirInstr) {
             }
         }
         parts.push(lirOperand(lirPtrType(), value.value))
+    }
+    // 1-arg path: `"{n}"` (a string literal that is a single
+    // interpolation with no surrounding text). The conversion to
+    // String already happened in the loop above, so the only thing
+    // left is to bind the result to the destination — no runtime
+    // call needed. Pre-PR #2000 the MIR emitter still emitted a
+    // string.concat for this shape and the LIR Proto rejected it
+    // ("string.concat expects at least two arguments"), which
+    // blocked helper functions like `fn intToStr(n: Int) -> String
+    // { "{n}" }`.
+    if parts.len() == 1 {
+        if instr.hasDest {
+            lirStoreMirResult(l, instr.dest, parts[0], "String", "string.concat result")
+        }
+        return
+    }
+    // 2-arg fast path: avoid the [N x ptr] alloca for the common
+    // `a + b` / `"x{y}"` shape and call `osty_rt_strings_Concat`
+    // directly. Both Concat and ConcatN have the same observable
+    // semantics; Concat is one runtime hop cheaper. Conversion of
+    // non-String parts has already happened in the loop above, so
+    // both branches feed the runtime fully-converted ptrs.
+    if parts.len() == 2 {
+        let symbol = mirRtStringSymbol("Concat")
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), [lirPtrType(), lirPtrType()], false))
+        let dest = lirFresh(l)
+        l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, parts))
+        if instr.hasDest {
+            lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), dest), "String", "string.concat result")
+        }
+        return
     }
     let count = parts.len()
     let countText = lirIntToString(count)
