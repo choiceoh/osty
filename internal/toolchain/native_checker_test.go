@@ -107,14 +107,59 @@ func TestInstallManagedBinaryReplacesExistingArtifactAfterRenameFailure(t *testi
 	}
 }
 
-func TestEnsureNativeCheckerReturnsRecursionGuardError(t *testing.T) {
+// TestBuildNativeCheckerRecursionGuardDetoursToGoBuild pins the
+// post-PR-1995 fix: when the LLVM build subprocess re-enters
+// `buildNativeChecker` (because it needs a checker to typecheck the
+// checker's own source), it MUST detour to the Go-build path instead
+// of erroring with a recursion-guard message. The previous behaviour
+// broke the first `osty check` / `osty build` after `osty install-self`
+// because the post-install invalidation hook (PR #1989) cleared the
+// managed slot, and the subsequent re-build hit the recursion guard
+// with no way to make progress.
+func TestBuildNativeCheckerRecursionGuardDetoursToGoBuild(t *testing.T) {
+	root := t.TempDir()
+	dest := filepath.Join(root, NativeCheckerBinaryName())
+
+	oldRepoRoot := sourceRepoRootFunc
+	oldVerify := verifyOstySelfCached
+	oldGoBuild := goBuildNativeChecker
+	t.Cleanup(func() {
+		sourceRepoRootFunc = oldRepoRoot
+		verifyOstySelfCached = oldVerify
+		goBuildNativeChecker = oldGoBuild
+	})
+
 	t.Setenv(RecursionGuardEnv, "1")
-	_, err := EnsureNativeChecker(".")
-	if err == nil {
-		t.Fatal("EnsureNativeChecker returned nil, want recursion guard error")
+	// Explicitly clear stage0 fallback so the recursion-guard branch
+	// is the one being exercised, not the stage0 branch.
+	t.Setenv(Stage0FallbackEnv, "")
+	sourceRepoRootFunc = func() (string, error) { return root, nil }
+	verifyCalls := 0
+	verifyOstySelfCached = func(string) error {
+		verifyCalls++
+		return errors.New("must not be called under recursion guard")
 	}
-	if !strings.Contains(err.Error(), RecursionGuardEnv) {
-		t.Fatalf("error %q does not mention %q", err, RecursionGuardEnv)
+	goBuildCalls := 0
+	goBuildNativeChecker = func(rootArg, outPath string) error {
+		goBuildCalls++
+		return os.WriteFile(outPath, []byte("recursion-guard go-built checker"), 0o755)
+	}
+
+	if err := buildNativeChecker(dest); err != nil {
+		t.Fatalf("buildNativeChecker under recursion guard: %v", err)
+	}
+	if verifyCalls != 0 {
+		t.Fatalf("verifyOstySelfCached called %d times under recursion guard, want 0", verifyCalls)
+	}
+	if goBuildCalls != 1 {
+		t.Fatalf("goBuildNativeChecker calls = %d, want 1", goBuildCalls)
+	}
+	body, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read managed dest: %v", err)
+	}
+	if string(body) != "recursion-guard go-built checker" {
+		t.Fatalf("managed dest body = %q, want recursion-guard go-built checker", body)
 	}
 }
 
@@ -203,6 +248,10 @@ func TestBuildNativeCheckerStage0FallbackDetoursToGoBuild(t *testing.T) {
 	})
 
 	t.Setenv(Stage0FallbackEnv, "1")
+	// Explicitly clear the recursion guard so the stage0 branch is
+	// the one being exercised (post-PR-1995 fix, both env vars
+	// independently trigger the Go-build path).
+	t.Setenv(RecursionGuardEnv, "")
 	sourceRepoRootFunc = func() (string, error) { return root, nil }
 	verifyCalls := 0
 	verifyOstySelfCached = func(string) error {
@@ -297,12 +346,14 @@ func TestBuildNativeCheckerFailsWhenOstySelfCacheMisses(t *testing.T) {
 		verifyOstySelfCached = oldVerify
 	})
 
-	// Explicitly clear the stage0 fallback gate — it would short-circuit
+	// Explicitly clear BOTH gates that would short-circuit
 	// `buildNativeChecker` to the Go-build path before the cache-miss
 	// check could fire, masking this regression test if the surrounding
 	// environment happened to leak `OSTY_STAGE0_FALLBACK=1` from an
-	// install-self invocation.
+	// install-self invocation OR `OSTY_BUILDING_NATIVE_CHECKER=1` from
+	// a nested subprocess.
 	t.Setenv(Stage0FallbackEnv, "")
+	t.Setenv(RecursionGuardEnv, "")
 	sourceRepoRootFunc = func() (string, error) { return root, nil }
 	verifyOstySelfCached = func(string) error {
 		return errors.New("osty-self not cached: run `osty install-self` first")
