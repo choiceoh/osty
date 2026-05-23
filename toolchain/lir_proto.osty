@@ -592,6 +592,7 @@ pub struct LirModule {
     pub runtimeDecls: LirRuntimeDecls,
     pub stringPool: LirStringPool,
     pub metadata: List<String>,
+    pub thunkSymbols: List<String>,
 }
 pub fn lirModule(packageName: String, sourcePath: String, target: String) -> LirModule {
     let stringPoolEntries: List<LirStringGlobal> = []
@@ -603,8 +604,9 @@ pub fn lirModuleWithStringPoolEntries(packageName: String, sourcePath: String, t
     let functions: List<LirFunction> = []
     let renderedFunctions: List<String> = []
     let metadata: List<String> = []
+    let thunkSymbols: List<String> = []
     let stringPool = LirStringPool {entries: stringPoolEntries}
-    LirModule {packageName, sourcePath, target, typeDefs, globals, functions, renderedFunctions, runtimeDecls: lirRuntimeDecls(), stringPool, metadata}
+    LirModule {packageName, sourcePath, target, typeDefs, globals, functions, renderedFunctions, runtimeDecls: lirRuntimeDecls(), stringPool, metadata, thunkSymbols}
 }
 // ====================================================================
 // Diagnostics and lowerer shell
@@ -8824,7 +8826,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
             return LirOperand {typ: LirType {llvm: "ptr", className: LirTypePtr}, value: "null"}
         }
         if kind == MirConstFn {
-            return LirOperand {typ: LirType {llvm: "ptr", className: LirTypePtr}, value: "@" + c.fnSymbol}
+            return lirEmitBareFnAsClosure(l, instrs, c.fnSymbol)
         }
         lirLowerError(l, LirDiagUnsupported, "unsupported MIR const kind `" + mirConstKindName(kind) + "`", "const." + mirConstKindName(kind))
         return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
@@ -8975,6 +8977,144 @@ fn lirLowerMirIndexProjectionIndex(l: LirMirFunctionLowerer, instrs: List<LirIns
     return lirOperand(lirIntType(64), lirIntToString(proj.indexConst))
 }
 
+// lirClosureThunkName mirrors `mirThunkName` in `toolchain/mir_generator.osty`.
+// Distinct prefix so the closure-env value cannot collide with the
+// underlying user function symbol.
+fn lirClosureThunkName(symbol: String) -> String {
+    "__osty_closure_thunk_" + symbol
+}
+
+// lirRenderBareFnThunk builds the `define private` block that adapts
+// a bare top-level fn (`@<symbol>`) into the uniform closure ABI
+// `RET (ptr %env, T0 %arg0, T1 %arg1, ...)`. The env is unused;
+// captures live elsewhere when the value comes from an actual
+// closure literal. For a bare fn there are no captures, so the
+// thunk just forwards its non-env params to the underlying call.
+fn lirRenderBareFnThunk(symbol: String, retType: LirType, paramTypes: List<LirType>) -> String {
+    let thunk = lirClosureThunkName(symbol)
+    let mut header: List<String> = ["ptr %env"]
+    let mut callArgs: List<String> = []
+    let mut i = 0
+    for pt in paramTypes {
+        let ptStr = lirTypeString(pt)
+        header.push(ptStr + " %arg" + lirIntToString(i))
+        callArgs.push(ptStr + " %arg" + lirIntToString(i))
+        i = i + 1
+    }
+    let retStr = lirRenderTypeOrVoid(retType)
+    let mut lines: List<String> = []
+    lines.push("define private " + retStr + " @" + thunk + "(" + strings.join(header, ", ") + ") \{")
+    lines.push("entry:")
+    if lirTypeIsVoid(retType) {
+        lines.push("  call void @" + symbol + "(" + strings.join(callArgs, ", ") + ")")
+        lines.push("  ret void")
+    } else {
+        lines.push("  %ret = call " + retStr + " @" + symbol + "(" + strings.join(callArgs, ", ") + ")")
+        lines.push("  ret " + retStr + " %ret")
+    }
+    lines.push("\}")
+    strings.join(lines, "\n")
+}
+
+// lirEnsureBareFnThunk lazily registers the closure-adapter thunk
+// for `symbol`. Re-entry with the same symbol is a no-op so multiple
+// `intToStr`-shaped values across a module share one thunk
+// definition.
+//
+// Returns `true` when a thunk for `symbol` exists after the call
+// (either pre-existing or just emitted); `false` only when the
+// caller can't generate one (the wrapped fn's signature is opaque),
+// in which case the caller should fall back to the raw fn-pointer
+// shape and skip closure wrapping.
+fn lirEnsureBareFnThunk(l: LirMirFunctionLowerer, symbol: String) -> Bool {
+    if listContainsString(l.out.thunkSymbols, symbol) {
+        return true
+    }
+    let mut foundIdx = -1
+    let mut i = 0
+    for fn_ in l.mirModule.functions {
+        if (fn_.exportSymbol != "" && fn_.exportSymbol == symbol) || fn_.name == symbol {
+            foundIdx = i
+        }
+        i = i + 1
+    }
+    if foundIdx < 0 {
+        return false
+    }
+    let target = l.mirModule.functions[foundIdx]
+    // Skip closure-body lifted fns: they already take an env as their
+    // first parameter (`ClosureEnv` / `ClosureEnv.<tag>...`) and the
+    // closure-allocation MIR lowering elsewhere stores the bare
+    // `@<symbol>` pointer (NOT a thunk wrapper) into slot 0 of the
+    // env struct. Wrapping such a fn again would build a 2-level
+    // closure: the original env stores the wrap-env ptr instead of
+    // the fn ptr, and the call site dereferences the wrap-env as if
+    // it were a fn pointer → segfault.
+    if target.params.len() > 0 {
+        let firstParamId = target.params[0]
+        let firstParamLocal = mirFunctionLocal(target, firstParamId)
+        if firstParamLocal.id >= 0 {
+            let firstParamTyp = firstParamLocal.typ
+            if firstParamTyp == "ClosureEnv" || strings.startsWith(firstParamTyp, "ClosureEnv.") {
+                return false
+            }
+        }
+    }
+    let retType = lirLowerMirType(l, target.returnType)
+    let mut paramTypes: List<LirType> = []
+    for paramId in target.params {
+        let loc = mirFunctionLocal(target, paramId)
+        if loc.id < 0 {
+            return false
+        }
+        let pt = lirLowerMirType(l, loc.typ)
+        if pt.className == LirTypeUnknown && pt.llvm == "" {
+            return false
+        }
+        paramTypes.push(pt)
+    }
+    let rendered = lirRenderBareFnThunk(symbol, retType, paramTypes)
+    l.out.renderedFunctions.push(rendered)
+    l.out.thunkSymbols.push(symbol)
+    true
+}
+
+// lirEmitBareFnAsClosure wraps a `@<symbol>` bare-fn address into a
+// closure-env value the uniform call ABI can consume. Allocates a
+// 0-capture `osty_rt_closure_env`, stores the closure thunk pointer
+// into the env's `fn_ptr` slot (offset 0), and returns the env
+// pointer.
+//
+// Pre-PR #2001 `MirConstFn` lowered to the raw fn address `@<sym>`,
+// which the callee then dereferenced as a closure env (`load ptr,
+// ptr %env` followed by an indirect call). For a bare fn that's a
+// read of the first 8 bytes of the function's machine code reinterpreted
+// as a pointer — undefined behavior that crashed at runtime. Wrapping
+// the bare fn here makes the value structurally identical to a
+// closure literal, so the existing closure call ABI Just Works.
+fn lirEmitBareFnAsClosure(l: LirMirFunctionLowerer, instrs: List<LirInstr>, fnSymbol: String) -> LirOperand {
+    let ptrType = lirPtrType()
+    if !lirEnsureBareFnThunk(l, fnSymbol) {
+        // Signature opaque: fall back to the raw fn-ptr shape.
+        // External / intrinsic fn refs end up here. Callees that
+        // genuinely need closure shape would have been routed
+        // through a regular closure literal, not a bare fn const.
+        return LirOperand {typ: ptrType, value: "@" + fnSymbol}
+    }
+    let symbol = "osty.rt.closure_env_alloc_v2"
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, ptrType, [lirIntType(64), ptrType, lirIntType(64)], false))
+    let envName = lirFresh(l)
+    let siteSymbol = lirStringEntriesInternKnown(l.stringPoolEntries, "bare-fn:" + fnSymbol, lirCStringEncodeSelfhostSafe("bare-fn:" + fnSymbol), lirStringByteLenWithNul("bare-fn:" + fnSymbol))
+    instrs.push(lirCall(envName, ptrType, "@" + symbol, [
+        lirOperand(lirIntType(64), "0"),
+        lirOperand(ptrType, siteSymbol),
+        lirOperand(lirIntType(64), "0"),
+    ]))
+    let thunkPtrOperand = LirOperand {typ: ptrType, value: "@" + lirClosureThunkName(fnSymbol)}
+    instrs.push(lirStore(thunkPtrOperand, envName, 8))
+    LirOperand {typ: ptrType, value: envName}
+}
+
 fn lirLowerMirConst(l: LirMirFunctionLowerer, c: MirConst, hintName: String, hint: LirType) -> LirOperand {
     let kind = c.kind
     if kind == MirConstInt {
@@ -9014,7 +9154,7 @@ fn lirLowerMirConst(l: LirMirFunctionLowerer, c: MirConst, hintName: String, hin
         return LirOperand {typ: LirType {llvm: "ptr", className: LirTypePtr}, value: "null"}
     }
     if kind == MirConstFn {
-        return LirOperand {typ: LirType {llvm: "ptr", className: LirTypePtr}, value: "@" + c.fnSymbol}
+        return lirEmitBareFnAsClosure(l, l.instrs, c.fnSymbol)
     }
     lirLowerError(l, LirDiagUnsupported, "unsupported MIR const kind `" + mirConstKindName(kind) + "`", "const." + mirConstKindName(kind))
     LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
