@@ -74,7 +74,14 @@ func NewMonomorphTypeRequest(pkg, typeName string, typeArgCodes []string) *Monom
 
 // Osty: toolchain/monomorph.osty:37:5
 func MonomorphPrimCode(name string) string {
-	if name == "Int" {
+	if name == "Int" || name == "UntypedInt" {
+		// `UntypedInt` is the literal-default placeholder the checker
+		// emits when a numeric literal's type hasn't been pinned to a
+		// concrete int kind yet (e.g. `R` resolves to `UntypedInt`
+		// when `flatMap(|x| [x, x])` unifies `R` against the list
+		// literal's element type). Defaulting to `l` (Int) matches the
+		// Osty checker's UntypedInt-to-Int promotion at value-position
+		// boundaries and keeps the mangled symbol clang-acceptable.
 		return "l"
 	}
 	if name == "Int8" {
@@ -104,7 +111,9 @@ func MonomorphPrimCode(name string) string {
 	if name == "Byte" {
 		return "h"
 	}
-	if name == "Float" {
+	if name == "Float" || name == "UntypedFloat" {
+		// `UntypedFloat` mirrors `UntypedInt`: a float-literal default
+		// when the checker has not pinned a concrete float kind.
 		return "d"
 	}
 	if name == "Float32" {
