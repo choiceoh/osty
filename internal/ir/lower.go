@@ -7057,6 +7057,35 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 		T:         l.exprType(m),
 		SpanV:     nodeSpan(m),
 	}
+	// Populate pattern-binding types BEFORE lowering arms so the
+	// arm bodies see proper Idents typed by their bindings instead
+	// of `ErrType`. The embedded selfhost checker doesn't populate
+	// `SymTypes` for match-arm pattern bindings on cross-pkg
+	// variants (e.g. `Err(e)` against `Result<T, Error>` where
+	// Error is from std.error) — without this priming, the IdentPat
+	// for `e` has no recorded type, `lowerIdent` falls through to
+	// `ErrTypeVal`, and downstream method-call dispatch
+	// (`e.message()`) loses the receiver-type info needed for
+	// stdlib body injection + interface method lookup.
+	scrutT := out.Scrutinee.Type()
+	if scrutT == nil || scrutT == ErrTypeVal {
+		// Recovery: when the lowered scrutinee's type is poisoned
+		// (cross-pkg generic args, native-checker miss on a call
+		// site like `make()` returning `Result<Int, Error>` where
+		// Error is from std.error), re-derive from the AST. Mirrors
+		// the `bindingTypeFromAST` pathway used for `let` patterns.
+		if recovered := l.bindingTypeFromAST(m.Scrutinee); recovered != nil && recovered != ErrTypeVal {
+			scrutT = recovered
+		}
+	}
+	if scrutT != nil && scrutT != ErrTypeVal {
+		for _, arm := range m.Arms {
+			if arm == nil {
+				continue
+			}
+			l.populatePatternBindingTypes(arm.Pattern, scrutT)
+		}
+	}
 	out.Arms = l.lowerMatchArms(m.Arms)
 	// Recover the match type from its arm bodies when the checker
 	// left it as <error>. The checker's type inference for match
@@ -7125,6 +7154,80 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 // pulled from `resolve.Symbol.Decl` and stay out of scope here
 // because the binding-→type pipeline for user enums runs through
 // a different recovery path (`lowerLetStmt:nativeBindingType`).
+// populatePatternBindingTypes seeds `bindingPatTypes` for every
+// IdentPat reachable from `pat`, given the known scrutinee type
+// `scrutT`. Mirrors the logic of `recoverVariantBindingArmType` but
+// (1) at the *binding* level rather than the arm-body level, (2)
+// for AST-side IdentPats (which are what `lowerIdent`'s fallback
+// consults via `sym.Decl.(*ast.IdentPat)`), and (3) handles nested
+// patterns so `Ok((a, b))` → `a`/`b` both get their tuple-element
+// types. Conservative: when the scrutinee shape doesn't match the
+// pattern shape (or the type info is missing) we silently leave
+// the binding uncached and let the existing fallback paths kick
+// in.
+func (l *lowerer) populatePatternBindingTypes(pat ast.Pattern, scrutT Type) {
+	if pat == nil || scrutT == nil || scrutT == ErrTypeVal {
+		return
+	}
+	switch p := pat.(type) {
+	case *ast.IdentPat:
+		if p == nil {
+			return
+		}
+		if l.bindingPatTypes == nil {
+			l.bindingPatTypes = map[*ast.IdentPat]Type{}
+		}
+		if _, ok := l.bindingPatTypes[p]; !ok {
+			l.bindingPatTypes[p] = scrutT
+		}
+	case *ast.VariantPat:
+		if p == nil {
+			return
+		}
+		named, ok := scrutT.(*NamedType)
+		if !ok || named == nil {
+			return
+		}
+		// Result<T, E> / Option<T> / Maybe<T> ABI shapes.
+		if len(p.Path) == 0 {
+			return
+		}
+		variant := p.Path[len(p.Path)-1]
+		switch named.Name {
+		case "Result":
+			if len(named.Args) < 2 {
+				return
+			}
+			switch variant {
+			case "Ok":
+				if len(p.Args) > 0 {
+					l.populatePatternBindingTypes(p.Args[0], named.Args[0])
+				}
+			case "Err":
+				if len(p.Args) > 0 {
+					l.populatePatternBindingTypes(p.Args[0], named.Args[1])
+				}
+			}
+		case "Option", "Maybe":
+			if len(named.Args) < 1 {
+				return
+			}
+			if variant == "Some" && len(p.Args) > 0 {
+				l.populatePatternBindingTypes(p.Args[0], named.Args[0])
+			}
+		}
+	case *ast.TuplePat:
+		if p == nil {
+			return
+		}
+		if tt, ok := scrutT.(*TupleType); ok && len(tt.Elems) == len(p.Elems) {
+			for i, elem := range p.Elems {
+				l.populatePatternBindingTypes(elem, tt.Elems[i])
+			}
+		}
+	}
+}
+
 func recoverVariantBindingArmType(scrutT Type, arm *MatchArm) Type {
 	if arm == nil || arm.Body == nil || arm.Body.Result == nil {
 		return nil
