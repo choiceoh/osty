@@ -29,7 +29,7 @@ fn main() {
 
 ## 빌드 시도 결과
 
-### 시도 1: `OSTY_STAGE0_FALLBACK=1` (default `OSTY_STDLIB_BODY_LOWER=0`)
+### 시도 1: `OSTY_STAGE0_FALLBACK=1` (`OSTY_STDLIB_BODY_LOWER=0` — 당시 기본은 off, 2026-05 이후 기본은 on)
 
 ```
 Undefined symbols for architecture arm64:

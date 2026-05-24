@@ -2,7 +2,12 @@
 
 - **Scope**: LIR prototype plan — isolated prototype for low-level IR
 - **Type**: Plan
-Status: isolated prototype in progress. No production wiring yet.
+Status: **production path (native-owned MIR→LLVM)** routes through the
+self-hosted LIR Proto stack (`internal/backend/llvm.go` → native subprocess →
+`osty-self` / `toolchain/lir_proto.osty`). Isolated fixture/parity work in
+earlier phases continues in parallel; the historical `OSTY_LLVM_LIR_PROTO`
+host gate was retired (PR [#1924](https://github.com/choiceoh/osty/pull/1924))
+because the Go MIR text emitter is gone.
 Authoring direction: new LIR Proto shape is Osty-first in
 `toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
 removed so new shape lands in Osty before production wiring.
@@ -13,9 +18,10 @@ current backend pressure is LLVM text generation, but it lives independently so
 it can grow into a real low-level compiler layer instead of remaining a helper
 package hidden under `internal/llvmgen`.
 
-The immediate goal is to finish the prototype as an isolated path, verify it
-against MIR fixtures and existing LLVM output, and wire it into production in
-one deliberate switch behind an explicit gate.
+The immediate goal remains parity + coverage on MIR fixtures and curated
+sources; production LLVM emission already depends on this path when the
+native-owned subprocess accepts the module (decline still falls back to
+stage0 only when `OSTY_STAGE0_FALLBACK=1` and the bootstrap contract allows).
 
 ## Why this exists
 
@@ -42,8 +48,8 @@ deterministic plan before rendering LLVM text.
 - Do not move HIR or MIR semantic lowering into LIR Proto.
 - Do not add a new optimizer pipeline as part of the prototype.
 - Do not require SSA, register allocation, or backend-independent codegen.
-- Do not route `osty build`, `osty gen`, tests, or normal backend dispatch
-  through LIR Proto until the final wiring phase.
+- Do not add a *second* parallel MIR→LLVM host implementation — the sole
+  native-owned path is LIR Proto (`emitLLVMFallback` in `internal/backend/llvm.go`).
 
 ## Naming and location
 
@@ -1291,6 +1297,13 @@ Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
 ## Phase 7: one-shot wiring behind a gate
+
+> **Historical note (2026-05-24):** The `OSTY_LLVM_LIR_PROTO` scaffold and
+> `ErrLIRProtoNotWired` warning path described in the remainder of this section
+> predates PR [#1924](https://github.com/choiceoh/osty/pull/1924). Today the
+> dispatcher always targets the native LIR Proto subprocess for the
+> native-owned route; there is no separate host-side env gate. Keep this
+> section as the design record for how the gate was introduced and retired.
 
 Deliverables:
 

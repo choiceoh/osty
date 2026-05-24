@@ -70,11 +70,25 @@ just front    # 전체 front-end 회귀
 
 ## 4. 알아야 할 wall + 우회 패턴
 
-### 4.1 stage0 fallback 의 stdlib body injection wall
+### 4.1 stdlib body injection (PrepareEntry)
 
-- `OSTY_STDLIB_BODY_LOWER=0` (default): `std.json.parseValue` 등 undefined symbol (link 실패)
-- `OSTY_STDLIB_BODY_LOWER=1`: stdlib body inject 되나 stage0 패턴 매칭 부족 → `osty_std_json__asString does not match any stage0 pattern`
-- **우회**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite (`std.io.readLine → osty_rt_io_read_line` 사례). C runtime 함수가 존재해야 작동.
+- **Default ON** (unset env, or any value other than `0` / `false` / `off`):
+  bodied stdlib definitions monomorphize out of `internal/stdlib/modules/*.osty`
+  (`stdlibBodyLoweringEnabled` in `internal/backend/entry.go`, flipped PR
+  [#1998](https://github.com/choiceoh/osty/pull/1998) after flatMap/combinator
+  coverage closed in PR [#1997](https://github.com/choiceoh/osty/pull/1997)).
+- **`OSTY_STDLIB_BODY_LOWER=0`**: injection off — regression bisection,
+  install-self stage0 bootstrap, or reproducing historical “decl only, no
+  definition” link failures for symbols that have no `osty_rt_*` intrinsic
+  mapping.
+- **Stage0-only builds**: with injection on, stdlib bodies still lower through
+  MIR; shapes stage0 cannot pattern-match still decline with messages like
+  `osty_std_json__asString does not match any stage0 pattern` (see PR2 attempt
+  doc for the original measurement).
+- **우회 (still relevant for I/O-shaped stdlib without bodies)**: PR1c 옵션 1
+  — `internal/mir/lower.go::qualifiedSymbol` 의 stdlib → C runtime symbol
+  rewrite (`std.io.readLine → osty_rt_io_read_line`). C runtime 심볼이 실제로
+  존재해야 함.
 - **`rewriteStdlibSymbolToRuntime` 에 향후 추가**:
   ```go
   case "std.io.readAll":

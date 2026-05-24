@@ -1,6 +1,8 @@
 # LLVM self-host — cross-pkg fn signature propagation through IR (Task B design)
 
-> **상태**: design (architectural change — not yet implemented).
+> **상태**: **partially implemented** (IR + check surface + `lowerUseDecl` +
+> MIR `useDeclFnType`; further cross-pkg interface / recovery 케이스는
+> [#2004](https://github.com/choiceoh/osty/pull/2004) 이후 trajectory).
 > **선행**: PR #1934 (`?`-prefix synthesis), PR #1936 (Option/Result MIR
 > recovery), PR #1937 (List/Set MIR recovery + library-mode symbol
 > qualification + cross-pkg link wall measurement). 본 doc 는 cross-pkg
@@ -13,29 +15,36 @@
 return type 을 잃는 leak (`declare void @toolchain.frontInvalidTypeRepr()`,
 즉 dep 의 실제 `-> FrontTypeRepr` 시그니처 대신 void). PR #1937 의
 library-mode qualification 이 link 측 mangling drift 는 해소했지만, 호출
-사이트의 return type 은 여전히 leak 가능. UseDecl 의 cross-pkg fn 시그니처
-plumbing 이 미완성.
+사이트의 return type 은 여전히 leak 가능했음. **해소 경로**: `check.Result`
+의 import surface → `ir.UseDecl.Imports` (`[]Decl`, pub fn 스텁) →
+`internal/mir/lower.go::useDeclFnType` 가 `GoBody` 다음으로 `Imports` 를
+조회해 poisoned call type 을 복구 ([`internal/ir/ir.go`](../internal/ir/ir.go)
+`UseDecl` 주석, PR [#2004](https://github.com/choiceoh/osty/pull/2004)).
+남은 gap 은 SPEC_GAPS / llvm-selfhost plan 의 cross-pkg 항목으로 계속 추적.
 
-## 2. 현재 위치의 leak path
+## 2. Original leak path (historical diagnosis)
 
-`internal/mir/lower.go::useDeclFnType` (line 4055) 는 `*ir.UseDecl.GoBody`
-만 walk:
+설계 전 `internal/mir/lower.go::useDeclFnType` 는 `GoBody` 만 walk 했고,
+일반 `use dep as alias` 는 `GoBody` 가 비어 있어 **항상** `nil` 이었다.
+
+**현재 구현** (PR [#2004](https://github.com/choiceoh/osty/pull/2004) 이후,
+`internal/mir/lower.go`):
 
 ```go
 func useDeclFnType(use *ir.UseDecl, name string) *ir.FnType {
-    if use == nil || name == "" { return nil }
-    for _, d := range use.GoBody {
-        fn, ok := d.(*ir.FnDecl)
-        if !ok || fn == nil || fn.Name != name { continue }
-        ...
+    if use == nil || name == "" {
+        return nil
     }
-    return nil
+    if sig := matchUseDeclFn(use.GoBody, name); sig != nil {
+        return sig
+    }
+    return matchUseDeclFn(use.Imports, name)
 }
 ```
 
-`GoBody` 는 inline FFI `use X { fn name(...) }` 만 채움. 일반 cross-pkg
-`use toolchain as tc` 는 GoBody 가 비어있어 useDeclFnType nil 반환. 결과:
-`internal/mir/lower.go::resolveQualifiedCall` 의 fallback path 도 무용.
+아래는 당시 `resolveQualifiedCall` 가 `sig == nil` 이면 poisoned
+`callType` 을 그대로 넘기던 문제를 보여주는 기록이다 (동작은 위 구현으로
+완화됨; 남은 edge 는 SPEC_GAPS 추적).
 
 ```go
 func (bs *bodyState) resolveQualifiedCall(...) ([]Operand, Callee) {
@@ -49,9 +58,13 @@ func (bs *bodyState) resolveQualifiedCall(...) ([]Operand, Callee) {
 }
 ```
 
-즉 cross-pkg call 의 consumer-side `t` (IR type) 가 poison 일 때 recovery
-경로가 없음. stage0 emit 은 poison 을 void 로 lower → 우리가 본
-`declare void @<pkg>.<fn>()`.
+`GoBody` 는 inline FFI `use X { fn name(...) }` 만 채움. 일반 cross-pkg
+`use toolchain as tc` 는 **이제** `Imports` 에 pub fn 시그니처가 채워지면
+`useDeclFnType` 이 복구한다. import surface 가 없는 legacy 경로에서는
+여전히 leak 가능.
+
+즉 (구버전에서) cross-pkg call 의 consumer-side `t` (IR type) 가 poison 일 때 recovery
+경로가 없었음. stage0 emit 은 poison 을 void 로 lower → `declare void @<pkg>.<fn>()`.
 
 ## 3. 진짜 fix path — UseDecl.Imports 캐리
 
@@ -62,8 +75,9 @@ func (bs *bodyState) resolveQualifiedCall(...) ([]Operand, Callee) {
 ```go
 type UseDecl struct {
     ...
-    GoBody  []Decl   // 기존 — inline FFI body
-    Imports []*FnDecl // 신규 — 일반 cross-pkg import surface
+    GoBody  []Decl // 기존 — inline FFI body
+    Imports []Decl // 일반 cross-pkg import surface (실제 구현은 Decl 슬라이스;
+                     // MIR 쪽은 FnDecl 매칭)
     SpanV   Span
 }
 ```
@@ -149,8 +163,8 @@ PR (B-3): useDeclFnType + MIR recovery 활성화 + integration test
 ## 6. 본 doc 의 산출물
 
 - `docs/llvm-selfhost-plan-cross-pkg-fn-sig-propagation-design.md` (이 doc)
-  — Task B 의 architectural design + sub-PR 분할 권장
-- 코드 변경 zero
+  — Task B 의 architectural design + sub-PR 분할 권장 (구현 후에는 상태
+    헤더 + §1 요약이 truth source)
 
 다음 fresh session 의 cross-pkg trajectory 의 다음 단계 시작점.
 
@@ -164,4 +178,5 @@ PR (B-3): useDeclFnType + MIR recovery 활성화 + integration test
 | [#1934](https://github.com/choiceoh/osty/pull/1934) | `?`-prefix synthesis from `ParamDefaults` |
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR recovery + library-mode symbol qualification + 본 doc 자매 doc |
-| (Task B; 이 doc) | UseDecl.Imports plumbing — cross-pkg fn sig propagation |
+| [#2004](https://github.com/choiceoh/osty/pull/2004) | Task B step 1–2 + partial step 2/4: `UseDecl.Imports`, LIR Proto 측 cross-pkg interface 훅 |
+| (Task B; 이 doc) | 원 설계 — 구현 상태는 §1 및 PR #2004 참조 |
