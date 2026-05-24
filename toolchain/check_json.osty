@@ -964,13 +964,30 @@ fn frontWireBuildTelemetry(diags: List<CheckDiagnostic>, m: FrontWireMapper) -> 
             continue
         }
         let bucket = frontWireDiagBucket(d)
-        byContext.update(bucket, |n| (n ?? 0) + 1)
+        // Inlined `byContext.update(bucket, |n| (n ?? 0) + 1)`.
+        // Map.update with a closure arg currently drops the closure
+        // operand at MIR generation (the `__update` symbol gets a 2-
+        // arg declare instead of the 3-arg form the body emits → link
+        // fails with `undefined symbol: _ZTSN4main3MapISslEE__update`).
+        // The bug surfaces only at toolchain selfhost build time —
+        // the canonical Map.update test in
+        // `internal/backend/llvm_closure_coalesce_test.go` reproduces
+        // it locally but skips in CI via `requireRealLLVMEmission`,
+        // hiding the regression introduced by PR #1998
+        // (`OSTY_STDLIB_BODY_LOWER=1` default flip). Until the
+        // closure-arg-drop bug is fixed at the MIR-lower layer,
+        // inline the increment so toolchain selfhost build works under
+        // default env. The semantic is identical to the closure form.
+        let currentBucket = byContext.get(bucket) ?? 0
+        byContext.insert(bucket, currentBucket + 1)
         let detail = frontWireDiagDetail(d, m)
         if detail == "" {
             continue
         }
         let mut bucketDetails = details.get(bucket) ?? {:}
-        bucketDetails.update(detail, |n| (n ?? 0) + 1)
+        // Same workaround as the byContext.update above.
+        let currentDetail = bucketDetails.get(detail) ?? 0
+        bucketDetails.insert(detail, currentDetail + 1)
         details.insert(bucket, bucketDetails)
     }
     FrontWireTelemetry {byContext, details}
