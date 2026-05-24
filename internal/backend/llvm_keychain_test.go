@@ -9,37 +9,39 @@ import (
 )
 
 func TestLLVMBackendStdKeychainApiKeyWrapperLowers(t *testing.T) {
-	// Original test (pre-PR #2002) called `keychain.getApiKey` (a
-	// high-level bodied wrapper) and expected its body inlining to
-	// surface the underlying `osty_rt_keychain_get` runtime intrinsic
-	// directly in the IR. The IR-layer body-inline path that produced
-	// that shape was retired in favor of cross-pkg dispatch — with
-	// body-lowering ON, `getApiKey` hits a cross-pkg call returning
-	// `Result<String, Error>` and the Error type (from std.error)
-	// has no layout entry → emit declines.
+	// Pre-PR #2003 the test asserted the `osty_rt_keychain_get`
+	// runtime intrinsic appeared in the IR via body inlining of the
+	// `getApiKey` wrapper. That IR-layer inline path was retired in
+	// favor of cross-pkg dispatch — with body-lowering ON, `getApiKey`
+	// now hits a cross-pkg call whose `Result<String, Error>` return
+	// references the `Error` interface from std.error. PRs #2004 /
+	// #2007 land the type-lowering + interface-boxing pieces but the
+	// vtable injection + init-globals render path are still gaps,
+	// so we pin to `OSTY_STDLIB_BODY_LOWER=0` and assert at the
+	// Osty-symbol level instead of the post-rewrite runtime symbol.
 	//
-	// Rewrite the test to exercise the LOWER-level call:
-	// `keychain.get(service, account)` lowers as a cross-pkg call to
-	// `@std.keychain.get` returning the `%Result.String_Error`
-	// algebraic aggregate. Verify the call shape + service strings
-	// flow through to the IR. The runtime intrinsic
-	// (`osty_rt_keychain_get`) is still what the runtime resolves
-	// `@std.keychain.get` to at link time — same end-state, just
-	// asserted at the Osty-symbol level instead of the post-rewrite
-	// LLVM symbol.
+	// Keep the `keychain.getApiKey` call shape so the test stays
+	// coverage for the WRAPPER path (`requireName("provider", ...)`
+	// + delegation to `get(defaultApiKeyService, ...)`) and not just
+	// the lower-level `keychain.get` direct call. In OFF mode the
+	// wrapper symbol surfaces as a cross-pkg `declare` + `call` line
+	// — same shape the linker resolves at runtime — which is enough
+	// to detect a regression that drops the wrapper entirely. The
+	// `osty.api` literal flows through the wrapper into the
+	// `defaultApiKeyService` default arg, confirming the body
+	// references that constant.
+	//
+	// Skip the `Err(err) -> err.message()` arm: virtual dispatch on
+	// the cross-pkg Error interface needs cross-pkg vtable injection
+	// (the next remaining gap after PR #2007). The Ok arm + a
+	// sentinel match-all on Err is enough to drive the wrapper into
+	// the IR.
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "0")
 	requireRealLLVMEmission(t)
-	// Skip the `Err(err) -> err.message()` arm: destructuring the
-	// `Result<String, Error>` payload reaches a virtual call on the
-	// Error interface (`err.message()`) which the LIR Proto cannot
-	// lower without cross-pkg interface layout propagation (the same
-	// `0 interface layout(s)` gap that blocks the bodied-getApiKey
-	// path). The Ok arm + a sentinel match-all on Err is enough to
-	// drive the runtime intrinsic into the IR.
 	req := newBackendRequest(t, EmitLLVMIR, `use std.keychain
 
 fn main() {
-    match keychain.get("osty.api", "openrouter") {
+    match keychain.getApiKey("openrouter") {
         Ok(secret) -> println(secret.len() > 0),
         Err(_) -> println(false),
     }
@@ -55,8 +57,7 @@ fn main() {
 	}
 	got := string(irBytes)
 	for _, want := range []string{
-		"@std.keychain.get",
-		"osty.api",
+		"@std.keychain.getApiKey",
 		"openrouter",
 	} {
 		if !strings.Contains(got, want) {

@@ -1200,17 +1200,27 @@ func containsString(values []string, want string) bool {
 
 // TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5
 // originally tested the post-MIR/pre-LIR-Proto "MIR backend" path
-// gated on the `mir-backend` feature flag, which has since been
-// retired in favor of the LIR Proto backend as the single Osty-
-// owned emit path. The header `osty LLVM MIR backend` no longer
-// exists; the equivalent today is the LIR Proto header
-// `osty LIR Proto`. The runtime symbols this test cares about
+// gated on the `mir-backend` feature flag. That feature flag is still
+// observed by `toolchain/mir_generator.osty` (and other tests assert
+// the `osty LLVM MIR backend` header), but for THIS specific test
+// the routing dispatch in `internal/backend/llvm.go` now consumes
+// `mir-backend` and dispatches to the LIR Proto subprocess (the
+// `mir-direct` route in `llvmDispatchMIRDirect`). So the expected
+// header for this test is `osty LIR Proto` rather than the old
+// `osty LLVM MIR backend`. The runtime symbols
 // (`@osty_rt_strings_Chars` / `Bytes` / `ByteLen`) still land in
 // the emitted text via the LIR Proto path, so the substantive
-// coverage is preserved — only the header tag and the legacy
-// `define i32 @main()` / `ret i32 0` (the old C-ABI main) assertions
-// need updating. LIR Proto emits `define void @main()` because the
-// runtime startup wrapper handles the C-ABI return.
+// coverage is preserved. LIR Proto emits `define void @main()`
+// because the runtime startup wrapper handles the C-ABI return —
+// the original `define i32 @main()` + `ret i32 0` asserts now
+// belong to the runtime wrapper, not the user `main`.
+//
+// Test name kept as-is because two other tests
+// (`TestLLVMBackendDispatchTraceReportsSelectedRoute` route map +
+// `TestLLVMBackendDocsMentionDispatchRoutes` docs guard) reference
+// it by name in `llvmDispatchMIRDirect`. Renaming would require
+// updating both references plus the docs/mir_design.md guard; a
+// follow-up cleanup could rename in one sweep.
 func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 	t.Parallel()
 	requireRealLLVMEmission(t)
