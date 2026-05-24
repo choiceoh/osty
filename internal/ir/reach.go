@@ -183,6 +183,16 @@ func BuiltinTypeOwningModule(name string) string {
 		return "option"
 	case "Result":
 		return "result"
+	case "Error":
+		// std.error.Error is prelude-bound — user code references
+		// it as a bare `Error` without `use std.error`, so the IR
+		// type often carries `Builtin: true, Package: ""` instead
+		// of the module-qualified shape. Without this owning-module
+		// entry, `ReachMethods` skips every `err.message()` call on
+		// an Error-typed value and the body-injector never reaches
+		// the concrete impls (`BasicError.message`, etc.) that
+		// satisfy the interface.
+		return "error"
 	}
 	return ""
 }
