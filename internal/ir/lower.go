@@ -239,6 +239,17 @@ type lowerer struct {
 	// when it processed the LetStmt earlier in the same function.
 	bindingPatTypes map[*ast.IdentPat]Type
 
+	// bindingPatTypesByOffset mirrors `bindingPatTypes` keyed by the
+	// IdentPat's source-position offset. Backend-emit paths reparse
+	// the merged package source (`cmd/osty/main.go::parseGenEmitFile`)
+	// before lowering, producing a NEW AST whose IdentPat pointers
+	// don't match the OLD AST that the resolve.Result was built
+	// against. The pointer-keyed map then misses every lookup whose
+	// `sym.Decl` is from the old AST. Falling back to position offset
+	// re-aligns the two ASTs across the reparse boundary — the merged
+	// source text is identical, so offsets are stable.
+	bindingPatTypesByOffset map[int]Type
+
 	// fieldTypeCache memoises (typeName, fieldName) → field IR Type
 	// resolutions for `recoverFieldType`. Without the memo, every
 	// field access on a partial struct re-walks the file's decls
@@ -2226,6 +2237,10 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 				l.bindingPatTypes = map[*ast.IdentPat]Type{}
 			}
 			l.bindingPatTypes[ip] = recorded
+			if l.bindingPatTypesByOffset == nil {
+				l.bindingPatTypesByOffset = map[int]Type{}
+			}
+			l.bindingPatTypesByOffset[ip.Pos().Offset] = recorded
 		}
 	}
 	return out
@@ -2329,6 +2344,19 @@ func (l *lowerer) bindingIdentType(id *ast.Ident) Type {
 	if l.bindingPatTypes != nil {
 		if ip, ok := sym.Decl.(*ast.IdentPat); ok {
 			if t := l.bindingPatTypes[ip]; usableRecoveredType(t) {
+				return t
+			}
+		}
+	}
+	// Offset-keyed companion fallback: the pointer-keyed lookup
+	// above misses across the `parseGenEmitFile` reparse boundary
+	// (sym.Decl points at the pre-reparse AST, populate cached the
+	// post-reparse AST). The merged source text is identical, so
+	// the IdentPat's source offset uniquely identifies the binding
+	// across both ASTs.
+	if l.bindingPatTypesByOffset != nil && sym.Decl != nil {
+		if _, ok := sym.Decl.(*ast.IdentPat); ok {
+			if t := l.bindingPatTypesByOffset[sym.Decl.Pos().Offset]; usableRecoveredType(t) {
 				return t
 			}
 		}
@@ -7179,6 +7207,13 @@ func (l *lowerer) populatePatternBindingTypes(pat ast.Pattern, scrutT Type) {
 		}
 		if _, ok := l.bindingPatTypes[p]; !ok {
 			l.bindingPatTypes[p] = scrutT
+		}
+		if l.bindingPatTypesByOffset == nil {
+			l.bindingPatTypesByOffset = map[int]Type{}
+		}
+		off := p.Pos().Offset
+		if _, ok := l.bindingPatTypesByOffset[off]; !ok {
+			l.bindingPatTypesByOffset[off] = scrutT
 		}
 	case *ast.VariantPat:
 		if p == nil {
