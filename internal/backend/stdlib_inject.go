@@ -156,6 +156,25 @@ func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStd
 		addStdlibValuePathMethod(reg, &found, seen, receiver, method)
 		return true
 	}), mod)
+	// Interface-method expansion: when a method ref points at an
+	// InterfaceDecl method (e.g. `Error.message` from std.error), the
+	// interface signature itself usually has no body — the real impl
+	// lives on a concrete StructDecl/EnumDecl that satisfies the
+	// interface (e.g. `BasicError.message`). Without expansion, the
+	// concrete impl method never reaches injection, no
+	// `@BasicError__message` definition is emitted, and any
+	// downstream forwarder synthesis from `@Error__message` has
+	// nothing to forward to.
+	//
+	// Expansion: for each ref whose `Type` matches an InterfaceDecl
+	// in the same stdlib module, scan the module's StructDecl /
+	// EnumDecl for any that declare a method with the same name and
+	// add that concrete impl method to the reach set. This is a
+	// conservative match (method-name only) — the MIR-side
+	// `interfaceSatisfiedByStruct` does the full coverage check at
+	// layout build time. For injection-time reach we just need to
+	// pull in the bodies that COULD satisfy the call.
+	expandInterfaceMethodReach(reg, &found, seen, mod)
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].Module != found[j].Module {
 			return found[i].Module < found[j].Module
@@ -166,6 +185,85 @@ func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStd
 		return found[i].Method < found[j].Method
 	})
 	return found
+}
+
+// expandInterfaceMethodReach scans the existing `found` set for any
+// method ref whose `Type` is an InterfaceDecl in the stdlib module,
+// and adds the same-name method from any concrete StructDecl /
+// EnumDecl in that module that declares it. The expansion is
+// conservative (method-name match, no full coverage check) — the
+// MIR-side `interfaceSatisfiedByStruct` does the strict check at
+// layout build time.
+//
+// Without this, a call like `e.message()` where `e: Error` only
+// reaches the InterfaceDecl's bodyless `Error.message` signature.
+// `bodyfulStdlibMethods` filters that out → no method body injected
+// → cross-pkg link fails when the user calls a method on a value
+// typed as the interface.
+func expandInterfaceMethodReach(
+	reg *stdlib.Registry,
+	found *[]ReachableStdlibMethod,
+	seen map[stdlibMethodReachKey]struct{},
+	mod *ir.Module,
+) {
+	_ = mod
+	if reg == nil || found == nil {
+		return
+	}
+	// Snapshot the initial refs because we mutate *found below.
+	initial := make([]ReachableStdlibMethod, len(*found))
+	copy(initial, *found)
+	for _, ref := range initial {
+		regMod, ok := reg.Modules[ref.Module]
+		if !ok || regMod == nil || regMod.File == nil {
+			continue
+		}
+		// Is ref.Type an interface in this stdlib module?
+		isInterface := false
+		for _, decl := range regMod.File.Decls {
+			if iface, ok := decl.(*ast.InterfaceDecl); ok && iface.Name == ref.Type {
+				isInterface = true
+				break
+			}
+		}
+		if !isInterface {
+			continue
+		}
+		// Scan struct + enum decls for a same-name method.
+		for _, decl := range regMod.File.Decls {
+			var (
+				implName string
+				methods  []*ast.FnDecl
+			)
+			switch d := decl.(type) {
+			case *ast.StructDecl:
+				implName = d.Name
+				methods = d.Methods
+			case *ast.EnumDecl:
+				implName = d.Name
+				methods = d.Methods
+			default:
+				continue
+			}
+			for _, m := range methods {
+				if m == nil || m.Name != ref.Method {
+					continue
+				}
+				k := stdlibMethodReachKey{module: ref.Module, typeName: implName, method: ref.Method}
+				if _, dup := seen[k]; dup {
+					continue
+				}
+				seen[k] = struct{}{}
+				*found = append(*found, ReachableStdlibMethod{
+					Module: ref.Module,
+					Type:   implName,
+					Method: ref.Method,
+					Fn:     m,
+				})
+				break
+			}
+		}
+	}
 }
 
 func addStdlibValuePathMethod(
