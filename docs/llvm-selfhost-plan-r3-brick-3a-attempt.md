@@ -73,7 +73,7 @@ let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
 ## 3. 검증 결과
 
 - ✓ `go build -o .bin/osty ./cmd/osty` — Go 측 빌드 성공
-- ✓ `OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 .bin/osty install-self` — osty-self 재빌드 성공
+- ✓ `OSTY_STAGE0_FALLBACK=1 .bin/osty install-self` — osty-self 재빌드 성공 (`OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP` 는 2026-05-19 이후 retire; stage0 source bootstrap 은 `OSTY_STAGE0_FALLBACK=1` 만으로 opt-in)
 - ✗ `osty-self --selfhost-doctor` — **exit 139 (SEGFAULT)**
 - ✗ `just osty-tests` — 51/51 fail (다시 `_Int__abs` undefined symbols)
 

@@ -986,7 +986,7 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 		{
 			gate: "Backend route",
 			anchors: map[string]map[string]bool{
-				"backend": {"generateLLVMIR": true, "llvmFallbackDispatchRoute": true},
+				"backend": {"generateLLVMIR": true, "emitLLVMFallback": true},
 			},
 		},
 		{

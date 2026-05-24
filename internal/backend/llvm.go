@@ -271,10 +271,6 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
 }
 
-func llvmFallbackDispatchRoute(opts llvmabi.Options, entry Entry) llvmDispatchRoute {
-	return NewLLVMCapabilityMatrix(entry, opts).DispatchRoute()
-}
-
 // emitLLVMFallback dispatches the resolved route to the native LIR Proto
 // subprocess. The Go MIR emitter is gone, so MIR-direct emission rides the
 // same `tryNativeOwnedMIRPayloadLLVMIRText` boundary the native-owned route
