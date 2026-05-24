@@ -344,6 +344,44 @@ func (l *lowerer) collectSignatures() {
 				continue
 			}
 			l.interfaces[x.Name] = x
+			// Register interface methods in the method-signature
+			// table so `signatureForMethod(typeName, methodName)` for
+			// an interface receiver finds the method's real return
+			// type / param list instead of falling through to the
+			// bare-name path (`Error__message` mangled with no type
+			// info → MIR call site picks up whatever stale return-
+			// type the lowerer last propagated, which has surfaced as
+			// `declare i64 @Error__message(ptr)` even though the
+			// interface declares `-> String`).
+			//
+			// The mangled symbol stays `Iface__method` (e.g.
+			// `Error__message`); concrete-impl forwarding remains the
+			// job of cross-pkg vtable injection (step 3.5 follow-up).
+			// What this fixes: the call-site signature has accurate
+			// types so cross-pkg call lowering declares the right
+			// shape and the synthesised forwarder (when it lands) can
+			// match.
+			for _, m := range x.Methods {
+				if m == nil || m.Name == "" {
+					continue
+				}
+				sig := &fnSignature{
+					ir:      m,
+					owner:   x.Name,
+					symbol:  mangleMethodSymbol(x.Name, m.Name),
+					params:  m.Params,
+					retType: m.Return,
+				}
+				key := methodKey(x.Name, m.Name)
+				// Don't shadow a concrete-impl method already
+				// registered with the same key (defensive — interface
+				// names are nominal and shouldn't collide with struct
+				// / enum names, but cross-pkg layout suffix matching
+				// could theoretically introduce overlap).
+				if _, exists := l.methods[key]; !exists {
+					l.methods[key] = sig
+				}
+			}
 		case *ir.LetDecl:
 			l.globals[x.Name] = x
 		case *ir.UseDecl:
