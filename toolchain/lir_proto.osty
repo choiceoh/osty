@@ -3433,6 +3433,46 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                         return
                     }
                     value = rebuilt
+                } else if value.typ.className == LirTypeAggregate && destType.className == LirTypePtr {
+                    // Cross-pkg interface boxing fallback (PR step 3).
+                    // Source is a real struct aggregate (e.g.
+                    // `BasicError { message }` from injected
+                    // `error.new` body), destination is `ptr` because
+                    // the destination's MIR type is a cross-pkg
+                    // interface (`Error`) lowered to opaque ptr via
+                    // the PR #2004 PascalCase fallback.
+                    //
+                    // No local vtable means we can't build the full
+                    // `{ptr data, ptr vtable}` iface aggregate. But
+                    // the working subset — pattern-match-on-
+                    // discriminant code like `Err(_) -> ...` — only
+                    // needs the destination slot to hold a valid ptr
+                    // representing the boxed value. Allocate the
+                    // struct on the GC heap, copy the value in, and
+                    // hand the heap pointer back as the interface
+                    // value. Mirrors `lirBoxInterfaceData` minus the
+                    // iface aggregate wrap.
+                    //
+                    // Soundness: any consumer that DOES call a
+                    // method on the boxed Error (e.g.
+                    // `err.message()`) will hit a missing-vtable
+                    // failure at LIR — see PR description's "Step
+                    // 3 — cross-pkg vtable injection" gap. The
+                    // boxing here is the prerequisite for that
+                    // future step.
+                    let allocSym = "osty.gc.alloc_v1"
+                    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(allocSym, lirPtrType(), [lirIntType(64), lirIntType(64), lirPtrType()], false))
+                    let sizeReg = lirEmitSizeOf(l, value.typ)
+                    let siteLabel = "mir.crosspkg.iface.box." + destLoc.typ
+                    let siteSym = lirStringEntriesInternKnown(l.stringPoolEntries, siteLabel, lirCStringEncodeSelfhostSafe(siteLabel), lirStringByteLenWithNul(siteLabel))
+                    let boxReg = lirFresh(l)
+                    l.instrs.push(lirCall(boxReg, lirPtrType(), "@" + allocSym, [
+                        lirOperand(lirIntType(64), "1"),
+                        lirOperand(lirIntType(64), sizeReg),
+                        lirOperand(lirPtrType(), siteSym),
+                    ]))
+                    l.instrs.push(lirStore(value, boxReg, 0))
+                    value = LirOperand {typ: destType, value: boxReg}
                 } else if lirTypeIsVoid(value.typ) && strings.startsWith(destLoc.name, "_") {
                     // Cross-pkg smoke-test convention: see sibling arm
                     // above (lirTypeIsVoid + `_`-prefix narrowing in
