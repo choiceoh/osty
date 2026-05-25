@@ -651,36 +651,12 @@ pub struct LirLowerConfig {
     pub sourcePath: String,
     pub target: String,
     pub emitGC: Bool,
-    pub featureGates: List<String>,
 }
 pub fn lirLowerConfig(packageName: String, sourcePath: String, target: String) -> LirLowerConfig {
-    let featureGates: List<String> = []
-    LirLowerConfig {packageName, sourcePath, target, emitGC: false, featureGates}
+    LirLowerConfig {packageName, sourcePath, target, emitGC: false}
 }
 pub fn lirLowerConfigCopy(cfg: LirLowerConfig) -> LirLowerConfig {
-    let mut gates: List<String> = []
-    for gate in cfg.featureGates {
-        gates.push(gate)
-    }
-    LirLowerConfig {packageName: cfg.packageName, sourcePath: cfg.sourcePath, target: cfg.target, emitGC: cfg.emitGC, featureGates: gates}
-}
-pub fn lirLowerConfigHasFeatureGate(cfg: LirLowerConfig, gate: String) -> Bool {
-    for existing in cfg.featureGates {
-        if existing == gate {
-            return true
-        }
-    }
-    false
-}
-pub fn lirLowerConfigAddFeatureGate(cfg: LirLowerConfig, gate: String) -> Bool {
-    if gate.len() == 0 {
-        return false
-    }
-    if lirLowerConfigHasFeatureGate(cfg, gate) {
-        return false
-    }
-    cfg.featureGates.push(gate)
-    true
+    LirLowerConfig {packageName: cfg.packageName, sourcePath: cfg.sourcePath, target: cfg.target, emitGC: cfg.emitGC}
 }
 pub struct LirLowerResult {
     pub module: LirModule,

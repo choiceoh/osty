@@ -27,7 +27,7 @@ PR1b ([#1821](https://github.com/choiceoh/osty/pull/1821)) 머지 후 PR1c (진�
 
 **시도**:
 ```sh
-$ OSTY_STAGE0_FALLBACK=1 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1 .bin/osty install-self
+$ OSTY_STAGE0_FALLBACK=1 .bin/osty install-self
 ```
 
 **결과**:

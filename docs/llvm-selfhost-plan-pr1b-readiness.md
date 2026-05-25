@@ -26,8 +26,8 @@ osty-native-checker-llvm: stub
 
 **측정 시도**: `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self`.
 
-**결과**:
-```
+**결과** (PR1b 시점 캡처; `OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP` 는 이후 퇴역 — `SPEC_GAPS.md` 2026-05-19, 단일 `OSTY_STAGE0_FALLBACK=1` 게이트로 통합):
+```text
 osty install-self: no osty-self bootstrap source available:
 selfhostcache: no usable osty-self binary found
 
@@ -38,9 +38,9 @@ to attempt the heavy source bootstrap anyway, set
 OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1.
 ```
 
-`install-self` 는 source bootstrap 진입에 추가 opt-in 필요. heavy run (수 분 + 메모리 폭주 위험). 본 PR1b 진입 조건은 아님 — **PR1b 는 단일 `osty-native-checker-llvm` binary 의 stdin echo 만 필요하며 toolchain 전체 monomorph 와 무관**.
+`install-self` 는 당시 source bootstrap 진입에 추가 opt-in 이 있었음. heavy run (수 분 + 메모리 폭주 위험). 본 PR1b 진입 조건은 아님 — **PR1b 는 단일 `osty-native-checker-llvm` binary 의 stdin echo 만 필요하며 toolchain 전체 monomorph 와 무관**.
 
-**Q7 결정**: 본 spike scope 바깥. 별도 measurement PR (`OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1` heavy run) 또는 stage0 100% 도달 시 자동 종결.
+**Q7 결정**: 본 spike scope 바깥. 별도 measurement PR (heavy `install-self` under `OSTY_STAGE0_FALLBACK=1`) 또는 stage0 100% 도달 시 자동 종결.
 
 ## Q8 — `readAll` 추가 시 수정해야 하는 backend 매핑 site (inventory)
 
