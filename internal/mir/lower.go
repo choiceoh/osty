@@ -311,6 +311,42 @@ func (l *lowerer) collectSignatures() {
 			}
 			l.structs[x.Name] = x
 			for _, m := range x.Methods {
+				// FIXME(method-sig-self-mismatch): m.Params does NOT
+				// include the receiver — `lowerFnDecl` parses
+				// `mut self` into a separate `Recv` field and drops
+				// it from Params, keeping only ReceiverMut as a
+				// bool. The MIR fn-definition path (`newFunction`
+				// at the `asMethod` branch, ~line 724-733)
+				// synthesizes a self param so the emitted MIR fn
+				// has [self, ...], but the SIG TABLE here registers
+				// raw m.Params (NO self). That off-by-one plus
+				// `methodCallSig`'s "drop first" assumption silently
+				// drops the LAST arg at every method-call site whose
+				// method has >0 source params.
+				//
+				// Concrete trigger: `Map<String,Int>.update(k,
+				// |n| ...)` registers sig.params=[key, f] (2).
+				// methodCallSig → [f] (1). orderArgs(2 args, 1
+				// slot) → [key] (closure dropped). MIR emits a
+				// 2-arg call to a 3-param def → LIR Proto rejects
+				// with "direct call argument count mismatch".
+				//
+				// The correct sig fix is to prepend a synthesized
+				// self param here (mirroring newFunction's
+				// asMethod branch). That fix has been verified in
+				// isolation on the minimal repro — but unmasks a
+				// Layer-2 type-confusion bug in some downstream
+				// call lowering (`osty_rt_list_get_i64` gets
+				// called with a String key where i64 index is
+				// expected, producing "ptr but expected 'i64'" at
+				// clang). The Layer-2 bug is hidden today because
+				// this drop bails the call earlier.
+				//
+				// Production workaround: PR #2013 inlined the
+				// toolchain's Map.update call sites. User code
+				// that calls Map.update with a closure still hits
+				// the drop. A real fix needs both this sig fix AND
+				// the Layer-2 type-confusion fix landing together.
 				sig := &fnSignature{
 					ir:      m,
 					owner:   x.Name,
