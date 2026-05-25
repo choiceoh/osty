@@ -70,11 +70,12 @@ just front    # 전체 front-end 회귀
 
 ## 4. 알아야 할 wall + 우회 패턴
 
-### 4.1 stage0 fallback 의 stdlib body injection wall
+### 4.1 stage0 fallback 과 stdlib body injection
 
-- `OSTY_STDLIB_BODY_LOWER=0` (default): `std.json.parseValue` 등 undefined symbol (link 실패)
-- `OSTY_STDLIB_BODY_LOWER=1`: stdlib body inject 되나 stage0 패턴 매칭 부족 → `osty_std_json__asString does not match any stage0 pattern`
-- **우회**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite (`std.io.readLine → osty_rt_io_read_line` 사례). C runtime 함수가 존재해야 작동.
+- **현재 (PR [#1997](https://github.com/choiceoh/osty/pull/1997) 이후)**: `internal/backend/entry.go::stdlibBodyLoweringEnabled` — **unset 이면 injection ON** (`0` / `false` / `off` 만 OFF). 예전에 기본 OFF 일 때 흔하던 링크 실패(`std.json.*` 정의 부재) 는 기본 경로에서 완화됨.
+- **OFF 로 두는 경우**: 회귀 bisect, stage0-only 재현, 또는 특정 stdlib body 가 백엔드 갭을 밟을 때 `OSTY_STDLIB_BODY_LOWER=0`.
+- **역사적 wall (기본 OFF 시대)**: `OSTY_STDLIB_BODY_LOWER=0` + stdlib 를 런타임 심볼만 쓰면 `std.json.parseValue` 등 undefined symbol. `=1` 인젝트 + stage0 패턴 부족 시 `osty_std_json__asString does not match any stage0 pattern`.
+- **우회 (C 런타임 매핑)**: PR1c 옵션 1 — `internal/mir/lower.go::qualifiedSymbol` 의 `rewriteStdlibSymbolToRuntime` (`std.io.readLine → osty_rt_io_read_line` 등). C 런타임에 심볼이 있어야 함.
 - **`rewriteStdlibSymbolToRuntime` 에 향후 추가**:
   ```go
   case "std.io.readAll":
@@ -86,18 +87,20 @@ just front    # 전체 front-end 회귀
 - 본 wall 의 우회 = manual naive parser (PR2 옵션 3', `strings.indexOf` + `strings.slice` 만). 정확성 한계 (escape 미처리).
 - 진짜 fix = std.json.* 의 C runtime mapping 또는 stdlib body 의 stage0 cover.
 
-### 4.3 cross-package method-call wall (step 3, 단일 unlock 차단)
+### 4.3 cross-package method-call (step 3) — 상태 갱신 2026-05
 
-세 use form 모두 같은 wall ([#1847](https://github.com/choiceoh/osty/pull/1847)):
+**Landed**: narrow-exception dispatch + activation (**PR [#1886](https://github.com/choiceoh/osty/pull/1886)**, [#1890](https://github.com/choiceoh/osty/pull/1890)). `cmd/osty-native-checker` 의 `PackageCheckInput.imports` + `use toolchain.check as tc` 패턴은 README 기준 E0703 없이 resolve. `SPEC_GAPS.md::cross-pkg-module-resolution` 은 여전히 상위 gap 과 후속 path 를 열어 둠.
+
+**PR #1890 이전 증상** ([#1847](https://github.com/choiceoh/osty/pull/1847) 측정 당시) — 세 use form 이 모두 같은 failure class:
 - `use toolchain.check as tc; tc.fn()` → E0703 (method-on-type)
 - `use toolchain.check::{fn}` → E0704 (not callable)
 - `use toolchain.check.fn` → E0704 (not callable)
 
-E0703 emit site = `generated.go:41950` (transpiled from `toolchain/elab.osty:19712`). **frozen seed** 라 수정 = spec 위반.
-
-**유일한 path = 옵션 c** (spec narrow exception). [#1848](https://github.com/choiceoh/osty/pull/1848) spec draft 가 합의 대기.
+근원: E0703 emit site `generated.go:41950` (transpiled from `toolchain/elab.osty:19712`) 가 package receiver 의 module-scoped lookup 을 못 함. **해소**: 옵션 c (CLAUDE.md narrow exception) 로 dispatch arm 적용. 이후 cross-pkg surface 확장(예: interface boxing, MIR signature 테이블) 은 [#2004](https://github.com/choiceoh/osty/pull/2004) 이후 PR chain — `SPEC_GAPS.md` 타임라인 참조.
 
 ## 5. 합의 후 sub-PR sequencing (옵션 c)
+
+> **아카이브**: 아래 블록은 옵션 c 머지 전 planning 스케치. 실제 spec/impl 은 CLAUDE.md narrow exception + PR [#1886](https://github.com/choiceoh/osty/pull/1886) / [#1890](https://github.com/choiceoh/osty/pull/1890) 궤적으로 착수됨.
 
 `docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md` 의 §3 narrow exception 표현이 CLAUDE.md "하지 말 것" 에 합의 머지된 후:
 

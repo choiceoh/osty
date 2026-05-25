@@ -21,7 +21,7 @@
 
 | 항목 | 이유 |
 |---|---|
-| `OSTY_STDLIB_BODY_LOWER=1` (stdlib 본문 LLVM IR 인젝트) | 진짜 셀프호스팅 정의에 포함시키지 않음. stdlib는 `osty_runtime.c` 의 runtime symbol (`osty_rt_*`) 로 lowering. Go-built 도 같은 runtime 에 link 되므로 behavior parity 와 무관 |
+| `OSTY_STDLIB_BODY_LOWER` / stdlib 본문 LLVM IR 인젝트 | 진짜 셀프호스팅 **parity 정의** 에는 포함시키지 않음 (여전히 `osty_runtime.c` 의 `osty_rt_*` 가 주된 런타임 bridge). **구현 갱신 (2026-05-23, PR [#1997](https://github.com/choiceoh/osty/pull/1997))**: `internal/backend/entry.go::stdlibBodyLoweringEnabled` 가 **unset 시 ON** — combinator/flatMap 류가 기본 빌드에서 링크되도록 함. `0`/`false`/`off` 만 OFF. 본 plan row 의 의미는 "parity 검증 대상이 stdlib Osty-body lowering 전체가 아니다" 로 유지 |
 | `cmd/osty/` 전체 탈Go (`main.osty` 경유 CLI) | scope 너무 큼. 별도 plan |
 | `internal/selfhost/generated.go` (~70k LOC, 정확히 70615) 재생성 부활 | PR #854 에서 retire. CLAUDE.md "하지 말 것" 에 명시. frozen seed 유지 |
 | `internal/resolve/{resolve,cfg,prelude,scope}.go` 4파일 삭제 | `SELFHOST_PORT_MATRIX.md` Phase 1c.5 의 frontend track. orthogonal |
@@ -419,7 +419,7 @@ L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 | 셀프호스팅의 종착지 | **LLVM 백엔드로 toolchain/*.osty 자체 컴파일 (진짜 셀프호스팅)** | Go resolver 4파일 삭제 (Phase 1c.5) / 현재 first-walls 만 닫기 (Phase 3) |
 | 자체 컴파일의 산출물 범위 | **osty-native-checker 만 LLVM 으로 자체 빌드 (최소)** | toolchain 전체 / Go shell 포함 완전 탈Go |
 | 검증 기준 | **Behavior parity — 같은 input 에 같은 JSON output (바이트 동일)** | self-build smoke 만 / fixed-point byte equality (`B2 ≡ B3`) — 후자는 결정성 작업 추가 필요 |
-| stdlib body injection | **OFF (현재 default) — stdlib 은 runtime symbol 호출** | ON — monomorph hang 선행 |
+| stdlib body injection | **ON by default (PR #1997)** — `stdlibBodyLoweringEnabled`; `OSTY_STDLIB_BODY_LOWER=0`/`false`/`off` 만 OFF | *(2026-05-16 인터뷰 스냅샷)* OFF 가 default — monomorph hang 선행 후 ON 검토 |
 | 진행 방식 | **Spec/design 먼저, 실제 PR 은 다음 세션** | walking skeleton 으로 바로 시작 / walls-first batch |
 | Fixture corpus | **점진: 시드 → spec/positive 흡수 → toolchain/ self-input** | testdata/spec/positive 만 / toolchain self 만 |
 | JSON ser/de 방식 | **Manual parseValue + stringifyValue 조합** | `#[json(key)]` derive — LLVM 백엔드의 generic encode/parse 완성도 미지 |
