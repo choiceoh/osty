@@ -57,25 +57,27 @@ build-all: build build-checker build-lirproto
 # triggers. Override on the command line (`OSTY_STAGE0_FALLBACK= just
 # bootstrap`) when you want to verify the prebuilt-only path instead.
 bootstrap: build-all
-    # `OSTY_STDLIB_BODY_LOWER=0` is the escape hatch from PR #1998's
-    # default-on flip. The stage0 source bootstrap path is sensitive to
-    # bodied stdlib injection because the toolchain itself calls into
-    # bodied methods (e.g. `Map<String, Int>.update`) whose injected
-    # form collides with the builtin-receiver dispatcher's intrinsic
-    # path — the symbol falls through to `mangleMethodSymbol(typeName,
-    # method)` (`_ZTSN…MapISslEE__update`) without a matching `define`.
-    # Disabling injection here keeps the existing bootstrap shape
-    # working until the conflict between `builtinNonGenericMethods` +
-    # `RewriteStdlibMethodCallsites` is resolved at the IR layer; user
-    # `osty build` continues to get the default-on path.
+    # PR #2013 inlined the `Map<String, Int>.update` toolchain call
+    # sites that previously needed `OSTY_STDLIB_BODY_LOWER=0` to
+    # dodge the closure-arg-drop bug introduced by PR #1998's
+    # default-on flip. `install-self` now works under the default
+    # env, so the bootstrap recipe exercises the same path
+    # production `osty build` walks.
     #
-    # Both env vars use the `${VAR:-1}` / `${VAR:-0}` form so a caller
-    # can override on the command line — for example,
-    # `OSTY_STAGE0_FALLBACK= just bootstrap` to verify the prebuilt-only
-    # path that the comment block above advertises. Hard-coding the
-    # values would silently override caller intent and make that
-    # documented contract impossible.
-    OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" OSTY_STDLIB_BODY_LOWER="${OSTY_STDLIB_BODY_LOWER:-0}" {{bin}} install-self
+    # If you hit a fresh stdlib-body lowering regression while
+    # extending this recipe, set `OSTY_STDLIB_BODY_LOWER=0 just
+    # bootstrap` from the shell as the escape hatch — same
+    # contract as before, just no longer the default. Removing the
+    # default workaround means the CI gate
+    # (`fresh-clone-source-bootstrap.yml`) now actually catches
+    # regressions that need body-lowering ON to surface, which is
+    # what reviewer feedback flagged after PR #1998 silently
+    # bypassed the gate for an entire 14-PR cycle.
+    #
+    # `OSTY_STAGE0_FALLBACK="${VAR:-1}"` stays as documented above —
+    # it's the chicken-and-egg fix from PR #1989 and is independent
+    # of the body-lowering flip.
+    OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" {{bin}} install-self
 
 # cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
 # osty-self path for the current toolchain SHA + host triple. With
