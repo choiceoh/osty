@@ -452,9 +452,13 @@ func TestEmitLLVMIRTextFallsBackWhenNativeMIRPayloadDeclines(t *testing.T) {
 
 func withNativeMIRPayloadEmitter(t *testing.T, fn func(Entry, string) ([]byte, bool, []error, error)) {
 	t.Helper()
+	nativeMIRPayloadEmitterTestMu.Lock()
 	oldTry := tryNativeOwnedMIRPayloadLLVMIRText
 	tryNativeOwnedMIRPayloadLLVMIRText = fn
-	t.Cleanup(func() { tryNativeOwnedMIRPayloadLLVMIRText = oldTry })
+	t.Cleanup(func() {
+		tryNativeOwnedMIRPayloadLLVMIRText = oldTry
+		nativeMIRPayloadEmitterTestMu.Unlock()
+	})
 }
 
 func TestEmitPrebuiltLLVMIRBuildsArtifactsFromProvidedIR(t *testing.T) {

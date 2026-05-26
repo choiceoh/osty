@@ -3,10 +3,13 @@ package backend
 import (
 	"errors"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
+
+var nativeMIRPayloadEmitterTestMu sync.RWMutex
 
 // installNativeMIRPayloadStub installs a `tryNativeOwnedMIRPayloadLLVMIRText`
 // override that always reports coverage with a trivial-but-valid IR shell.
@@ -60,6 +63,8 @@ const requireRealLLVMEmissionStrictEnv = "OSTY_REQUIRE_REAL_LLVM_EMISSION"
 // introducing PR.
 func requireRealLLVMEmission(t *testing.T) {
 	t.Helper()
+	nativeMIRPayloadEmitterTestMu.RLock()
+	t.Cleanup(nativeMIRPayloadEmitterTestMu.RUnlock)
 	strict := requireRealLLVMEmissionStrict()
 	failOrSkip := func(format string, args ...any) {
 		if strict {
