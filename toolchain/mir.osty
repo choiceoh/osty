@@ -977,7 +977,7 @@ pub struct MirStructLayout {
     pub align: Int,
     /// builtinSource names the stdlib built-in generic template this
     /// struct was monomorphized from ("List", "Map", "Set", ...) when
-    /// `OSTY_STDLIB_BODY_LOWER` injected and specialized it. Empty for
+    /// stdlib body injection injected and specialized it. Empty for
     /// ordinary user structs. builtinSourceArgs carries the concrete
     /// type-arg names in template-generic order. The LIR Proto backend
     /// reads these to re-associate a `_ZTS…` mangled struct with its
