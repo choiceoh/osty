@@ -1,7 +1,7 @@
 # LLVM self-host — 다음 세션 handoff
 
 > **목적**: fresh context 진입 시 5분에 읽고 다음 PR 진입 가능한 단일 명세.
-> **상태**: 2026-05-17 후속 세션 종료 시점. 50+ PR 머지 + R3 trajectory brick 1-12 + PR3-D~F activation 완성.
+> **상태**: 2026-05-17 후속 세션 baseline + **2026-05-26 doc refresh** (stdlib body-lowering default, LLVM cross-pkg interface slice).
 
 ## 1. 30초 요약
 
@@ -61,43 +61,46 @@ just front    # 전체 front-end 회귀
 | `internal/mir/lower.go::qualifiedSymbol` | `rewriteStdlibSymbolToRuntime` helper (PR1c 옵션 1) — `std.io.readLine → osty_rt_io_read_line` |
 | `internal/selfhost/api/types.go::ResolvedSymbol.ImportPath` | use-decl import path 필드 ([PR #1842](https://github.com/choiceoh/osty/pull/1842)) |
 | `internal/selfhost/resolve_adapter.go::selfhostUseAliasImportPaths` | post-processing walker |
-| `internal/selfhost/generated.go:41950` | **frozen seed의 method-call dispatch** (step 3 wall) |
+| `internal/selfhost/generated.go` (package `kind` + `ImportPath` 분기) | **frozen seed의 module-scoped method-call dispatch** (PR3-C step 3 / narrow exception; 라인 번호는 시드 편집마다 drift) |
 | `internal/selfhost/generated.go:28553` | E0703 emit (`diagUnknownMethod`) |
 | `toolchain/elab.osty:19712` | transpile source 의 method-call dispatch (generated.go 와 drift) |
 | `internal/backend/stage0/emit.go` | stage0 fallback emitter (17679 LOC, 99.8% cover) |
 | `internal/backend/runtime/osty_runtime.c::osty_rt_io_read_line` | C runtime (line 25384) |
-| `SPEC_GAPS.md::cross-pkg-module-resolution` | open gap (path #5 = step 3 wall) |
+| `SPEC_GAPS.md::cross-pkg-module-resolution` | open gap 색인 + 타임라인 (checker 단계 PR3-C 이후에도 LLVM/cross-pkg 조각 남음) |
 
 ## 4. 알아야 할 wall + 우회 패턴
 
-### 4.1 stage0 fallback 의 stdlib body injection wall
+### 4.1 Stdlib body lowering (`OSTY_STDLIB_BODY_LOWER`)
 
-- `OSTY_STDLIB_BODY_LOWER=0` (default): `std.json.parseValue` 등 undefined symbol (link 실패)
-- `OSTY_STDLIB_BODY_LOWER=1`: stdlib body inject 되나 stage0 패턴 매칭 부족 → `osty_std_json__asString does not match any stage0 pattern`
-- **우회**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite (`std.io.readLine → osty_rt_io_read_line` 사례). C runtime 함수가 존재해야 작동.
-- **`rewriteStdlibSymbolToRuntime` 에 향후 추가**:
-  ```go
-  case "std.io.readAll":
-      return "osty_rt_io_read_all"  // 단 osty_rt_io_read_all 가 C runtime 에 부재
-  ```
+Verified behavior lives in `internal/backend/entry.go::stdlibBodyLoweringEnabled`.
+
+- **Default: ON** ([PR #1998](https://github.com/choiceoh/osty/pull/1998), PR3-C steady state). `PrepareEntry` 가 stdlib 본문을 사용자 모듈에 inject 해 `flatMap` / `zip` 등 **`osty_rt_*` 만으로는 링크 못 잡던** 조합자를 LLVM 경로에서 커버한다.
+- **Escape hatch: `OSTY_STDLIB_BODY_LOWER=0`** (`off` / `false` 동일) — injection 끄고 `rewriteStdlibSymbolToRuntime` 가 알려진 심볼만 C 런타임으로 보내는 구형 경로. 회귀 bisect, stage0-only 실험, 또는 cross-pkg 인터페이스 vtable 이 아직 비는 테스트가 `=0` 을 핀다 (`internal/backend/llvm_keychain_test.go` 가 PR #2007 이후 주석으로 이유 기술).
+- **`just bootstrap`** 는 다시 **unset/default** 조합으로 `install-self` 를 돌린다 ([PR #2013](https://github.com/choiceoh/osty/pull/2013)) — 예전엔 레시피가 `=0` 으로 gate 를 우회해 body-lowering 회귀를 놓쳤다.
+- **여전히 유효한 우회 패턴 (PR1c 옵션 1)**: `internal/mir/lower.go::qualifiedSymbol` 의 stdlib → `osty_rt_*` rewrite. C 런타임에 심볼이 실제로 있어야 링크된다.
+- Injection ON 일 때 stage0 가 못 받는 패턴이 남아 있으면 `osty_std_* does not match any stage0 pattern` 류로 터질 수 있다 — 그때는 stage0 커버리지 wave 또는 C wrapper / IR 경로가 별도 이슈.
 
 ### 4.2 std.json wall
 
 - 본 wall 의 우회 = manual naive parser (PR2 옵션 3', `strings.indexOf` + `strings.slice` 만). 정확성 한계 (escape 미처리).
 - 진짜 fix = std.json.* 의 C runtime mapping 또는 stdlib body 의 stage0 cover.
 
-### 4.3 cross-package method-call wall (step 3, 단일 unlock 차단)
+### 4.3 Cross-package module access (checker + LLVM backend)
 
-세 use form 모두 같은 wall ([#1847](https://github.com/choiceoh/osty/pull/1847)):
-- `use toolchain.check as tc; tc.fn()` → E0703 (method-on-type)
-- `use toolchain.check::{fn}` → E0704 (not callable)
-- `use toolchain.check.fn` → E0704 (not callable)
+**Checker / frozen seed (PR3-C)**: `ResolvedSymbol.ImportPath` + `kind == "package"` 일 때 module-scoped lookup 분기가 **narrow exception** 으로 `internal/selfhost/generated.go` 에 들어갔고, `toolchain/elab.osty` 동등 변경이 드리프트 방지용 의무다 ([`docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md`](llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md)).
 
-E0703 emit site = `generated.go:41950` (transpiled from `toolchain/elab.osty:19712`). **frozen seed** 라 수정 = spec 위반.
+역사적으로 동일한 본질이었던 use 형태 ([#1847](https://github.com/choiceoh/osty/pull/1847)):
 
-**유일한 path = 옵션 c** (spec narrow exception). [#1848](https://github.com/choiceoh/osty/pull/1848) spec draft 가 합의 대기.
+- `use dep.mod as alias; alias.fn()` — package 별칭에 대한 호출
+- `use dep.mod::{fn}` / `use dep.mod.fn` — grouped import / qualified 접근
 
-## 5. 합의 후 sub-PR sequencing (옵션 c)
+**LLVM 쪽 후속 (PR #2004–#2011)**: cross-pkg 인터페이스 타입 lowering, MIR signature table 에 cross-pkg 인터페이스 메서드 등록, struct→`Error` 대입 시 boxing 등이 진행됨. 회귀 가드: `internal/backend/llvm_crosspkg_iface_box_test.go`. **아직 비는 조각**: cross-pkg `Error` 에 대한 vtable 주입 + init-globals 렌더 (`llvm_keychain_test.go` 주석 — 가상 디스패치 `err.message()` 는 테스트에서 의도적으로 스킵).
+
+**남은 권위**: [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인(열린 gap 으로 계속 색인됨) + [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md).
+
+## 5. 합의 후 sub-PR sequencing (옵션 c) — **히스토리컬 초안**
+
+> **2026-05-26**: PR3-C-step3-c-impl / 테스트 / 후속 LLVM cross-pkg PR 들은 이미 main 에 합류했다. 아래 박스는 당시 합의 직후 작성된 **참고용** pseudocode·순서다. 현재 작업은 §4.3, SPEC_GAPS 최신 항목, `llvm-selfhost-plan.md` 를 우선한다.
 
 `docs/llvm-selfhost-plan-pr3-c-step3-c-spec-draft.md` 의 §3 narrow exception 표현이 CLAUDE.md "하지 말 것" 에 합의 머지된 후:
 

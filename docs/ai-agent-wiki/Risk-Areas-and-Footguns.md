@@ -30,6 +30,9 @@
 - unsupported source shapes should stay on structured diagnostic paths
 - runtime ABI changes can affect emitted binaries far from the edited file
 - backend docs may describe migration history; check current shipped behavior too
+- **`OSTY_STDLIB_BODY_LOWER`** defaults to **on** (stdlib bodies lowered with the
+  user module). Set `0`, `off`, or `false` only for bisects or tests that need
+  the C-runtime-only rewrite path (`internal/backend/entry.go::stdlibBodyLoweringEnabled`).
 
 ## Spec traps
 

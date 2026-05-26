@@ -21,7 +21,7 @@
 
 | 항목 | 이유 |
 |---|---|
-| `OSTY_STDLIB_BODY_LOWER=1` (stdlib 본문 LLVM IR 인젝트) | 진짜 셀프호스팅 정의에 포함시키지 않음. stdlib는 `osty_runtime.c` 의 runtime symbol (`osty_rt_*`) 로 lowering. Go-built 도 같은 runtime 에 link 되므로 behavior parity 와 무관 |
+| `OSTY_STDLIB_BODY_LOWER` (stdlib 본문 LLVM IR 인젝트; **기본 ON**, PR #1998) | 셀프호스팅 “정의” 자체에 플래그 축을 추가하지 않는다는 뜻이다. 기본 경로는 `internal/backend/entry.go::stdlibBodyLoweringEnabled` 가 ON 이라 bodied stdlib 이 MIR/LIR 로 내려간다. `=0`/`off`/`false` 는 bisect·stage0-only·일부 LLVM 테스트가 C 런타임 rewrite 만 보려 할 때의 **escape hatch**. Go-built 와의 runtime parity 는 여전히 `osty_runtime.c` 의 `osty_rt_*` 가 담당하는 심볼에 기대며, rewrite 테이블 (`rewriteStdlibSymbolToRuntime`) 과 injection 은 교대로 쓰인다 |
 | `cmd/osty/` 전체 탈Go (`main.osty` 경유 CLI) | scope 너무 큼. 별도 plan |
 | `internal/selfhost/generated.go` (~70k LOC, 정확히 70615) 재생성 부활 | PR #854 에서 retire. CLAUDE.md "하지 말 것" 에 명시. frozen seed 유지 |
 | `internal/resolve/{resolve,cfg,prelude,scope}.go` 4파일 삭제 | `SELFHOST_PORT_MATRIX.md` Phase 1c.5 의 frontend track. orthogonal |

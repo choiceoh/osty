@@ -545,6 +545,16 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### Stdlib body lowering (default on)
+
+`internal/backend.PrepareEntry` / `PreparePackage` consult
+`stdlibBodyLoweringEnabled` (`internal/backend/entry.go`): unless
+`OSTY_STDLIB_BODY_LOWER` is `0`, `off`, or `false`, the backend **injects**
+Osty stdlib function bodies into the module so MIR lowering can emit calls
+into those definitions (default since PR #1998). With injection off, many
+stdlib entrypoints rely on `rewriteStdlibSymbolToRuntime` mapping to
+`osty_rt_*` in `internal/mir/lower.go` instead.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

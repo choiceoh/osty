@@ -451,6 +451,25 @@ visible without import cycles. Use this when profiling `install-self` or large
 workspace builds to see whether the next bottleneck is front-end, MIR/IR, or
 link — not as a stable machine interface.
 
+## Stdlib body lowering (`OSTY_STDLIB_BODY_LOWER`)
+
+When unset or set to any value other than `0`, `false`, or `off` (case-sensitive
+for the string tokens), `internal/backend/PrepareEntry` **injects** Osty stdlib
+bodies into the module under compilation so list/map helpers that are not
+covered by `osty_rt_*` shims still link ([PR #1998](https://github.com/choiceoh/osty/pull/1998)).
+
+- **Escape hatch**: `OSTY_STDLIB_BODY_LOWER=0` (or `off` / `false`) disables
+  injection; known stdlib entrypoints are then rewritten to C runtime symbols
+  where `internal/mir/lower.go::rewriteStdlibSymbolToRuntime` has a mapping.
+- **Bootstrap**: `just bootstrap` runs `install-self` with the same default as
+  normal `osty build` again ([PR #2013](https://github.com/choiceoh/osty/pull/2013))
+  so CI catches regressions that only appear with injection enabled.
+- **Tests**: several LLVM integration tests still call `t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")`
+  explicitly for clarity, or pin `0` when a scenario depends on the
+  C-runtime-only path (see comments in `internal/backend/llvm_keychain_test.go`).
+
+Source of truth: `stdlibBodyLoweringEnabled` in [`internal/backend/entry.go`](./internal/backend/entry.go).
+
 ## LLVM workspace link (experimental)
 
 For manifest-driven **`osty build`** with `--backend llvm` emitting a **binary**, cross-package callees are normally lowered as unresolved `declare`s and fail at link time unless definitions are visible to the linker. Setting **`OSTY_CROSS_PKG_LINK=1`** (or `true`, `yes`, or `on`, case-insensitive) asks the CLI to compile each **other** workspace member package as a **library** object (skips emitting `main`, avoiding `_main` collisions), collect the `.o` paths, append them on `backend.Request.ExtraObjects`, and pass them to the final `clang` link.
