@@ -10282,6 +10282,18 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		ctx.aggregates[destID] = aggregateBinding{typeName: typeName, reg: expr, fields: fields}
 		return true
 	}
+	if agg, ok := ai.Src.(*mir.AggregateRV); ok && agg.Kind == mir.AggTuple {
+		expr, ty, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		typeName, fields, ok := classifyAggregateReturnType(destLocal.Type, ctx.mctx)
+		if !ok {
+			return false
+		}
+		ctx.aggregates[destID] = aggregateBinding{typeName: typeName, reg: expr, fields: fields}
+		return true
+	}
 
 	destType := ctx.scalarForLocal(destID, destLocal.Type)
 	if destType == scalarUnknown {
@@ -11672,7 +11684,13 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		return false
 	}
 	ref, ok := ci.Callee.(*mir.FnRef)
-	if !ok || ref.Symbol == "" {
+	if !ok {
+		if ind, ok := ci.Callee.(*mir.IndirectCall); ok {
+			return emitWhileIndirectCall(ctx, out, ci, ind, ci.Dest.Local, destType)
+		}
+		return false
+	}
+	if ref.Symbol == "" {
 		return false
 	}
 	recordWhileCallStructResult(ctx, ci, ref)
@@ -11719,6 +11737,81 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 	}
 	declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 	return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
+}
+
+func emitWhileIndirectCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr, ind *mir.IndirectCall, destID mir.LocalID, destType scalarType) bool {
+	if ctx == nil || ctx.mctx == nil || out == nil || ci == nil || ind == nil || ind.Callee == nil || ci.Dest == nil || ci.Dest.HasProjections() {
+		return false
+	}
+	fnTy, ok := ind.Callee.Type().(*ir.FnType)
+	if !ok || fnTy == nil || len(fnTy.Params) != len(ci.Args) {
+		return false
+	}
+	retTy := ctx.mctx.scalarFromType(fnTy.Return, true)
+	if retTy == scalarUnknown || retTy != destType {
+		return false
+	}
+	calleeExpr, calleeTy, ok := resolveOperandWithLoad(ctx, out, ind.Callee)
+	if !ok || calleeTy != scalarOpaquePtr {
+		return false
+	}
+	args := make([]callArg, 0, len(ci.Args))
+	for i, op := range ci.Args {
+		expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok {
+			return false
+		}
+		paramTy := ctx.mctx.scalarFromType(fnTy.Params[i], true)
+		if paramTy == scalarUnknown || paramTy != argTy {
+			return false
+		}
+		args = append(args, callArg{expr: expr, ty: argTy.llvm()})
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s %s(", reg, destType.llvm(), calleeExpr)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	return bindWhileResult(ctx, out, destID, destType, reg)
+}
+
+func emitWhileIndirectVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr, ind *mir.IndirectCall) bool {
+	if ctx == nil || ctx.mctx == nil || out == nil || ci == nil || ind == nil || ind.Callee == nil || ci.Dest != nil {
+		return false
+	}
+	fnTy, ok := ind.Callee.Type().(*ir.FnType)
+	if !ok || fnTy == nil || !isUnitType(fnTy.Return) || len(fnTy.Params) != len(ci.Args) {
+		return false
+	}
+	calleeExpr, calleeTy, ok := resolveOperandWithLoad(ctx, out, ind.Callee)
+	if !ok || calleeTy != scalarOpaquePtr {
+		return false
+	}
+	args := make([]callArg, 0, len(ci.Args))
+	for i, op := range ci.Args {
+		expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok {
+			return false
+		}
+		paramTy := ctx.mctx.scalarFromType(fnTy.Params[i], true)
+		if paramTy == scalarUnknown || paramTy != argTy {
+			return false
+		}
+		args = append(args, callArg{expr: expr, ty: argTy.llvm()})
+	}
+	fmt.Fprintf(out, "  call void %s(", calleeExpr)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	return true
 }
 
 func emitWhileKnownIntMethodCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr, symbol string) bool {
@@ -11805,7 +11898,13 @@ func recordWhileCallStructResult(ctx *whileLoopEmitCtx, ci *mir.CallInstr, ref *
 
 func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
 	ref, ok := ci.Callee.(*mir.FnRef)
-	if !ok || ref.Symbol == "" {
+	if !ok {
+		if ind, ok := ci.Callee.(*mir.IndirectCall); ok {
+			return emitWhileIndirectVoidCall(ctx, out, ci, ind)
+		}
+		return false
+	}
+	if ref.Symbol == "" {
 		return false
 	}
 	if emitWhileTestingVoidCall(ctx, out, ci, ref.Symbol) {
@@ -11974,6 +12073,9 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	if !ok {
 		return "", scalarUnknown, false
 	}
+	if expr, ty, ok := resolveWhileMapIndexedOperand(ctx, out, place); ok {
+		return expr, ty, true
+	}
 	listPlace := mir.Place{
 		Local:       place.Local,
 		Projections: append([]mir.Projection(nil), place.Projections[:len(place.Projections)-1]...),
@@ -12086,6 +12188,78 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 	value := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = call %s @%s(ptr %s, i64 %s)\n", value, elemTy.llvm(), symbol, listExpr, indexExpr)
 	return value, elemTy, true
+}
+
+func resolveWhileMapIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || len(place.Projections) == 0 {
+		return "", scalarUnknown, false
+	}
+	idxProj, ok := place.Projections[len(place.Projections)-1].(*mir.IndexProj)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	mapPlace := mir.Place{
+		Local:       place.Local,
+		Projections: append([]mir.Projection(nil), place.Projections[:len(place.Projections)-1]...),
+	}
+	mapTy := placeResultType(ctx.fn, mapPlace)
+	if !isMapType(mapTy) {
+		return "", scalarUnknown, false
+	}
+	mapExpr, mapScalarTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: mapPlace, T: mapTy})
+	if !ok || mapScalarTy != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, idxProj.Index)
+	if !ok || keyTy == scalarUnknown {
+		return "", scalarUnknown, false
+	}
+	if expectedKey := collectionArgScalarFromType(mapTy, "Map", 0, ctx.mctx); expectedKey != scalarUnknown && expectedKey != keyTy {
+		return "", scalarUnknown, false
+	}
+	valueTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
+	if valueTy == scalarUnknown {
+		valueTy = collectionArgScalarFromType(mapTy, "Map", 1, ctx.mctx)
+	}
+	if valueTy == scalarUnknown {
+		return "", scalarUnknown, false
+	}
+	zero, ok := valueTy.zeroValue()
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	symbol := mapGetSymbolFor(keyTy)
+	if symbol == "" {
+		return "", scalarUnknown, false
+	}
+	slot := freshReg(ctx)
+	found := freshReg(ctx)
+	value := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = alloca %s\n", slot, valueTy.llvm())
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", valueTy.llvm(), zero, slot)
+	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
+	fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n", found, symbol, mapExpr, keyTy.llvm(), keyExpr, slot)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", value, valueTy.llvm(), slot)
+	return value, valueTy, true
+}
+
+func isMapType(t mir.Type) bool {
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil {
+		return false
+	}
+	return named.Name == "Map" || isMangledBuiltinTemplate(named.Name, "Map")
+}
+
+func collectionArgScalarFromType(t mir.Type, name string, index int, mctx *moduleCtx) scalarType {
+	if index < 0 || mctx == nil {
+		return scalarUnknown
+	}
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil || named.Name != name || index >= len(named.Args) {
+		return scalarUnknown
+	}
+	return mctx.scalarFromType(named.Args[index], true)
 }
 
 func resolveWhileRangeIndexOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.Operand) (string, string, bool) {
@@ -12814,11 +12988,12 @@ func emitForInRangeReturn(out *strings.Builder, fn *mir.Function, pat forInRange
 // _len, _elem) are SSA-bound.
 
 type forInListPattern struct {
-	retType    scalarType
-	paramIDs   []mir.LocalID
-	paramTypes []scalarType
-	paramNames []string
-	stackDecls []stackDecl // multi-assigned scalars (idx counter, etc.)
+	returnsVoid bool
+	retType     scalarType
+	paramIDs    []mir.LocalID
+	paramTypes  []scalarType
+	paramNames  []string
+	stackDecls  []stackDecl // multi-assigned scalars (idx counter, etc.)
 
 	entryBody      string
 	headerBody     string
@@ -12860,9 +13035,12 @@ func multiWrittenLocals(fn *mir.Function) map[mir.LocalID]bool {
 func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, bool) {
 	pat := forInListPattern{}
 
-	// Return type: scalar or opaque ptr.
-	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
-	if pat.retType == scalarUnknown {
+	// Return type: scalar / opaque ptr / void.
+	pat.returnsVoid = isUnitType(fn.ReturnType)
+	if !pat.returnsVoid {
+		pat.retType = mctx.scalarFromType(fn.ReturnType, true)
+	}
+	if !pat.returnsVoid && pat.retType == scalarUnknown {
 		return pat, false
 	}
 
@@ -12981,7 +13159,14 @@ func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, 
 	}
 
 	nextSSA := 0
-	ctx := &whileLoopEmitCtx{fn: fn, bindings: bindings, stack: stack, mctx: mctx, nextSSA: &nextSSA}
+	ctx := &whileLoopEmitCtx{
+		fn:         fn,
+		bindings:   bindings,
+		stack:      stack,
+		mctx:       mctx,
+		nextSSA:    &nextSSA,
+		aggregates: map[mir.LocalID]aggregateBinding{},
+	}
 
 	// Render each block.
 	entryStr, ok := forInListBlock(ctx, entry)
@@ -13009,12 +13194,20 @@ func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, 
 	}
 	pat.postBody = postStr
 
-	exitStr, finalExpr, ok := forInListExit(ctx, exit, fn.ReturnLocal, pat.retType)
-	if !ok {
-		return pat, false
+	if pat.returnsVoid {
+		exitStr, ok := forInListVoidExit(ctx, exit)
+		if !ok {
+			return pat, false
+		}
+		pat.exitBody = exitStr
+	} else {
+		exitStr, finalExpr, ok := forInListExit(ctx, exit, fn.ReturnLocal, pat.retType)
+		if !ok {
+			return pat, false
+		}
+		pat.exitBody = exitStr
+		pat.finalRetExpr = finalExpr
 	}
-	pat.exitBody = exitStr
-	pat.finalRetExpr = finalExpr
 
 	pat.headerLabel = blockLabelName(header.ID, "header")
 	pat.bodyLabel = blockLabelName(body.ID, "body")
@@ -13076,6 +13269,16 @@ func forInListExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, retLocal mir.Local
 	return out.String(), b.expr, true
 }
 
+func forInListVoidExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock) (string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !forInListStep(ctx, &out, instr) {
+			return "", false
+		}
+	}
+	return out.String(), true
+}
+
 // forInListStep dispatches one MIR instruction in the for-in-list context.
 // It extends emitWhileStep with LenRV, AggregateRV{AggList}, opaque-ptr
 // calls, indexed element access, and list_push intrinsic.
@@ -13116,6 +13319,18 @@ func forInListAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 	}
 	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
 	if destType == scalarUnknown {
+		if agg, ok := ai.Src.(*mir.AggregateRV); ok && agg.Kind == mir.AggTuple {
+			expr, ty, ok := emitWhileAggregateRValue(ctx, out, agg, scalarOpaquePtr, destLocal.Type)
+			if !ok || ty != scalarOpaquePtr {
+				return false
+			}
+			typeName, fields, ok := classifyAggregateReturnType(destLocal.Type, ctx.mctx)
+			if !ok {
+				return false
+			}
+			ctx.aggregates[destID] = aggregateBinding{typeName: typeName, reg: expr, fields: fields}
+			return true
+		}
 		return false
 	}
 	isStackDest := false
@@ -13259,7 +13474,13 @@ func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		return false
 	}
 	ref, ok := ci.Callee.(*mir.FnRef)
-	if !ok || ref.Symbol == "" {
+	if !ok {
+		if ind, ok := ci.Callee.(*mir.IndirectCall); ok {
+			return emitWhileIndirectCall(ctx, out, ci, ind, destID, destType)
+		}
+		return false
+	}
+	if ref.Symbol == "" {
 		return false
 	}
 	// Resolve args — uses the extended operand resolver.
@@ -13438,7 +13659,7 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", sym, listExpr, elemTy.llvm(), elemExpr)
 		return true
 	}
-	return false
+	return emitWhileIntrinsic(ctx, out, ii)
 }
 
 // resolveForInListOperand resolves a MIR operand in the for-in-list
@@ -13455,6 +13676,9 @@ func resolveForInListOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir
 	last := cp.Place.Projections[len(cp.Place.Projections)-1]
 	idxProj, isIndex := last.(*mir.IndexProj)
 	if !isIndex {
+		if expr, ty, ok := resolveWhileTupleProjectedOperand(ctx, out, cp.Place); ok {
+			return expr, ty, true
+		}
 		// Field projection: build a temp bindings map with stack locals
 		// materialised so the sequential resolver can see them.
 		tempBindings := forInListMaterialiseStack(ctx, out)
@@ -13463,6 +13687,9 @@ func resolveForInListOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir
 			return "", scalarUnknown, false
 		}
 		out.WriteString(prelude)
+		return expr, ty, true
+	}
+	if expr, ty, ok := resolveWhileMapIndexedOperand(ctx, out, cp.Place); ok {
 		return expr, ty, true
 	}
 	// Index projection: _iter[_idx].  Resolve both list ptr and index value
@@ -13516,8 +13743,20 @@ func forInListMaterialiseStack(ctx *whileLoopEmitCtx, out *strings.Builder) map[
 	return snap
 }
 
+func copyAggregateBindings(in map[mir.LocalID]aggregateBinding) map[mir.LocalID]aggregateBinding {
+	out := make(map[mir.LocalID]aggregateBinding, len(in))
+	for k, v := range in {
+		fields := append([]scalarType(nil), v.fields...)
+		out[k] = aggregateBinding{typeName: v.typeName, reg: v.reg, fields: fields}
+	}
+	return out
+}
+
 func emitForInListReturn(out *strings.Builder, fn *mir.Function, pat forInListPattern) error {
 	retLLVM := pat.retType.llvm()
+	if pat.returnsVoid {
+		retLLVM = "void"
+	}
 	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
 	for i, name := range pat.paramNames {
 		if i > 0 {
@@ -13551,7 +13790,11 @@ func emitForInListReturn(out *strings.Builder, fn *mir.Function, pat forInListPa
 	out.WriteString("\n")
 	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
 	out.WriteString(pat.exitBody)
-	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	if pat.returnsVoid {
+		out.WriteString("  ret void\n")
+	} else {
+		fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	}
 	out.WriteString("}\n\n")
 	return nil
 }
@@ -13754,7 +13997,14 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 	}
 
 	nextSSA := 0
-	ctx := &whileLoopEmitCtx{fn: fn, bindings: bindings, stack: stack, mctx: mctx, nextSSA: &nextSSA}
+	ctx := &whileLoopEmitCtx{
+		fn:         fn,
+		bindings:   bindings,
+		stack:      stack,
+		mctx:       mctx,
+		nextSSA:    &nextSSA,
+		aggregates: map[mir.LocalID]aggregateBinding{},
+	}
 
 	// Render entry block.
 	entryStr, ok := forInListBlock(ctx, entry)
@@ -13773,7 +14023,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 
 	// Render body block: element access + inner cond.
 	bodyCtxBindings := copyBindings(ctx.bindings)
-	bodyCtx := &whileLoopEmitCtx{fn: fn, bindings: bodyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	bodyCtx := &whileLoopEmitCtx{fn: fn, bindings: bodyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA, aggregates: copyAggregateBindings(ctx.aggregates)}
 	var bodyBuf strings.Builder
 	for _, instr := range body.Instrs {
 		if !forInListStep(bodyCtx, &bodyBuf, instr) {
@@ -13795,7 +14045,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 
 	// Render early-exit block.
 	earlyCtxBindings := copyBindings(ctx.bindings)
-	earlyCtx := &whileLoopEmitCtx{fn: fn, bindings: earlyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	earlyCtx := &whileLoopEmitCtx{fn: fn, bindings: earlyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA, aggregates: copyAggregateBindings(ctx.aggregates)}
 	var earlyBuf strings.Builder
 	for _, instr := range earlyExit.Instrs {
 		if !forInListStep(earlyCtx, &earlyBuf, instr) {
@@ -13812,7 +14062,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 
 	// Render false-prep block (connects body-false → post).
 	falsePrepCtxBindings := copyBindings(ctx.bindings)
-	falsePrepCtx := &whileLoopEmitCtx{fn: fn, bindings: falsePrepCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	falsePrepCtx := &whileLoopEmitCtx{fn: fn, bindings: falsePrepCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA, aggregates: copyAggregateBindings(ctx.aggregates)}
 	falsePrepStr, ok := forInListBlock(falsePrepCtx, falsePrep)
 	if !ok {
 		return pat, false
@@ -16130,6 +16380,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	}
 
 	blocks := genericBlockOrder(fn)
+	unreachableOnlyReturn := genericEntryOnlyReachesUnreachable(fn)
 	if !pat.returnsVoid && !genericHasReturnTerm(blocks) {
 		if exitID, localID, ok := genericInferListAccumulatorSyntheticReturn(fn, mctx); ok {
 			pat.syntheticReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
@@ -16140,7 +16391,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 				pat.syntheticReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
 			} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
-			} else {
+			} else if !unreachableOnlyReturn {
 				traceFail(9)
 				return pat, false
 			}
@@ -16167,7 +16418,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 					pat.syntheticStringCoalesces = map[mir.BlockID]mir.LocalID{exitID: optID}
 				} else if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 					pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
-				} else {
+				} else if !unreachableOnlyReturn {
 					traceFail(10)
 					return pat, false
 				}
@@ -16175,7 +16426,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		} else {
 			if exitID, pt, ok := genericInferXSyntheticReturn(fn, mctx, pat.retType); ok {
 				pat.syntheticXReturns = map[mir.BlockID]PayloadType{exitID: pt}
-			} else {
+			} else if !unreachableOnlyReturn {
 				traceFail(11)
 				return pat, false
 			}
@@ -18511,6 +18762,57 @@ func genericHasReturnTerm(blocks []*mir.BasicBlock) bool {
 		}
 	}
 	return false
+}
+
+func genericEntryOnlyReachesUnreachable(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	visiting := map[mir.BlockID]bool{}
+	proven := map[mir.BlockID]bool{}
+	var walk func(mir.BlockID) bool
+	walk = func(id mir.BlockID) bool {
+		if proven[id] {
+			return true
+		}
+		if visiting[id] {
+			return false
+		}
+		bb := blockByID(fn, id)
+		if bb == nil || bb.Term == nil {
+			return false
+		}
+		if _, ok := bb.Term.(*mir.UnreachableTerm); ok {
+			proven[id] = true
+			return true
+		}
+		visiting[id] = true
+		defer delete(visiting, id)
+		switch term := bb.Term.(type) {
+		case *mir.GotoTerm:
+			if !walk(term.Target) {
+				return false
+			}
+		case *mir.BranchTerm:
+			if !walk(term.Then) || !walk(term.Else) {
+				return false
+			}
+		case *mir.SwitchIntTerm:
+			if !walk(term.Default) {
+				return false
+			}
+			for _, c := range term.Cases {
+				if !walk(c.Target) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+		proven[id] = true
+		return true
+	}
+	return walk(fn.Entry)
 }
 
 func genericBlockOrder(fn *mir.Function) []*mir.BasicBlock {

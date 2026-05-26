@@ -100,6 +100,10 @@ func charConst(v rune) *mir.ConstOp {
 	return &mir.ConstOp{Const: &mir.CharConst{Value: v}, T: ir.TChar}
 }
 
+func unitConst() *mir.ConstOp {
+	return &mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit}
+}
+
 func paramCopy(id mir.LocalID, ty mir.Type) *mir.CopyOp {
 	return &mir.CopyOp{Place: mir.Place{Local: id}, T: ty}
 }
@@ -4344,6 +4348,63 @@ func TestStage0RejectsIndirectCall(t *testing.T) {
 	mustReject(t, trivialMainFn(), caller)
 }
 
+func TestStage0EmitsIndirectCallThroughFunctionParam(t *testing.T) {
+	t.Parallel()
+	fType := fnTy(ir.TInt, ir.TInt)
+	caller := makeMultiInstrFn(
+		"apply",
+		ir.TInt,
+		[]paramSpec{{name: "f", ty: fType}, {name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TInt}},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 3},
+				Callee: &mir.IndirectCall{Callee: paramCopy(1, fType)},
+				Args:   []mir.Operand{paramCopy(2, ir.TInt)},
+			},
+			assign(0, useRV(localCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"define i64 @apply(ptr %f, i64 %x)",
+		"%0 = call i64 %f(i64 %x)",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsIndirectVoidCallThroughFunctionParam(t *testing.T) {
+	t.Parallel()
+	fType := fnTy(ir.TUnit, ir.TString, ir.TInt)
+	caller := makeMultiInstrFn(
+		"visit",
+		ir.TUnit,
+		[]paramSpec{{name: "f", ty: fType}, {name: "name", ty: ir.TString}, {name: "n", ty: ir.TInt}},
+		nil,
+		[]mir.Instr{
+			&mir.CallInstr{
+				Callee: &mir.IndirectCall{Callee: paramCopy(1, fType)},
+				Args:   []mir.Operand{paramCopy(2, ir.TString), paramCopy(3, ir.TInt)},
+			},
+			assign(0, useRV(unitConst())),
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"define void @visit(ptr %f, ptr %name, i64 %n)",
+		"call void %f(ptr %name, i64 %n)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0EmitsDiscardedValueCall(t *testing.T) {
 	t.Parallel()
 	other := makeFn(fnSpec{
@@ -6589,6 +6650,71 @@ func TestStage0GenericCFGSwitchWithUnreachableDefault(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestStage0GenericCFGNonVoidSwitchAllPathsUnreachable(t *testing.T) {
+	t.Parallel()
+	errTy := &ir.NamedType{Name: "Error"}
+	resultTy := &ir.NamedType{Name: "Result", Builtin: true, Args: []ir.Type{ir.TString, errTy}}
+	fn := &mir.Function{
+		Name:        "resultStringUnreachableSwitch",
+		Params:      []mir.LocalID{1, 2},
+		ReturnType:  ir.TString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TString, IsReturn: true},
+			{ID: 1, Name: "self", Type: resultTy, IsParam: true},
+			{ID: 2, Name: "fallback", Type: ir.TString, IsParam: true},
+			{ID: 3, Name: "_scrut", Type: resultTy},
+			{ID: 4, Name: "", Type: ir.TInt},
+			{ID: 5, Name: "value", Type: ir.TString},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.StorageLiveInstr{Local: 3},
+					assign(3, useRV(paramCopy(1, resultTy))),
+					assign(4, &mir.DiscriminantRV{Place: mir.Place{Local: 3}, T: ir.TInt}),
+				},
+				Term: &mir.SwitchIntTerm{
+					Scrutinee: localCopy(4, ir.TInt),
+					Cases: []mir.SwitchCase{
+						{Value: 0, Target: 1},
+						{Value: 1, Target: 1},
+					},
+					Default: 6,
+				},
+			},
+			{
+				ID:     1,
+				Instrs: []mir.Instr{&mir.StorageDeadInstr{Local: 5}, &mir.StorageDeadInstr{Local: 3}},
+				Term:   &mir.UnreachableTerm{},
+			},
+			{ID: 2, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 3, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 4, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 5, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 6, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define ptr @resultStringUnreachableSwitch(ptr %self, ptr %fallback)",
+		"switch i64 %",
+		"i64 0, label %bb.1",
+		"i64 1, label %bb.1",
+		"bb.1:",
+		"unreachable",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_stage0_declined") {
+		t.Fatalf("emitted IR unexpectedly used a decline stub:\n%s", got)
 	}
 }
 
