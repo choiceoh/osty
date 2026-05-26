@@ -169,3 +169,25 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/scratch/osty"
           ./.bin/osty check examples/calc 2>&1 | tee "$RUNNER_TEMP/check.log"
+
+      - name: Run strict-mode backend tests against the bootstrapped osty-self
+        # Reviewer-flagged gap from PR #1998: 88 backend tests use
+        # `requireRealLLVMEmission`, which SKIPs when osty-self isn't
+        # cached. CI runs from a fresh clone with no osty-self until
+        # this workflow builds one — so the gated tests silently
+        # skipped in every PR's run, hiding any MIR-direct regression
+        # until manual users hit it.
+        #
+        # With osty-self now in cache (post-bootstrap above), set
+        # OSTY_REQUIRE_REAL_LLVM_EMISSION=1 to flip the gate from
+        # skip-on-missing to fail-on-missing AND actually run the
+        # tests against the bootstrapped artifact. Any
+        # `requireRealLLVMEmission`-gated test that fails surfaces
+        # as a CI failure on the introducing PR — same contract as
+        # the install-self gate this workflow already provides.
+        env:
+          OSTY_REQUIRE_REAL_LLVM_EMISSION: "1"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          go test -count=1 -short ./internal/backend/ 2>&1 | tee "$RUNNER_TEMP/strict-backend.log"
