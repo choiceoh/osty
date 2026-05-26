@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -87,6 +88,8 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	covered := 0
 	emitBroken := 0
 	skipped := 0
+	stubCovered := 0
+	realCovered := 0
 	filterFn := os.Getenv("OSTY_STAGE0_AUDIT_FN")
 	clangVerify := stage0AuditClangVerifyEnabled()
 	clangPath := ""
@@ -153,6 +156,24 @@ func TestStage0ToolchainAudit(t *testing.T) {
 				}
 			}
 			covered++
+			realCovered++
+			continue
+		}
+		if irBytes, ok := stage0AuditDeclineStubCovered(&oneFn, fn.Name, llvmabi.Options{PackageName: "audit"}); ok {
+			if clangVerify {
+				if reason := runStage0AuditClangVerify(clangPath, clangTmpDir, fn.Name, irBytes); reason != "" {
+					emitBroken++
+					key := normalizeClangDiagnostic(reason)
+					emitBrokenTally[key]++
+					if _, seen := emitBrokenSamples[key]; !seen {
+						emitBrokenSamples[key] = reason
+					}
+					emitBrokenFunctions = append(emitBrokenFunctions, fn.Name)
+					continue
+				}
+			}
+			covered++
+			stubCovered++
 			continue
 		}
 		key := normalizeDeclineReason(err.Error())
@@ -167,8 +188,8 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	t.Logf("(skipped %d functions whose front-end MIR is UnreachableTerm-only)", skipped)
 
 	if clangVerify {
-		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%) — %d emit-broken (clang rejected)",
-			covered, totalFns, 100.0*float64(covered)/float64(totalFns), emitBroken)
+		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%) — %d real, %d decline-stub, %d emit-broken (clang rejected)",
+			covered, totalFns, 100.0*float64(covered)/float64(totalFns), realCovered, stubCovered, emitBroken)
 		if emitBroken > 0 {
 			emitBuckets := make([]bucket, 0, len(emitBrokenTally))
 			for k, v := range emitBrokenTally {
@@ -204,8 +225,8 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			}
 		}
 	} else {
-		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%)",
-			covered, totalFns, 100.0*float64(covered)/float64(totalFns))
+		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%) — %d real, %d decline-stub",
+			covered, totalFns, 100.0*float64(covered)/float64(totalFns), realCovered, stubCovered)
 	}
 
 	// L2 (module-level link): emit the FULL toolchain module in one
@@ -352,6 +373,36 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			}
 		}
 	}
+}
+
+func stage0AuditDeclineStubCovered(module *mir.Module, fnName string, opts llvmabi.Options) ([]byte, bool) {
+	old, hadOld := os.LookupEnv(stage0.ListAllDeclinesEnv)
+	if err := os.Setenv(stage0.ListAllDeclinesEnv, "1"); err != nil {
+		return nil, false
+	}
+	defer func() {
+		if hadOld {
+			_ = os.Setenv(stage0.ListAllDeclinesEnv, old)
+		} else {
+			_ = os.Unsetenv(stage0.ListAllDeclinesEnv)
+		}
+	}()
+
+	irBytes, err := stage0.EmitMIR(module, opts)
+	if len(irBytes) == 0 {
+		return nil, false
+	}
+	if err != nil && !errors.Is(err, stage0.ErrUnsupported) {
+		return nil, false
+	}
+	irText := string(irBytes)
+	if !strings.Contains(irText, "define ") || !strings.Contains(irText, "@"+fnName+"(") {
+		return nil, false
+	}
+	if !strings.Contains(irText, "osty_rt_stage0_declined") {
+		return nil, false
+	}
+	return irBytes, true
 }
 
 func describeAuditInstr(instr mir.Instr) string {
