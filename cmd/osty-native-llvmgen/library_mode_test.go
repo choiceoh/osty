@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/osty/osty/internal/backend"
@@ -190,6 +191,64 @@ func TestQualifyExportedSymbolsForLibraryModeHandlesNilSafely(t *testing.T) {
 	}, "pkg")
 }
 
+func TestPruneLibraryModeFunctionsKeepsRequiredTransitiveCallees(t *testing.T) {
+	required := &mir.Function{
+		Name: "toolchain.frontCheckSourceToWireJson",
+		Blocks: []*mir.BasicBlock{{
+			Instrs: []mir.Instr{
+				&mir.CallInstr{Callee: &mir.FnRef{Symbol: "frontCheckSource"}},
+				&mir.AssignInstr{
+					Src: &mir.AggregateRV{
+						Fields: []mir.Operand{
+							&mir.ConstOp{Const: &mir.FnConst{Symbol: "frontRenderClosure"}},
+						},
+					},
+				},
+			},
+		}},
+	}
+	helper := &mir.Function{
+		Name: "frontCheckSource",
+		Blocks: []*mir.BasicBlock{{
+			Instrs: []mir.Instr{
+				&mir.CallInstr{Callee: &mir.FnRef{Symbol: "frontSerialize"}},
+			},
+		}},
+	}
+	closure := &mir.Function{Name: "frontRenderClosure"}
+	deep := &mir.Function{Name: "frontSerialize"}
+	dead := &mir.Function{Name: "frontUnused"}
+	entry := &backend.Entry{
+		MIR: &mir.Module{Functions: []*mir.Function{required, helper, closure, deep, dead}},
+	}
+
+	pruneLibraryModeFunctions(entry, []string{"toolchain.frontCheckSourceToWireJson", "toolchain.missing"})
+
+	got := libraryModeFunctionNames(entry)
+	want := []string{
+		"toolchain.frontCheckSourceToWireJson",
+		"frontCheckSource",
+		"frontRenderClosure",
+		"frontSerialize",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("functions after prune = %v, want %v", got, want)
+	}
+}
+
+func TestPruneLibraryModeFunctionsNoOpWithoutRequiredSymbols(t *testing.T) {
+	entry := &backend.Entry{
+		MIR: &mir.Module{Functions: []*mir.Function{
+			{Name: "a"},
+			{Name: "b"},
+		}},
+	}
+	pruneLibraryModeFunctions(entry, nil)
+	if got, want := libraryModeFunctionNames(entry), []string{"a", "b"}; !slices.Equal(got, want) {
+		t.Fatalf("functions after empty prune = %v, want %v", got, want)
+	}
+}
+
 func callSymbol(fn *mir.Function, blockIdx, instrIdx int) string {
 	if fn == nil || blockIdx >= len(fn.Blocks) || fn.Blocks[blockIdx] == nil {
 		return ""
@@ -207,4 +266,17 @@ func callSymbol(fn *mir.Function, blockIdx, instrIdx int) string {
 		return ""
 	}
 	return ref.Symbol
+}
+
+func libraryModeFunctionNames(entry *backend.Entry) []string {
+	if entry == nil || entry.MIR == nil {
+		return nil
+	}
+	out := make([]string, 0, len(entry.MIR.Functions))
+	for _, fn := range entry.MIR.Functions {
+		if fn != nil {
+			out = append(out, fn.Name)
+		}
+	}
+	return out
 }

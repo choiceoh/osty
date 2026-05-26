@@ -197,6 +197,38 @@ fn testLirProtoAggregateProjectionHelpers() {
     testing.assertEq(lirProjectionPathText(steps), ".inner.0")
     testing.assertEq(lirRenderIndices(lirProjectionPathIndices(steps)), "1, 0")
 }
+fn testLirProtoCanonicalizesMangledBuiltinMapType() {
+    testing.assertEq(lirCanonMangledBuiltinTypeName("_ZTSN4main3MapISsSsEE"), "Map<String, String>")
+    testing.assertEq(lirCanonMangledBuiltinTypeName("_ZTSN9toolchain3MapISslEE"), "Map<String, Int>")
+    testing.assertEq(lirCanonMangledBuiltinTypeName("_ZTSN4main4ListIN4main4CellEEE"), "List<Cell>")
+    testing.assertEq(lirMangledMethodOwnerBuiltinTypeName("_ZTSN4main3MapISsSsEE__keys"), "Map<String, String>")
+    testing.assertEq(lirCanonMangledBuiltinTypeName("_ZTSN4main4PairIlSsEE"), "")
+}
+fn testLirProtoMangledMapIndexProjectionUsesMapRuntime() {
+    let mut fn_ = lirTestFunction("_ZTSN4main3MapISsSsEE__keys", "String")
+    let m = lirTestAddParam(fn_, "m", "RawPtr")
+    let k = lirTestAddParam(fn_, "k", "String")
+    let entry = lirTestEntryBlock(fn_)
+    let value = mirOperandCopy(mirPlaceProject(mirPlace(m), mirIndexProjLocal(k, "String")), "String")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVUse(value), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_mangled_map.osty", ""), lirTestModule([fn_]))
+    testing.assert(!(lirLowerHasErrors(result)))
+    let ir = lirRenderModule(result.module)
+    assertLirContains(ir, "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)")
+    assertLirContains(ir, "call void @osty_rt_map_get_or_abort_string(")
+    testing.assert(!(strings.contains(ir, "osty_rt_list_get_string")))
+}
+fn testLirProtoMapGetScalarOptionIsBranchless() {
+    let lowered = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_map_get_branchless.osty", ""), lirParityBuildMapGetI64StringModule())
+    testing.assert(!(lirLowerHasErrors(lowered)))
+    let ir = lirRenderModule(lowered.module)
+    assertLirContains(ir, "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)")
+    assertLirContains(ir, "select i1")
+    testing.assert(!(strings.contains(ir, "map.get.some")))
+    testing.assert(!(strings.contains(ir, "map.get.none")))
+    testing.assert(!(strings.contains(ir, "map.get.end")))
+}
 fn testLirProtoProjectionFrameKeepsEachAggregateOperand() {
     let root = lirAggregateType("%Root")
     let middle = lirAggregateType("%Middle")

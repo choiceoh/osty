@@ -46,6 +46,7 @@ func TestShouldUseStage0BootstrapFallbackDetectsPartialOstySelf(t *testing.T) {
 		{"empty", nil, false},
 		{"missing", []error{errors.New("osty-self not found; run `osty build toolchain/`")}, true},
 		{"partial-stage0", []error{errors.New("native LIR Proto subprocess declined: osty-self: stage0 declined function: mirJsonParseValue")}, true},
+		{"timeout", []error{errors.New("osty-self lir-proto-lower-mir-json timed out after 3m20s")}, true},
 		{"unrelated", []error{errors.New("MIR payload requires the Osty-owned LIR Proto backend")}, false},
 	}
 	for _, c := range cases {

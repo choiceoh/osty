@@ -639,8 +639,8 @@ func TestSelfLowerTimeoutScalesWithMirJSONSize(t *testing.T) {
 	if got := selfLowerTimeout([]string{"lir-proto-lower-mir-json", small}, small); got != 20*time.Second {
 		t.Fatalf("small MIR timeout = %s, want 20s", got)
 	}
-	if got := selfLowerTimeout([]string{"lir-proto-lower-mir-json", large}, large); got != 35*time.Second {
-		t.Fatalf("large MIR timeout = %s, want 35s", got)
+	if got := selfLowerTimeout([]string{"lir-proto-lower-mir-json", large}, large); got != 65*time.Second {
+		t.Fatalf("large MIR timeout = %s, want 65s", got)
 	}
 	if got := selfLowerTimeout([]string{"lir-proto-lower", large}, large); got != 20*time.Second {
 		t.Fatalf("source timeout = %s, want 20s", got)

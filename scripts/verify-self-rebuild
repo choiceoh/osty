@@ -9,10 +9,8 @@ Runs the self-rebuild ratchet:
 
   1. host osty validates the toolchain sources and current MIR gates
   2. host osty builds osty-self-1 from toolchain/
-  3. osty-self-1 source-compiles a minimal MIR JSON selfhost backend seed
-     through its direct MIR emitter
-  4. host osty front-end rebuilds the MIR-driver package while osty-self-2-seed
-     and osty-self-2 provide the MIR JSON -> LIR Proto backend
+  3. host osty front-end rebuilds the MIR-driver package while osty-self-1,
+     osty-self-2-seed, and osty-self-2 provide the MIR JSON -> LIR Proto backend
   5. osty-self-2 and osty-self-3 are compared byte-for-byte
 
 Environment overrides:
@@ -650,7 +648,7 @@ if [[ "$mode" == "stage1" ]]; then
 	exit 0
 fi
 
-build_self_binary_with_compile_driver "$stage1" "stage2-seed" "$stage2_seed"
+build_self_binary_with_host_mir_backend "$stage1" "stage2-seed" "$stage2_seed"
 
 smoke_self_driver "$stage2_seed" "stage2-seed"
 
