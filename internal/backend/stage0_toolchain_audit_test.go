@@ -75,6 +75,8 @@ func TestStage0ToolchainAudit(t *testing.T) {
 		count int
 	}
 	tally := map[string]int{}
+	stubTally := map[string]int{}
+	stubSamples := map[string][]string{}
 	emitBrokenTally := map[string]int{}
 	emitBrokenSamples := map[string]string{} // first sample per fingerprint
 	emitBrokenFunctions := []string{}        // names that emitted but clang rejected
@@ -91,6 +93,15 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	stubCovered := 0
 	realCovered := 0
 	filterFn := os.Getenv("OSTY_STAGE0_AUDIT_FN")
+	logStubDeclines := os.Getenv("OSTY_STAGE0_AUDIT_STUBS") != ""
+	logStubSamples := os.Getenv("OSTY_STAGE0_AUDIT_STUB_SAMPLES") != ""
+	stubSampleLimit := 5
+	if raw := os.Getenv("OSTY_STAGE0_AUDIT_STUB_SAMPLE_LIMIT"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			stubSampleLimit = parsed
+		}
+	}
+	stubSamplesLogged := 0
 	clangVerify := stage0AuditClangVerifyEnabled()
 	clangPath := ""
 	clangTmpDir := ""
@@ -174,6 +185,37 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			}
 			covered++
 			stubCovered++
+			if logStubDeclines {
+				key := normalizeDeclineReason(err.Error())
+				if key == "no matching pattern" {
+					key = fingerprintFn(fn)
+				}
+				stubTally[key]++
+				if len(stubSamples[key]) < 8 {
+					stubSamples[key] = append(stubSamples[key], fn.Name)
+				}
+				if logStubSamples && stubSamplesLogged < stubSampleLimit {
+					stubSamplesLogged++
+					t.Logf("---- decline-stub sample %q [%s] ----", fn.Name, key)
+					t.Logf("  decline=%v", err)
+					t.Logf("  ReturnLocal=%d Params=%v", fn.ReturnLocal, fn.Params)
+					for _, l := range fn.Locals {
+						if l == nil {
+							continue
+						}
+						t.Logf("  local#%d name=%q isParam=%v type=%T %v", l.ID, l.Name, l.IsParam, l.Type, l.Type)
+					}
+					for _, bb := range fn.Blocks {
+						if bb == nil {
+							continue
+						}
+						t.Logf("  bb id=%d term=%T %s instrs=%d", bb.ID, bb.Term, describeAuditTerm(bb.Term), len(bb.Instrs))
+						for _, instr := range bb.Instrs {
+							t.Logf("    %s", describeAuditInstr(instr))
+						}
+					}
+				}
+			}
 			continue
 		}
 		key := normalizeDeclineReason(err.Error())
@@ -227,6 +269,25 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	} else {
 		t.Logf("toolchain stage0 audit: %d / %d functions covered (%.1f%%) — %d real, %d decline-stub",
 			covered, totalFns, 100.0*float64(covered)/float64(totalFns), realCovered, stubCovered)
+	}
+	if logStubDeclines {
+		stubBuckets := make([]bucket, 0, len(stubTally))
+		for k, v := range stubTally {
+			stubBuckets = append(stubBuckets, bucket{k, v})
+		}
+		sort.Slice(stubBuckets, func(i, j int) bool {
+			if stubBuckets[i].count != stubBuckets[j].count {
+				return stubBuckets[i].count > stubBuckets[j].count
+			}
+			return stubBuckets[i].key < stubBuckets[j].key
+		})
+		t.Logf("decline-stub reasons:")
+		for _, b := range stubBuckets {
+			t.Logf("  %4d  %s", b.count, b.key)
+			if samples := stubSamples[b.key]; len(samples) > 0 {
+				t.Logf("        samples: %s", strings.Join(samples, ", "))
+			}
+		}
 	}
 
 	// L2 (module-level link): emit the FULL toolchain module in one
@@ -857,7 +918,7 @@ func runStage0AuditModuleVerify(t *testing.T, module *mir.Module, clangPath stri
 		// continue with the partial IR if any was produced — the
 		// remaining functions are still worth clang-verifying.
 		short := strings.TrimSpace(err.Error())
-		if len(short) > 400 {
+		if os.Getenv("OSTY_STAGE0_AUDIT_MODULE_DECLINES_FULL") == "" && len(short) > 400 {
 			short = short[:400] + "…"
 		}
 		t.Logf("module-verify: stage0 reports declines (partial IR continues): %s", short)
