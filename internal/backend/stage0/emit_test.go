@@ -6987,6 +6987,26 @@ func undecidableFn(name string) *mir.Function {
 	}
 }
 
+func undecidableCallbackParamFn(name string) *mir.Function {
+	callback := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TUnit}
+	return &mir.Function{
+		Name:        name,
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TUnit,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
+			{ID: 1, Name: "callback", Type: callback, IsParam: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{{
+			ID:     0,
+			Instrs: []mir.Instr{},
+			Term:   &mir.GotoTerm{Target: 0},
+		}},
+	}
+}
+
 func TestStage0DefaultStopsAtFirstDecline(t *testing.T) {
 	// Cannot use t.Parallel — we touch the env var.
 	t.Setenv(ListAllDeclinesEnv, "")
@@ -7034,6 +7054,29 @@ func TestStage0ListAllDeclinesAggregatesAcrossModule(t *testing.T) {
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("aggregated diagnostic missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestStage0ListAllDeclinesStubsFunctionValueParams(t *testing.T) {
+	// Cannot use t.Parallel — we touch the env var.
+	t.Setenv(ListAllDeclinesEnv, "1")
+
+	got, err := EmitMIR(moduleWith(trivialMainFn(), undecidableCallbackParamFn("with_callback")), llvmabi.Options{PackageName: "main"})
+	if err == nil {
+		t.Fatal("expected aggregated error")
+	}
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"define void @with_callback(ptr %p0)",
+		"call void @osty_rt_stage0_declined(",
+		"unreachable",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("decline stub missing %q:\n%s", want, text)
 		}
 	}
 }

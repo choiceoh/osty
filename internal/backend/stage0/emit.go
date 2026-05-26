@@ -1415,6 +1415,9 @@ func scalarFromTypeInternal(t mir.Type, allowUserNamed bool) scalarType {
 			return scalarOpaquePtr
 		}
 	}
+	if _, ok := t.(*ir.FnType); ok {
+		return scalarOpaquePtr
+	}
 	if opt, ok := t.(*ir.OptionalType); ok && opt != nil {
 		return scalarOpaquePtr
 	}
