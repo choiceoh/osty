@@ -53,6 +53,10 @@ type PackageInput struct {
 	// Empty PackageName disables the rename (defensive: every
 	// production caller now derives Name via the package loader).
 	PackageName string `json:"packageName,omitempty"`
+	// RequiredSymbols optionally narrows LibraryMode emission to the exported
+	// symbols a consumer actually references plus their transitive private
+	// callees. Empty preserves the historical full-library behavior.
+	RequiredSymbols []string `json:"requiredSymbols,omitempty"`
 }
 
 type PackageFile struct {
@@ -127,12 +131,20 @@ func TryPackage(start, entryPath string, pkg *resolve.Package) ([]byte, bool, []
 // consumer binary without `_main` symbol collision. Used by the
 // cross-package dep `.o` compile path (PR-G2 cross-pkg link).
 func TryPackageLibrary(start, entryPath string, pkg *resolve.Package) ([]byte, bool, []error, error) {
+	return TryPackageLibraryForSymbols(start, entryPath, pkg, nil)
+}
+
+// TryPackageLibraryForSymbols is TryPackageLibrary with an optional reachable
+// symbol seed set. The subprocess keeps only these symbols and their local
+// callees when LibraryMode is enabled.
+func TryPackageLibraryForSymbols(start, entryPath string, pkg *resolve.Package, required []string) ([]byte, bool, []error, error) {
 	req, err := RequestFromPackage(entryPath, pkg)
 	if err != nil {
 		return nil, false, nil, err
 	}
 	if req.Package != nil {
 		req.Package.LibraryMode = true
+		req.Package.RequiredSymbols = append([]string(nil), required...)
 	}
 	resp, err := Run(start, req)
 	if err != nil {

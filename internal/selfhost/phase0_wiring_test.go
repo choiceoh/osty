@@ -577,10 +577,10 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 	}
 }
 
-// TestSelfhostDoctorRunsSourceProbe pins the `--selfhost-doctor`
-// source probe so the status cannot drift back to a text-only Phase 0
-// claim while the real LIR Proto path regresses underneath it.
-func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
+// TestSelfhostDoctorRunsBackendProbe pins the `--selfhost-doctor`
+// backend probe so the status cannot drift back to a text-only Phase 0
+// claim while the real MIR JSON -> LIR Proto path regresses underneath it.
+func TestSelfhostDoctorRunsBackendProbe(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -603,12 +603,14 @@ func TestSelfhostDoctorRunsSourceProbe(t *testing.T) {
 		"lirLowerMirModule(",
 		"lirRenderModule(",
 		"mirJsonParseModule(raw)",
+		"selfhostMirProbeError",
+		"lirLowerMirModuleListsInto(",
 		"LLVM IR renderer produced no return instruction",
 		"selfRebuildBundleSource",
 		"selfRebuildRunClang",
-		"osty-self source compiler: enabled",
+		"osty-self MIR JSON backend: enabled",
 		"osty-self self-rebuild probe: OK",
-		"osty-self self-rebuild driver: source bundle -> clang object/runtime link",
+		"osty-self self-rebuild driver: MIR JSON backend -> clang object/runtime link",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Errorf("doctor probe missing %q", needle)

@@ -556,7 +556,7 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 		// `osty-self` makes the subprocess the production fast lane.
 		var extraObjects []string
 		if emitMode == backend.EmitBinary {
-			extraObjects = buildCrossPkgDepObjects(context.Background(), root, m, eng, lower, resolved, feats, layout)
+			extraObjects = buildCrossPkgDepObjects(context.Background(), root, m, eng, lower, resolved, feats, layout, entryAbs)
 		}
 		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, features, linkLibraries, extraObjects, entryAbs, pkg); usedExternal {
 			if err != nil {

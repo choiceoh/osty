@@ -410,9 +410,9 @@ fn selfhostProbeError() -> String {
     ""
 }
 fn selfhostDoctorProbeError(exe: String) -> String {
-    let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
-    let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
-    if writeErr != "" {
+	let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
+	let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
+	if writeErr != "" {
         return "write probe failed: " + writeErr
     }
     let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", {:}, 0) {
@@ -440,14 +440,86 @@ fn selfhostDoctorProbeError(exe: String) -> String {
     }
     if strings.contains(irText, "body omitted") || strings.contains(irText, "function bodies stubbed") {
         return "LLVM IR renderer still reports stubbed function bodies"
+	}
+	""
+}
+fn selfhostMirProbeJson() -> String {
+	r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "main",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [
+        {"id": 0, "name": "ret", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "isReturn": true}
+      ],
+      "blocks": [
+        {
+          "id": 0,
+          "instrs": [
+            {
+              "kind": "assign",
+              "dest": {"local": 0},
+              "src": {
+                "kind": "use",
+                "op": {
+                  "kind": "const",
+                  "type": {"kind": "prim", "display": "Int", "prim": "Int"},
+                  "const": {"kind": "int", "type": {"kind": "prim", "display": "Int", "prim": "Int"}, "int": 42}
+                }
+              }
+            }
+          ],
+          "term": {"kind": "return"}
+        }
+      ]
     }
-    ""
+  ]
+}
+"""
+}
+fn selfhostMirProbeError() -> String {
+	let mut mir = mirModule("main")
+	match mirJsonParseModuleInto(selfhostMirProbeJson(), mir) {
+		Ok(_) -> {
+		},
+		Err(e) -> {
+			return e
+		},
+	}
+	let checkedMir = mirModuleWithPackageName("main", mir)
+	let mirErrs = mirValidateModule(checkedMir)
+	if mirErrs.len() != 0 {
+		return "MIR validation failed: " + strings.join(mirErrs, "; ")
+	}
+	let cfg = lirLowerConfig("main", "<selfhost-mir-doctor>", "")
+	let lowerStringPoolEntries: List<LirStringGlobal> = []
+	let lowerOut = lirModuleWithStringPoolEntries("main", "<selfhost-mir-doctor>", "", lowerStringPoolEntries)
+	let lowerDiagnostics: List<LirDiagnostic> = []
+	lirLowerMirModuleListsInto(cfg, lowerStringPoolEntries, "main", checkedMir.functions, checkedMir.globals, checkedMir.uses, checkedMir.layouts, checkedMir.span, lowerOut, lowerDiagnostics)
+	if lowerDiagnostics.len() != 0 {
+		return lirDiagnosticRender(lowerDiagnostics[0])
+	}
+	let irText = lirRenderModule(lowerOut)
+	if irText.len() == 0 {
+		return "LLVM IR renderer returned empty output"
+	}
+	if !strings.contains(irText, "define") {
+		return "LLVM IR renderer produced no function definition"
+	}
+	if !strings.contains(irText, "ret ") {
+		return "LLVM IR renderer produced no return instruction"
+	}
+	""
 }
 fn runSelfhostDoctor() -> Int {
-    let exe = currentExecutable()
-    if exe == "" {
-        eprint("osty-self self-rebuild probe failed: executable not found\n")
-        return 2
+	let exe = currentExecutable()
+	if exe == "" {
+		eprint("osty-self self-rebuild probe failed: executable not found\n")
+		return 2
     }
     let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
     let mut probeError = ""
@@ -480,16 +552,25 @@ fn runSelfhostDoctor() -> Int {
                 probeError = "LLVM IR renderer still reports stubbed function bodies"
             }
         }
-    }
-    println("osty-self mode: self-rebuild")
-    println("osty-self host compiler: disabled")
-    if probeError != "" {
-        println("osty-self source compiler: disabled")
-        println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LIR Proto -> LLVM IR")
-        eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
-        return 1
-    }
-    println("osty-self source compiler: enabled")
+	}
+	println("osty-self mode: self-rebuild")
+	println("osty-self host compiler: disabled")
+	if probeError != "" {
+		println("osty-self source compiler: disabled")
+		let mirProbeError = selfhostMirProbeError()
+		if mirProbeError == "" {
+			println("osty-self MIR JSON backend: enabled")
+			println("osty-self pipeline: MIR JSON -> LIR Proto -> LLVM IR")
+			println("osty-self self-rebuild probe: OK")
+			println("osty-self self-rebuild driver: MIR JSON backend -> clang object/runtime link")
+			return 0
+		}
+		println("osty-self MIR JSON backend: disabled")
+		eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
+		eprint("osty-self MIR JSON probe failed: " + mirProbeError + "\n")
+		return 1
+	}
+	println("osty-self source compiler: enabled")
     println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LIR Proto -> LLVM IR")
     println("osty-self self-rebuild probe: OK")
     println("osty-self self-rebuild driver: source bundle -> clang object/runtime link")

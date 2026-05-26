@@ -21,6 +21,7 @@ var tryStage0Fallback = func(entry Entry, opts llvmabi.Options) ([]byte, error) 
 // own context.
 const ostySelfMissingSignal = "osty-self not found"
 const ostySelfStage0DeclinedSignal = "stage0 declined function:"
+const ostySelfTimeoutSignal = "timed out after"
 
 // IsOstySelfMissing reports whether any of the supplied subprocess warnings
 // carry the "osty-self not found" signal originating from
@@ -65,7 +66,9 @@ func ShouldUseStage0BootstrapFallback(warnings []error) bool {
 			continue
 		}
 		msg := w.Error()
-		if strings.Contains(msg, ostySelfMissingSignal) || strings.Contains(msg, ostySelfStage0DeclinedSignal) {
+		if strings.Contains(msg, ostySelfMissingSignal) ||
+			strings.Contains(msg, ostySelfStage0DeclinedSignal) ||
+			strings.Contains(msg, ostySelfTimeoutSignal) {
 			return true
 		}
 	}

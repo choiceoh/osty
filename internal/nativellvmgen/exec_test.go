@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 
@@ -115,6 +116,44 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 	}
 	if !req.Package.RuntimeCapability {
 		t.Fatal("runtime capability was not forwarded")
+	}
+}
+
+func TestTryPackageLibraryForSymbolsForwardsRequiredSymbols(t *testing.T) {
+	bin := buildFakeNativeLLVMGen(t)
+	capture := filepath.Join(t.TempDir(), "request.json")
+
+	t.Setenv(Env, bin)
+	t.Setenv("FAKE_NATIVE_LLVMGEN_CAPTURE", capture)
+	t.Setenv("FAKE_NATIVE_LLVMGEN_RESPONSE", `{"covered":true,"llvmIr":"define i64 @toolchain.frontCheckSourceToWireJson()"}`)
+
+	pkg := &resolve.Package{
+		Dir:  "/tmp/toolchain",
+		Name: "toolchain",
+		Files: []*resolve.PackageFile{
+			{Path: "/tmp/toolchain/check_json.osty", Source: []byte("pub fn frontCheckSourceToWireJson(source: String) -> String { \"\" }\n")},
+		},
+	}
+	required := []string{"toolchain.frontCheckSourceToWireJson", "toolchain.frontCheckPackageToWireJson"}
+
+	_, ok, _, err := TryPackageLibraryForSymbols(".", "/tmp/toolchain/check_json.osty", pkg, required)
+	if err != nil {
+		t.Fatalf("TryPackageLibraryForSymbols error: %v", err)
+	}
+	if !ok {
+		t.Fatal("covered = false, want true")
+	}
+
+	var req Request
+	decodeCapturedRequest(t, capture, &req)
+	if req.Package == nil {
+		t.Fatal("request package = nil")
+	}
+	if !req.Package.LibraryMode {
+		t.Fatal("LibraryMode = false, want true")
+	}
+	if !slices.Equal(req.Package.RequiredSymbols, required) {
+		t.Fatalf("RequiredSymbols = %v, want %v", req.Package.RequiredSymbols, required)
 	}
 }
 

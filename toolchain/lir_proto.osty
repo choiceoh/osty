@@ -5565,6 +5565,225 @@ fn lirContainerInnerArg(typeName: String, prefix: String) -> String {
     let inner = strings.trimPrefix(typeName, prefix)
     strings.trimSuffix(inner, ">")
 }
+struct LirMangledLengthParse {
+    text: String,
+    next: Int,
+    ok: Bool,
+}
+struct LirMangledTypeParse {
+    text: String,
+    next: Int,
+    ok: Bool,
+}
+fn lirMangledParseFail(pos: Int) -> LirMangledTypeParse {
+    LirMangledTypeParse {text: "", next: pos, ok: false}
+}
+fn lirMangledLengthParseFail(pos: Int) -> LirMangledLengthParse {
+    LirMangledLengthParse {text: "", next: pos, ok: false}
+}
+fn lirMangledDecimalDigit(unit: String) -> Int {
+    if unit == "0" {
+        return 0
+    }
+    if unit == "1" {
+        return 1
+    }
+    if unit == "2" {
+        return 2
+    }
+    if unit == "3" {
+        return 3
+    }
+    if unit == "4" {
+        return 4
+    }
+    if unit == "5" {
+        return 5
+    }
+    if unit == "6" {
+        return 6
+    }
+    if unit == "7" {
+        return 7
+    }
+    if unit == "8" {
+        return 8
+    }
+    if unit == "9" {
+        return 9
+    }
+    -1
+}
+fn lirParseMangledLengthSegment(text: String, pos: Int) -> LirMangledLengthParse {
+    if pos >= text.len() {
+        return lirMangledLengthParseFail(pos)
+    }
+    let mut i = pos
+    let mut n = 0
+    for i < text.len() {
+        let d = lirMangledDecimalDigit(strings.slice(text, i, i + 1))
+        if d < 0 {
+            break
+        }
+        n = (n * 10) + d
+        i = i + 1
+    }
+    if i == pos || n <= 0 || (i + n) > text.len() {
+        return lirMangledLengthParseFail(pos)
+    }
+    LirMangledLengthParse {text: strings.slice(text, i, i + n), next: i + n, ok: true}
+}
+fn lirMangledPrimitiveTypeCode(text: String, pos: Int) -> LirMangledTypeParse {
+    if pos >= text.len() {
+        return lirMangledParseFail(pos)
+    }
+    if (pos + 2) <= text.len() {
+        let two = strings.slice(text, pos, pos + 2)
+        if two == "Ss" {
+            return LirMangledTypeParse {text: "String", next: pos + 2, ok: true}
+        }
+        if two == "By" {
+            return LirMangledTypeParse {text: "Bytes", next: pos + 2, ok: true}
+        }
+    }
+    let unit = strings.slice(text, pos, pos + 1)
+    if unit == "l" {
+        return LirMangledTypeParse {text: "Int", next: pos + 1, ok: true}
+    }
+    if unit == "a" {
+        return LirMangledTypeParse {text: "Int8", next: pos + 1, ok: true}
+    }
+    if unit == "s" {
+        return LirMangledTypeParse {text: "Int16", next: pos + 1, ok: true}
+    }
+    if unit == "i" {
+        return LirMangledTypeParse {text: "Int32", next: pos + 1, ok: true}
+    }
+    if unit == "x" {
+        return LirMangledTypeParse {text: "Int64", next: pos + 1, ok: true}
+    }
+    if unit == "h" {
+        return LirMangledTypeParse {text: "Byte", next: pos + 1, ok: true}
+    }
+    if unit == "t" {
+        return LirMangledTypeParse {text: "UInt16", next: pos + 1, ok: true}
+    }
+    if unit == "j" {
+        return LirMangledTypeParse {text: "UInt32", next: pos + 1, ok: true}
+    }
+    if unit == "y" {
+        return LirMangledTypeParse {text: "UInt64", next: pos + 1, ok: true}
+    }
+    if unit == "d" {
+        return LirMangledTypeParse {text: "Float", next: pos + 1, ok: true}
+    }
+    if unit == "f" {
+        return LirMangledTypeParse {text: "Float32", next: pos + 1, ok: true}
+    }
+    if unit == "b" {
+        return LirMangledTypeParse {text: "Bool", next: pos + 1, ok: true}
+    }
+    if unit == "w" {
+        return LirMangledTypeParse {text: "Char", next: pos + 1, ok: true}
+    }
+    if unit == "v" {
+        return LirMangledTypeParse {text: "Unit", next: pos + 1, ok: true}
+    }
+    lirMangledParseFail(pos)
+}
+fn lirDecodeMangledTypeCode(text: String, pos: Int) -> LirMangledTypeParse {
+    if pos >= text.len() {
+        return lirMangledParseFail(pos)
+    }
+    if strings.slice(text, pos, pos + 1) != "N" {
+        return lirMangledPrimitiveTypeCode(text, pos)
+    }
+    let scope = lirParseMangledLengthSegment(text, pos + 1)
+    if !(scope.ok) {
+        return lirMangledParseFail(pos)
+    }
+    let name = lirParseMangledLengthSegment(text, scope.next)
+    if !(name.ok) {
+        return lirMangledParseFail(pos)
+    }
+    let mut next = name.next
+    let mut args: List<String> = []
+    if next < text.len() && strings.slice(text, next, next + 1) == "I" {
+        next = next + 1
+        for next < text.len() && strings.slice(text, next, next + 1) != "E" {
+            let arg = lirDecodeMangledTypeCode(text, next)
+            if !(arg.ok) || arg.next <= next {
+                return lirMangledParseFail(pos)
+            }
+            args.push(arg.text)
+            next = arg.next
+        }
+        if next >= text.len() || strings.slice(text, next, next + 1) != "E" {
+            return lirMangledParseFail(pos)
+        }
+        next = next + 1
+    }
+    if next >= text.len() || strings.slice(text, next, next + 1) != "E" {
+        return lirMangledParseFail(pos)
+    }
+    next = next + 1
+    let rendered = if args.len() == 0 {
+        name.text
+    } else {
+        name.text + "<" + strings.join(args, ", ") + ">"
+    }
+    LirMangledTypeParse {text: rendered, next, ok: true}
+}
+fn lirDecodedMangledBuiltinSurface(text: String) -> Bool {
+    strings.startsWith(text, "List<") || strings.startsWith(text, "Map<") || strings.startsWith(text, "Set<") ||
+        strings.startsWith(text, "Option<") || strings.startsWith(text, "Maybe<") || strings.startsWith(text, "Result<") ||
+        strings.startsWith(text, "Tuple<")
+}
+fn lirCanonMangledBuiltinTypeName(name: String) -> String {
+    let prefix = "_ZTS"
+    if !(strings.startsWith(name, prefix)) {
+        return ""
+    }
+    let decoded = lirDecodeMangledTypeCode(name, prefix.len())
+    if !(decoded.ok) || decoded.next != name.len() {
+        return ""
+    }
+    if !(lirDecodedMangledBuiltinSurface(decoded.text)) {
+        return ""
+    }
+    decoded.text
+}
+fn lirMangledMethodOwnerBuiltinTypeName(fnName: String) -> String {
+    let parts = strings.split(fnName, "__")
+    if parts.len() < 2 {
+        return ""
+    }
+    let owner = parts[0]
+    let decoded = lirCanonMangledBuiltinTypeName(owner)
+    if decoded != "" {
+        return decoded
+    }
+    if lirDecodedMangledBuiltinSurface(owner) {
+        return owner
+    }
+    ""
+}
+fn lirTypeNameLooksOpaqueProjectionRef(typeName: String) -> Bool {
+    typeName == "" || typeName == "RawPtr" || typeName == "ptr"
+}
+fn lirMapProjectionReceiverTypeName(l: LirMirFunctionLowerer, currentTypeName: String) -> String {
+    if lirMapKeyTypeName(l, currentTypeName) != "" {
+        return currentTypeName
+    }
+    if !(lirTypeNameLooksOpaqueProjectionRef(currentTypeName)) {
+        return ""
+    }
+    let owner = lirMangledMethodOwnerBuiltinTypeName(l.fn_.name)
+    if owner != "" && lirMapKeyTypeName(l, owner) != "" {
+        return owner
+    }
+    ""
+}
 // lirCanonBuiltinTypeName re-associates a monomorphized builtin-generic
 // struct with its surface form. `OSTY_STDLIB_BODY_LOWER` injects
 // `List<T>` / `Map<K,V>` / `Set<T>` as generic struct templates so the
@@ -5581,6 +5800,17 @@ fn lirCanonBuiltinTypeName(l: LirMirFunctionLowerer, name: String) -> String {
     }
     let layout = lirFindMirStructLayout(l, name)
     if layout.builtinSource == "" {
+        let decoded = lirCanonMangledBuiltinTypeName(name)
+        if decoded != "" {
+            return decoded
+        }
+        return name
+    }
+    if layout.builtinSourceArgs.len() == 0 {
+        let decoded = lirCanonMangledBuiltinTypeName(name)
+        if decoded != "" {
+            return decoded
+        }
         return name
     }
     layout.builtinSource + "<" + strings.join(layout.builtinSourceArgs, ", ") + ">"
@@ -6366,28 +6596,45 @@ fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     l.instrs.push(lirAlloca(outSlot, valueType, 0))
     let presentReg = lirFresh(l)
     l.instrs.push(lirCall(presentReg, lirIntType(1), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirPtrType(), outSlot)]))
-    let mergeSlot = lirFresh(l)
-    l.instrs.push(lirAlloca(mergeSlot, optType, 0))
-    let someLabel = lirFreshAuxLabel(l, "map.get.some")
-    let noneLabel = lirFreshAuxLabel(l, "map.get.none")
-    let endLabel = lirFreshAuxLabel(l, "map.get.end")
-    lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
+    if lirAggregateHasWidenedPayload(l.out, optType) || valueType.className == LirTypeAggregate {
+        let mergeSlot = lirFresh(l)
+        l.instrs.push(lirAlloca(mergeSlot, optType, 0))
+        let someLabel = lirFreshAuxLabel(l, "map.get.some")
+        let noneLabel = lirFreshAuxLabel(l, "map.get.none")
+        let endLabel = lirFreshAuxLabel(l, "map.get.end")
+        lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
+        let loaded = lirFresh(l)
+        l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
+        let someValue = lirEmitOptionSomeStruct(l, optType, lirOperand(valueType, loaded))
+        l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
+        lirCutBlockBr(l, endLabel)
+        l.currentBlockLabel = noneLabel
+        let noneValue = lirEmitOptionNone(l, optType)
+        l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
+        lirCutBlockBr(l, endLabel)
+        let merged = lirFresh(l)
+        l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+        lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "map.get result")
+        return
+    }
+    if valueType.className == LirTypePtr {
+        l.instrs.push(lirStore(lirOperand(valueType, "null"), outSlot, 0))
+    } else if valueType.className == LirTypeInt {
+        l.instrs.push(lirStore(lirOperand(valueType, "0"), outSlot, 0))
+    } else if valueType.className == LirTypeFloat {
+        l.instrs.push(lirStore(lirOperand(valueType, "0.000000e+00"), outSlot, 0))
+    }
     let loaded = lirFresh(l)
     l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
-    let someValue = if lirAggregateHasWidenedPayload(l.out, optType) {
-        lirEmitOptionSomeStruct(l, optType, lirOperand(valueType, loaded))
-    } else {
-        let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
-        lirEmitOptionSome(l, optType, payloadI64)
-    }
-    l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
-    lirCutBlockBr(l, endLabel)
-    l.currentBlockLabel = noneLabel
-    let noneValue = lirEmitOptionNone(l, optType)
-    l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
-    lirCutBlockBr(l, endLabel)
+    let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
+    let discReg = lirFresh(l)
+    l.instrs.push(lirSelect(discReg, lirIntType(64), presentReg, "0", "1"))
+    let payloadReg = lirFresh(l)
+    l.instrs.push(lirSelect(payloadReg, lirIntType(64), presentReg, payloadI64, "0"))
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), discReg), [0]))
     let merged = lirFresh(l)
-    l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+    l.instrs.push(lirInsertValue(merged, optType, step, lirOperand(lirIntType(64), payloadReg), [1]))
     lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "map.get result")
 }
 // `List.first()` / `List.last() -> Option<T>` lowering. Runtime has no
@@ -8760,8 +9007,8 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
     if op.kind == MirOpCopy || op.kind == MirOpMove {
         let place = op.place
         let slot = lirMirLocalSlotFrom(l.slots, place.local, 0)
+        let loc = mirFunctionLocal(l.fn_, place.local)
         if slot.slot == "" {
-            let loc = mirFunctionLocal(l.fn_, place.local)
             if loc.id < 0 {
                 lirLowerError(l, LirDiagInvalidInput, "local out of range: " + lirIntToString(place.local), "local")
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
@@ -8775,6 +9022,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
         let loadedName = lirFresh(l)
         instrs.push(lirLoad(loadedName, slot.typ, slot.slot, 0))
         let mut current = LirOperand {typ: slot.typ, value: loadedName}
+        let mut currentTypeName = loc.typ
         for proj in place.projections {
             let step = lirProjectionStepFromMir(l, proj)
             if step.kind == LirProjInvalid {
@@ -8782,10 +9030,16 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
             }
             if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
-                current = lirLowerMirIndexProjection(l, instrs, current, proj)
+                let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
+                if mapTypeName != "" {
+                    current = lirLowerMirMapIndexProjection(l, instrs, current, mapTypeName, proj)
+                } else {
+                    current = lirLowerMirIndexProjection(l, instrs, current, proj)
+                }
                 if current.value == "" {
                     return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
                 }
+                currentTypeName = proj.typ
                 continue
             }
             if current.typ.className != LirTypeAggregate {
@@ -8794,6 +9048,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 // + literal eq).
                 if lirStringEq(current.typ.llvm, "") {
                     current = LirOperand {typ: step.typ, value: current.value}
+                    currentTypeName = proj.typ
                     continue
                 }
                 // R3 brick 20: i64 current.typ (brick 5 alloca'd
@@ -8812,6 +9067,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 // 와 무관 — revert 후에도 동일 wall (다른 path).
                 if lirStringEq(current.typ.llvm, "i64") && lirStringEq(step.typ.llvm, "i64") {
                     current = LirOperand {typ: step.typ, value: current.value}
+                    currentTypeName = proj.typ
                     continue
                 }
                 // R3 brick 22 (PR #1909 review feedback follow-up):
@@ -8828,12 +9084,14 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                         let castName = lirFresh(l)
                         instrs.push(lirCast(castName, "inttoptr", current, step.typ))
                         current = LirOperand {typ: step.typ, value: castName}
+                        currentTypeName = proj.typ
                         continue
                     }
                     if step.typ.className == LirTypeInt {
                         let castName = lirFresh(l)
                         instrs.push(lirCast(castName, "trunc", current, step.typ))
                         current = LirOperand {typ: step.typ, value: castName}
+                        currentTypeName = proj.typ
                         continue
                     }
                     if step.typ.className == LirTypeAggregate {
@@ -8843,6 +9101,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                         let merged = lirEmitAlgebraicI64(l, step.typ, 0, current.value, "projection.i64.wrap")
                         if !lirStringEq(merged, "undef") {
                             current = LirOperand {typ: step.typ, value: merged}
+                            currentTypeName = proj.typ
                             continue
                         }
                     }
@@ -8854,6 +9113,7 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
             instrs.push(lirExtractValue(projectedName, current.typ, current.value, [step.index]))
             let finalName = lirMaybeNarrowAlgebraicPayload(l, current.typ, projectedName, step)
             current = LirOperand {typ: step.typ, value: finalName}
+            currentTypeName = proj.typ
         }
         return current
     }
@@ -8915,12 +9175,13 @@ fn lirHintOrDefaultFloatType(hint: LirType) -> LirType {
 }
 // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
 fn lirLoadMirPlace(l: LirMirFunctionLowerer, place: MirPlace) -> LirOperand {
-    let base = lirLoadMirLocal(l, place.local)
-    if place.projections.len() == 0 {
-        return base
-    }
-    let projected = lirProjectMirOperand(l, base, place.projections)
-    projected
+	let base = lirLoadMirLocal(l, place.local)
+	if place.projections.len() == 0 {
+		return base
+	}
+	let loc = mirFunctionLocal(l.fn_, place.local)
+	let projected = lirProjectMirOperand(l, base, loc.typ, place.projections)
+	projected
 }
 fn lirLoadMirLocal(l: LirMirFunctionLowerer, id: Int) -> LirOperand {
     let slot = lirMirLocalSlot(l, id)
@@ -8942,31 +9203,39 @@ fn lirLoadMirLocal(l: LirMirFunctionLowerer, id: Int) -> LirOperand {
     l.instrs.push(lirLoad(dest, slot.typ, slot.slot, 0))
     LirOperand {typ: slot.typ, value: dest}
 }
-fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, projections: List<MirProjection>) -> LirOperand {
-    let mut current = value
-    for proj in projections {
-        let step = lirProjectionStepFromMir(l, proj)
-        if step.kind == LirProjInvalid {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection `" + mirProjectionKindName(proj.kind) + "`", "projection." + mirProjectionKindName(proj.kind))
-            return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
-        }
-        if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
-            current = lirLowerMirIndexProjection(l, l.instrs, current, proj)
-            if current.value == "" {
-                return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
-            }
-            continue
-        }
-        if current.typ.className != LirTypeAggregate {
-            lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
-            return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
+fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, rootTypeName: String, projections: List<MirProjection>) -> LirOperand {
+	let mut current = value
+	let mut currentTypeName = rootTypeName
+	for proj in projections {
+		let step = lirProjectionStepFromMir(l, proj)
+		if step.kind == LirProjInvalid {
+			lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection `" + mirProjectionKindName(proj.kind) + "`", "projection." + mirProjectionKindName(proj.kind))
+			return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
+		}
+		if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
+			let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
+			if mapTypeName != "" {
+				current = lirLowerMirMapIndexProjection(l, l.instrs, current, mapTypeName, proj)
+			} else {
+				current = lirLowerMirIndexProjection(l, l.instrs, current, proj)
+			}
+			if current.value == "" {
+				return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
+			}
+			currentTypeName = proj.typ
+			continue
+		}
+		if current.typ.className != LirTypeAggregate {
+			lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
+			return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
         }
         let dest = lirFresh(l)
-        l.instrs.push(lirExtractValue(dest, current.typ, current.value, [step.index]))
-        let finalName = lirMaybeNarrowAlgebraicPayload(l, current.typ, dest, step)
-        current = LirOperand {typ: step.typ, value: finalName}
-    }
-    current
+		l.instrs.push(lirExtractValue(dest, current.typ, current.value, [step.index]))
+		let finalName = lirMaybeNarrowAlgebraicPayload(l, current.typ, dest, step)
+		current = LirOperand {typ: step.typ, value: finalName}
+		currentTypeName = proj.typ
+	}
+	current
 }
 
 fn lirMaybeNarrowAlgebraicPayload(l: LirMirFunctionLowerer, aggregateType: LirType, rawValue: String, step: LirProjectionStep) -> String {
@@ -8999,9 +9268,9 @@ fn lirTypeIsDefaultI64AlgebraicPayload(out: LirModule, typ: LirType) -> Bool {
 }
 
 fn lirLowerMirIndexProjection(l: LirMirFunctionLowerer, instrs: List<LirInstr>, listValue: LirOperand, proj: MirProjection) -> LirOperand {
-    let elemName = proj.typ
-    let elemType = lirLowerMirType(l, elemName)
-    if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+	let elemName = proj.typ
+	let elemType = lirLowerMirType(l, elemName)
+	if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
         lirLowerError(l, LirDiagUnsupported, "index projection element type `" + elemName + "` is not implemented", "projection.index")
         return lirOperandInvalid()
     }
@@ -9023,14 +9292,52 @@ fn lirLowerMirIndexProjection(l: LirMirFunctionLowerer, instrs: List<LirInstr>, 
     let symbol = mirRtListGetBytesV1Symbol()
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirIntType(64), lirPtrType(), lirIntType(64)], false))
     instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), listValue.value), lirOperand(lirIntType(64), idx.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
-    let loaded = lirFresh(l)
-    instrs.push(lirLoad(loaded, elemType, slot, 0))
-    return lirOperand(elemType, loaded)
+	let loaded = lirFresh(l)
+	instrs.push(lirLoad(loaded, elemType, slot, 0))
+	return lirOperand(elemType, loaded)
+}
+
+fn lirLowerMirMapIndexProjection(l: LirMirFunctionLowerer, instrs: List<LirInstr>, mapValue: LirOperand, mapTypeName: String, proj: MirProjection) -> LirOperand {
+	let keyName = lirMapKeyTypeName(l, mapTypeName)
+	if keyName == "" {
+		lirLowerError(l, LirDiagUnsupported, "map index projection could not extract key type from `" + mapTypeName + "`", "projection.index")
+		return lirOperandInvalid()
+	}
+	let keyLir = lirContainerElemLaneType(keyName)
+	if lirTypeIsZero(keyLir) || lirTypeIsVoid(keyLir) {
+		lirLowerError(l, LirDiagUnsupported, "map index key type `" + keyName + "` has no runtime ABI lane", "projection.index")
+		return lirOperandInvalid()
+	}
+	let valueName = proj.typ
+	let mut valueType = lirContainerElemLaneType(valueName)
+	if lirTypeIsZero(valueType) {
+		valueType = lirLowerMirType(l, valueName)
+	}
+	if lirTypeIsZero(valueType) || lirTypeIsVoid(valueType) {
+		lirLowerError(l, LirDiagUnsupported, "map index value type `" + valueName + "` has no MIR layout", "projection.index")
+		return lirOperandInvalid()
+	}
+	let key = lirLowerMirIndexProjectionIndex(l, instrs, proj)
+	if key.value == "" {
+		return lirOperandInvalid()
+	}
+	let coercedKey = lirCoerceValueToType(l, key, keyName, keyName, keyLir, "map index key")
+	if coercedKey.value == "" {
+		return lirOperandInvalid()
+	}
+	let slot = lirFresh(l)
+	instrs.push(lirAlloca(slot, valueType, 0))
+	let symbol = mirRtMapSymbol("get_or_abort_" + llvmMapKeySuffix(keyLir.llvm, lirContainerElemIsString(keyName)))
+	lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), keyLir, lirPtrType()], false))
+	instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), mapValue.value), lirOperand(keyLir, coercedKey.value), lirOperand(lirPtrType(), slot)]))
+	let loaded = lirFresh(l)
+	instrs.push(lirLoad(loaded, valueType, slot, 0))
+	return lirOperand(valueType, loaded)
 }
 
 fn lirLowerMirIndexProjectionIndex(l: LirMirFunctionLowerer, instrs: List<LirInstr>, proj: MirProjection) -> LirOperand {
-    if proj.indexLocal >= 0 {
-        let slot = lirMirLocalSlot(l, proj.indexLocal)
+	if proj.indexLocal >= 0 {
+		let slot = lirMirLocalSlot(l, proj.indexLocal)
         if slot.slot == "" {
             lirLowerError(l, LirDiagLoweringBug, "index projection local has no LIR slot: " + lirIntToString(proj.indexLocal), "projection.index")
             return lirOperandInvalid()

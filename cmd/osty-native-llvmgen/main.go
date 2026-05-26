@@ -70,6 +70,7 @@ func run(stdin io.Reader, stdout io.Writer) error {
 		if req.Package.PackageName != "" {
 			qualifyExportedSymbolsForLibraryMode(&entry, req.Package.PackageName)
 		}
+		pruneLibraryModeFunctions(&entry, req.Package.RequiredSymbols)
 	}
 	ir, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(entry, "")
 	if err != nil {
@@ -301,6 +302,195 @@ func qualifyExportedSymbolsForLibraryMode(entry *backend.Entry, packageName stri
 					}
 				}
 			}
+		}
+	}
+}
+
+// pruneLibraryModeFunctions narrows a dependency library object to the symbols
+// the consumer actually references plus transitive same-package callees. This
+// lets large packages such as `toolchain` link the checker without requiring
+// every unrelated backend/test helper in the package to be LIR-Proto clean.
+func pruneLibraryModeFunctions(entry *backend.Entry, required []string) {
+	if entry == nil || entry.MIR == nil || len(required) == 0 {
+		return
+	}
+	byName := map[string]*mir.Function{}
+	for _, fn := range entry.MIR.Functions {
+		if fn != nil && fn.Name != "" {
+			byName[fn.Name] = fn
+		}
+	}
+	keep := map[string]bool{}
+	queue := make([]string, 0, len(required))
+	for _, sym := range required {
+		if _, ok := byName[sym]; ok && !keep[sym] {
+			keep[sym] = true
+			queue = append(queue, sym)
+		}
+	}
+	for len(queue) > 0 {
+		sym := queue[0]
+		queue = queue[1:]
+		fn := byName[sym]
+		if fn == nil {
+			continue
+		}
+		collectFunctionRefs(fn, func(ref string) {
+			if _, ok := byName[ref]; ok && !keep[ref] {
+				keep[ref] = true
+				queue = append(queue, ref)
+			}
+		})
+	}
+	if len(keep) == 0 {
+		return
+	}
+	filtered := entry.MIR.Functions[:0]
+	for _, fn := range entry.MIR.Functions {
+		if fn != nil && keep[fn.Name] {
+			filtered = append(filtered, fn)
+		}
+	}
+	entry.MIR.Functions = filtered
+}
+
+func collectFunctionRefs(fn *mir.Function, visit func(string)) {
+	if fn == nil || visit == nil {
+		return
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			collectInstrRefs(instr, visit)
+		}
+		collectTermRefs(bb.Term, visit)
+	}
+}
+
+func collectInstrRefs(instr mir.Instr, visit func(string)) {
+	switch x := instr.(type) {
+	case *mir.AssignInstr:
+		if x != nil {
+			collectRValueRefs(x.Src, visit)
+			collectPlaceRefs(x.Dest, visit)
+		}
+	case *mir.CallInstr:
+		if x != nil {
+			collectCalleeRefs(x.Callee, visit)
+			for _, arg := range x.Args {
+				collectOperandRefs(arg, visit)
+			}
+			if x.Dest != nil {
+				collectPlaceRefs(*x.Dest, visit)
+			}
+		}
+	case *mir.IntrinsicInstr:
+		if x != nil {
+			for _, arg := range x.Args {
+				collectOperandRefs(arg, visit)
+			}
+			if x.Dest != nil {
+				collectPlaceRefs(*x.Dest, visit)
+			}
+		}
+	}
+}
+
+func collectCalleeRefs(c mir.Callee, visit func(string)) {
+	switch x := c.(type) {
+	case *mir.FnRef:
+		if x != nil && x.Symbol != "" {
+			visit(x.Symbol)
+		}
+	case *mir.IndirectCall:
+		if x != nil {
+			collectOperandRefs(x.Callee, visit)
+		}
+	}
+}
+
+func collectTermRefs(term mir.Terminator, visit func(string)) {
+	switch x := term.(type) {
+	case *mir.BranchTerm:
+		if x != nil {
+			collectOperandRefs(x.Cond, visit)
+		}
+	case *mir.SwitchIntTerm:
+		if x != nil {
+			collectOperandRefs(x.Scrutinee, visit)
+		}
+	}
+}
+
+func collectRValueRefs(rv mir.RValue, visit func(string)) {
+	switch x := rv.(type) {
+	case *mir.UseRV:
+		if x != nil {
+			collectOperandRefs(x.Op, visit)
+		}
+	case *mir.UnaryRV:
+		if x != nil {
+			collectOperandRefs(x.Arg, visit)
+		}
+	case *mir.BinaryRV:
+		if x != nil {
+			collectOperandRefs(x.Left, visit)
+			collectOperandRefs(x.Right, visit)
+		}
+	case *mir.AggregateRV:
+		if x != nil {
+			for _, field := range x.Fields {
+				collectOperandRefs(field, visit)
+			}
+		}
+	case *mir.DiscriminantRV:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	case *mir.LenRV:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	case *mir.CastRV:
+		if x != nil {
+			collectOperandRefs(x.Arg, visit)
+		}
+	case *mir.AddressOfRV:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	case *mir.RefRV:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	}
+}
+
+func collectOperandRefs(op mir.Operand, visit func(string)) {
+	switch x := op.(type) {
+	case *mir.CopyOp:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	case *mir.MoveOp:
+		if x != nil {
+			collectPlaceRefs(x.Place, visit)
+		}
+	case *mir.ConstOp:
+		if x != nil {
+			if fn, ok := x.Const.(*mir.FnConst); ok && fn != nil && fn.Symbol != "" {
+				visit(fn.Symbol)
+			}
+		}
+	}
+}
+
+func collectPlaceRefs(place mir.Place, visit func(string)) {
+	for _, proj := range place.Projections {
+		if idx, ok := proj.(*mir.IndexProj); ok && idx != nil {
+			collectOperandRefs(idx.Index, visit)
 		}
 	}
 }

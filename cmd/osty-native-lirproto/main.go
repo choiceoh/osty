@@ -232,9 +232,14 @@ func mirJSONSizeTimeoutBudget(size int64) time.Duration {
 	if chunks == 0 {
 		return 0
 	}
-	budget := time.Duration(chunks) * 5 * time.Second
-	if budget > 3*time.Minute {
-		return 3 * time.Minute
+	// Large self-rebuild MIR payloads are tens of MiB and can spend
+	// several minutes in the Osty-owned LIR Proto backend before
+	// producing IR. Keep small probes snappy, but give real toolchain
+	// payloads enough room to finish instead of falling back to a
+	// partial stage0 bootstrap compiler.
+	budget := time.Duration(chunks) * 15 * time.Second
+	if budget > 10*time.Minute {
+		return 10 * time.Minute
 	}
 	return budget
 }
