@@ -159,24 +159,34 @@ pub fn hirBuildSubstEnv(params: List<HirTypeParam>, args: List<HirType>) -> HirS
 ///
 /// `HirType` is a flat struct with payload fields for every variant
 /// (see `hir.osty:377`). The `kind` discriminator tells us which
-/// fields are semantically live, but because unused fields always hold
-/// empty lists / empty strings, we can clone all of them
-/// unconditionally without dragging invalid payloads along.
+/// fields are semantically live, so this clones only the payloads that
+/// can be observed for the active variant. Dead payload lists are
+/// carried over as-is; they are never inspected or mutated through the
+/// clone contract, and preserving them avoids manufacturing four empty
+/// list payloads for every primitive/var/error type.
 pub fn hirCloneType(t: HirType) -> HirType {
-    let mut out = hirTypeInvalid()
-    out.kind = t.kind
-    out.primKind = t.primKind
-    out.namedPkg = t.namedPkg
-    out.namedName = t.namedName
-    out.namedArgs = hirCloneTypeList(t.namedArgs)
-    out.namedBuiltin = t.namedBuiltin
-    out.optionalInner = hirCloneTypeList(t.optionalInner)
-    out.tupleElems = hirCloneTypeList(t.tupleElems)
-    out.fnParams = hirCloneTypeList(t.fnParams)
-    out.fnReturn = hirCloneTypeList(t.fnReturn)
-    out.varName = t.varName
-    out.varOwner = t.varOwner
-    out
+    if t.kind == HirTypeNamed {
+        let mut out = t
+        out.namedArgs = hirCloneTypeList(t.namedArgs)
+        return out
+    }
+    if t.kind == HirTypeOptional {
+        let mut out = t
+        out.optionalInner = hirCloneTypeList(t.optionalInner)
+        return out
+    }
+    if t.kind == HirTypeTuple {
+        let mut out = t
+        out.tupleElems = hirCloneTypeList(t.tupleElems)
+        return out
+    }
+    if t.kind == HirTypeFn {
+        let mut out = t
+        out.fnParams = hirCloneTypeList(t.fnParams)
+        out.fnReturn = hirCloneTypeList(t.fnReturn)
+        return out
+    }
+    t
 }
 /// hirCloneTypeList applies hirCloneType to each element. Kept
 /// separate so List-valued payloads can share the recursion without
@@ -224,28 +234,29 @@ pub fn hirSubstType(t: HirType, env: HirSubstEnv) -> HirType {
         return hirCloneType(t)
     }
     if t.kind == HirTypeVar {
-        if hirSubstEnvHas(env, t.varName) {
-            return hirSubstEnvLookup(env, t.varName)
+        let idx = hirSubstEnvIndex(env, t.varName)
+        if idx >= 0 {
+            return hirCloneType(env.types[idx])
         }
         return hirCloneType(t)
     }
     if t.kind == HirTypeNamed {
-        let mut out = hirCloneType(t)
+        let mut out = t
         out.namedArgs = hirSubstTypeList(t.namedArgs, env)
         return out
     }
     if t.kind == HirTypeOptional {
-        let mut out = hirCloneType(t)
+        let mut out = t
         out.optionalInner = hirSubstTypeList(t.optionalInner, env)
         return out
     }
     if t.kind == HirTypeTuple {
-        let mut out = hirCloneType(t)
+        let mut out = t
         out.tupleElems = hirSubstTypeList(t.tupleElems, env)
         return out
     }
     if t.kind == HirTypeFn {
-        let mut out = hirCloneType(t)
+        let mut out = t
         out.fnParams = hirSubstTypeList(t.fnParams, env)
         out.fnReturn = hirSubstTypeList(t.fnReturn, env)
         return out

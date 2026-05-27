@@ -513,6 +513,9 @@ pub struct EnumerateLoopRewrite {
 /// rewriter emits inside generated `for` blocks — four spaces, to
 /// match the existing Osty formatter style.
 let airepairSemanticIndentStep: String = "    "
+fn airepairSemanticIndentStepValue() -> String {
+    "    "
+}
 /// rewriteEnumerateLoopHeader transforms a `for X.enumerate() \{`
 /// header into the indexed-loop shape the native checker can
 /// validate end-to-end. The new shape pre-binds the iterable to
@@ -566,7 +569,7 @@ pub fn rewriteEnumerateLoopHeader(indent: String, trimmed: String, counter: Int)
         return EnumerateLoopRewrite {rewritten: "", nextCounter: counter, ok: false}
     }
     let iterTemp = "_osty_enumerate{counter}"
-    let bodyIndent = indent + airepairSemanticIndentStep
+    let bodyIndent = indent + airepairSemanticIndentStepValue()
     let rewritten = indent + "let " + iterTemp + " = " + iterExpr + "\n" +
         indent + "for " + indexVar + " in 0.." + iterTemp + ".len() \{\n" +
         bodyIndent + "let " + valueBinding + " = " + iterTemp + "[" + indexVar + "]"

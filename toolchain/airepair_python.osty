@@ -32,6 +32,15 @@ use std.strings as strings
 pub let pythonScopeBlock: Int = 0
 pub let pythonScopeMatch: Int = 1
 pub let pythonScopeMatchArm: Int = 2
+fn pythonScopeBlockCode() -> Int {
+    0
+}
+fn pythonScopeMatchCode() -> Int {
+    1
+}
+fn pythonScopeMatchArmCode() -> Int {
+    2
+}
 /// PythonColonHeader is the structured outcome of recognising a
 /// Python-style block header. `ok == false` leaves all the
 /// string fields empty.
@@ -69,7 +78,7 @@ pub fn rewritePythonColonHeader(trimmed: String) -> PythonColonHeader {
             rewritten: head + " -> \{",
             changeKind: "python_arrow_arm_block",
             message: "wrap a multiline match arm body in Osty braces",
-            scopeKind: pythonScopeMatchArm,
+            scopeKind: pythonScopeMatchArmCode(),
             elseish: false,
             requiresMatch: true,
             ok: true,
@@ -115,7 +124,7 @@ pub fn rewritePythonColonHeader(trimmed: String) -> PythonColonHeader {
             rewritten: head + " \{",
             changeKind: "python_match_block",
             message: "replace Python-style `match:` block with Osty braces",
-            scopeKind: pythonScopeMatch,
+            scopeKind: pythonScopeMatchCode(),
             elseish: false,
             requiresMatch: false,
             ok: true,
@@ -127,7 +136,7 @@ pub fn rewritePythonColonHeader(trimmed: String) -> PythonColonHeader {
             rewritten: rest + " -> \{",
             changeKind: "python_case_arm",
             message: "replace Python-style `case:` arm with Osty match syntax",
-            scopeKind: pythonScopeMatchArm,
+            scopeKind: pythonScopeMatchArmCode(),
             elseish: false,
             requiresMatch: true,
             ok: true,
@@ -138,7 +147,7 @@ pub fn rewritePythonColonHeader(trimmed: String) -> PythonColonHeader {
             rewritten: "_ -> \{",
             changeKind: "python_default_arm",
             message: "replace Python-style `default:` arm with Osty match syntax",
-            scopeKind: pythonScopeMatchArm,
+            scopeKind: pythonScopeMatchArmCode(),
             elseish: false,
             requiresMatch: true,
             ok: true,
@@ -171,7 +180,7 @@ fn airepairPyColonBlock(rewritten: String, changeKind: String, message: String, 
         rewritten: rewritten,
         changeKind: changeKind,
         message: message,
-        scopeKind: pythonScopeBlock,
+        scopeKind: pythonScopeBlockCode(),
         elseish: elseish,
         requiresMatch: false,
         ok: true,
@@ -184,7 +193,7 @@ fn airepairPyColonNone() -> PythonColonHeader {
         rewritten: "",
         changeKind: "",
         message: "",
-        scopeKind: pythonScopeBlock,
+        scopeKind: pythonScopeBlockCode(),
         elseish: false,
         requiresMatch: false,
         ok: false,

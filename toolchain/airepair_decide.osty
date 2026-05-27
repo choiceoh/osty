@@ -128,13 +128,6 @@ pub fn compareFrontEndAssist(before: ProbeStats, after: ProbeStats) -> Int {
 pub fn repairedChanged(changeCount: Int, skipCount: Int) -> Bool {
     changeCount > 0 || skipCount > 0
 }
-/// Mode strings the airepair scorers dispatch on. Match
-/// toolchain/airepair_flags.osty's canonical mode names so the
-/// `--airepair-mode` flag and the policy talk in the same alphabet.
-let airepairModeRewriteOnly: String = "rewrite"
-let airepairModeAutoAssist: String = "auto"
-let airepairModeParseAssist: String = "parse"
-let airepairModeFrontEndAssist: String = "frontend"
 /// isImproved reports whether the rewriter's snapshot is a strict
 /// improvement over the pre-repair snapshot under the chosen
 /// mode. The default ("auto" or unrecognised) routes through the
@@ -143,13 +136,13 @@ let airepairModeFrontEndAssist: String = "frontend"
 /// `rewrite` mode is structurally improved whenever the repair
 /// pass emitted any edits — there's no diagnostic scoring to do.
 pub fn isImproved(mode: String, before: ProbeStats, after: ProbeStats, repairedChanges: Int) -> Bool {
-    if mode == airepairModeRewriteOnly {
+    if mode == "rewrite" {
         return repairedChanges > 0
     }
-    if mode == airepairModeParseAssist {
+    if mode == "parse" {
         return compareParseAssist(before, after) > 0
     }
-    if mode == airepairModeFrontEndAssist {
+    if mode == "frontend" {
         return compareFrontEndAssist(before, after) > 0
     }
     compareAutoAssist(before, after) > 0
@@ -169,13 +162,13 @@ pub fn isAccepted(mode: String, before: ProbeStats, after: ProbeStats, repairedC
     if repairedChanges == 0 && repairedSkipped == 0 {
         return true
     }
-    if mode == airepairModeRewriteOnly {
+    if mode == "rewrite" {
         return true
     }
-    if mode == airepairModeParseAssist {
+    if mode == "parse" {
         return compareParseAssist(before, after) >= 0
     }
-    if mode == airepairModeFrontEndAssist {
+    if mode == "frontend" {
         return compareFrontEndAssist(before, after) >= 0
     }
     compareAutoAssist(before, after) >= 0
@@ -221,7 +214,7 @@ pub fn explainAcceptedReason(
     if after.totalWarnings < before.totalWarnings {
         return "warnings_reduced"
     }
-    if mode == airepairModeRewriteOnly && repairedChanges > 0 {
+    if mode == "rewrite" && repairedChanges > 0 {
         return "rewrite_mode_applied"
     }
     if repairedChanges > 0 {
@@ -244,10 +237,10 @@ pub fn explainRejectedReason(mode: String, before: ProbeStats, after: ProbeStats
     if after.parse.errors > before.parse.errors {
         return "parse_regression_blocked"
     }
-    if mode == airepairModeAutoAssist && after.resolve.errors > before.resolve.errors {
+    if mode == "auto" && after.resolve.errors > before.resolve.errors {
         return "resolve_regression_blocked"
     }
-    if mode == airepairModeAutoAssist && after.check.errors > before.check.errors {
+    if mode == "auto" && after.check.errors > before.check.errors {
         return "check_regression_blocked"
     }
     if after.totalErrors > before.totalErrors {

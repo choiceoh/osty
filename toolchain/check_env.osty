@@ -269,18 +269,22 @@ pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start:
 /// the most recent binding for `name`. Returns `-1` (no type) when
 /// `name` is not in scope.
 pub fn checkLookup(env: CheckEnv, name: String) -> Int {
-    let binding = checkBindingStackIndexTop(env.local.bindingIndex, name)
-    if binding.isNone() {
-        return -1
+    let mut found = -1
+    for binding in env.local.bindings {
+        if binding.name == name {
+            found = binding.ty
+        }
     }
-    binding.unwrap().ty
+    found
 }
 pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
-    let binding = checkBindingStackIndexTop(env.local.bindingIndex, name)
-    if binding.isNone() {
-        return false
+    let mut found = false
+    for binding in env.local.bindings {
+        if binding.name == name {
+            found = binding.mutable
+        }
     }
-    binding.unwrap().mutable
+    found
 }
 // ---------------------------------------------------------------------
 // Module-level registration.
@@ -513,12 +517,7 @@ fn checkHashKey(key: String) -> Int {
     h
 }
 fn checkNameIndexTableSlot(table: CheckNameIndexTable, key: String) -> Int {
-    let slot = table.slots.get(key)
-    if slot.isSome() {
-        slot.unwrap()
-    } else {
-        -1
-    }
+    checkNameIndex(table.keys, table.hashes, key, checkHashKey(key))
 }
 fn checkNameIndexTableSet(table: CheckNameIndexTable, key: String, value: Int) {
     let slot = checkNameIndexTableSlot(table, key)
@@ -533,18 +532,13 @@ fn checkNameIndexTableSet(table: CheckNameIndexTable, key: String, value: Int) {
 }
 fn checkNameIndexTableGet(table: CheckNameIndexTable, key: String) -> Int {
     let slot = checkNameIndexTableSlot(table, key)
-    if slot < 0 {
-        return -1
+    if slot >= 0 && slot < table.values.len() {
+        return table.values[slot]
     }
-    table.values[slot]
+    checkLookupExactIndex(table.keys, table.hashes, table.values, key, checkHashKey(key))
 }
 fn checkNameSetTableSlot(table: CheckNameSetTable, key: String) -> Int {
-    let slot = table.slots.get(key)
-    if slot.isSome() {
-        slot.unwrap()
-    } else {
-        -1
-    }
+    checkNameIndex(table.keys, table.hashes, key, checkHashKey(key))
 }
 fn checkNameSetTableAdd(table: CheckNameSetTable, key: String) {
     let slot = checkNameSetTableSlot(table, key)
@@ -556,15 +550,14 @@ fn checkNameSetTableAdd(table: CheckNameSetTable, key: String) {
     table.slots.insert(key, table.keys.len() - 1)
 }
 fn checkNameSetTableHas(table: CheckNameSetTable, key: String) -> Bool {
-    checkNameSetTableSlot(table, key) >= 0
+    let slot = checkNameSetTableSlot(table, key)
+    if slot >= 0 && slot < table.keys.len() {
+        return true
+    }
+    checkNameIndex(table.keys, table.hashes, key, checkHashKey(key)) >= 0
 }
 fn checkBindingStackIndexSlot(table: CheckBindingStackIndex, key: String) -> Int {
-    let slot = table.slots.get(key)
-    if slot.isSome() {
-        slot.unwrap()
-    } else {
-        -1
-    }
+    checkNameIndex(table.keys, table.hashes, key, checkHashKey(key))
 }
 fn checkBindingStackIndexPush(table: CheckBindingStackIndex, binding: CheckBinding) {
     let slot = checkBindingStackIndexSlot(table, binding.name)
@@ -598,12 +591,7 @@ fn checkBindingStackIndexTop(table: CheckBindingStackIndex, name: String) -> Che
     Some(stack[stack.len() - 1])
 }
 fn checkIntStackIndexSlot(table: CheckIntStackIndex, key: String) -> Int {
-    let slot = table.slots.get(key)
-    if slot.isSome() {
-        slot.unwrap()
-    } else {
-        -1
-    }
+    checkNameIndex(table.keys, table.hashes, key, checkHashKey(key))
 }
 fn checkIntStackIndexPush(table: CheckIntStackIndex, key: String, value: Int) {
     let slot = checkIntStackIndexSlot(table, key)
@@ -633,22 +621,22 @@ fn checkIntStackIndexValues(table: CheckIntStackIndex, key: String) -> List<Int>
     table.stacks[slot]
 }
 fn checkNameIndex(names: List<String>, hashes: List<Int>, name: String, hash: Int) -> Int {
-    let mut i = names.len() - 1
-    for i >= 0 {
+    let mut i = 0
+    for i < names.len() {
         if hashes[i] == hash && names[i] == name {
             return i
         }
-        i = i - 1
+        i = i + 1
     }
     -1
 }
 fn checkLookupExactIndex(keys: List<String>, hashes: List<Int>, values: List<Int>, key: String, hash: Int) -> Int {
-    let mut i = keys.len() - 1
-    for i >= 0 {
-        if hashes[i] == hash && keys[i] == key {
+    let mut i = 0
+    for i < keys.len() {
+        if i < hashes.len() && i < values.len() && hashes[i] == hash && keys[i] == key {
             return values[i]
         }
-        i = i - 1
+        i = i + 1
     }
     -1
 }

@@ -231,10 +231,7 @@ fn hirLowerNamedFromTy(arena: TyArena, idx: Int) -> HirType {
     let argIdxs = tyArgsAt(arena, idx)
     if argIdxs.len() == 0 {
         let prim = hirLowerPrimByName(head)
-        let primHit = match prim.kind {
-            HirTypeInvalid -> false,
-            _ -> true,
-        }
+        let primHit = prim.kind != HirTypeInvalid
         if primHit {
             return prim
         }
@@ -694,10 +691,7 @@ pub struct HirLowerIntParse {
 /// grammar (decimal, hex, binary, octal, underscores). Returns
 /// `ok=false` for non-IntLit expressions or unparseable text.
 pub fn hirLowerParseAnnotationInt(e: HirExpr) -> HirLowerIntParse {
-    let isIntLit = match e.kind {
-        HirExprIntLit -> true,
-        _ -> false,
-    }
+    let isIntLit = e.kind == HirExprIntLit
     if !isIntLit {
         return HirLowerIntParse {value: 0, ok: false}
     }
@@ -749,10 +743,7 @@ pub struct HirLowerStringParse {
 /// String literal from an annotation arg value. Interpolated forms
 /// are rejected — annotation args must be literals.
 pub fn hirLowerAnnotationStringLit(e: HirExpr) -> HirLowerStringParse {
-    let isStringLit = match e.kind {
-        HirExprStringLit -> true,
-        _ -> false,
-    }
+    let isStringLit = e.kind == HirExprStringLit
     if !isStringLit {
         return HirLowerStringParse {value: "", ok: false}
     }
@@ -1257,10 +1248,7 @@ pub struct HirLowerStmtPromotion {
 ///             if !x.IsIfLet { return l.lowerIfStmt(x) }
 ///         }
 pub fn hirLowerPromoteIfExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
-    let isIf = match e.kind {
-        HirExprIf -> true,
-        _ -> false,
-    }
+    let isIf = e.kind == HirExprIf
     if !isIf {
         return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
@@ -1286,10 +1274,7 @@ pub fn hirLowerPromoteIfExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
 /// statement position into a HirMatchStmt when its value is
 /// discarded. Same shape / semantics as the IfExpr promoter.
 pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
-    let isMatch = match e.kind {
-        HirExprMatch -> true,
-        _ -> false,
-    }
+    let isMatch = e.kind == HirExprMatch
     if !isMatch {
         return HirLowerStmtPromotion {stmt: hirStmtInvalid(), promoted: false}
     }
@@ -2158,10 +2143,13 @@ fn hirLowerFnDecl(cx: HirLowerContext, idx: Int, owner: String, parentScope: Hir
         i = i + 1
     }
     let ret = hirLowerTypeFromAst(cx.ast, node.left, genericScope)
-    let body = if node.right >= 0 {
+    let mut body = if node.right >= 0 {
         hirLowerBlockLike(cx, node.right, hirLowerStmtScope(), genericScope)
     } else {
         hirBlock(span)
+    }
+    if node.right >= 0 && body.stmts.len() == 0 && !body.hasResult {
+        hirBlockAppend(body, hirExprStmt(hirUnitLit(span), span))
     }
     hirLowerAssembleFnDecl(node.text, params, ret, generics, body, annotations, receiverMut, node.flags == 1, span)
 }
@@ -2606,12 +2594,7 @@ fn hirLowerClosureCaptures(cx: HirLowerContext, closureIdx: Int) -> List<HirCapt
         }
         let coreIdx = hirLowerExprCoreIdx(cx, refNode)
         let identKind = hirLowerCoreIdentCaptureKind(cx, coreIdx, name)
-        let shouldCapture = match identKind {
-            HirCaptureLocal -> true,
-            HirCaptureParam -> true,
-            HirCaptureSelf -> true,
-            _ -> false,
-        }
+        let shouldCapture = identKind == HirCaptureLocal || identKind == HirCaptureParam || identKind == HirCaptureSelf
         if shouldCapture && !(hirLowerContainsString(names, name)) {
             names.push(name)
             let typ = if refNode >= 0 {
@@ -3147,6 +3130,13 @@ fn hirLowerTypeFromAst(ast: AstFile, idx: Int, typeScope: HirLowerTypeScope) -> 
     }
     let node = astArenaNodeAt(ast.arena, idx)
     if node.kind != AstNType {
+        if node.text != "" {
+            let prim = hirLowerPrimByName(node.text)
+            if prim.kind != HirTypeInvalid {
+                return prim
+            }
+            return hirTypeNamed(node.text, [])
+        }
         return hirTypeInvalid()
     }
     if node.text == "optional" {
@@ -3184,10 +3174,7 @@ fn hirLowerTypeFromAst(ast: AstFile, idx: Int, typeScope: HirLowerTypeScope) -> 
     }
     if args.len() == 0 {
         let prim = hirLowerPrimByName(node.text)
-        let isPrim = match prim.kind {
-            HirTypeInvalid -> false,
-            _ -> true,
-        }
+        let isPrim = prim.kind != HirTypeInvalid
         if isPrim {
             return prim
         }
@@ -3306,23 +3293,23 @@ fn hirLowerDecodeStringToken(text: String) -> HirLowerDecodedString {
         return HirLowerDecodedString {body: text[4..n - 3], raw: true, triple: true}
     }
     if n >= 6 && text[0..3] == "\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {body: text[3..n - 3], raw: false, triple: true}
+        return HirLowerDecodedString {body: hirLowerDecodeStringEscapes(text[3..n - 3]), raw: false, triple: true}
     }
     if n >= 3 && text[0..2] == "r\"" && text[n - 1..n] == "\"" {
         return HirLowerDecodedString {body: text[2..n - 1], raw: true, triple: false}
     }
     if n >= 2 && text[0..1] == "\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {body: text[1..n - 1], raw: false, triple: false}
+        return HirLowerDecodedString {body: hirLowerDecodeStringEscapes(text[1..n - 1]), raw: false, triple: false}
     }
     HirLowerDecodedString {body: text, raw: false, triple: false}
 }
 fn hirLowerDecodeBytesToken(text: String) -> HirLowerDecodedString {
     let n = text.len()
     if n >= 4 && text[0..2] == "b\"" && text[n - 1..n] == "\"" {
-        return HirLowerDecodedString {body: text[2..n - 1], raw: false, triple: false}
+        return HirLowerDecodedString {body: hirLowerDecodeStringEscapes(text[2..n - 1]), raw: false, triple: false}
     }
     if n >= 5 && text[0..3] == "b\"\"\"" && text[n - 3..n] == "\"\"\"" {
-        return HirLowerDecodedString {body: text[3..n - 3], raw: false, triple: true}
+        return HirLowerDecodedString {body: hirLowerDecodeStringEscapes(text[3..n - 3]), raw: false, triple: true}
     }
     if n >= 5 && text[0..3] == "br\"" && text[n - 1..n] == "\"" {
         return HirLowerDecodedString {body: text[3..n - 1], raw: true, triple: false}
@@ -3331,6 +3318,9 @@ fn hirLowerDecodeBytesToken(text: String) -> HirLowerDecodedString {
         return HirLowerDecodedString {body: text[4..n - 3], raw: true, triple: true}
     }
     HirLowerDecodedString {body: text, raw: false, triple: false}
+}
+fn hirLowerDecodeStringEscapes(body: String) -> String {
+    ostyDecodeEscapes(body)
 }
 pub struct HirLowerQualifiedName {
     pub owner: String,

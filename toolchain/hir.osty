@@ -388,7 +388,7 @@ pub fn hirTypeBuiltin(name: String, args: List<HirType>) -> HirType {
 pub fn hirTypeOptional(inner: HirType) -> HirType {
     let mut t = hirTypeInvalid()
     t.kind = HirTypeOptional
-    t.optionalInner.push(inner)
+    t.optionalInner = [inner]
     t
 }
 pub fn hirTypeTuple(elems: List<HirType>) -> HirType {
@@ -401,7 +401,7 @@ pub fn hirTypeFn(params: List<HirType>, ret: HirType) -> HirType {
     let mut t = hirTypeInvalid()
     t.kind = HirTypeFn
     t.fnParams = params
-    t.fnReturn.push(ret)
+    t.fnReturn = [ret]
     t
 }
 pub fn hirTypeVar(name: String, owner: String) -> HirType {
@@ -496,28 +496,22 @@ pub fn hirTypeIsErr(t: HirType) -> Bool {
 // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// hirTypeIsUnit reports whether `t` is the `()` primitive.
 pub fn hirTypeIsUnit(t: HirType) -> Bool {
-    match t.kind {
-        HirTypePrim -> {
-            if t.primKind == HirPrimUnit {
-                return true
-            }
-            false
-        },
-        _ -> false,
+    if t.kind == HirTypePrim {
+        if t.primKind == HirPrimUnit {
+            return true
+        }
     }
+    false
 }
 // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// hirTypeIsNever reports whether `t` is the `!` primitive.
 pub fn hirTypeIsNever(t: HirType) -> Bool {
-    match t.kind {
-        HirTypePrim -> {
-            if t.primKind == HirPrimNever {
-                return true
-            }
-            false
-        },
-        _ -> false,
+    if t.kind == HirTypePrim {
+        if t.primKind == HirPrimNever {
+            return true
+        }
     }
+    false
 }
 // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
 /// hirTypeIsOptional reports whether `t` is a `T?` wrapper.
@@ -531,45 +525,36 @@ pub fn hirTypeIsOptional(t: HirType) -> Bool {
 /// hirTypeOptionalInner returns the inner type of a `T?` or an invalid
 /// HirType when `t` is not an optional.
 pub fn hirTypeOptionalInner(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeOptional -> {
-            if t.optionalInner.len() > 0 {
-                t.optionalInner[0]
-            } else {
-                hirTypeInvalid()
-            }
-        },
-        _ -> hirTypeInvalid(),
+    if t.kind == HirTypeOptional {
+        if t.optionalInner.len() > 0 {
+            return t.optionalInner[0]
+        }
+        return hirTypeInvalid()
     }
+    hirTypeInvalid()
 }
 /// hirTypeFnReturn returns the return type of an fn type or an invalid
 /// HirType when `t` is not an fn.
 pub fn hirTypeFnReturn(t: HirType) -> HirType {
-    match t.kind {
-        HirTypeFn -> {
-            if t.fnReturn.len() > 0 {
-                t.fnReturn[0]
-            } else {
-                hirTypeInvalid()
-            }
-        },
-        _ -> hirTypeInvalid(),
+    if t.kind == HirTypeFn {
+        if t.fnReturn.len() > 0 {
+            return t.fnReturn[0]
+        }
+        return hirTypeInvalid()
     }
+    hirTypeInvalid()
 }
 /// hirTypeQualifiedName is the `pkg.Name` form of a named type. Returns
 /// the bare name when no package qualifier is present; empty for
 /// non-named types.
 pub fn hirTypeQualifiedName(t: HirType) -> String {
-    match t.kind {
-        HirTypeNamed -> {
-            if t.namedPkg == "" {
-                t.namedName
-            } else {
-                t.namedPkg + "." + t.namedName
-            }
-        },
-        _ -> "",
+    if t.kind == HirTypeNamed {
+        if t.namedPkg == "" {
+            return t.namedName
+        }
+        return t.namedPkg + "." + t.namedName
     }
+    ""
 }
 // ---- Printing ------------------------------------------------------
 /// hirPrimKindString returns the canonical source-level name for a
@@ -644,23 +629,36 @@ pub fn hirPrimKindString(k: HirPrimKind) -> String {
 /// hirTypeString returns a source-level rendering of `t`. Safe for
 /// diagnostics; invalid / error types render as `<error>` / `<nil>`.
 pub fn hirTypeString(t: HirType) -> String {
-    match t.kind {
-        HirTypeInvalid -> "<nil>",
-        HirTypeErr -> "<error>",
-        HirTypePrim -> hirPrimKindString(t.primKind),
-        HirTypeVar -> t.varName,
-        HirTypeOptional -> {
-            let inner = if t.optionalInner.len() > 0 {
-                hirTypeString(t.optionalInner[0])
-            } else {
-                "<nil>"
-            }
-            inner + "?"
-        },
-        HirTypeTuple -> hirTypeTupleString(t.tupleElems),
-        HirTypeFn -> hirTypeFnString(t),
-        HirTypeNamed -> hirTypeNamedString(t),
+    if t.kind == HirTypeInvalid {
+        return "<nil>"
     }
+    if t.kind == HirTypeErr {
+        return "<error>"
+    }
+    if t.kind == HirTypePrim {
+        return hirPrimKindString(t.primKind)
+    }
+    if t.kind == HirTypeVar {
+        return t.varName
+    }
+    if t.kind == HirTypeOptional {
+        let inner = if t.optionalInner.len() > 0 {
+            hirTypeString(t.optionalInner[0])
+        } else {
+            "<nil>"
+        }
+        return inner + "?"
+    }
+    if t.kind == HirTypeTuple {
+        return hirTypeTupleString(t.tupleElems)
+    }
+    if t.kind == HirTypeFn {
+        return hirTypeFnString(t)
+    }
+    if t.kind == HirTypeNamed {
+        return hirTypeNamedString(t)
+    }
+    "<nil>"
 }
 fn hirTypeTupleString(elems: List<HirType>) -> String {
     let mut parts: List<String> = []
@@ -1717,7 +1715,7 @@ pub fn hirUnary(op: HirUnOp, x: HirExpr, typ: HirType, span: HirSpan) -> HirExpr
     let mut e = hirExprInvalid()
     e.kind = HirExprUnary
     e.unaryOp = op
-    e.unaryChild.push(x)
+    e.unaryChild = [x]
     e.typ = typ
     e.span = span
     e
@@ -1726,8 +1724,8 @@ pub fn hirBinary(op: HirBinOp, left: HirExpr, right: HirExpr, typ: HirType, span
     let mut e = hirExprInvalid()
     e.kind = HirExprBinary
     e.binaryOp = op
-    e.binaryLeft.push(left)
-    e.binaryRight.push(right)
+    e.binaryLeft = [left]
+    e.binaryRight = [right]
     e.typ = typ
     e.span = span
     e
@@ -1735,7 +1733,7 @@ pub fn hirBinary(op: HirBinOp, left: HirExpr, right: HirExpr, typ: HirType, span
 pub fn hirCall(callee: HirExpr, args: List<HirArg>, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprCall
-    e.callCallee.push(callee)
+    e.callCallee = [callee]
     e.callArgs = args
     e.typ = typ
     e.span = span
@@ -1769,7 +1767,7 @@ pub fn hirListLit(elems: List<HirExpr>, elem: HirType, span: HirSpan) -> HirExpr
 pub fn hirBlockExpr(body: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprBlock
-    e.blockBody.push(body)
+    e.blockBody = [body]
     e.typ = typ
     e.span = span
     e
@@ -1777,9 +1775,9 @@ pub fn hirBlockExpr(body: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
 pub fn hirIfExpr(cond: HirExpr, thenBlock: HirBlock, elseBlock: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprIf
-    e.ifExprCond.push(cond)
-    e.ifExprThen.push(thenBlock)
-    e.ifExprElse.push(elseBlock)
+    e.ifExprCond = [cond]
+    e.ifExprThen = [thenBlock]
+    e.ifExprElse = [elseBlock]
     e.typ = typ
     e.span = span
     e
@@ -1787,7 +1785,7 @@ pub fn hirIfExpr(cond: HirExpr, thenBlock: HirBlock, elseBlock: HirBlock, typ: H
 pub fn hirFieldExpr(x: HirExpr, name: String, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprField
-    e.fieldTarget.push(x)
+    e.fieldTarget = [x]
     e.fieldName = name
     e.typ = typ
     e.span = span
@@ -1802,8 +1800,8 @@ pub fn hirFieldExprOptional(x: HirExpr, name: String, typ: HirType, span: HirSpa
 pub fn hirIndexExpr(x: HirExpr, idx: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprIndex
-    e.indexTarget.push(x)
-    e.indexIndex.push(idx)
+    e.indexTarget = [x]
+    e.indexIndex = [idx]
     e.typ = typ
     e.span = span
     e
@@ -1811,7 +1809,7 @@ pub fn hirIndexExpr(x: HirExpr, idx: HirExpr, typ: HirType, span: HirSpan) -> Hi
 pub fn hirMethodCall(receiver: HirExpr, name: String, args: List<HirArg>, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprMethod
-    e.methodReceiver.push(receiver)
+    e.methodReceiver = [receiver]
     e.methodName = name
     e.methodArgs = args
     e.typ = typ
@@ -1836,7 +1834,7 @@ pub fn hirStructLit(typeName: String, fields: List<HirStructLitField>, typ: HirT
 /// built with hirStructLit. Mirrors Go's `{ ..x, field: v }` form.
 pub fn hirStructLitSpread(typeName: String, fields: List<HirStructLitField>, spread: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirStructLit(typeName, fields, typ, span)
-    e.structSpread.push(spread)
+    e.structSpread = [spread]
     e.structHasSpread = true
     e
 }
@@ -1868,8 +1866,8 @@ pub fn hirMapLit(entries: List<HirMapEntry>, keyT: HirType, valT: HirType, span:
 pub fn hirRangeLitBounded(start: HirExpr, end: HirExpr, inclusive: Bool, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprRange
-    e.rangeStart.push(start)
-    e.rangeEnd.push(end)
+    e.rangeStart = [start]
+    e.rangeEnd = [end]
     e.rangeInclusive = inclusive
     e.typ = typ
     e.span = span
@@ -1878,7 +1876,7 @@ pub fn hirRangeLitBounded(start: HirExpr, end: HirExpr, inclusive: Bool, typ: Hi
 pub fn hirRangeLitFrom(start: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprRange
-    e.rangeStart.push(start)
+    e.rangeStart = [start]
     e.typ = typ
     e.span = span
     e
@@ -1886,7 +1884,7 @@ pub fn hirRangeLitFrom(start: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
 pub fn hirRangeLitTo(end: HirExpr, inclusive: Bool, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprRange
-    e.rangeEnd.push(end)
+    e.rangeEnd = [end]
     e.rangeInclusive = inclusive
     e.typ = typ
     e.span = span
@@ -1895,7 +1893,7 @@ pub fn hirRangeLitTo(end: HirExpr, inclusive: Bool, typ: HirType, span: HirSpan)
 pub fn hirQuestion(x: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprQuestion
-    e.questionChild.push(x)
+    e.questionChild = [x]
     e.typ = typ
     e.span = span
     e
@@ -1903,8 +1901,8 @@ pub fn hirQuestion(x: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
 pub fn hirCoalesce(left: HirExpr, right: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprCoalesce
-    e.coalesceLeft.push(left)
-    e.coalesceRight.push(right)
+    e.coalesceLeft = [left]
+    e.coalesceRight = [right]
     e.typ = typ
     e.span = span
     e
@@ -1914,7 +1912,7 @@ pub fn hirClosure(params: List<HirParam>, returnType: HirType, body: HirBlock, c
     e.kind = HirExprClosure
     e.closureParams = params
     e.closureReturn = returnType
-    e.closureBody.push(body)
+    e.closureBody = [body]
     e.closureCaptures = captures
     e.typ = typ
     e.span = span
@@ -1933,7 +1931,7 @@ pub fn hirVariantLit(enumName: String, variant: String, args: List<HirArg>, typ:
 pub fn hirMatchExpr(scrutinee: HirExpr, arms: List<HirMatchArm>, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprMatch
-    e.matchExprScrutinee.push(scrutinee)
+    e.matchExprScrutinee = [scrutinee]
     e.matchExprArms = arms
     e.typ = typ
     e.span = span
@@ -1943,8 +1941,8 @@ pub fn hirIfLetExpr(pattern: HirPattern, scrutinee: HirExpr, thenBlock: HirBlock
     let mut e = hirExprInvalid()
     e.kind = HirExprIfLet
     e.ifLetPattern = pattern
-    e.ifLetScrutinee.push(scrutinee)
-    e.ifLetThen.push(thenBlock)
+    e.ifLetScrutinee = [scrutinee]
+    e.ifLetThen = [thenBlock]
     e.ifLetHasElse = false
     e.typ = typ
     e.span = span
@@ -1952,14 +1950,14 @@ pub fn hirIfLetExpr(pattern: HirPattern, scrutinee: HirExpr, thenBlock: HirBlock
 }
 pub fn hirIfLetExprElse(pattern: HirPattern, scrutinee: HirExpr, thenBlock: HirBlock, elseBlock: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirIfLetExpr(pattern, scrutinee, thenBlock, typ, span)
-    e.ifLetElse.push(elseBlock)
+    e.ifLetElse = [elseBlock]
     e.ifLetHasElse = true
     e
 }
 pub fn hirTupleAccess(x: HirExpr, index: Int, typ: HirType, span: HirSpan) -> HirExpr {
     let mut e = hirExprInvalid()
     e.kind = HirExprTupleAccess
-    e.tupleAccessTarget.push(x)
+    e.tupleAccessTarget = [x]
     e.tupleAccessIndex = index
     e.typ = typ
     e.span = span
@@ -2080,7 +2078,7 @@ pub fn hirIdentPatMut(name: String, span: HirSpan) -> HirPattern {
 pub fn hirLitPat(value: HirExpr, span: HirSpan) -> HirPattern {
     let mut p = hirPatternInvalid()
     p.kind = HirPatLit
-    p.litValue.push(value)
+    p.litValue = [value]
     p.span = span
     p
 }
@@ -2119,8 +2117,8 @@ pub fn hirVariantPat(enumName: String, variant: String, args: List<HirPattern>, 
 pub fn hirRangePatBounded(low: HirExpr, high: HirExpr, inclusive: Bool, span: HirSpan) -> HirPattern {
     let mut p = hirPatternInvalid()
     p.kind = HirPatRange
-    p.rangeLow.push(low)
-    p.rangeHigh.push(high)
+    p.rangeLow = [low]
+    p.rangeHigh = [high]
     p.rangeInclusive = inclusive
     p.span = span
     p
@@ -2129,7 +2127,7 @@ pub fn hirRangePatBounded(low: HirExpr, high: HirExpr, inclusive: Bool, span: Hi
 pub fn hirRangePatFrom(low: HirExpr, span: HirSpan) -> HirPattern {
     let mut p = hirPatternInvalid()
     p.kind = HirPatRange
-    p.rangeLow.push(low)
+    p.rangeLow = [low]
     p.span = span
     p
 }
@@ -2137,7 +2135,7 @@ pub fn hirRangePatFrom(low: HirExpr, span: HirSpan) -> HirPattern {
 pub fn hirRangePatTo(high: HirExpr, inclusive: Bool, span: HirSpan) -> HirPattern {
     let mut p = hirPatternInvalid()
     p.kind = HirPatRange
-    p.rangeHigh.push(high)
+    p.rangeHigh = [high]
     p.rangeInclusive = inclusive
     p.span = span
     p
@@ -2751,7 +2749,7 @@ pub fn hirDecisionBind(name: String, proj: HirProjection, typ: HirType, next: Hi
     n.bindHasProj = true
     n.bindProj = proj
     n.bindType = typ
-    n.bindNext.push(next)
+    n.bindNext = [next]
     n
 }
 pub fn hirDecisionBindWhole(name: String, typ: HirType, next: HirDecisionNode) -> HirDecisionNode {
@@ -2760,15 +2758,15 @@ pub fn hirDecisionBindWhole(name: String, typ: HirType, next: HirDecisionNode) -
     n.bindName = name
     n.bindHasProj = false
     n.bindType = typ
-    n.bindNext.push(next)
+    n.bindNext = [next]
     n
 }
 pub fn hirDecisionGuard(cond: HirExpr, thenNode: HirDecisionNode, elseNode: HirDecisionNode) -> HirDecisionNode {
     let mut n = hirDecisionInvalid()
     n.kind = HirDecisionGuard
-    n.guardCond.push(cond)
-    n.guardThen.push(thenNode)
-    n.guardElse.push(elseNode)
+    n.guardCond = [cond]
+    n.guardThen = [thenNode]
+    n.guardElse = [elseNode]
     n
 }
 pub fn hirDecisionSwitch(kind: HirSwitchKind, proj: HirProjection, cases: List<HirSwitchCase>, defaultNode: HirDecisionNode) -> HirDecisionNode {
@@ -2777,7 +2775,7 @@ pub fn hirDecisionSwitch(kind: HirSwitchKind, proj: HirProjection, cases: List<H
     n.switchKind = kind
     n.switchProj = proj
     n.switchCases = cases
-    n.switchDefault.push(defaultNode)
+    n.switchDefault = [defaultNode]
     n
 }
 /// hirDecisionIsValid reports whether the node is a real decision

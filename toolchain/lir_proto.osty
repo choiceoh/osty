@@ -581,6 +581,12 @@ pub fn lirStringPoolOrdered(pool: LirStringPool) -> List<LirStringGlobal> {
 pub fn lirStringPoolIsEmpty(pool: LirStringPool) -> Bool {
     pool.entries.len() == 0
 }
+pub struct LirMirLayoutIndex {
+    pub structs: Map<String, Int>,
+    pub enums: Map<String, Int>,
+    pub tuples: Map<String, Int>,
+    pub interfaces: Map<String, Int>,
+}
 pub struct LirModule {
     pub packageName: String,
     pub sourcePath: String,
@@ -593,6 +599,9 @@ pub struct LirModule {
     pub stringPool: LirStringPool,
     pub metadata: List<String>,
     pub thunkSymbols: List<String>,
+    pub thunkSymbolSet: Map<String, Bool>,
+    pub layoutIndex: LirMirLayoutIndex,
+    pub mirTypeCache: Map<String, LirType>,
 }
 pub fn lirModule(packageName: String, sourcePath: String, target: String) -> LirModule {
     let stringPoolEntries: List<LirStringGlobal> = []
@@ -605,8 +614,153 @@ pub fn lirModuleWithStringPoolEntries(packageName: String, sourcePath: String, t
     let renderedFunctions: List<String> = []
     let metadata: List<String> = []
     let thunkSymbols: List<String> = []
+    let thunkSymbolSet: Map<String, Bool> = {:}
+    let layoutIndex = lirMirLayoutIndexEmpty()
+    let mirTypeCache: Map<String, LirType> = {:}
     let stringPool = LirStringPool {entries: stringPoolEntries}
-    LirModule {packageName, sourcePath, target, typeDefs, globals, functions, renderedFunctions, runtimeDecls: lirRuntimeDecls(), stringPool, metadata, thunkSymbols}
+    LirModule {packageName, sourcePath, target, typeDefs, globals, functions, renderedFunctions, runtimeDecls: lirRuntimeDecls(), stringPool, metadata, thunkSymbols, thunkSymbolSet, layoutIndex, mirTypeCache}
+}
+
+fn lirMirLayoutIndexEmpty() -> LirMirLayoutIndex {
+    let structs: Map<String, Int> = {:}
+    let enums: Map<String, Int> = {:}
+    let tuples: Map<String, Int> = {:}
+    let interfaces: Map<String, Int> = {:}
+    LirMirLayoutIndex {structs, enums, tuples, interfaces}
+}
+
+fn lirMirBuildLayoutIndex(layouts: MirLayoutTable) -> LirMirLayoutIndex {
+    let index = lirMirLayoutIndexEmpty()
+    let mut i = 0
+    for i < layouts.structs.len() {
+        let layout = layouts.structs[i]
+        lirMirLayoutIndexPutQualified(index.structs, layout.name, i)
+        lirMirLayoutIndexPutQualified(index.structs, layout.mangled, i)
+        i = i + 1
+    }
+    i = 0
+    for i < layouts.enums.len() {
+        let layout = layouts.enums[i]
+        lirMirLayoutIndexPut(index.enums, layout.name, i)
+        lirMirLayoutIndexPut(index.enums, layout.mangled, i)
+        i = i + 1
+    }
+    i = 0
+    for i < layouts.tuples.len() {
+        let layout = layouts.tuples[i]
+        lirMirLayoutIndexPut(index.tuples, layout.key, i)
+        lirMirLayoutIndexPut(index.tuples, layout.mangled, i)
+        i = i + 1
+    }
+    i = 0
+    for i < layouts.interfaces.len() {
+        let layout = layouts.interfaces[i]
+        lirMirLayoutIndexPut(index.interfaces, layout.name, i)
+        i = i + 1
+    }
+    index
+}
+
+fn lirMirLayoutIndexPut(m: Map<String, Int>, key: String, pos: Int) {
+    if key == "" {
+        return
+    }
+    m.insert(key, pos)
+    if !(strings.startsWith(key, "%")) {
+        m.insert("%" + key, pos)
+    }
+}
+
+fn lirMirLayoutIndexPutQualified(m: Map<String, Int>, key: String, pos: Int) {
+    lirMirLayoutIndexPut(m, key, pos)
+    if key == "" || !(strings.contains(key, ".")) {
+        return
+    }
+    let parts = strings.split(key, ".")
+    let mut i = 1
+    for i < parts.len() {
+        let mut suffix = parts[i]
+        let mut j = i + 1
+        for j < parts.len() {
+            suffix = suffix + "." + parts[j]
+            j = j + 1
+        }
+        if suffix != "" && suffix != key {
+            lirMirLayoutIndexPut(m, suffix, pos)
+        }
+        i = i + 1
+    }
+}
+
+fn lirMirLayoutIndexLookup(m: Map<String, Int>, name: String) -> Int {
+    if name == "" {
+        return -1
+    }
+    match m.get(name) {
+        Some(pos) -> {
+            return pos
+        },
+        None -> {
+        },
+    }
+    if strings.startsWith(name, "%") {
+        let bare = strings.trimPrefix(name, "%")
+        match m.get(bare) {
+            Some(pos) -> {
+                return pos
+            },
+            None -> {
+            },
+        }
+    }
+    return -1
+}
+
+fn lirMirLayoutIndexGenericHead(name: String) -> String {
+    let base = if strings.startsWith(name, "%") {
+        strings.trimPrefix(name, "%")
+    } else {
+        name
+    }
+    let mut i = 0
+    for ch in strings.chars(base) {
+        if ch == '<' {
+            if i <= 0 {
+                return ""
+            }
+            return strings.slice(base, 0, i)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn lirMirLayoutIndexLookupGeneric(m: Map<String, Int>, name: String) -> Int {
+    let exact = lirMirLayoutIndexLookup(m, name)
+    if exact >= 0 {
+        return exact
+    }
+    let head = lirMirLayoutIndexGenericHead(name)
+    if head == "" {
+        return -1
+    }
+    return lirMirLayoutIndexLookup(m, head)
+}
+
+fn lirMirLayoutIndexStructPos(index: LirMirLayoutIndex, name: String) -> Int {
+    return lirMirLayoutIndexLookup(index.structs, name)
+}
+
+fn lirMirLayoutIndexEnumPos(index: LirMirLayoutIndex, name: String) -> Int {
+    return lirMirLayoutIndexLookupGeneric(index.enums, name)
+}
+
+fn lirMirLayoutIndexTuplePos(index: LirMirLayoutIndex, name: String) -> Int {
+    return lirMirLayoutIndexLookup(index.tuples, name)
+}
+
+fn lirMirLayoutIndexInterfacePos(index: LirMirLayoutIndex, name: String) -> Int {
+    return lirMirLayoutIndexLookup(index.interfaces, name)
 }
 // ====================================================================
 // Diagnostics and lowerer shell
@@ -915,7 +1069,7 @@ fn lirRenderFunctionName(fn_: LirFunction) -> String {
 
 fn lirRenderFunctionLinkage(fn_: LirFunction) -> String {
     if fn_.linkage.len() != 0 {
-        return fn_.linkage
+        return "define " + fn_.linkage
     }
     return "define"
 }
@@ -923,18 +1077,22 @@ fn lirRenderFunctionLinkage(fn_: LirFunction) -> String {
 fn lirRenderFunctionText(name: String, ret: LirType, params: List<LirParam>, blocks: List<String>) -> String {
     let retText = lirRenderTypeOrVoid(ret)
     let fnName = lirNameOrMain(name)
-    return lirRenderFunctionTextBlocks("define " + retText + " @" + fnName + "(" + lirRenderParams(params) + ") " + lirLBrace(), blocks, 0)
+    let mut lines: List<String> = ["define " + retText + " @" + fnName + "(" + lirRenderParams(params) + ") " + lirLBrace()]
+    lines = lirRenderFunctionTextBlocks(blocks, 0, lines)
+    lines.push(lirRBrace())
+    strings.join(lines, lirLF())
 }
 
-fn lirRenderFunctionTextBlocks(out: String, blocks: List<String>, pos: Int) -> String {
+fn lirRenderFunctionTextBlocks(blocks: List<String>, pos: Int, lines: List<String>) -> List<String> {
     if pos >= blocks.len() {
-        return out + lirLF() + lirRBrace()
+        return lines
     }
     let block = blocks[pos]
     if block.len() == 0 {
-        return lirRenderFunctionTextBlocks(out, blocks, pos + 1)
+        return lirRenderFunctionTextBlocks(blocks, pos + 1, lines)
     }
-    return lirRenderFunctionTextBlocks(out + lirLF() + block, blocks, pos + 1)
+    lines.push(block)
+    return lirRenderFunctionTextBlocks(blocks, pos + 1, lines)
 }
 
 fn lirRenderTypeOrVoid(t: LirType) -> String {
@@ -954,12 +1112,13 @@ fn lirNameOrMain(name: String) -> String {
 
 fn lirRenderBlockText(label: String, instrs: List<LirInstr>, term: LirTerm) -> String {
     let blockLabel = lirBlockLabelOrEntry(label)
-    let out = lirRenderInstrsText(instrs, 0, blockLabel + ":")
+    let mut lines: List<String> = [blockLabel + ":"]
+    lines = lirRenderInstrsText(instrs, 0, lines)
     let termText = lirRenderTerm(term)
     if termText.len() != 0 {
-        return out + lirLF() + "  " + termText
+        lines.push("  " + termText)
     }
-    return out
+    strings.join(lines, lirLF())
 }
 
 fn lirBlockLabelOrEntry(label: String) -> String {
@@ -969,15 +1128,16 @@ fn lirBlockLabelOrEntry(label: String) -> String {
     return "entry"
 }
 
-fn lirRenderInstrsText(instrs: List<LirInstr>, pos: Int, out: String) -> String {
+fn lirRenderInstrsText(instrs: List<LirInstr>, pos: Int, lines: List<String>) -> List<String> {
     if pos >= instrs.len() {
-        return out
+        return lines
     }
     let text = lirRenderInstr(instrs[pos])
     if text.len() == 0 {
-        return lirRenderInstrsText(instrs, pos + 1, out)
+        return lirRenderInstrsText(instrs, pos + 1, lines)
     }
-    return lirRenderInstrsText(instrs, pos + 1, out + lirLF() + "  " + text)
+    lines.push("  " + text)
+    return lirRenderInstrsText(instrs, pos + 1, lines)
 }
 
 fn lirRenderFunctionAttrs(attrs: List<String>, pos: Int, head: List<String>) -> List<String> {
@@ -2157,6 +2317,53 @@ pub fn lirTupleTypeBody(types: List<LirType>) -> String {
     }
     lirBraced(strings.join(parts, ", "))
 }
+fn lirIsTupleTypeName(name: String) -> Bool {
+    strings.startsWith(name, "(") && strings.endsWith(name, ")") && !strings.startsWith(name, "fn(")
+}
+fn lirTupleTypeArgs(name: String) -> List<String> {
+    let mut out: List<String> = []
+    if !lirIsTupleTypeName(name) {
+        return out
+    }
+    let inner = strings.trimSpace(strings.slice(name, 1, name.len() - 1))
+    if inner == "" {
+        return out
+    }
+    let mut start = 0
+    let mut pos = 0
+    let mut parenDepth = 0
+    let mut angleDepth = 0
+    let mut bracketDepth = 0
+    for ch in strings.chars(inner) {
+        if ch == '(' {
+            parenDepth = parenDepth + 1
+        } else if ch == ')' {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if ch == '<' {
+            angleDepth = angleDepth + 1
+        } else if ch == '>' {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            }
+        } else if ch == '[' {
+            bracketDepth = bracketDepth + 1
+        } else if ch == ']' {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if ch == ',' {
+            if parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 {
+                out.push(strings.trimSpace(strings.slice(inner, start, pos)))
+                start = pos + 1
+            }
+        }
+        pos = pos + 1
+    }
+    out.push(strings.trimSpace(strings.slice(inner, start, inner.len())))
+    out
+}
 pub fn lirNamedTypeLayoutKey(packageName: String, builtin: Bool, name: String) -> String {
     if builtin {
         return "builtin:" + name
@@ -2212,6 +2419,8 @@ pub struct LirMirFunctionLowerer {
     pub parallelAccessGroupRef: String,
     pub stringPoolEntries: List<LirStringGlobal>,
     pub renderedBlocks: List<String>,
+    pub typeCache: Map<String, LirType>,
+    pub typeInProgress: Map<String, Bool>,
 }
 // `parallelAccessGroupRef` lazily caches the `!N` access-group
 // metadata reference for the current function. Populated on first
@@ -2249,6 +2458,7 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
     }
     let ctor = lirBuildInitGlobalsCtor(out, mir, diags)
     out.functions.push(ctor)
+    out.renderedFunctions.push(lirRenderFunction(ctor))
     let ctorType = "[1 x " + lirBraced("i32, ptr, ptr") + "]"
     let ctorInit = "[" + lirBraced("i32, ptr, ptr") + " " + lirBraced("i32 65535, ptr @__osty_init_globals, ptr null") + "]"
     out.globals.push(lirGlobalWithLinkage("@llvm.global_ctors", lirRawType(ctorType), ctorInit, "appending"))
@@ -2256,6 +2466,183 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
 // No init functions: skip ctor + global_ctors registration.
 // Programs whose globals are zero-initialised are correct
 // without a ctor (LLVM zeros them at module load).
+fn lirDeclareMirLayoutTypeDefs(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>) {
+    let mut structPos = 0
+    for structPos < mir.layouts.structs.len() {
+        let layout = mir.layouts.structs[structPos]
+        if layout.builtinSource == "" {
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            let body = lirMirStructLayoutBodyShallow(out, mir, layout, "layout.struct." + layout.name, diags)
+            if body != "" {
+                lirModuleDeclareTypeDef(out, lirTypeDef(typeName, body))
+            }
+        }
+        structPos = structPos + 1
+    }
+    let mut tuplePos = 0
+    for tuplePos < mir.layouts.tuples.len() {
+        let layout = mir.layouts.tuples[tuplePos]
+        let typeName = "%" + if layout.mangled == "" {
+            layout.key
+        } else {
+            layout.mangled
+        }
+        let body = lirMirTupleLayoutBodyShallow(out, mir, layout, "layout.tuple." + layout.key, diags)
+        if body != "" {
+            lirModuleDeclareTypeDef(out, lirTypeDef(typeName, body))
+        }
+        tuplePos = tuplePos + 1
+    }
+    let mut enumPos = 0
+    for enumPos < mir.layouts.enums.len() {
+        let layout = mir.layouts.enums[enumPos]
+        if !(lirMirEnumIsPayloadFree(layout)) {
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            lirModuleDeclareTypeDef(out, lirTypeDef(typeName, lirBraced("i64, i64")))
+        }
+        enumPos = enumPos + 1
+    }
+    if mir.layouts.interfaces.len() > 0 {
+        lirDeclareIfaceType(out)
+    }
+}
+
+fn lirMirStructLayoutBodyShallow(out: LirModule, mir: MirModule, layout: MirStructLayout, path: String, diags: List<LirDiagnostic>) -> String {
+    let mut parts: List<String> = []
+    for field in layout.fields {
+        let fieldType = lirLowerMirType_module_shallow(out, mir, field.typ, path + "." + field.name, diags)
+        if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
+            return ""
+        }
+        parts.push(lirTypeString(fieldType))
+    }
+    lirBraced(strings.join(parts, ", "))
+}
+
+fn lirMirTupleLayoutBodyShallow(out: LirModule, mir: MirModule, layout: MirTupleLayout, path: String, diags: List<LirDiagnostic>) -> String {
+    let mut parts: List<String> = []
+    let mut i = 0
+    for field in layout.fields {
+        let fieldType = lirLowerMirType_module_shallow(out, mir, field.typ, path + "." + lirIntToString(i), diags)
+        if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
+            return ""
+        }
+        parts.push(lirTypeString(fieldType))
+        i = i + 1
+    }
+    lirBraced(strings.join(parts, ", "))
+}
+
+fn lirLowerMirType_module_shallow(out: LirModule, mir: MirModule, rawName: String, path: String, diags: List<LirDiagnostic>) -> LirType {
+    let name = lirCanonicalizeOptionalSugar(rawName)
+    if name == "" {
+        return LirType {llvm: "", className: LirTypeUnknown}
+    }
+    let primitive = lirLowerPrimitiveTypeName(name)
+    if !(lirTypeIsZero(primitive)) {
+        return primitive
+    }
+    if lirIsRefBuiltinTypeName(name) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
+    let canon = lirCanonMangledBuiltinTypeName(name)
+    if canon != "" && lirIsRefBuiltinTypeName(canon) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
+    let structPos = lirMirLayoutIndexStructPos(out.layoutIndex, name)
+    if structPos >= 0 && structPos < mir.layouts.structs.len() {
+        let layout = mir.layouts.structs[structPos]
+        if layout.builtinSource != "" {
+            return LirType {llvm: "ptr", className: LirTypePtr}
+        }
+        let typeName = "%" + if layout.mangled == "" {
+            layout.name
+        } else {
+            layout.mangled
+        }
+        return LirType {llvm: typeName, className: LirTypeAggregate}
+    }
+    for layout in mir.layouts.structs {
+        if lirMirStructLayoutMatches(layout, name) {
+            if layout.builtinSource != "" {
+                return LirType {llvm: "ptr", className: LirTypePtr}
+            }
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            return LirType {llvm: typeName, className: LirTypeAggregate}
+        }
+    }
+    let tuplePos = lirMirLayoutIndexTuplePos(out.layoutIndex, name)
+    if tuplePos >= 0 && tuplePos < mir.layouts.tuples.len() {
+        let layout = mir.layouts.tuples[tuplePos]
+        let typeName = "%" + if layout.mangled == "" {
+            layout.key
+        } else {
+            layout.mangled
+        }
+        return LirType {llvm: typeName, className: LirTypeAggregate}
+    }
+    let enumPos = lirMirLayoutIndexEnumPos(out.layoutIndex, name)
+    if enumPos >= 0 && enumPos < mir.layouts.enums.len() {
+        let layout = mir.layouts.enums[enumPos]
+        if lirMirEnumIsPayloadFree(layout) {
+            return LirType {llvm: "i64", className: LirTypeInt}
+        }
+        let typeName = "%" + if layout.mangled == "" {
+            layout.name
+        } else {
+            layout.mangled
+        }
+        return LirType {llvm: typeName, className: LirTypeAggregate}
+    }
+    for layout in mir.layouts.enums {
+        if lirMirEnumLayoutMatches(layout, name) {
+            if lirMirEnumIsPayloadFree(layout) {
+                return LirType {llvm: "i64", className: LirTypeInt}
+            }
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            return LirType {llvm: typeName, className: LirTypeAggregate}
+        }
+    }
+    let ifacePos = lirMirLayoutIndexInterfacePos(out.layoutIndex, name)
+    if ifacePos >= 0 && ifacePos < mir.layouts.interfaces.len() {
+        lirDeclareIfaceType(out)
+        return LirType {llvm: lirIfaceTypeName(), className: LirTypeAggregate}
+    }
+    if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
+        let typeName = "%" + lirMangleAlgebraicTypeName(name)
+        let bodyText = lirAlgebraicAggregateBody_module(out, mir, name)
+        lirModuleDeclareTypeDef(out, lirTypeDef(typeName, bodyText))
+        return LirType {llvm: typeName, className: LirTypeAggregate}
+    }
+    if name == "ClosureEnv" || strings.startsWith(name, "fn(") {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
+    if strings.contains(name, "(") {
+        return LirType {llvm: name, className: LirTypeFunction}
+    }
+    if lirIsLikelyCrossPkgNominalName(name) {
+        return LirType {llvm: "ptr", className: LirTypePtr}
+    }
+    diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported layout field type `" + name + "` (" + lirTypeLowerTraceMessage(mir, name) + ")", path))
+    LirType {llvm: "", className: LirTypeUnknown}
+}
+
 // Module-context type lowering for a top-level type name. The normal
 // `lirLowerMirType` requires a `LirMirFunctionLowerer`; for
 // module-level globals we don't have one. Reproduce the relevant
@@ -2281,6 +2668,11 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
     if lirIsRefBuiltinTypeName(name) {
         return LirType {llvm: "ptr", className: LirTypePtr}
     }
+    let ifacePos = lirMirLayoutIndexInterfacePos(out.layoutIndex, name)
+    if ifacePos >= 0 && ifacePos < mir.layouts.interfaces.len() {
+        lirDeclareIfaceType(out)
+        return LirType {llvm: lirIfaceTypeName(), className: LirTypeAggregate}
+    }
     if lirMirModuleHasInterfaceLayout(mir, name) {
         lirDeclareIfaceType(out)
         return LirType {llvm: lirIfaceTypeName(), className: LirTypeAggregate}
@@ -2289,6 +2681,16 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
         let typeName = "%" + lirMangleAlgebraicTypeName(name)
         let bodyText = lirAlgebraicAggregateBody_module(out, mir, name)
         lirModuleDeclareTypeDef(out, lirTypeDef(typeName, bodyText))
+        return LirType {llvm: typeName, className: LirTypeAggregate}
+    }
+    let structPos = lirMirLayoutIndexStructPos(out.layoutIndex, name)
+    if structPos >= 0 && structPos < mir.layouts.structs.len() {
+        let layout = mir.layouts.structs[structPos]
+        let typeName = "%" + if layout.mangled == "" {
+            layout.name
+        } else {
+            layout.mangled
+        }
         return LirType {llvm: typeName, className: LirTypeAggregate}
     }
     for layout in mir.layouts.structs {
@@ -2300,6 +2702,20 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, rawName: String, path:
             }
             return LirType {llvm: typeName, className: LirTypeAggregate}
         }
+    }
+    let enumPos = lirMirLayoutIndexEnumPos(out.layoutIndex, name)
+    if enumPos >= 0 && enumPos < mir.layouts.enums.len() {
+        let layout = mir.layouts.enums[enumPos]
+        if lirMirEnumIsPayloadFree(layout) {
+            return LirType {llvm: "i64", className: LirTypeInt}
+        }
+        let typeName = "%" + if layout.mangled == "" {
+            layout.name
+        } else {
+            layout.mangled
+        }
+        lirModuleDeclareTypeDef(out, lirTypeDef(typeName, lirBraced("i64, i64")))
+        return LirType {llvm: typeName, className: LirTypeAggregate}
     }
     // Payload-free user enums lower to `i64` discriminant; payload-
     // bearing user enums to `{ i64 disc, i64 payload }`. Composite
@@ -2442,20 +2858,50 @@ fn lirAlgebraicAggregateBody_module(out: LirModule, mir: MirModule, name: String
     // as the Option/Result payload leaves the aggregate unsized
     // because the underlying runtime struct has no LLVM body.
     // Default to the i64 payload path (caller ptrtoint's the ptr).
-    if lirMirStructIsBuiltinSource(mir, payloadInner) {
+    if lirMirStructIsBuiltinSource(out, mir, payloadInner) {
         return lirBraced("i64, i64")
     }
-    let structRef = lirMirStructTypeRefByName(mir, payloadInner)
+    if lirMirStructLayoutDirectlyMentionsType(out, mir, payloadInner, name) {
+        return lirBraced("i64, i64")
+    }
+    let structRef = lirMirStructTypeRefByName(out, mir, payloadInner)
     if structRef == "" {
         return lirBraced("i64, i64")
     }
     lirBraced("i64, " + structRef)
 }
 
-fn lirMirStructIsBuiltinSource(mir: MirModule, name: String) -> Bool {
+fn lirMirStructIsBuiltinSource(out: LirModule, mir: MirModule, name: String) -> Bool {
+    let structPos = lirMirLayoutIndexStructPos(out.layoutIndex, name)
+    if structPos >= 0 && structPos < mir.layouts.structs.len() {
+        return mir.layouts.structs[structPos].builtinSource != ""
+    }
     for layout in mir.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
             return layout.builtinSource != ""
+        }
+    }
+    false
+}
+fn lirMirStructLayoutDirectlyMentionsType(out: LirModule, mir: MirModule, structName: String, typeName: String) -> Bool {
+    let canonical = lirCanonicalizeOptionalSugar(typeName)
+    let structPos = lirMirLayoutIndexStructPos(out.layoutIndex, structName)
+    if structPos >= 0 && structPos < mir.layouts.structs.len() {
+        for field in mir.layouts.structs[structPos].fields {
+            if lirCanonicalizeOptionalSugar(field.typ) == canonical {
+                return true
+            }
+        }
+        return false
+    }
+    for layout in mir.layouts.structs {
+        if lirMirStructLayoutMatches(layout, structName) {
+            for field in layout.fields {
+                if lirCanonicalizeOptionalSugar(field.typ) == canonical {
+                    return true
+                }
+            }
+            return false
         }
     }
     false
@@ -2508,7 +2954,17 @@ fn lirSplitFirstGenericArg(args: String) -> String {
 // for a named struct in `mir.layouts.structs`, or "" when not found. Used
 // by Option/Result aggregate widening so we don't recurse through
 // `lirLowerMirType_module`.
-fn lirMirStructTypeRefByName(mir: MirModule, name: String) -> String {
+fn lirMirStructTypeRefByName(out: LirModule, mir: MirModule, name: String) -> String {
+    let structPos = lirMirLayoutIndexStructPos(out.layoutIndex, name)
+    if structPos >= 0 && structPos < mir.layouts.structs.len() {
+        let layout = mir.layouts.structs[structPos]
+        let identifier = if layout.mangled == "" {
+            layout.name
+        } else {
+            layout.mangled
+        }
+        return "%" + identifier
+    }
     for layout in mir.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
             let identifier = if layout.mangled == "" {
@@ -2629,8 +3085,13 @@ fn lirEmitInterfaceShim(out: LirModule, mir: MirModule, layout: MirInterfaceLayo
     } else {
         lirRetValue(retType, "%res")
     })
-    entry.instrs.push(lirLoad("%self", selfType, "%self_data", 8))
-    args.push(lirOperand(selfType, "%self"))
+    let selfAbiType = lirMirParamAbiType(selfLocal.typ, selfType)
+    if lirMirParamShouldPassByRef(selfLocal.typ, selfType) && selfAbiType.className == LirTypePtr {
+        args.push(lirOperand(selfAbiType, "%self_data"))
+    } else {
+        entry.instrs.push(lirLoad("%self", selfType, "%self_data", 8))
+        args.push(lirOperand(selfAbiType, "%self"))
+    }
     let mut skipSelf = true
     let mut argIndex = 0
     for id in concrete.params {
@@ -2643,10 +3104,11 @@ fn lirEmitInterfaceShim(out: LirModule, mir: MirModule, layout: MirInterfaceLayo
             diags.push(lirDiagnosticError(LirDiagInvalidInput, "interface shim `" + concreteSymbol + "` parameter local is out of range", "interface." + layout.name + "." + method.name))
             return false
         }
-        let paramType = lirLowerMirType_module(out, mir, loc.typ, "interface." + layout.name + "." + method.name + ".arg", diags)
-        if lirTypeIsZero(paramType) || lirTypeIsVoid(paramType) {
+        let paramValueType = lirLowerMirType_module(out, mir, loc.typ, "interface." + layout.name + "." + method.name + ".arg", diags)
+        if lirTypeIsZero(paramValueType) || lirTypeIsVoid(paramValueType) {
             return false
         }
+        let paramType = lirMirParamAbiType(loc.typ, paramValueType)
         let paramName = "%a" + lirIntToString(argIndex)
         fn_.params.push(lirParam(paramName, paramType))
         args.push(lirOperand(paramType, paramName))
@@ -2659,6 +3121,7 @@ fn lirEmitInterfaceShim(out: LirModule, mir: MirModule, layout: MirInterfaceLayo
     }
     fn_.blocks.push(entry)
     out.functions.push(fn_)
+    out.renderedFunctions.push(lirRenderFunction(fn_))
     true
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
@@ -2669,6 +3132,8 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     }
     let mut out = lirModule(packageName, cfg.sourcePath, cfg.target)
     let mut diags: List<LirDiagnostic> = []
+    out.layoutIndex = lirMirBuildLayoutIndex(mir.layouts)
+    lirDeclareMirLayoutTypeDefs(out, mir, diags)
     lirEmitMirGlobals(out, mir, diags)
     lirLowerMirUses(out, mir)
     lirEmitInterfaceVTables(out, mir, diags)
@@ -2686,6 +3151,8 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
 
 pub fn lirLowerMirModuleListsInto(cfg: LirLowerConfig, stringPoolEntries: List<LirStringGlobal>, packageName: String, functions: List<MirFunction>, globals: List<MirGlobal>, uses: List<MirUse>, layouts: MirLayoutTable, span: MirSpan, out: LirModule, diags: List<LirDiagnostic>) {
     let mir = MirModule {packageName, functions, globals, uses, layouts, span}
+    out.layoutIndex = lirMirBuildLayoutIndex(layouts)
+    lirDeclareMirLayoutTypeDefs(out, mir, diags)
     lirEmitMirGlobals(out, mir, diags)
     lirLowerMirUses(out, mir)
     lirEmitInterfaceVTables(out, mir, diags)
@@ -2803,6 +3270,8 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     lowered.typeDefs = module.typeDefs
     lowered.runtimeDecls = module.runtimeDecls
     lowered.stringPool = module.stringPool
+    lowered.layoutIndex = lirMirBuildLayoutIndex(mir.layouts)
+    lirDeclareMirLayoutTypeDefs(lowered, mir, diagnostics)
     let stringPoolEntries = lowered.stringPool.entries
     lirLowerMirFunctionInto(cfg, mir, lowered, fn_, diagnostics, stringPoolEntries)
     LirLowerResult {module: lowered, diagnostics}
@@ -2818,11 +3287,17 @@ fn lirLowerMirFunctionInto(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     let gcRootSlots: List<String> = []
     let renderedBlocks: List<String> = []
     let tempNames: List<String> = []
-    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: module, diagnostics, prologue, instrs, slots, labels, tempNames, safepointSerial: 0, currentBlockLabel: "", extraBlocks, auxLabel: 0, gcRootSlots, parallelAccessGroupRef: "", stringPoolEntries, renderedBlocks}
+    let typeCache: Map<String, LirType> = {:}
+    let typeInProgress: Map<String, Bool> = {:}
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: module, diagnostics, prologue, instrs, slots, labels, tempNames, safepointSerial: 0, currentBlockLabel: "", extraBlocks, auxLabel: 0, gcRootSlots, parallelAccessGroupRef: "", stringPoolEntries, renderedBlocks, typeCache, typeInProgress}
     let name = lirRenderedMirFunctionNameOrMain(fn_)
     let hasBody = fn_.blocks.len() > 0
     if (fn_.isExternal || fn_.isIntrinsic) && !hasBody {
-        let externRet = lirLowerMirType(l, fn_.returnType)
+        let externRet = if lirIsStdFsRuntimeResultSymbol(name) {
+            lirPtrType()
+        } else {
+            lirLowerMirType(l, fn_.returnType)
+        }
         let mut externParams: List<LirType> = []
         externParams = lirLowerMirExternalParamsFromLocals(externParams, l, 0)
         lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(name, externRet, externParams, false))
@@ -2869,11 +3344,60 @@ fn lirLowerMirFunctionParamsFromLocals(params: List<LirParam>, name: String, l: 
             if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
                 lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", name)
             } else {
-                params.push(lirParamWithAttrs(lirMirParamName(loc.id), typ, lirParamAttrsFromMir(l.fn_, typ)))
+                let abiType = lirMirParamAbiType(loc.typ, typ)
+                params.push(lirParamWithAttrs(lirMirParamName(loc.id), abiType, lirParamAttrsFromMir(l.fn_, abiType)))
             }
         }
         i = i + 1
     }
+}
+
+fn lirMirParamAbiType(typeName: String, typ: LirType) -> LirType {
+    if lirMirParamShouldPassByRef(typeName, typ) {
+        return lirPtrType()
+    }
+    typ
+}
+fn lirMirParamShouldPassByRef(typeName: String, typ: LirType) -> Bool {
+    if typ.className != LirTypeAggregate {
+        return false
+    }
+    let name = if strings.startsWith(typeName, "%") {
+        strings.trimPrefix(typeName, "%")
+    } else {
+        typeName
+    }
+    lirMirParamNameShouldPassByRef(name)
+}
+fn lirMirParamNameShouldPassByRef(name: String) -> Bool {
+    name == "OstyParser" ||
+    name == "AstArena" ||
+    name == "TyArena" ||
+    name == "CoreArena" ||
+    name == "Solver" ||
+    name == "CheckEnv" ||
+    name == "CheckGlobalEnv" ||
+    name == "CheckLocalEnv" ||
+    name == "CheckNameIndexTable" ||
+    name == "CheckNameSetTable" ||
+    name == "CheckBindingStackIndex" ||
+    name == "CheckIntStackIndex" ||
+    name == "ElabCx" ||
+    name == "HirLowerer" ||
+    name == "HirLowerContext" ||
+    name == "HirBlock" ||
+    name == "MirLowerer" ||
+    name == "MirLowerBodyState" ||
+    name == "MirLowerMatchContext" ||
+    name == "MirBasicBlock" ||
+    name == "MirFunction" ||
+    name == "MirModule" ||
+    name == "MonoState" ||
+    name == "LirModule" ||
+    name == "LirRuntimeDecls" ||
+    name == "LirMirFunctionLowerer" ||
+    name == "OnbLowerState" ||
+    name == "SatState"
 }
 
 fn lirLowerMirFunctionParams(l: LirMirFunctionLowerer, ids: List<Int>, pos: Int, params: List<LirParam>, name: String) -> List<LirParam> {
@@ -2890,8 +3414,9 @@ fn lirLowerMirFunctionParams(l: LirMirFunctionLowerer, ids: List<Int>, pos: Int,
         if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
             lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "` (" + lirTypeLowerTraceMessage(l.mirModule, loc.typ) + ")", name)
         } else {
-            let attrs = lirParamAttrsFromMir(l.fn_, typ)
-            next.push(lirParamWithAttrs(lirMirParamName(id), typ, attrs))
+            let abiType = lirMirParamAbiType(loc.typ, typ)
+            let attrs = lirParamAttrsFromMir(l.fn_, abiType)
+            next.push(lirParamWithAttrs(lirMirParamName(id), abiType, attrs))
         }
     }
     return lirLowerMirFunctionParams(l, ids, pos + 1, next, name)
@@ -2908,7 +3433,7 @@ fn lirLowerMirFunctionBlocksInto(blocks: List<LirBlock>, ordered: List<MirBasicB
         blockInstrs = lirAppendLirInstrs(blockInstrs, l.prologue, 0)
     }
     let currentBlockLabel = lirLabelForMirBlock(l, bb.id)
-    let mut blockLowerer = LirMirFunctionLowerer {cfg: l.cfg, mirModule: l.mirModule, fn_: l.fn_, out: l.out, diagnostics: l.diagnostics, prologue: l.prologue, instrs: blockInstrs, slots: l.slots, labels: l.labels, tempNames: l.tempNames, safepointSerial: l.safepointSerial, currentBlockLabel, extraBlocks: blockExtraBlocks, auxLabel: l.auxLabel, gcRootSlots: l.gcRootSlots, parallelAccessGroupRef: l.parallelAccessGroupRef, stringPoolEntries: l.stringPoolEntries, renderedBlocks}
+    let mut blockLowerer = LirMirFunctionLowerer {cfg: l.cfg, mirModule: l.mirModule, fn_: l.fn_, out: l.out, diagnostics: l.diagnostics, prologue: l.prologue, instrs: blockInstrs, slots: l.slots, labels: l.labels, tempNames: l.tempNames, safepointSerial: l.safepointSerial, currentBlockLabel, extraBlocks: blockExtraBlocks, auxLabel: l.auxLabel, gcRootSlots: l.gcRootSlots, parallelAccessGroupRef: l.parallelAccessGroupRef, stringPoolEntries: l.stringPoolEntries, renderedBlocks, typeCache: l.typeCache, typeInProgress: l.typeInProgress}
     lirLowerMirBlockInstrs(bb.instrs, blockLowerer, 0)
     let term = lirLowerMirBlockTerm(blockLowerer, bb, ret)
     let mut next = lirAppendLirBlocks(blocks, blockLowerer.extraBlocks, 0)
@@ -3204,15 +3729,19 @@ fn lirLowerMirLocalsFrom(locals: List<MirLocal>, l: LirMirFunctionLowerer, pos: 
     }
     if !(lirTypeIsVoid(typ)) {
         let slot = lirMirLocalSlotName(loc.id)
-        l.slots.push(LirLocalSlot {id: loc.id, slot, typ})
-        l.prologue.push(lirAlloca(slot, typ, 0))
-        if loc.isParam {
-            l.prologue.push(lirStore(lirOperand(typ, lirMirParamName(loc.id)), slot, 0))
-        }
-        if lirTypeNameIsGCManaged(loc.typ) {
-            if !(loc.isParam) && typ.className == LirTypePtr {
-                l.prologue.push(lirStore(lirOperand(typ, "null"), slot, 0))
+        if loc.isParam && lirMirParamShouldPassByRef(loc.typ, typ) {
+            l.slots.push(LirLocalSlot {id: loc.id, slot: lirMirParamName(loc.id), typ})
+        } else {
+            l.slots.push(LirLocalSlot {id: loc.id, slot, typ})
+            l.prologue.push(lirAlloca(slot, typ, 0))
+            if loc.isParam {
+                l.prologue.push(lirStore(lirOperand(typ, lirMirParamName(loc.id)), slot, 0))
             }
+        }
+        if lirTypeNameIsGCManaged(loc.typ) && !(loc.isParam) && typ.className == LirTypePtr {
+            l.prologue.push(lirStore(lirOperand(typ, "null"), slot, 0))
+        }
+        if lirTypeNameIsGCManaged(loc.typ) && loc.isParam {
             lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirGcRootBindDecl())
             l.prologue.push(lirCall("", lirVoidType(), "@" + lirGcRootBindSymbol(), [lirOperand(lirPtrType(), slot)]))
             l.gcRootSlots.push(slot)
@@ -3267,7 +3796,16 @@ fn lirRuntimePanicDecl() -> LirRuntimeDecl {
 // binding order — the same LIFO discipline production uses
 // (generator.go::releaseGCRoots).
 fn lirEmitGcRootReleases(l: LirMirFunctionLowerer) {
-    return
+    if l.gcRootSlots.len() == 0 {
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirGcRootReleaseDecl())
+    let mut i = l.gcRootSlots.len()
+    for i > 0 {
+        i = i - 1
+        let slot = l.gcRootSlots[i]
+        l.instrs.push(lirCall("", lirVoidType(), "@" + lirGcRootReleaseSymbol(), [lirOperand(lirPtrType(), slot)]))
+    }
 }
 fn lirMirLocalSlot(l: LirMirFunctionLowerer, id: Int) -> LirLocalSlot {
     for slot in l.slots {
@@ -3393,9 +3931,11 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
             }
             l.instrs.push(lirStore(lirOperand(destType, "zeroinitializer"), slot.slot, 0))
             return
-        } else {
-            let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, destType, lirPrimitiveTypeIsUnsigned(instr.src.typ))
-            if castOp == "" {
+                } else if lirTypeIsVoid(value.typ) {
+                    value = LirOperand {typ: destType, value: lirZeroValue(destType)}
+                } else {
+                    let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, destType, lirPrimitiveTypeIsUnsigned(instr.src.typ))
+                    if castOp == "" {
                 // R3 brick 15: cross-family coercion case-by-case fix.
                 // Each branch emits *correct* LLVM IR (SSA-valid)
                 // instead of the brick-8 broadest "skip" path (which
@@ -3427,7 +3967,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                     l.instrs.push(lirCast(castName, "inttoptr", value, destType))
                     value = LirOperand {typ: destType, value: castName}
                 } else if value.typ.className == LirTypeAggregate && destType.className == LirTypeAggregate {
-                    let rebuilt = lirRebuildDefaultI64Aggregate(l, value, destType)
+                    let rebuilt = lirRebuildAlgebraicAggregate(l, value, destLoc.typ, destType)
                     if rebuilt.value == "" {
                         lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
                         return
@@ -3490,6 +4030,8 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                     }
                     l.instrs.push(lirStore(lirOperand(destType, "zeroinitializer"), voidSlot.slot, 0))
                     return
+                } else if lirTypeIsVoid(value.typ) {
+                    value = LirOperand {typ: destType, value: lirZeroValue(destType)}
                 } else {
                     lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
                     return
@@ -3533,7 +4075,7 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
             let castOp = lirPlanSameFamilyCoercionOpcode(stored.typ, leafType, lirPrimitiveTypeIsUnsigned(valueMirType))
             if castOp == "" {
                 if stored.typ.className == LirTypeAggregate && leafType.className == LirTypeAggregate {
-                    let rebuilt = lirRebuildDefaultI64Aggregate(l, stored, leafType)
+                    let rebuilt = lirRebuildAlgebraicAggregate(l, stored, leafTypeName, leafType)
                     if rebuilt.value != "" {
                         stored = rebuilt
                     } else {
@@ -3560,9 +4102,32 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
     l.instrs.push(lirLoad(base, rootType, slot.slot, 0))
     let mut frames: List<LirProjectionFrame> = []
     let mut current = lirOperand(rootType, base)
+    let mut listStoreActive = false
+    let mut listStoreReg = ""
+    let mut listStoreProj = mirProjInvalid()
+    let mut listStoreElemName = ""
     let mut idx = 0
     for proj in place.projections {
         if current.typ.className != LirTypeAggregate {
+            if current.typ.className == LirTypePtr && proj.kind == MirProjIndex && idx == place.projections.len() - 1 {
+                lirStoreIndexedListRegisterValue(l, current.value, proj, proj.typ, stored, leafTypeName, context)
+                return
+            }
+            if current.typ.className == LirTypePtr && proj.kind == MirProjIndex {
+                let element = lirLowerMirIndexProjection(l, l.instrs, current, proj)
+                if element.value == "" {
+                    return
+                }
+                listStoreActive = true
+                listStoreReg = current.value
+                listStoreProj = proj
+                listStoreElemName = proj.typ
+                let resetFrames: List<LirProjectionFrame> = []
+                frames = resetFrames
+                current = element
+                idx = idx + 1
+                continue
+            }
             lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type `" + current.typ.llvm + "` (projection kind: " + mirProjectionKindName(proj.kind) + ")", context)
             return
         }
@@ -3591,6 +4156,10 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
         rebuilt = lirOperand(fr.aggregate.typ, dest)
         i = i - 1
     }
+    if listStoreActive {
+        lirStoreIndexedListRegisterValue(l, listStoreReg, listStoreProj, listStoreElemName, rebuilt, listStoreElemName, context)
+        return
+    }
     l.instrs.push(lirStore(rebuilt, slot.slot, 0))
 }
 fn lirStoreIndexedListValue(l: LirMirFunctionLowerer, place: MirPlace, root: MirLocal, rootType: LirType, value: LirOperand, valueMirType: String, context: String) {
@@ -3610,6 +4179,13 @@ fn lirStoreIndexedListValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mir
     }
     let listReg = lirFresh(l)
     l.instrs.push(lirLoad(listReg, rootType, slot.slot, 0))
+    lirStoreIndexedListRegisterValue(l, listReg, proj, elemName, value, valueMirType, context)
+}
+fn lirStoreIndexedListRegisterValue(l: LirMirFunctionLowerer, listReg: String, proj: MirProjection, elemName: String, value: LirOperand, valueMirType: String, context: String) {
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, context + " could not extract list element type from projected index", context)
+        return
+    }
     let idx = lirLowerMirIndexProjectionIndex(l, l.instrs, proj)
     if idx.value == "" {
         return
@@ -3655,6 +4231,9 @@ fn lirCoerceValueToType(l: LirMirFunctionLowerer, value: LirOperand, valueMirTyp
     if value.typ.className == LirTypeUnknown {
         return LirOperand {typ: destType, value: value.value}
     }
+    if lirTypeIsVoid(value.typ) && !(lirTypeIsVoid(destType)) {
+        return LirOperand {typ: destType, value: lirZeroValue(destType)}
+    }
     if value.typ.className == LirTypeInt && destType.className == LirTypeAggregate && lirCoerceTargetIsPayloadEnum(l, destTypeName) {
         return lirEmitEnumDiscriminantAggregate(l, value, destType)
     }
@@ -3681,7 +4260,7 @@ fn lirCoerceValueToType(l: LirMirFunctionLowerer, value: LirOperand, valueMirTyp
         return lirOperand(destType, wrapped)
     }
     if value.typ.className == LirTypeAggregate && destType.className == LirTypeAggregate {
-        let rebuilt = lirRebuildDefaultI64Aggregate(l, value, destType)
+        let rebuilt = lirRebuildAlgebraicAggregate(l, value, destTypeName, destType)
         if rebuilt.value != "" {
             return rebuilt
         }
@@ -3747,6 +4326,110 @@ fn lirRebuildDefaultI64Aggregate(l: LirMirFunctionLowerer, value: LirOperand, de
     l.instrs.push(lirInsertValue(rebuilt, destType, step, lirOperand(lirIntType(64), payload), [1]))
     lirOperand(destType, rebuilt)
 }
+fn lirRebuildAlgebraicAggregate(l: LirMirFunctionLowerer, value: LirOperand, destTypeName: String, destType: LirType) -> LirOperand {
+    if value.typ.className != LirTypeAggregate || destType.className != LirTypeAggregate {
+        return lirOperandInvalid()
+    }
+    let defaultPair = lirRebuildDefaultI64Aggregate(l, value, destType)
+    if defaultPair.value != "" {
+        return defaultPair
+    }
+    let valueDefault = lirAggregateIsDefaultI64Pair(l.out, value.typ)
+    let destDefault = lirAggregateIsDefaultI64Pair(l.out, destType)
+    let valueWidened = lirAggregateHasWidenedPayload(l.out, value.typ)
+    let destWidened = lirAggregateHasWidenedPayload(l.out, destType)
+    if valueDefault && destWidened {
+        return lirRebuildDefaultI64AggregateIntoWidened(l, value, destTypeName, destType)
+    }
+    if valueWidened && destDefault {
+        return lirRebuildWidenedAggregateIntoDefaultI64(l, value, destType)
+    }
+    if valueWidened && destWidened {
+        return lirRebuildWidenedAggregateIntoWidened(l, value, destType)
+    }
+    lirOperandInvalid()
+}
+fn lirRebuildDefaultI64AggregateIntoWidened(l: LirMirFunctionLowerer, value: LirOperand, destTypeName: String, destType: LirType) -> LirOperand {
+    let payloadRef = lirOptionResultPayloadStructRef(l.out, destType.llvm)
+    if payloadRef == "" {
+        return lirOperandInvalid()
+    }
+    let payloadType = lirAggregateType(payloadRef)
+    let disc = lirFresh(l)
+    l.instrs.push(lirExtractValue(disc, value.typ, value.value, [0]))
+    let isOption = lirIsOptionTypeName(destTypeName) || lirStringHasQuestionSuffix(destTypeName)
+    if !(isOption) {
+        let payloadI64 = lirFresh(l)
+        l.instrs.push(lirExtractValue(payloadI64, value.typ, value.value, [1]))
+        let payload = lirUnboxCompositeFromI64(l, payloadI64, payloadType)
+        let step = lirFresh(l)
+        l.instrs.push(lirInsertValue(step, destType, "undef", lirOperand(lirIntType(64), disc), [0]))
+        let rebuilt = lirFresh(l)
+        l.instrs.push(lirInsertValue(rebuilt, destType, step, lirOperand(payloadType, payload), [1]))
+        return lirOperand(destType, rebuilt)
+    }
+    let present = lirFresh(l)
+    l.instrs.push(lirBinary(present, "icmp eq", lirIntType(64), disc, "0"))
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, destType, 0))
+    let someLabel = lirFreshAuxLabel(l, "alg.coerce.some")
+    let noneLabel = lirFreshAuxLabel(l, "alg.coerce.none")
+    let endLabel = lirFreshAuxLabel(l, "alg.coerce.end")
+    lirCutBlockCondBr(l, present, someLabel, noneLabel, someLabel)
+    let payloadI64 = lirFresh(l)
+    l.instrs.push(lirExtractValue(payloadI64, value.typ, value.value, [1]))
+    let payload = lirUnboxCompositeFromI64(l, payloadI64, payloadType)
+    let someStep = lirFresh(l)
+    l.instrs.push(lirInsertValue(someStep, destType, "undef", lirOperand(lirIntType(64), disc), [0]))
+    let someValue = lirFresh(l)
+    l.instrs.push(lirInsertValue(someValue, destType, someStep, lirOperand(payloadType, payload), [1]))
+    l.instrs.push(lirStore(lirOperand(destType, someValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = noneLabel
+    let noneStep = lirFresh(l)
+    l.instrs.push(lirInsertValue(noneStep, destType, "undef", lirOperand(lirIntType(64), disc), [0]))
+    let noneValue = lirFresh(l)
+    l.instrs.push(lirInsertValue(noneValue, destType, noneStep, lirOperand(payloadType, "zeroinitializer"), [1]))
+    l.instrs.push(lirStore(lirOperand(destType, noneValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, destType, slot, 0))
+    lirOperand(destType, merged)
+}
+fn lirRebuildWidenedAggregateIntoDefaultI64(l: LirMirFunctionLowerer, value: LirOperand, destType: LirType) -> LirOperand {
+    let payloadRef = lirOptionResultPayloadStructRef(l.out, value.typ.llvm)
+    if payloadRef == "" {
+        return lirOperandInvalid()
+    }
+    let payloadType = lirAggregateType(payloadRef)
+    let disc = lirFresh(l)
+    l.instrs.push(lirExtractValue(disc, value.typ, value.value, [0]))
+    let payload = lirFresh(l)
+    l.instrs.push(lirExtractValue(payload, value.typ, value.value, [1]))
+    let payloadI64 = lirBoxCompositeToI64(l, payload, payloadType)
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, destType, "undef", lirOperand(lirIntType(64), disc), [0]))
+    let rebuilt = lirFresh(l)
+    l.instrs.push(lirInsertValue(rebuilt, destType, step, lirOperand(lirIntType(64), payloadI64), [1]))
+    lirOperand(destType, rebuilt)
+}
+fn lirRebuildWidenedAggregateIntoWidened(l: LirMirFunctionLowerer, value: LirOperand, destType: LirType) -> LirOperand {
+    let valuePayloadRef = lirOptionResultPayloadStructRef(l.out, value.typ.llvm)
+    let destPayloadRef = lirOptionResultPayloadStructRef(l.out, destType.llvm)
+    if valuePayloadRef == "" || destPayloadRef == "" || valuePayloadRef != destPayloadRef {
+        return lirOperandInvalid()
+    }
+    let payloadType = lirAggregateType(destPayloadRef)
+    let disc = lirFresh(l)
+    l.instrs.push(lirExtractValue(disc, value.typ, value.value, [0]))
+    let payload = lirFresh(l)
+    l.instrs.push(lirExtractValue(payload, value.typ, value.value, [1]))
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, destType, "undef", lirOperand(lirIntType(64), disc), [0]))
+    let rebuilt = lirFresh(l)
+    l.instrs.push(lirInsertValue(rebuilt, destType, step, lirOperand(payloadType, payload), [1]))
+    lirOperand(destType, rebuilt)
+}
 fn lirAggregateIsDefaultI64Pair(out: LirModule, typ: LirType) -> Bool {
     if typ.className != LirTypeAggregate {
         return false
@@ -3783,6 +4466,9 @@ fn lirMirProjectionLeafType(projections: List<MirProjection>) -> String {
     }
     projections[projections.len() - 1].typ
 }
+fn lirIsStdFsRuntimeResultSymbol(symbol: String) -> Bool {
+    symbol == "std.fs.readToString" || symbol == "std.fs.walk" || symbol == "std.fs.mkdirAll" || symbol == "std.fs.writeString"
+}
 fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.calleeKind == MirCalleeIndirect {
         lirLowerMirIndirectCall(l, instr)
@@ -3798,6 +4484,10 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     if instr.calleeSymbol == "std.fs.readToString" {
         lirLowerMirStdFsReadToStringCall(l, instr)
+        return
+    }
+    if lirIsStdFsRuntimeResultSymbol(instr.calleeSymbol) {
+        lirLowerMirRuntimeBoxedResultCall(l, instr, "call.std.fs.result")
         return
     }
     if lirIsStdOsExecResultSymbol(instr.calleeSymbol) {
@@ -3991,6 +4681,47 @@ fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         let loc = mirFunctionLocal(l.fn_, instr.dest.local)
         lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "cross-module call result")
     }
+}
+fn lirLowerMirRuntimeBoxedResultCall(l: LirMirFunctionLowerer, instr: MirInstr, context: String) {
+    if !instr.hasDest {
+        lirLowerError(l, LirDiagInvalidInput, instr.calleeSymbol + " call requires a destination", context)
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, instr.calleeSymbol + " destination local out of range", context)
+        return
+    }
+    let resultType = lirLowerMirType(l, loc.typ)
+    if resultType.className != LirTypeAggregate {
+        lirLowerError(l, LirDiagUnsupported, instr.calleeSymbol + " destination must be Result<...>, got `" + loc.typ + "`", context)
+        return
+    }
+    if lirAggregateHasWidenedPayload(l.out, resultType) {
+        lirLowerError(l, LirDiagUnsupported, instr.calleeSymbol + " widened Result payload is not implemented", context)
+        return
+    }
+    let mut paramTypes: List<LirType> = []
+    let mut args: List<LirOperand> = []
+    for arg in instr.args {
+        let paramType = lirLowerMirType(l, arg.typ)
+        if lirTypeIsZero(paramType) {
+            lirLowerError(l, LirDiagUnsupported, instr.calleeSymbol + " arg type `" + arg.typ + "` is not implemented (" + lirTypeLowerTraceMessage(l.mirModule, arg.typ) + ")", context)
+            return
+        }
+        let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, paramType)
+        if value.value == "" {
+            return
+        }
+        paramTypes.push(paramType)
+        args.push(lirOperand(paramType, value.value))
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(instr.calleeSymbol, lirPtrType(), paramTypes, false))
+    let boxed = lirFresh(l)
+    l.instrs.push(lirCall(boxed, lirPtrType(), "@" + instr.calleeSymbol, args))
+    let loaded = lirFresh(l)
+    l.instrs.push(lirLoad(loaded, resultType, boxed, 8))
+    lirStoreMirResult(l, instr.dest, lirOperand(resultType, loaded), loc.typ, instr.calleeSymbol + " result")
 }
 fn lirIsStdOsExecResultSymbol(symbol: String) -> Bool {
     symbol == "osty_rt_os_exec_with" || symbol == "osty_rt_os_exec_input_with"
@@ -4253,18 +4984,70 @@ fn lirLowerMirCallArgs(l: LirMirFunctionLowerer, args: List<MirOperand>, callee:
     let mut i = 0
     for arg in args {
         let paramLocal = mirFunctionLocal(callee, callee.params[i])
-        let paramType = lirLowerMirType(l, paramLocal.typ)
-        let mut value = lirLowerMirOperand(l, l.instrs, arg, paramLocal.typ, paramType)
-        if value.typ.llvm != paramType.llvm {
-            value = lirCoerceValueToType(l, value, arg.typ, paramLocal.typ, paramType, "direct call arg")
-            if value.value == "" {
+        let paramValueType = lirLowerMirType(l, paramLocal.typ)
+        let paramType = lirMirParamAbiType(paramLocal.typ, paramValueType)
+        if lirMirParamShouldPassByRef(paramLocal.typ, paramValueType) && paramType.className == LirTypePtr {
+            let valuePtr = lirLowerMirAggregateArgAddress(l, arg, paramLocal.typ, paramValueType, "direct call arg")
+            if valuePtr.value == "" {
                 return out
             }
+            out.push(valuePtr)
+        } else {
+            let mut value = lirLowerMirOperand(l, l.instrs, arg, paramLocal.typ, paramType)
+            if value.typ.llvm != paramType.llvm {
+                value = lirCoerceValueToType(l, value, arg.typ, paramLocal.typ, paramType, "direct call arg")
+                if value.value == "" {
+                    return out
+                }
+            }
+            out.push(lirOperand(paramType, value.value))
         }
-        out.push(lirOperand(paramType, value.value))
         i = i + 1
     }
     out
+}
+
+fn lirLowerMirAggregateArgAddress(l: LirMirFunctionLowerer, arg: MirOperand, paramTypeName: String, paramType: LirType, context: String) -> LirOperand {
+    if arg.kind == MirOpCopy || arg.kind == MirOpMove {
+        let address = lirLowerMirAggregatePlaceAddress(l, arg.place, paramTypeName, context)
+        if address.value != "" {
+            return address
+        }
+    }
+    let value = lirLowerMirOperand(l, l.instrs, arg, paramTypeName, paramType)
+    if value.value == "" {
+        return lirOperandInvalid()
+    }
+    let tmp = lirFresh(l)
+    l.instrs.push(lirAlloca(tmp, value.typ, 0))
+    l.instrs.push(lirStore(value, tmp, 0))
+    lirOperand(lirPtrType(), tmp)
+}
+fn lirLowerMirAggregatePlaceAddress(l: LirMirFunctionLowerer, place: MirPlace, rootTypeName: String, context: String) -> LirOperand {
+    let slot = lirMirLocalSlotFrom(l.slots, place.local, 0)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagInvalidInput, context + " aggregate argument local has no slot", context)
+        return lirOperandInvalid()
+    }
+    if place.projections.len() == 0 {
+        return lirOperand(lirPtrType(), slot.slot)
+    }
+    let mut currentPtr = slot.slot
+    let mut currentType = slot.typ
+    for proj in place.projections {
+        let step = lirProjectionStepFromMir(l, proj)
+        if step.kind == LirProjInvalid {
+            return lirOperandInvalid()
+        }
+        if currentType.className != LirTypeAggregate {
+            return lirOperandInvalid()
+        }
+        let nextPtr = lirFresh(l)
+        l.instrs.push(lirGep(nextPtr, currentType, currentPtr, [lirOperand(lirIntType(32), "0"), lirOperand(lirIntType(32), lirIntToString(step.index))], true))
+        currentPtr = nextPtr
+        currentType = step.typ
+    }
+    lirOperand(lirPtrType(), currentPtr)
 }
 fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperand, resultTypeName: String, context: String) {
     let loc = mirFunctionLocal(l.fn_, dest.local)
@@ -6535,7 +7318,7 @@ fn lirLowerMirMapRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
     if key.value == "" {
         return
     }
-    lirEmitContainerCall(l, instr, llvmMapRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value)], "", "map.remove")
+    lirEmitContainerCall(l, instr, llvmMapRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value)], "Bool", "map.remove")
 }
 // `Map.get(key) -> Option<V>` lowering. Production calls
 // `osty_rt_map_get_<keysuf>(map, key, out_ptr) -> i1` where the runtime
@@ -8057,6 +8840,9 @@ fn lirLowerMirListLinearScan(l: LirMirFunctionLowerer, instr: MirInstr, wantInde
 // bitcast through `bitcast double %x to i64` so the bit pattern is
 // preserved. Returns the i64 register name.
 fn lirParseResultPayloadAsI64(l: LirMirFunctionLowerer, valueReg: String, valueType: LirType) -> String {
+    if valueReg == "" || lirTypeIsVoid(valueType) {
+        return "0"
+    }
     if valueType.llvm == "i64" {
         return valueReg
     }
@@ -8243,10 +9029,15 @@ fn lirIsResultTypeName(name: String) -> Bool {
 // a valid identifier even for nested generics (`%Option.List_Int_`).
 fn lirMangleAlgebraicTypeName(name: String) -> String {
     let mut out = name
+    out = strings.replaceAll(out, "()", "Unit")
     out = strings.replaceAll(out, "<", ".")
     out = strings.replaceAll(out, ">", "")
     out = strings.replaceAll(out, ",", "_")
     out = strings.replaceAll(out, " ", "")
+    out = strings.replaceAll(out, "(", ".tuple.")
+    out = strings.replaceAll(out, ")", "")
+    out = strings.replaceAll(out, "[", ".array.")
+    out = strings.replaceAll(out, "]", "")
     out
 }
 fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> LirTerm {
@@ -8515,15 +9306,37 @@ fn lirLowerMirBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
     if lirBinaryIsStringComparison(rv) {
         return lirLowerMirStringComparison(l, rv)
     }
-    let argType = if lirMirBinaryIsComparison(rv.binaryOp) {
+    let mut argType = if lirMirBinaryIsComparison(rv.binaryOp) {
         lirLowerMirType(l, rv.arg.typ)
     } else if lirTypeIsZero(hint) {
         lirLowerMirType(l, rv.arg.typ)
     } else {
         hint
     }
-    let left = lirLowerMirOperand(l, l.instrs, rv.arg, rv.arg.typ, argType)
-    let right = lirLowerMirOperand(l, l.instrs, rv.right, rv.right.typ, argType)
+    let mut left = lirLowerMirOperand(l, l.instrs, rv.arg, rv.arg.typ, argType)
+    let mut right = lirLowerMirOperand(l, l.instrs, rv.right, rv.right.typ, argType)
+    if lirTypeIsZero(argType) {
+        if !(lirTypeIsZero(left.typ)) {
+            argType = left.typ
+        } else if !(lirTypeIsZero(right.typ)) {
+            argType = right.typ
+        }
+    }
+    if left.value == "" || right.value == "" {
+        return lirOperandInvalid()
+    }
+    if left.typ.llvm != argType.llvm {
+        left = lirCoerceValueToType(l, left, rv.arg.typ, rv.arg.typ, argType, "binary left")
+        if left.value == "" {
+            return lirOperandInvalid()
+        }
+    }
+    if right.typ.llvm != argType.llvm {
+        right = lirCoerceValueToType(l, right, rv.right.typ, rv.right.typ, argType, "binary right")
+        if right.value == "" {
+            return lirOperandInvalid()
+        }
+    }
     let resType = if lirMirBinaryIsComparison(rv.binaryOp) {
         lirIntType(1)
     } else {
@@ -8875,17 +9688,21 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
         l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirAggregateType(structRef), payload.value), [1]))
         return lirOperand(aggType, value)
     }
-    let payloadI64 = if rv.aggFields.len() == 0 {
-        "0"
-    } else if rv.aggFields.len() == 1 {
+    let mut payloadI64 = "0"
+    if rv.aggFields.len() == 1 {
         let arg = rv.aggFields[0]
         let argHint = lirLowerMirType(l, arg.typ)
         let value = lirLowerMirOperand(l, l.instrs, arg, arg.typ, argHint)
         if value.value == "" {
-            return lirOperandInvalid()
+            if lirTypeIsVoid(value.typ) || arg.typ == "Unit" || arg.typ == "()" {
+                payloadI64 = "0"
+            } else {
+                return lirOperandInvalid()
+            }
+        } else {
+            payloadI64 = lirParseResultPayloadAsI64(l, value.value, value.typ)
         }
-        lirParseResultPayloadAsI64(l, value.value, value.typ)
-    } else {
+    } else if rv.aggFields.len() > 1 {
         lirLowerError(l, LirDiagUnsupported, "enum variant with " + lirIntToString(rv.aggFields.len()) + " payload fields (only scalar / 0-arity supported)", "aggregate.enum")
         return lirOperandInvalid()
     }
@@ -8920,17 +9737,9 @@ fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: 
         }
         let mut value = lirLowerMirOperand(l, l.instrs, field, fieldLayout.typ, fieldType)
         if value.typ.llvm != fieldType.llvm {
-            if value.typ.className == LirTypeUnknown {
-                value = LirOperand {typ: fieldType, value: value.value}
-            } else {
-                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
-                if castOp == "" {
-                    lirLowerError(l, LirDiagUnsupported, "tuple field coercion is not supported", "aggregate.tuple")
-                    return lirOperandInvalid()
-                }
-                let castName = lirFresh(l)
-                l.instrs.push(lirCast(castName, castOp, value, fieldType))
-                value = LirOperand {typ: fieldType, value: castName}
+            value = lirCoerceValueToType(l, value, field.typ, fieldLayout.typ, fieldType, "aggregate.tuple")
+            if value.value == "" {
+                return lirOperandInvalid()
             }
         }
         let dest = lirFresh(l)
@@ -8983,17 +9792,9 @@ fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName:
         }
         let mut value = lirLowerMirOperand(l, l.instrs, field, fieldLayout.typ, fieldType)
         if value.typ.llvm != fieldType.llvm {
-            if value.typ.className == LirTypeUnknown {
-                value = LirOperand {typ: fieldType, value: value.value}
-            } else {
-                let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, fieldType, lirPrimitiveTypeIsUnsigned(field.typ))
-                if castOp == "" {
-                    lirLowerError(l, LirDiagUnsupported, "struct field coercion is not supported", "aggregate.struct")
-                    return lirOperandInvalid()
-                }
-                let castName = lirFresh(l)
-                l.instrs.push(lirCast(castName, castOp, value, fieldType))
-                value = LirOperand {typ: fieldType, value: castName}
+            value = lirCoerceValueToType(l, value, field.typ, fieldLayout.typ, fieldType, "aggregate.struct")
+            if value.value == "" {
+                return lirOperandInvalid()
             }
         }
         let dest = lirFresh(l)
@@ -9029,20 +9830,28 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                 lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection `" + mirProjectionKindName(proj.kind) + "`", "projection." + mirProjectionKindName(proj.kind))
                 return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
             }
-            if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
-                let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
-                if mapTypeName != "" {
-                    current = lirLowerMirMapIndexProjection(l, instrs, current, mapTypeName, proj)
-                } else {
-                    current = lirLowerMirIndexProjection(l, instrs, current, proj)
-                }
+	            if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
+	                let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
+	                if mapTypeName != "" {
+	                    current = lirLowerMirMapIndexProjection(l, instrs, current, mapTypeName, proj)
+	                } else {
+	                    current = lirLowerMirIndexProjection(l, instrs, current, proj)
+	                }
                 if current.value == "" {
                     return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
                 }
-                currentTypeName = proj.typ
-                continue
-            }
-            if current.typ.className != LirTypeAggregate {
+	                currentTypeName = proj.typ
+	                continue
+	            }
+	            if step.kind == LirProjField && current.typ.className == LirTypePtr && lirIsStdOsOutputTypeName(currentTypeName) {
+	                current = lirLowerMirStdOsOutputFieldProjection(l, instrs, current, currentTypeName, proj)
+	                if current.value == "" {
+	                    return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
+	                }
+	                currentTypeName = proj.typ
+	                continue
+	            }
+	            if current.typ.className != LirTypeAggregate {
                 // R3 brick 18: empty/unknown current.typ — projection
                 // skip, promote to step.typ. brick 17 패턴 (simple if
                 // + literal eq).
@@ -9087,15 +9896,35 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, instrs: List<LirInstr>, op: MirO
                         currentTypeName = proj.typ
                         continue
                     }
-                    if step.typ.className == LirTypeInt {
-                        let castName = lirFresh(l)
-                        instrs.push(lirCast(castName, "trunc", current, step.typ))
-                        current = LirOperand {typ: step.typ, value: castName}
-                        currentTypeName = proj.typ
-                        continue
-                    }
-                    if step.typ.className == LirTypeAggregate {
-                        // i64 → Option/Result aggregate: Some/Ok wrap
+	                    if step.typ.className == LirTypeInt {
+	                        let castName = lirFresh(l)
+	                        instrs.push(lirCast(castName, "trunc", current, step.typ))
+	                        current = LirOperand {typ: step.typ, value: castName}
+	                        currentTypeName = proj.typ
+	                        continue
+	                    }
+	                    if step.kind == LirProjVariant {
+	                        if lirTypeIsVoid(step.typ) {
+	                            current = LirOperand {typ: lirIntType(64), value: current.value}
+	                            currentTypeName = proj.typ
+	                            continue
+	                        }
+	                        if step.typ.className == LirTypeUnknown || step.typ.llvm == "" {
+	                            let castName = lirFresh(l)
+	                            instrs.push(lirCast(castName, "inttoptr", current, lirPtrType()))
+	                            current = LirOperand {typ: lirPtrType(), value: castName}
+	                            currentTypeName = proj.typ
+	                            continue
+	                        }
+	                        let narrowed = lirNarrowI64ToType(l, current.value, step.typ)
+	                        if narrowed != "" {
+	                            current = LirOperand {typ: step.typ, value: narrowed}
+	                            currentTypeName = proj.typ
+	                            continue
+	                        }
+	                    }
+	                    if step.typ.className == LirTypeAggregate {
+	                        // i64 → Option/Result aggregate: Some/Ok wrap
                         // (disc=0 + i64 payload). lirEmitAlgebraicI64
                         // 의 same path — assign coercion brick 15 cover.
                         let merged = lirEmitAlgebraicI64(l, step.typ, 0, current.value, "projection.i64.wrap")
@@ -9212,20 +10041,82 @@ fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, rootTypeNam
 			lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection `" + mirProjectionKindName(proj.kind) + "`", "projection." + mirProjectionKindName(proj.kind))
 			return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
 		}
-		if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
-			let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
-			if mapTypeName != "" {
-				current = lirLowerMirMapIndexProjection(l, l.instrs, current, mapTypeName, proj)
-			} else {
-				current = lirLowerMirIndexProjection(l, l.instrs, current, proj)
-			}
+			if step.kind == LirProjIndex && current.typ.className == LirTypePtr {
+				let mapTypeName = lirMapProjectionReceiverTypeName(l, currentTypeName)
+				if mapTypeName != "" {
+					current = lirLowerMirMapIndexProjection(l, l.instrs, current, mapTypeName, proj)
+				} else {
+					current = lirLowerMirIndexProjection(l, l.instrs, current, proj)
+				}
 			if current.value == "" {
 				return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
 			}
-			currentTypeName = proj.typ
-			continue
-		}
-		if current.typ.className != LirTypeAggregate {
+				currentTypeName = proj.typ
+				continue
+			}
+			if step.kind == LirProjField && current.typ.className == LirTypePtr && lirIsStdOsOutputTypeName(currentTypeName) {
+				current = lirLowerMirStdOsOutputFieldProjection(l, l.instrs, current, currentTypeName, proj)
+				if current.value == "" {
+					return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
+				}
+				currentTypeName = proj.typ
+				continue
+			}
+			if current.typ.className != LirTypeAggregate {
+			if lirStringEq(current.typ.llvm, "") {
+				current = LirOperand {typ: step.typ, value: current.value}
+				currentTypeName = proj.typ
+				continue
+			}
+			if lirStringEq(current.typ.llvm, "i64") && lirStringEq(step.typ.llvm, "i64") {
+				current = LirOperand {typ: step.typ, value: current.value}
+				currentTypeName = proj.typ
+				continue
+			}
+			if lirStringEq(current.typ.llvm, "i64") {
+				if step.typ.className == LirTypePtr {
+					let castName = lirFresh(l)
+					l.instrs.push(lirCast(castName, "inttoptr", current, step.typ))
+					current = LirOperand {typ: step.typ, value: castName}
+					currentTypeName = proj.typ
+					continue
+				}
+				if step.typ.className == LirTypeInt {
+					let castName = lirFresh(l)
+					l.instrs.push(lirCast(castName, "trunc", current, step.typ))
+					current = LirOperand {typ: step.typ, value: castName}
+					currentTypeName = proj.typ
+					continue
+				}
+				if step.kind == LirProjVariant {
+					if lirTypeIsVoid(step.typ) {
+						current = LirOperand {typ: lirIntType(64), value: current.value}
+						currentTypeName = proj.typ
+						continue
+					}
+					if step.typ.className == LirTypeUnknown || step.typ.llvm == "" {
+						let castName = lirFresh(l)
+						l.instrs.push(lirCast(castName, "inttoptr", current, lirPtrType()))
+						current = LirOperand {typ: lirPtrType(), value: castName}
+						currentTypeName = proj.typ
+						continue
+					}
+					let narrowed = lirNarrowI64ToType(l, current.value, step.typ)
+					if narrowed != "" {
+						current = LirOperand {typ: step.typ, value: narrowed}
+						currentTypeName = proj.typ
+						continue
+					}
+				}
+				if step.typ.className == LirTypeAggregate {
+					let merged = lirEmitAlgebraicI64(l, step.typ, 0, current.value, "projection.i64.wrap")
+					if !lirStringEq(merged, "undef") {
+						current = LirOperand {typ: step.typ, value: merged}
+						currentTypeName = proj.typ
+						continue
+					}
+				}
+			}
 			lirLowerError(l, LirDiagUnsupported, "projection on non-aggregate type `" + current.typ.llvm + "`", "projection." + mirProjectionKindName(proj.kind))
 			return LirOperand {typ: LirType {llvm: "", className: LirTypeUnknown}, value: ""}
         }
@@ -9236,6 +10127,69 @@ fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, rootTypeNam
 		currentTypeName = proj.typ
 	}
 	current
+}
+
+fn lirIsStdOsOutputTypeName(name: String) -> Bool {
+    name == "Output" || name == "ExecOutput"
+}
+
+fn lirLowerMirStdOsOutputFieldProjection(l: LirMirFunctionLowerer, instrs: List<LirInstr>, value: LirOperand, typeName: String, proj: MirProjection) -> LirOperand {
+    let mut fieldIndex = proj.index
+    if proj.name != "" {
+        let namedIndex = lirStdOsOutputFieldIndex(typeName, proj.name)
+        if namedIndex >= 0 {
+            fieldIndex = namedIndex
+        }
+    }
+    let fieldType = lirStdOsOutputFieldType(typeName, fieldIndex)
+    if fieldType.llvm == "" {
+        lirLowerError(l, LirDiagUnsupported, "std.os output field `" + proj.name + "` is not implemented", "projection.field")
+        return lirOperandInvalid()
+    }
+    let boxType = if typeName == "ExecOutput" {
+        lirRawType(lirBraced("i64, ptr, ptr, i1"))
+    } else {
+        lirRawType(lirBraced("i64, ptr, ptr"))
+    }
+    let ptr = lirFresh(l)
+    instrs.push(lirGep(ptr, boxType, value.value, [lirOperand(lirIntType(32), "0"), lirOperand(lirIntType(32), lirIntToString(fieldIndex))], true))
+    let loaded = lirFresh(l)
+    let align = if fieldType.llvm == "i1" {
+        1
+    } else {
+        8
+    }
+    instrs.push(lirLoad(loaded, fieldType, ptr, align))
+    lirOperand(fieldType, loaded)
+}
+
+fn lirStdOsOutputFieldIndex(typeName: String, field: String) -> Int {
+    if field == "exitCode" {
+        return 0
+    }
+    if field == "stdout" {
+        return 1
+    }
+    if field == "stderr" {
+        return 2
+    }
+    if typeName == "ExecOutput" && field == "timedOut" {
+        return 3
+    }
+    -1
+}
+
+fn lirStdOsOutputFieldType(typeName: String, index: Int) -> LirType {
+    if index == 0 {
+        return lirIntType(64)
+    }
+    if index == 1 || index == 2 {
+        return lirPtrType()
+    }
+    if typeName == "ExecOutput" && index == 3 {
+        return lirIntType(1)
+    }
+    lirTypeInvalid()
 }
 
 fn lirMaybeNarrowAlgebraicPayload(l: LirMirFunctionLowerer, aggregateType: LirType, rawValue: String, step: LirProjectionStep) -> String {
@@ -9399,8 +10353,14 @@ fn lirRenderBareFnThunk(symbol: String, retType: LirType, paramTypes: List<LirTy
 // in which case the caller should fall back to the raw fn-pointer
 // shape and skip closure wrapping.
 fn lirEnsureBareFnThunk(l: LirMirFunctionLowerer, symbol: String) -> Bool {
-    if listContainsString(l.out.thunkSymbols, symbol) {
-        return true
+    match l.out.thunkSymbolSet.get(symbol) {
+        Some(seen) -> {
+            if seen {
+                return true
+            }
+        },
+        None -> {
+        },
     }
     let mut foundIdx = -1
     let mut i = 0
@@ -9443,11 +10403,12 @@ fn lirEnsureBareFnThunk(l: LirMirFunctionLowerer, symbol: String) -> Bool {
         if pt.className == LirTypeUnknown && pt.llvm == "" {
             return false
         }
-        paramTypes.push(pt)
+        paramTypes.push(lirMirParamAbiType(loc.typ, pt))
     }
     let rendered = lirRenderBareFnThunk(symbol, retType, paramTypes)
     l.out.renderedFunctions.push(rendered)
     l.out.thunkSymbols.push(symbol)
+    l.out.thunkSymbolSet.insert(symbol, true)
     true
 }
 
@@ -9593,17 +10554,168 @@ fn lirInterfaceConcreteName(name: String) -> String {
     }
     name
 }
+fn lirLowerMirTypeCached(l: LirMirFunctionLowerer, name: String, typ: LirType) -> LirType {
+    if name != "" {
+        l.typeCache.insert(name, typ)
+        l.out.mirTypeCache.insert(name, typ)
+    }
+    typ
+}
+fn lirLowerMirTypeCacheKey(l: LirMirFunctionLowerer, key: String, typ: LirType) {
+    if key == "" {
+        return
+    }
+    l.typeCache.insert(key, typ)
+    l.out.mirTypeCache.insert(key, typ)
+    if !(strings.startsWith(key, "%")) {
+        l.typeCache.insert("%" + key, typ)
+        l.out.mirTypeCache.insert("%" + key, typ)
+    }
+}
+fn lirLowerMirTypeCacheAliases(l: LirMirFunctionLowerer, name: String, aliasA: String, aliasB: String, typ: LirType) -> LirType {
+    lirLowerMirTypeCacheKey(l, name, typ)
+    lirLowerMirTypeCacheKey(l, aliasA, typ)
+    lirLowerMirTypeCacheKey(l, aliasB, typ)
+    typ
+}
+fn lirLowerMirTypeProgressKey(l: LirMirFunctionLowerer, key: String, active: Bool) {
+    if key == "" {
+        return
+    }
+    l.typeInProgress.insert(key, active)
+    if !(strings.startsWith(key, "%")) {
+        l.typeInProgress.insert("%" + key, active)
+    }
+}
+fn lirLowerMirTypeSetProgress(l: LirMirFunctionLowerer, name: String, aliasA: String, aliasB: String, active: Bool) {
+    lirLowerMirTypeProgressKey(l, name, active)
+    lirLowerMirTypeProgressKey(l, aliasA, active)
+    lirLowerMirTypeProgressKey(l, aliasB, active)
+}
+fn lirLowerMirTypeProgressKeyActive(l: LirMirFunctionLowerer, key: String) -> Bool {
+    if key == "" {
+        return false
+    }
+    match l.typeInProgress.get(key) {
+        Some(active) -> {
+            return active
+        },
+        None -> {
+        },
+    }
+    false
+}
+fn lirLowerMirTypeInProgress(l: LirMirFunctionLowerer, name: String, aliasA: String, aliasB: String) -> Bool {
+    if lirLowerMirTypeProgressKeyActive(l, name) {
+        return true
+    }
+    if lirLowerMirTypeProgressKeyActive(l, aliasA) {
+        return true
+    }
+    if lirLowerMirTypeProgressKeyActive(l, aliasB) {
+        return true
+    }
+    false
+}
+fn lirLowerMirInterfaceLayoutType(l: LirMirFunctionLowerer, name: String, layout: MirInterfaceLayout) -> LirType {
+    lirDeclareIfaceType(l.out)
+    lirLowerMirTypeCacheAliases(l, name, layout.name, "", LirType {llvm: lirIfaceTypeName(), className: LirTypeAggregate})
+}
+
+fn lirLowerMirStructLayoutType(l: LirMirFunctionLowerer, name: String, layout: MirStructLayout) -> LirType {
+    let typeName = "%" + if layout.mangled == "" {
+        layout.name
+    } else {
+        layout.mangled
+    }
+    let aggregateType = LirType {llvm: typeName, className: LirTypeAggregate}
+    if lirLowerMirTypeInProgress(l, name, layout.name, layout.mangled) {
+        return aggregateType
+    }
+    lirLowerMirTypeCacheAliases(l, name, layout.name, layout.mangled, aggregateType)
+    let body = lirMirStructLayoutBodyShallow(l.out, l.mirModule, layout, "layout.struct." + layout.name, l.diagnostics)
+    if body == "" {
+        return LirType {llvm: "", className: LirTypeUnknown}
+    }
+    lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, body))
+    return lirLowerMirTypeCacheAliases(l, name, layout.name, layout.mangled, aggregateType)
+}
+
+fn lirLowerMirTupleLayoutType(l: LirMirFunctionLowerer, name: String, layout: MirTupleLayout) -> LirType {
+    let typeName = "%" + if layout.mangled == "" {
+        layout.key
+    } else {
+        layout.mangled
+    }
+    let aggregateType = LirType {llvm: typeName, className: LirTypeAggregate}
+    if lirLowerMirTypeInProgress(l, name, layout.key, layout.mangled) {
+        return aggregateType
+    }
+    lirLowerMirTypeCacheAliases(l, name, layout.key, layout.mangled, aggregateType)
+    let body = lirMirTupleLayoutBodyShallow(l.out, l.mirModule, layout, "layout.tuple." + layout.key, l.diagnostics)
+    if body == "" {
+        return LirType {llvm: "", className: LirTypeUnknown}
+    }
+    lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, body))
+    return lirLowerMirTypeCacheAliases(l, name, layout.key, layout.mangled, aggregateType)
+}
+fn lirLowerMirSyntheticTupleType(l: LirMirFunctionLowerer, name: String) -> LirType {
+    let args = lirTupleTypeArgs(name)
+    if args.len() == 0 {
+        return lirLowerMirTypeCached(l, name, lirIntType(64))
+    }
+    let mut types: List<LirType> = []
+    for arg in args {
+        let typ = lirLowerMirType(l, arg)
+        if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
+            return lirLowerMirTypeCached(l, name, LirType {llvm: "", className: LirTypeUnknown})
+        }
+        types.push(typ)
+    }
+    let typeName = lirTupleTypeNameFromTypes(types)
+    lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, lirTupleTypeBody(types)))
+    lirLowerMirTypeCacheAliases(l, name, typeName, "", LirType {llvm: typeName, className: LirTypeAggregate})
+}
+
+fn lirLowerMirEnumLayoutType(l: LirMirFunctionLowerer, name: String, layout: MirEnumLayout) -> LirType {
+    if lirMirEnumIsPayloadFree(layout) {
+        return lirLowerMirTypeCacheAliases(l, name, layout.name, layout.mangled, LirType {llvm: "i64", className: LirTypeInt})
+    }
+    let typeName = "%" + if layout.mangled == "" {
+        layout.name
+    } else {
+        layout.mangled
+    }
+    lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, lirBraced("i64, i64")))
+    return lirLowerMirTypeCacheAliases(l, name, layout.name, layout.mangled, LirType {llvm: typeName, className: LirTypeAggregate})
+}
+
 fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     let name = lirCanonicalizeOptionalSugar(rawName)
     if name.len() == 0 {
         return LirType {llvm: "", className: LirTypeUnknown}
     }
+    match l.typeCache.get(name) {
+        Some(cached) -> {
+            return cached
+        },
+        None -> {
+        },
+    }
+    match l.out.mirTypeCache.get(name) {
+        Some(cached) -> {
+            l.typeCache.insert(name, cached)
+            return cached
+        },
+        None -> {
+        },
+    }
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
-        return primitive
+        return lirLowerMirTypeCached(l, name, primitive)
     }
     if lirIsRefBuiltinTypeName(name) {
-        return LirType {llvm: "ptr", className: LirTypePtr}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: "ptr", className: LirTypePtr})
     }
     // A monomorphized builtin-generic struct (`_ZTS…List…`) injected by
     // OSTY_STDLIB_BODY_LOWER is pointer-shaped exactly like the surface
@@ -9612,7 +10724,7 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     // as a ref-builtin without needing a separate head extractor.
     let canonName = lirCanonBuiltinTypeName(l, name)
     if canonName != name && lirIsRefBuiltinTypeName(canonName) {
-        return LirType {llvm: "ptr", className: LirTypePtr}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: "ptr", className: LirTypePtr})
     }
     // Closure env aggregates and `fn(...) -> ...` function-value types
     // are pointer-shaped at the LLVM ABI boundary. A lifted closure
@@ -9629,12 +10741,15 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     // / `onb_abi` already treat with `==`. `fn(` is a structural
     // function-value spelling and is correct as a prefix match.
     if name == "ClosureEnv" || strings.startsWith(name, "fn(") {
-        return LirType {llvm: "ptr", className: LirTypePtr}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: "ptr", className: LirTypePtr})
+    }
+    let ifacePos = lirMirLayoutIndexInterfacePos(l.out.layoutIndex, name)
+    if ifacePos >= 0 && ifacePos < l.mirModule.layouts.interfaces.len() {
+        return lirLowerMirInterfaceLayoutType(l, name, l.mirModule.layouts.interfaces[ifacePos])
     }
     for layout in l.mirModule.layouts.interfaces {
         if lirMirInterfaceLayoutMatches(layout, name) {
-            lirDeclareIfaceType(l.out)
-            return LirType {llvm: lirIfaceTypeName(), className: LirTypeAggregate}
+            return lirLowerMirInterfaceLayoutType(l, name, layout)
         }
     }
     if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
@@ -9647,45 +10762,28 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
         // would mint the wrong typedef for the whole module.
         let body = lirAlgebraicAggregateBody_module(l.out, l.mirModule, name)
         lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, body))
-        return LirType {llvm: typeName, className: LirTypeAggregate}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: typeName, className: LirTypeAggregate})
+    }
+    let structPos = lirMirLayoutIndexStructPos(l.out.layoutIndex, name)
+    if structPos >= 0 && structPos < l.mirModule.layouts.structs.len() {
+        return lirLowerMirStructLayoutType(l, name, l.mirModule.layouts.structs[structPos])
     }
     for layout in l.mirModule.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
-            let typeName = "%" + if layout.mangled == "" {
-                layout.name
-            } else {
-                layout.mangled
-            }
-            let mut parts: List<String> = []
-            for field in layout.fields {
-                let fieldType = lirLowerMirType(l, field.typ)
-                if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
-                    return LirType {llvm: "", className: LirTypeUnknown}
-                }
-                parts.push(lirTypeString(fieldType))
-            }
-            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, lirBraced(strings.join(parts, ", "))))
-            return LirType {llvm: typeName, className: LirTypeAggregate}
+            return lirLowerMirStructLayoutType(l, name, layout)
         }
+    }
+    let tuplePos = lirMirLayoutIndexTuplePos(l.out.layoutIndex, name)
+    if tuplePos >= 0 && tuplePos < l.mirModule.layouts.tuples.len() {
+        return lirLowerMirTupleLayoutType(l, name, l.mirModule.layouts.tuples[tuplePos])
     }
     for layout in l.mirModule.layouts.tuples {
         if lirMirTupleLayoutMatches(layout, name) {
-            let typeName = "%" + if layout.mangled == "" {
-                layout.key
-            } else {
-                layout.mangled
-            }
-            let mut parts: List<String> = []
-            for field in layout.fields {
-                let fieldType = lirLowerMirType(l, field.typ)
-                if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
-                    return LirType {llvm: "", className: LirTypeUnknown}
-                }
-                parts.push(lirTypeString(fieldType))
-            }
-            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, lirBraced(strings.join(parts, ", "))))
-            return LirType {llvm: typeName, className: LirTypeAggregate}
+            return lirLowerMirTupleLayoutType(l, name, layout)
         }
+    }
+    if lirIsTupleTypeName(name) {
+        return lirLowerMirSyntheticTupleType(l, name)
     }
     // Payload-free user enums lower to a bare `i64` discriminant.
     // Payload-bearing enums lower to `{ i64 disc, i64 payload }` —
@@ -9694,22 +10792,17 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     // a known limitation tracked separately; primitive and pointer
     // payloads (Int/Bool/Char/Byte/Float64/String/List/etc.) round-trip
     // correctly.
+    let enumPos = lirMirLayoutIndexEnumPos(l.out.layoutIndex, name)
+    if enumPos >= 0 && enumPos < l.mirModule.layouts.enums.len() {
+        return lirLowerMirEnumLayoutType(l, name, l.mirModule.layouts.enums[enumPos])
+    }
     for layout in l.mirModule.layouts.enums {
         if lirMirEnumLayoutMatches(layout, name) {
-            if lirMirEnumIsPayloadFree(layout) {
-                return LirType {llvm: "i64", className: LirTypeInt}
-            }
-            let typeName = "%" + if layout.mangled == "" {
-                layout.name
-            } else {
-                layout.mangled
-            }
-            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, lirBraced("i64, i64")))
-            return LirType {llvm: typeName, className: LirTypeAggregate}
+            return lirLowerMirEnumLayoutType(l, name, layout)
         }
     }
     if strings.contains(name, "(") {
-        return LirType {llvm: name, className: LirTypeFunction}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: name, className: LirTypeFunction})
     }
     // Cross-package nominal type fallback. A reference to a type
     // declared in another package (e.g. `Error` from `std.error`
@@ -9742,9 +10835,9 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
     // silently becoming `ptr`. Names containing a `.` are also
     // accepted — fully qualified cross-pkg refs like `osty.Error`.
     if lirIsLikelyCrossPkgNominalName(name) {
-        return LirType {llvm: "ptr", className: LirTypePtr}
+        return lirLowerMirTypeCached(l, name, LirType {llvm: "ptr", className: LirTypePtr})
     }
-    LirType {llvm: "", className: LirTypeUnknown}
+    lirLowerMirTypeCached(l, name, LirType {llvm: "", className: LirTypeUnknown})
 }
 // lirIsLikelyCrossPkgNominalName: heuristic for "this looks like a
 // nominal type name from another package we couldn't find a layout
@@ -9799,6 +10892,10 @@ fn lirIsLikelyCrossPkgNominalName(name: String) -> Bool {
 // monomorphizer keeps the printed type name intact so we just sniff
 // the canonical prefix instead of dragging the full Osty type AST in.
 fn lirFindMirStructLayout(l: LirMirFunctionLowerer, name: String) -> MirStructLayout {
+    let structPos = lirMirLayoutIndexStructPos(l.out.layoutIndex, name)
+    if structPos >= 0 && structPos < l.mirModule.layouts.structs.len() {
+        return l.mirModule.layouts.structs[structPos]
+    }
     for layout in l.mirModule.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
             return layout
@@ -9809,23 +10906,71 @@ fn lirFindMirStructLayout(l: LirMirFunctionLowerer, name: String) -> MirStructLa
     MirStructLayout {name: "", mangled: "", fields, size: 0, align: 0, builtinSource: "", builtinSourceArgs: bsArgs}
 }
 fn lirFindMirTupleLayout(l: LirMirFunctionLowerer, name: String) -> MirTupleLayout {
+    let tuplePos = lirMirLayoutIndexTuplePos(l.out.layoutIndex, name)
+    if tuplePos >= 0 && tuplePos < l.mirModule.layouts.tuples.len() {
+        return l.mirModule.layouts.tuples[tuplePos]
+    }
     for layout in l.mirModule.layouts.tuples {
         if lirMirTupleLayoutMatches(layout, name) {
             return layout
         }
     }
+    if lirIsTupleTypeName(name) {
+        return lirSyntheticTupleLayout(name)
+    }
     let fields: List<MirFieldLayout> = []
     MirTupleLayout {key: "", mangled: "", fields}
+}
+fn lirSyntheticTupleLayout(name: String) -> MirTupleLayout {
+    let args = lirTupleTypeArgs(name)
+    let mut fields: List<MirFieldLayout> = []
+    let mut i = 0
+    for arg in args {
+        fields.push(MirFieldLayout {index: i, name: lirIntToString(i), typ: arg})
+        i = i + 1
+    }
+    MirTupleLayout {key: name, mangled: "", fields}
+}
+fn lirMirQualifiedSuffixMatches(candidate: String, name: String) -> Bool {
+    if candidate == "" || name == "" {
+        return false
+    }
+    if candidate.len() <= name.len() {
+        return false
+    }
+    if !strings.endsWith(candidate, name) {
+        return false
+    }
+    let dotIndex = candidate.len() - name.len() - 1
+    strings.slice(candidate, dotIndex, dotIndex + 1) == "."
+}
+fn lirMirGenericPrefixMatches(candidate: String, name: String) -> Bool {
+    if candidate == "" {
+        return false
+    }
+    if name.len() <= candidate.len() + 1 {
+        return false
+    }
+    if strings.slice(name, 0, candidate.len()) != candidate {
+        return false
+    }
+    strings.slice(name, candidate.len(), candidate.len() + 1) == "<"
+}
+fn lirMirPercentNameMatches(candidate: String, name: String) -> Bool {
+    if candidate == "" || !strings.startsWith(name, "%") {
+        return false
+    }
+    strings.trimPrefix(name, "%") == candidate
 }
 fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
     if layout.name == name || layout.mangled == name {
         return true
     }
-    if layout.name != "" && "%" + layout.name == name {
-        return true
-    }
-    if layout.mangled != "" && "%" + layout.mangled == name {
-        return true
+    if strings.startsWith(name, "%") {
+        let bareName = strings.trimPrefix(name, "%")
+        if layout.name == bareName || layout.mangled == bareName {
+            return true
+        }
     }
     // Cross-pkg suffix match: an injected stdlib body references a
     // local struct by its BARE name (`BasicError`) but the layout was
@@ -9834,11 +10979,10 @@ fn lirMirStructLayoutMatches(layout: MirStructLayout, name: String) -> Bool {
     // misses the layout in lirLowerMirType → falls through to the
     // PR #2004 opaque-ptr fallback → constructor emits insertvalue
     // on a `ptr` which LLVM rejects as not aggregate-typed.
-    let suffix = "." + name
-    if layout.name != "" && strings.endsWith(layout.name, suffix) {
+    if lirMirQualifiedSuffixMatches(layout.name, name) {
         return true
     }
-    if layout.mangled != "" && strings.endsWith(layout.mangled, suffix) {
+    if lirMirQualifiedSuffixMatches(layout.mangled, name) {
         return true
     }
     false
@@ -9853,16 +10997,16 @@ fn lirMirEnumLayoutMatches(layout: MirEnumLayout, name: String) -> Bool {
     if layout.name == name || layout.mangled == name {
         return true
     }
-    if layout.name != "" && "%" + layout.name == name {
+    if strings.startsWith(name, "%") {
+        let bareName = strings.trimPrefix(name, "%")
+        if layout.name == bareName || layout.mangled == bareName {
+            return true
+        }
+    }
+    if lirMirGenericPrefixMatches(layout.name, name) {
         return true
     }
-    if layout.mangled != "" && "%" + layout.mangled == name {
-        return true
-    }
-    if layout.name != "" && strings.startsWith(name, layout.name + "<") {
-        return true
-    }
-    if layout.mangled != "" && strings.startsWith(name, layout.mangled + "<") {
+    if lirMirGenericPrefixMatches(layout.mangled, name) {
         return true
     }
     false
@@ -9885,10 +11029,10 @@ fn lirMirTupleLayoutMatches(layout: MirTupleLayout, name: String) -> Bool {
     if layout.key == name || layout.mangled == name {
         return true
     }
-    if layout.key != "" && "%" + layout.key == name {
+    if lirMirPercentNameMatches(layout.key, name) {
         return true
     }
-    if layout.mangled != "" && "%" + layout.mangled == name {
+    if lirMirPercentNameMatches(layout.mangled, name) {
         return true
     }
     false
@@ -9897,7 +11041,7 @@ fn lirMirInterfaceLayoutMatches(layout: MirInterfaceLayout, name: String) -> Boo
     if layout.name == name {
         return true
     }
-    if layout.name != "" && "%" + layout.name == name {
+    if lirMirPercentNameMatches(layout.name, name) {
         return true
     }
     false
@@ -10085,6 +11229,9 @@ fn lirMirCompareOpcode(op: String, isFloat: Bool, unsigned: Bool) -> String {
 fn lirZeroValue(typ: LirType) -> String {
     if typ.llvm == "ptr" {
         return "null"
+    }
+    if typ.className == LirTypeAggregate {
+        return "zeroinitializer"
     }
     if typ.className == LirTypeFloat {
         return "0.0"

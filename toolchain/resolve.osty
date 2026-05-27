@@ -425,7 +425,9 @@ fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolve
 /// so that `for { || { break } }` is correctly rejected: the loop doesn't
 /// leak through the closure barrier. These mirror the Go resolver's flowCtx.
 struct SelfResolveScope {
-    symbols: List<SelfSymbol>,
+    rootSymbols: List<SelfSymbol>,
+    rootIndex: Map<String, Int>,
+    locals: List<SelfSymbol>,
     depth: Int,
     ifaceDefault: Bool,
     inFn: Bool,
@@ -435,41 +437,71 @@ struct SelfResolveScope {
     loopLabelEnds: List<Int>,
 }
 fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
-    SelfResolveScope {symbols: srSymbolListCopy(result.symbols), depth: 0, ifaceDefault: false, inFn: false, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
+    SelfResolveScope {rootSymbols: result.symbols, rootIndex: srBuildSymbolIndex(result.symbols), locals: [], depth: 0, ifaceDefault: false, inFn: false, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
 }
 fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
-    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: parent.inLoop, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
+    SelfResolveScope {rootSymbols: parent.rootSymbols, rootIndex: parent.rootIndex, locals: srSymbolListCopy(parent.locals), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: parent.inLoop, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
 }
 fn srFnChildScope(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveScope {
-    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault, inFn: true, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
+    SelfResolveScope {rootSymbols: parent.rootSymbols, rootIndex: parent.rootIndex, locals: srSymbolListCopy(parent.locals), depth: parent.depth + 1, ifaceDefault, inFn: true, inLoop: false, loopLabels: [], loopLabelStarts: [], loopLabelEnds: []}
 }
 fn srLoopChildScope(parent: SelfResolveScope) -> SelfResolveScope {
-    SelfResolveScope {symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: true, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
+    SelfResolveScope {rootSymbols: parent.rootSymbols, rootIndex: parent.rootIndex, locals: srSymbolListCopy(parent.locals), depth: parent.depth + 1, ifaceDefault: parent.ifaceDefault, inFn: parent.inFn, inLoop: true, loopLabels: srStringListCopy(parent.loopLabels), loopLabelStarts: srIntListCopy(parent.loopLabelStarts), loopLabelEnds: srIntListCopy(parent.loopLabelEnds)}
 }
 fn srScopeDefine(scope: SelfResolveScope, result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srIsDiscardName(sym.name) {
         return out
     }
-    if srSymbolExistsAtDepth(scope.symbols, sym.name, scope.depth) {
+    if srScopeSymbolExistsAtDepth(scope, sym.name, scope.depth) {
         return srDuplicateAtNode(out, sym.name, sym.start, sym.end, sym.node)
     }
     let mut scoped = sym
     scoped.depth = scope.depth
-    scope.symbols.push(scoped)
+    scope.locals.push(scoped)
     out
 }
 fn srScopeLookup(scope: SelfResolveScope, name: String) -> SelfSymbol {
-    let mut found = selfSymbol("", "", "", 0, -1, 0, 0, false)
-    for sym in scope.symbols {
+    let mut i = scope.locals.len() - 1
+    for i >= 0 {
+        let sym = scope.locals[i]
         if sym.name == name {
-            found = sym
+            return sym
         }
+        i = i - 1
     }
-    found
+    srScopeLookupRoot(scope, name)
 }
 fn srScopeHas(scope: SelfResolveScope, name: String) -> Bool {
     srScopeLookup(scope, name).name != ""
+}
+fn srBuildSymbolIndex(symbols: List<SelfSymbol>) -> Map<String, Int> {
+    let mut index: Map<String, Int> = {:}
+    let mut i = 0
+    for sym in symbols {
+        index.insert(sym.name, i)
+        i = i + 1
+    }
+    index
+}
+fn srScopeLookupRoot(scope: SelfResolveScope, name: String) -> SelfSymbol {
+    match scope.rootIndex.get(name) {
+        Some(pos) -> {
+            if pos >= 0 && pos < scope.rootSymbols.len() {
+                return scope.rootSymbols[pos]
+            }
+        },
+        None -> {
+        },
+    }
+    srEmptySymbol()
+}
+fn srScopeSymbolExistsAtDepth(scope: SelfResolveScope, name: String, depth: Int) -> Bool {
+    if depth == 0 {
+        let sym = srScopeLookupRoot(scope, name)
+        return sym.name != ""
+    }
+    srSymbolExistsAtDepth(scope.locals, name, depth)
 }
 fn selfResolveAstCollectTopLevel(file: AstFile, cfg: SelfResolveCfgEnv, result: SelfResolveResult) -> SelfResolveResult {
     let mut out = result
@@ -1240,7 +1272,7 @@ fn srAstResolveOrPattern(file: AstFile, node: AstNode, scope: SelfResolveScope, 
         altCount = altCount + 1
         let altScope = srChildScope(scope)
         out = srAstResolvePattern(file, altIdx, altScope, out)
-        let bound = srSymbolsAtDepth(altScope.symbols, altScope.depth)
+        let bound = srSymbolsAtDepth(altScope.locals, altScope.depth)
         for sym in bound {
             let existing = srStringListIndex(names, sym.name)
             if existing >= 0 {
@@ -1716,7 +1748,10 @@ fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
 }
 fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
     let mut names: List<String> = []
-    for sym in scope.symbols {
+    for sym in scope.rootSymbols {
+        names.push(sym.name)
+    }
+    for sym in scope.locals {
         names.push(sym.name)
     }
     srSuggestFromList(name, names)

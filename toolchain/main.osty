@@ -21,8 +21,15 @@ fn forwardedArgsFrom(encoded: String, rawArgs: List<String>) -> List<String> {
     }
     out
 }
+fn selfRebuildRawSubcommand(rawArgs: List<String>, name: String) -> Bool {
+    rawArgs.len() > 1 && rawArgs[1] == name
+}
 fn forwardedArgs() -> List<String> {
-    forwardedArgsFrom(env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? "", env.args())
+    let rawArgs = env.args()
+    if selfRebuildRawSubcommand(rawArgs, "--selfhost-doctor") || selfRebuildRawSubcommand(rawArgs, "compile") || selfRebuildRawSubcommand(rawArgs, "lir-proto-lower") || selfRebuildRawSubcommand(rawArgs, "lir-proto-lower-mir-json") {
+        return forwardedArgsFrom("", rawArgs)
+    }
+    forwardedArgsFrom(env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? "", rawArgs)
 }
 fn hasSelfhostCommand(args: List<String>, name: String) -> Bool {
     args.len() > 0 && args[0] == name
@@ -80,9 +87,21 @@ fn selfRebuildWriteString(path: String, contents: String) -> String {
     match fs.writeString(path, contents) {
         Ok(_) -> "",
         Err(_) -> {
-            "write failed: " + path
+            selfRebuildWriteStringViaShell(path, contents)
         },
     }
+}
+fn selfRebuildWriteStringViaShell(path: String, contents: String) -> String {
+    let out = match os.execWith("/bin/sh", ["-c", "cat > \"$1\"", "osty-self-write", path], contents, selfRebuildChildEnv(), 0) {
+        Ok(o) -> o,
+        Err(_) -> {
+            return "write failed: " + path
+        },
+    }
+    if out.timedOut || out.exitCode != 0 {
+        return selfRebuildCommandError("write", "cat > " + path, out.stdout, out.stderr)
+    }
+    ""
 }
 fn selfRebuildToolchainSourcePaths(toolchainDir: String) -> Result<List<String>, String> {
     let entries = match fs.walk(toolchainDir) {
@@ -214,10 +233,7 @@ fn selfRebuildHostIsDarwin() -> Bool {
     }
 }
 fn selfRebuildHostIsWindows() -> Bool {
-    match os.execWith("cmd", ["/C", "ver"], "", {:}, 0) {
-        Ok(_) -> true,
-        Err(_) -> false,
-    }
+    false
 }
 fn selfRebuildIsWindowsTarget(target: String) -> Bool {
     if target == "" {
@@ -284,12 +300,17 @@ fn selfRebuildRunClang(action: String, args: List<String>) -> String {
     let msg = strings.trimSpace(out.stderr + "\n" + out.stdout)
     "clang " + action + " failed\ncommand: clang " + strings.join(args, " ") + "\n" + msg
 }
+fn selfRebuildChildEnv() -> Map<String, String> {
+    let mut childEnv: Map<String, String> = {:}
+    childEnv.insert("OSTY_SELF_REBUILD_FORWARD_ARGS", "")
+    childEnv
+}
 fn selfRebuildRunSelfLower(exe: String, bundlePath: String, target: String) -> String {
     let mut args: List<String> = ["lir-proto-lower", bundlePath, "--package-name=main"]
     if target != "" {
         args.push("--target=" + target)
     }
-    let out = match os.execWith(exe, args, "", {:}, 0) {
+    let out = match os.execWith(exe, args, "", selfRebuildChildEnv(), 0) {
         Ok(o) -> o,
         Err(_) -> {
             eprint("osty-self rebuild: self LIR Proto lower failed to start\n")
@@ -300,6 +321,12 @@ fn selfRebuildRunSelfLower(exe: String, bundlePath: String, target: String) -> S
         return out.stdout
     }
     eprint("osty-self rebuild: self LIR Proto lower failed\n")
+    let timedOutText = if out.timedOut {
+        "true"
+    } else {
+        "false"
+    }
+    eprint("exitCode=" + lirIntToString(out.exitCode) + " timedOut=" + timedOutText + "\n")
     eprint(strings.trimSpace(out.stderr + "\n" + out.stdout) + "\n")
     ""
 }
@@ -375,7 +402,16 @@ fn runSelfRebuild(args: List<String>) -> Int {
     0
 }
 fn selfhostProbeSource() -> String {
-    "fn main() -> Int \{\n    let x = 41\n    return x + 1\n\}\n"
+    r"""
+fn add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn main() -> Int {
+    let x = 41
+    return add(x, 1)
+}
+"""
 }
 fn selfhostProbeError() -> String {
     let source = selfhostProbeSource()
@@ -415,7 +451,7 @@ fn selfhostDoctorProbeError(exe: String) -> String {
 	if writeErr != "" {
         return "write probe failed: " + writeErr
     }
-    let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", {:}, 0) {
+    let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", selfRebuildChildEnv(), 0) {
         Ok(o) -> o,
             Err(_) -> {
                 return "lir-proto-lower probe failed to start"
@@ -521,53 +557,12 @@ fn runSelfhostDoctor() -> Int {
 		eprint("osty-self self-rebuild probe failed: executable not found\n")
 		return 2
     }
-    let probePath = selfRebuildTempPath("osty-self-doctor-probe.osty")
-    let mut probeError = ""
-    let writeErr = selfRebuildWriteString(probePath, selfhostProbeSource())
-    if writeErr != "" {
-        probeError = "write probe failed: " + writeErr
-    } else {
-        let out = match os.execWith(exe, ["lir-proto-lower", probePath, "--package-name=main"], "", {:}, 0) {
-            Ok(o) -> o,
-            Err(_) -> {
-                probeError = "lir-proto-lower probe failed to start"
-                os.execOutput(1, "", "", false)
-            },
-        }
-        if probeError == "" {
-            if out.exitCode != 0 || out.timedOut {
-                let msg = strings.trimSpace(out.stderr + "\n" + out.stdout)
-                if msg == "" {
-                    probeError = "lir-proto-lower probe failed"
-                } else {
-                    probeError = msg
-                }
-            } else if out.stdout == "" {
-                probeError = "LLVM IR renderer returned empty output"
-            } else if !strings.contains(out.stdout, "define") {
-                probeError = "LLVM IR renderer produced no function definition"
-            } else if !strings.contains(out.stdout, "ret ") {
-                probeError = "LLVM IR renderer produced no return instruction"
-            } else if strings.contains(out.stdout, "body omitted") || strings.contains(out.stdout, "function bodies stubbed") {
-                probeError = "LLVM IR renderer still reports stubbed function bodies"
-            }
-        }
-	}
+    let probeError = selfhostProbeError()
 	println("osty-self mode: self-rebuild")
 	println("osty-self host compiler: disabled")
 	if probeError != "" {
 		println("osty-self source compiler: disabled")
-		let mirProbeError = selfhostMirProbeError()
-		if mirProbeError == "" {
-			println("osty-self MIR JSON backend: enabled")
-			println("osty-self pipeline: MIR JSON -> LIR Proto -> LLVM IR")
-			println("osty-self self-rebuild probe: OK")
-			println("osty-self self-rebuild driver: MIR JSON backend -> clang object/runtime link")
-			return 0
-		}
-		println("osty-self MIR JSON backend: disabled")
 		eprint("osty-self self-rebuild probe failed: " + probeError + "\n")
-		eprint("osty-self MIR JSON probe failed: " + mirProbeError + "\n")
 		return 1
 	}
 	println("osty-self source compiler: enabled")
@@ -575,6 +570,9 @@ fn runSelfhostDoctor() -> Int {
     println("osty-self self-rebuild probe: OK")
     println("osty-self self-rebuild driver: source bundle -> clang object/runtime link")
     0
+}
+fn selfhostLowerSource(packageName: String, source: String) -> HirModule {
+    hirLowerSource(packageName, source)
 }
 /// runCompile is the self-host pipeline entry used by the rebuild
 /// scripts: read a source file, run the toolchain pipeline (HIR → MIR),
@@ -595,7 +593,7 @@ fn runCompile(args: List<String>) -> Int {
             return 2
         },
     }
-    let hir = hirLowerSource("main", source)
+    let hir = selfhostLowerSource("main", source)
     let mir = mirLowerModule(hir)
     let checkedMir = mirModuleWithPackageName("main", mir)
     let mirErrs = mirValidateModule(checkedMir)
@@ -659,7 +657,7 @@ fn runLirProtoLower(args: List<String>) -> Int {
             return 2
         },
     }
-    let hir = hirLowerSource(packageName, source)
+    let hir = selfhostLowerSource(packageName, source)
     let mir = mirLowerModule(hir)
     let checkedMir = mirModuleWithPackageName(packageName, mir)
     let mirErrs = mirValidateModule(checkedMir)
