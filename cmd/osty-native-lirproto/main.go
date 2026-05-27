@@ -63,9 +63,9 @@ const selfLowerTimeoutEnv = "OSTY_LIRPROTO_SELF_TIMEOUT"
 // MIR JSON timeout. Use "0" to disable timeout compatibility retries.
 const selfTimeoutCompatMaxBytesEnv = "OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES"
 
-// selfSourceCompatMaxBytesEnv bounds the legacy source retry used
+// selfSourceCompatMaxBytesEnv opts into the legacy source retry used
 // only when an older osty-self cannot handle MIR JSON directly.
-// Use "0" to disable the size guard.
+// Unset or "0" disables source re-lowering; positive values bound it.
 const selfSourceCompatMaxBytesEnv = "OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES"
 
 func main() {
@@ -318,10 +318,25 @@ func lowerLegacyMIRJSON(req nativelirproto.Request, selfBin string) (nativelirpr
 		}
 		return nativelirproto.Response{Declined: true, Error: "legacy osty-self does not support MIR JSON requests"}, nil
 	}
-	if max := sourceCompatMaxBytes(); max > 0 && len([]byte(req.Source)) > max {
+	sourceBytes := len([]byte(req.Source))
+	max := sourceCompatMaxBytes()
+	if max <= 0 {
 		sourceResp := nativelirproto.Response{
 			Declined: true,
-			Error:    fmt.Sprintf("legacy source compat skipped: source is %d bytes, exceeds %d byte guard", len([]byte(req.Source)), max),
+			Error:    fmt.Sprintf("legacy source compat skipped: set %s to a positive byte limit to enable source re-lowering", selfSourceCompatMaxBytesEnv),
+		}
+		if !triedStage0 {
+			return sourceResp, nil
+		}
+		return nativelirproto.Response{
+			Declined: true,
+			Error:    combineDeclineErrors(stage0Resp.Error, sourceResp.Error),
+		}, nil
+	}
+	if sourceBytes > max {
+		sourceResp := nativelirproto.Response{
+			Declined: true,
+			Error:    fmt.Sprintf("legacy source compat skipped: source is %d bytes, exceeds %d byte guard", sourceBytes, max),
 		}
 		if !triedStage0 {
 			return sourceResp, nil
@@ -413,15 +428,12 @@ func combineDeclineErrors(primary, secondary string) string {
 
 func sourceCompatMaxBytes() int {
 	if raw := os.Getenv(selfSourceCompatMaxBytesEnv); raw != "" {
-		if raw == "0" {
-			return 0
-		}
 		var n int
 		if _, err := fmt.Sscanf(raw, "%d", &n); err == nil && n >= 0 {
 			return n
 		}
 	}
-	return 1 << 20
+	return 0
 }
 
 func timeoutCompatMaxBytes() int64 {

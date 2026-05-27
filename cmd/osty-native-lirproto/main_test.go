@@ -243,13 +243,14 @@ func TestValidateSelfHostedLLVMIRCatchesUndefinedTemps(t *testing.T) {
 	}
 }
 
-func TestRunMIRPayloadRetriesSourceWhenMirJSONUnsupported(t *testing.T) {
+func TestRunMIRPayloadRetriesSourceWhenMirJSONUnsupportedAndCompatEnabled(t *testing.T) {
 	bin := buildFakeOstySelf(t)
 	captureDir := t.TempDir()
 	captureArgs := filepath.Join(captureDir, "args.json")
 	captureSource := filepath.Join(captureDir, "source.osty")
 
 	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(selfSourceCompatMaxBytesEnv, "1048576")
 	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_SOURCE", captureSource)
@@ -287,6 +288,51 @@ func TestRunMIRPayloadRetriesSourceWhenMirJSONUnsupported(t *testing.T) {
 	}
 	if staged := readFile(t, captureSource); !strings.Contains(staged, "fn main() -> Int { 7 }") {
 		t.Fatalf("compat retry staged %q, want original source", staged)
+	}
+}
+
+func TestRunMIRPayloadSkipsLegacySourceCompatByDefault(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	captureDir := t.TempDir()
+	captureArgs := filepath.Join(captureDir, "args.json")
+
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
+	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; source compat should not run\ndefine i64 @main() {\n  ret i64 7\n}\n")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		Source:      "fn main() -> Int { 7 }\n",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want default source compat skip: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "legacy source compat skipped") || !strings.Contains(resp.Error, selfSourceCompatMaxBytesEnv) {
+		t.Fatalf("Error = %q, want source compat opt-in guard", resp.Error)
+	}
+	if strings.Contains(resp.LLVMIR, "source compat should not run") {
+		t.Fatalf("source compat unexpectedly produced IR:\n%s", resp.LLVMIR)
+	}
+	args := readCapturedArgs(t, captureArgs)
+	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
+		t.Fatalf("args = %v, want only MIR JSON attempt", args)
 	}
 }
 
