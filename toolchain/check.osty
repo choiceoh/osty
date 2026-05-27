@@ -1048,18 +1048,40 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         checkBindSpan(cx.env, "self", sig.receiverTy, true, node.start, node.end)
     }
     let mut i = 0
-    for pname in sig.paramNames {
+    for paramIdx in node.children {
+        let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
+        if paramNode.kind != AstNParam {
+            let _ = paramIdx
+            continue
+        }
+        if sig.receiverTy >= 0 && paramNode.text == "self" {
+            continue
+        }
         let pty = if i < checkIntListLenLocal(sig.paramTys) {
             checkIntListAtLocal(sig.paramTys, i)
         } else {
             tErr(cx.env.tys)
         }
-        let bindName = if pname.startsWith("?") {
-            strings.trimPrefix(pname, "?")
+        let sigName = if i < sig.paramNames.len() {
+            sig.paramNames[i]
         } else {
-            pname
+            ""
         }
-        checkBindSpan(cx.env, bindName, pty, true, node.start, node.end)
+        let rawName = if paramNode.text != "" {
+            paramNode.text
+        } else if sigName.startsWith("?") {
+            strings.trimPrefix(sigName, "?")
+        } else {
+            sigName
+        }
+        let bindName = if rawName.startsWith("?") {
+            strings.trimPrefix(rawName, "?")
+        } else {
+            rawName
+        }
+        if bindName != "" {
+            checkBindSpan(cx.env, bindName, pty, true, paramNode.start, paramNode.end)
+        }
         i = i + 1
     }
     if node.right >= 0 {

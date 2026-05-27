@@ -227,16 +227,82 @@ pub fn hirCloneModule(module: HirModule) -> HirModule {
     HirModule {packageName: module.packageName, fns: hirCloneFnDeclList(module.fns), structs: hirCloneStructDeclList(module.structs), enums: hirCloneEnumDeclList(module.enums), lets: hirCloneLetDeclList(module.lets), uses: hirCloneUseDeclList(module.uses), interfaces: hirCloneInterfaceDeclList(module.interfaces), aliases: hirCloneTypeAliasDeclList(module.aliases), script: hirCloneStmtList(module.script), issues: hirCloneStringList(module.issues), span: module.span}
 }
 pub fn hirCloneBlock(b: HirBlock) -> HirBlock {
-    HirBlock {stmts: hirCloneStmtList(b.stmts), hasResult: b.hasResult, result: hirCloneExpr(b.result), span: b.span}
+    let mut out = b
+    out.stmts = hirCloneStmtList(b.stmts)
+    if b.hasResult {
+        out.result = hirCloneExpr(b.result)
+    }
+    out
 }
 pub fn hirCloneStmt(stmt: HirStmt) -> HirStmt {
-    HirStmt {kind: stmt.kind, span: stmt.span, block: hirCloneBlock(stmt.block), letName: stmt.letName, letPattern: hirClonePattern(stmt.letPattern), letHasPattern: stmt.letHasPattern, letTyp: hirCloneType(stmt.letTyp), letHasType: stmt.letHasType, letValue: hirCloneExpr(stmt.letValue), letHasValue: stmt.letHasValue, letMut: stmt.letMut, exprValue: hirCloneExpr(stmt.exprValue), assignOp: stmt.assignOp, assignTargets: hirCloneExprList(stmt.assignTargets), assignValue: hirCloneExpr(stmt.assignValue), returnValue: hirCloneExpr(stmt.returnValue), returnHasValue: stmt.returnHasValue, ifCond: hirCloneExpr(stmt.ifCond), ifThen: hirCloneBlock(stmt.ifThen), ifElse: hirCloneBlock(stmt.ifElse), ifHasElse: stmt.ifHasElse, forKind: stmt.forKind, forVar: stmt.forVar, forPattern: hirClonePattern(stmt.forPattern), forHasPattern: stmt.forHasPattern, forCond: hirCloneExpr(stmt.forCond), forHasCond: stmt.forHasCond, forIter: hirCloneExpr(stmt.forIter), forHasIter: stmt.forHasIter, forStart: hirCloneExpr(stmt.forStart), forHasStart: stmt.forHasStart, forEnd: hirCloneExpr(stmt.forEnd), forHasEnd: stmt.forHasEnd, forInclusive: stmt.forInclusive, forBody: hirCloneBlock(stmt.forBody), matchScrutinee: hirCloneExpr(stmt.matchScrutinee), matchArms: hirCloneMatchArmList(stmt.matchArms), matchHasTree: stmt.matchHasTree, matchTree: hirCloneDecisionNode(stmt.matchTree), deferBody: hirCloneBlock(stmt.deferBody), chanChannel: hirCloneExpr(stmt.chanChannel), chanValue: hirCloneExpr(stmt.chanValue), errorNote: stmt.errorNote}
+    let mut out = stmt
+    if stmt.kind == HirStmtBlock {
+        out.block = hirCloneBlock(stmt.block)
+    } else if stmt.kind == HirStmtLet {
+        if stmt.letHasPattern {
+            out.letPattern = hirClonePattern(stmt.letPattern)
+        }
+        if stmt.letHasType {
+            out.letTyp = hirCloneType(stmt.letTyp)
+        }
+        if stmt.letHasValue {
+            out.letValue = hirCloneExpr(stmt.letValue)
+        }
+    } else if stmt.kind == HirStmtExpr {
+        out.exprValue = hirCloneExpr(stmt.exprValue)
+    } else if stmt.kind == HirStmtAssign {
+        out.assignTargets = hirCloneExprList(stmt.assignTargets)
+        out.assignValue = hirCloneExpr(stmt.assignValue)
+    } else if stmt.kind == HirStmtReturn {
+        if stmt.returnHasValue {
+            out.returnValue = hirCloneExpr(stmt.returnValue)
+        }
+    } else if stmt.kind == HirStmtIf {
+        out.ifCond = hirCloneExpr(stmt.ifCond)
+        out.ifThen = hirCloneBlock(stmt.ifThen)
+        if stmt.ifHasElse {
+            out.ifElse = hirCloneBlock(stmt.ifElse)
+        }
+    } else if stmt.kind == HirStmtFor {
+        if stmt.forHasPattern {
+            out.forPattern = hirClonePattern(stmt.forPattern)
+        }
+        if stmt.forHasCond {
+            out.forCond = hirCloneExpr(stmt.forCond)
+        }
+        if stmt.forHasIter {
+            out.forIter = hirCloneExpr(stmt.forIter)
+        }
+        if stmt.forHasStart {
+            out.forStart = hirCloneExpr(stmt.forStart)
+        }
+        if stmt.forHasEnd {
+            out.forEnd = hirCloneExpr(stmt.forEnd)
+        }
+        out.forBody = hirCloneBlock(stmt.forBody)
+    } else if stmt.kind == HirStmtMatch {
+        out.matchScrutinee = hirCloneExpr(stmt.matchScrutinee)
+        out.matchArms = hirCloneMatchArmList(stmt.matchArms)
+        if stmt.matchHasTree {
+            out.matchTree = hirCloneDecisionNode(stmt.matchTree)
+        }
+    } else if stmt.kind == HirStmtDefer {
+        out.deferBody = hirCloneBlock(stmt.deferBody)
+    } else if stmt.kind == HirStmtChanSend {
+        out.chanChannel = hirCloneExpr(stmt.chanChannel)
+        out.chanValue = hirCloneExpr(stmt.chanValue)
+    }
+    out
 }
 pub fn hirCloneArg(a: HirArg) -> HirArg {
     HirArg {name: a.name, value: hirCloneExpr(a.value), span: a.span}
 }
 pub fn hirCloneStringPart(p: HirStringPart) -> HirStringPart {
-    HirStringPart {isLit: p.isLit, lit: p.lit, expr: hirCloneExprList(p.expr)}
+    let mut out = p
+    if !(p.isLit) {
+        out.expr = hirCloneExprList(p.expr)
+    }
+    out
 }
 pub fn hirCloneStructLitField(f: HirStructLitField) -> HirStructLitField {
     HirStructLitField {name: f.name, hasValue: f.hasValue, value: hirCloneExpr(f.value), span: f.span}
@@ -248,23 +314,150 @@ pub fn hirCloneCapture(c: HirCapture) -> HirCapture {
     HirCapture {name: c.name, kind: c.kind, typ: hirCloneType(c.typ), mutable: c.mutable, span: c.span}
 }
 pub fn hirCloneMatchArm(arm: HirMatchArm) -> HirMatchArm {
-    HirMatchArm {pattern: hirClonePattern(arm.pattern), hasGuard: arm.hasGuard, guard: hirCloneExpr(arm.guard), body: hirCloneBlock(arm.body), span: arm.span}
+    let mut out = arm
+    out.pattern = hirClonePattern(arm.pattern)
+    if arm.hasGuard {
+        out.guard = hirCloneExpr(arm.guard)
+    }
+    out.body = hirCloneBlock(arm.body)
+    out
 }
 pub fn hirCloneExpr(e: HirExpr) -> HirExpr {
-    HirExpr {kind: e.kind, typ: hirCloneType(e.typ), span: e.span, numText: e.numText, boolValue: e.boolValue, charValue: e.charValue, byteValue: e.byteValue, strParts: hirCloneStringPartList(e.strParts), strIsRaw: e.strIsRaw, strIsTriple: e.strIsTriple, identName: e.identName, identKind: e.identKind, identTypeArgs: hirCloneTypeList(e.identTypeArgs), unaryOp: e.unaryOp, unaryChild: hirCloneExprList(e.unaryChild), binaryOp: e.binaryOp, binaryLeft: hirCloneExprList(e.binaryLeft), binaryRight: hirCloneExprList(e.binaryRight), callCallee: hirCloneExprList(e.callCallee), callTypeArgs: hirCloneTypeList(e.callTypeArgs), callArgs: hirCloneArgList(e.callArgs), intrinsicKind: e.intrinsicKind, intrinsicArgs: hirCloneArgList(e.intrinsicArgs), listElems: hirCloneExprList(e.listElems), listElem: hirCloneType(e.listElem), blockBody: hirCloneBlockList(e.blockBody), ifExprCond: hirCloneExprList(e.ifExprCond), ifExprThen: hirCloneBlockList(e.ifExprThen), ifExprElse: hirCloneBlockList(e.ifExprElse), fieldTarget: hirCloneExprList(e.fieldTarget), fieldName: e.fieldName, fieldOptional: e.fieldOptional, indexTarget: hirCloneExprList(e.indexTarget), indexIndex: hirCloneExprList(e.indexIndex), methodReceiver: hirCloneExprList(e.methodReceiver), methodName: e.methodName, methodTypeArgs: hirCloneTypeList(e.methodTypeArgs), methodArgs: hirCloneArgList(e.methodArgs), structTypeName: e.structTypeName, structFields: hirCloneStructLitFieldList(e.structFields), structSpread: hirCloneExprList(e.structSpread), structHasSpread: e.structHasSpread, tupleElems: hirCloneExprList(e.tupleElems), mapEntries: hirCloneMapEntryList(e.mapEntries), mapKeyT: hirCloneType(e.mapKeyT), mapValT: hirCloneType(e.mapValT), rangeStart: hirCloneExprList(e.rangeStart), rangeEnd: hirCloneExprList(e.rangeEnd), rangeInclusive: e.rangeInclusive, questionChild: hirCloneExprList(e.questionChild), coalesceLeft: hirCloneExprList(e.coalesceLeft), coalesceRight: hirCloneExprList(e.coalesceRight), closureParams: hirCloneParamList(e.closureParams), closureReturn: hirCloneType(e.closureReturn), closureBody: hirCloneBlockList(e.closureBody), closureCaptures: hirCloneCaptureList(e.closureCaptures), variantEnum: e.variantEnum, variantName: e.variantName, variantArgs: hirCloneArgList(e.variantArgs), matchExprScrutinee: hirCloneExprList(e.matchExprScrutinee), matchExprArms: hirCloneMatchArmList(e.matchExprArms), matchExprHasTree: e.matchExprHasTree, matchExprTree: hirCloneDecisionNode(e.matchExprTree), ifLetPattern: hirClonePattern(e.ifLetPattern), ifLetScrutinee: hirCloneExprList(e.ifLetScrutinee), ifLetThen: hirCloneBlockList(e.ifLetThen), ifLetElse: hirCloneBlockList(e.ifLetElse), ifLetHasElse: e.ifLetHasElse, tupleAccessTarget: hirCloneExprList(e.tupleAccessTarget), tupleAccessIndex: e.tupleAccessIndex, errorNote: e.errorNote}
+    let mut out = e
+    out.typ = hirCloneType(e.typ)
+    if e.kind == HirExprStringLit || e.kind == HirExprBytesLit {
+        out.strParts = hirCloneStringPartList(e.strParts)
+    } else if e.kind == HirExprIdent {
+        out.identTypeArgs = hirCloneTypeList(e.identTypeArgs)
+    } else if e.kind == HirExprUnary {
+        out.unaryChild = hirCloneExprList(e.unaryChild)
+    } else if e.kind == HirExprBinary {
+        out.binaryLeft = hirCloneExprList(e.binaryLeft)
+        out.binaryRight = hirCloneExprList(e.binaryRight)
+    } else if e.kind == HirExprCall {
+        out.callCallee = hirCloneExprList(e.callCallee)
+        out.callTypeArgs = hirCloneTypeList(e.callTypeArgs)
+        out.callArgs = hirCloneArgList(e.callArgs)
+    } else if e.kind == HirExprIntrinsic {
+        out.intrinsicArgs = hirCloneArgList(e.intrinsicArgs)
+    } else if e.kind == HirExprList {
+        out.listElems = hirCloneExprList(e.listElems)
+        out.listElem = hirCloneType(e.listElem)
+    } else if e.kind == HirExprBlock {
+        out.blockBody = hirCloneBlockList(e.blockBody)
+    } else if e.kind == HirExprIf {
+        out.ifExprCond = hirCloneExprList(e.ifExprCond)
+        out.ifExprThen = hirCloneBlockList(e.ifExprThen)
+        out.ifExprElse = hirCloneBlockList(e.ifExprElse)
+    } else if e.kind == HirExprField {
+        out.fieldTarget = hirCloneExprList(e.fieldTarget)
+    } else if e.kind == HirExprIndex {
+        out.indexTarget = hirCloneExprList(e.indexTarget)
+        out.indexIndex = hirCloneExprList(e.indexIndex)
+    } else if e.kind == HirExprMethod {
+        out.methodReceiver = hirCloneExprList(e.methodReceiver)
+        out.methodTypeArgs = hirCloneTypeList(e.methodTypeArgs)
+        out.methodArgs = hirCloneArgList(e.methodArgs)
+    } else if e.kind == HirExprStructLit {
+        out.structFields = hirCloneStructLitFieldList(e.structFields)
+        if e.structHasSpread {
+            out.structSpread = hirCloneExprList(e.structSpread)
+        }
+    } else if e.kind == HirExprTupleLit {
+        out.tupleElems = hirCloneExprList(e.tupleElems)
+    } else if e.kind == HirExprMapLit {
+        out.mapEntries = hirCloneMapEntryList(e.mapEntries)
+        out.mapKeyT = hirCloneType(e.mapKeyT)
+        out.mapValT = hirCloneType(e.mapValT)
+    } else if e.kind == HirExprRange {
+        out.rangeStart = hirCloneExprList(e.rangeStart)
+        out.rangeEnd = hirCloneExprList(e.rangeEnd)
+    } else if e.kind == HirExprQuestion {
+        out.questionChild = hirCloneExprList(e.questionChild)
+    } else if e.kind == HirExprCoalesce {
+        out.coalesceLeft = hirCloneExprList(e.coalesceLeft)
+        out.coalesceRight = hirCloneExprList(e.coalesceRight)
+    } else if e.kind == HirExprClosure {
+        out.closureParams = hirCloneParamList(e.closureParams)
+        out.closureReturn = hirCloneType(e.closureReturn)
+        out.closureBody = hirCloneBlockList(e.closureBody)
+        out.closureCaptures = hirCloneCaptureList(e.closureCaptures)
+    } else if e.kind == HirExprVariantLit {
+        out.variantArgs = hirCloneArgList(e.variantArgs)
+    } else if e.kind == HirExprMatch {
+        out.matchExprScrutinee = hirCloneExprList(e.matchExprScrutinee)
+        out.matchExprArms = hirCloneMatchArmList(e.matchExprArms)
+        if e.matchExprHasTree {
+            out.matchExprTree = hirCloneDecisionNode(e.matchExprTree)
+        }
+    } else if e.kind == HirExprIfLet {
+        out.ifLetPattern = hirClonePattern(e.ifLetPattern)
+        out.ifLetScrutinee = hirCloneExprList(e.ifLetScrutinee)
+        out.ifLetThen = hirCloneBlockList(e.ifLetThen)
+        if e.ifLetHasElse {
+            out.ifLetElse = hirCloneBlockList(e.ifLetElse)
+        }
+    } else if e.kind == HirExprTupleAccess {
+        out.tupleAccessTarget = hirCloneExprList(e.tupleAccessTarget)
+    }
+    out
 }
 pub fn hirCloneStructPatField(f: HirStructPatField) -> HirStructPatField {
-    HirStructPatField {name: f.name, hasPattern: f.hasPattern, pattern: hirClonePattern(f.pattern), span: f.span}
+    let mut out = f
+    if f.hasPattern {
+        out.pattern = hirClonePattern(f.pattern)
+    }
+    out
 }
 pub fn hirClonePattern(p: HirPattern) -> HirPattern {
-    HirPattern {kind: p.kind, span: p.span, identName: p.identName, identMut: p.identMut, litValue: hirCloneExprList(p.litValue), tupleElems: hirClonePatternList(p.tupleElems), structTypeName: p.structTypeName, structFields: hirCloneStructPatFieldList(p.structFields), structRest: p.structRest, variantEnum: p.variantEnum, variantName: p.variantName, variantArgs: hirClonePatternList(p.variantArgs), rangeLow: hirCloneExprList(p.rangeLow), rangeHigh: hirCloneExprList(p.rangeHigh), rangeInclusive: p.rangeInclusive, orAlts: hirClonePatternList(p.orAlts), bindingName: p.bindingName, bindingChild: hirClonePatternList(p.bindingChild), errorNote: p.errorNote}
+    let mut out = p
+    if p.kind == HirPatLit {
+        out.litValue = hirCloneExprList(p.litValue)
+    } else if p.kind == HirPatTuple {
+        out.tupleElems = hirClonePatternList(p.tupleElems)
+    } else if p.kind == HirPatStruct {
+        out.structFields = hirCloneStructPatFieldList(p.structFields)
+    } else if p.kind == HirPatVariant {
+        out.variantArgs = hirClonePatternList(p.variantArgs)
+    } else if p.kind == HirPatRange {
+        out.rangeLow = hirCloneExprList(p.rangeLow)
+        out.rangeHigh = hirCloneExprList(p.rangeHigh)
+    } else if p.kind == HirPatOr {
+        out.orAlts = hirClonePatternList(p.orAlts)
+    } else if p.kind == HirPatBinding {
+        out.bindingChild = hirClonePatternList(p.bindingChild)
+    }
+    out
 }
 pub fn hirCloneProjection(p: HirProjection) -> HirProjection {
-    HirProjection {kind: p.kind, base: hirCloneProjectionList(p.base), index: p.index, field: p.field, variant: p.variant}
+    let mut out = p
+    out.base = hirCloneProjectionList(p.base)
+    out
 }
 pub fn hirCloneSwitchCase(c: HirSwitchCase) -> HirSwitchCase {
-    HirSwitchCase {label: c.label, variant: c.variant, hasLit: c.hasLit, lit: hirCloneExpr(c.lit), body: hirCloneDecisionNode(c.body)}
+    let mut out = c
+    if c.hasLit {
+        out.lit = hirCloneExpr(c.lit)
+    }
+    out.body = hirCloneDecisionNode(c.body)
+    out
 }
 pub fn hirCloneDecisionNode(n: HirDecisionNode) -> HirDecisionNode {
-    HirDecisionNode {kind: n.kind, leafArm: n.leafArm, bindName: n.bindName, bindHasProj: n.bindHasProj, bindProj: hirCloneProjection(n.bindProj), bindType: hirCloneType(n.bindType), bindNext: hirCloneDecisionNodeList(n.bindNext), guardCond: hirCloneExprList(n.guardCond), guardThen: hirCloneDecisionNodeList(n.guardThen), guardElse: hirCloneDecisionNodeList(n.guardElse), switchKind: n.switchKind, switchProj: hirCloneProjection(n.switchProj), switchCases: hirCloneSwitchCaseList(n.switchCases), switchDefault: hirCloneDecisionNodeList(n.switchDefault)}
+    let mut out = n
+    if n.kind == HirDecisionBind {
+        if n.bindHasProj {
+            out.bindProj = hirCloneProjection(n.bindProj)
+        }
+        out.bindType = hirCloneType(n.bindType)
+        out.bindNext = hirCloneDecisionNodeList(n.bindNext)
+    } else if n.kind == HirDecisionGuard {
+        out.guardCond = hirCloneExprList(n.guardCond)
+        out.guardThen = hirCloneDecisionNodeList(n.guardThen)
+        out.guardElse = hirCloneDecisionNodeList(n.guardElse)
+    } else if n.kind == HirDecisionSwitch {
+        out.switchProj = hirCloneProjection(n.switchProj)
+        out.switchCases = hirCloneSwitchCaseList(n.switchCases)
+        out.switchDefault = hirCloneDecisionNodeList(n.switchDefault)
+    }
+    out
 }

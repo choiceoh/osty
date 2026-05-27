@@ -110,6 +110,24 @@ let CheckPolicy: CheckName = "policy"
 let CheckLockfile: CheckName = "lockfile"
 let CheckRelease: CheckName = "release"
 let CheckSemver: CheckName = "semver"
+fn ciCheckFormatName() -> CheckName {
+    "format"
+}
+fn ciCheckLintName() -> CheckName {
+    "lint"
+}
+fn ciCheckPolicyName() -> CheckName {
+    "policy"
+}
+fn ciCheckLockfileName() -> CheckName {
+    "lockfile"
+}
+fn ciCheckReleaseName() -> CheckName {
+    "release"
+}
+fn ciCheckSemverName() -> CheckName {
+    "semver"
+}
 /// Options controls which checks Runner.Run executes.
 pub struct Options {
     pub Format: Bool,
@@ -173,42 +191,42 @@ pub struct Runner {
         if self.Opts.Format {
             rep.Checks.push(self.checkFormat())
         } else {
-            rep.Checks.push(skipped(CheckFormat))
+            rep.Checks.push(skipped(ciCheckFormatName()))
         }
         if self.Opts.Policy {
             rep.Checks.push(self.checkPolicy())
         } else {
-            rep.Checks.push(skipped(CheckPolicy))
+            rep.Checks.push(skipped(ciCheckPolicyName()))
         }
         if self.Opts.Lockfile {
             rep.Checks.push(self.checkLockfile())
         } else {
-            rep.Checks.push(skipped(CheckLockfile))
+            rep.Checks.push(skipped(ciCheckLockfileName()))
         }
         if self.Opts.Lint {
             rep.Checks.push(self.checkLint())
         } else {
-            rep.Checks.push(skipped(CheckLint))
+            rep.Checks.push(skipped(ciCheckLintName()))
         }
         if self.Opts.Release {
             rep.Checks.push(self.checkRelease())
         } else {
-            rep.Checks.push(skipped(CheckRelease))
+            rep.Checks.push(skipped(ciCheckReleaseName()))
         }
         if self.Opts.Semver {
             rep.Checks.push(self.checkSemver())
         } else {
-            rep.Checks.push(skipped(CheckSemver))
+            rep.Checks.push(skipped(ciCheckSemverName()))
         }
         rep.Checks = ciFinalizeChecks(rep.Checks, self.Opts.Strict)
         rep.FinishedAt = host.NowUTC()
         rep
     }
     fn checkFormat(self) -> Check {
-        checkFromHostResult(CheckFormat, host.CheckFormat(self.Root, self.ostyFiles()))
+        checkFromHostResult(ciCheckFormatName(), host.CheckFormat(self.Root, self.ostyFiles()))
     }
     fn checkPolicy(self) -> Check {
-        let mut c = Check {Name: CheckPolicy, Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
+        let mut c = Check {Name: ciCheckPolicyName(), Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
         if !(host.HasManifest(self.Manifest)) {
             c.Note = "no osty.toml found; policy checks skipped"
             return c
@@ -224,13 +242,13 @@ pub struct Runner {
         c
     }
     fn checkLockfile(self) -> Check {
-        checkFromHostResult(CheckLockfile, host.CheckLockfile(self.Root, self.Manifest))
+        checkFromHostResult(ciCheckLockfileName(), host.CheckLockfile(self.Root, self.Manifest))
     }
     fn checkLint(self) -> Check {
-        checkFromHostResult(CheckLint, host.CheckLint(self.Manifest, self.Packages, self.Results))
+        checkFromHostResult(ciCheckLintName(), host.CheckLint(self.Manifest, self.Packages, self.Results))
     }
     fn checkRelease(self) -> Check {
-        let mut c = Check {Name: CheckRelease, Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
+        let mut c = Check {Name: ciCheckReleaseName(), Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
         pushCoreDiagnostics(c, ciReleaseManifestCore(releaseCore(self.Manifest)))
         if host.HasManifest(self.Manifest) && host.ManifestCoreOf(self.Manifest).HasPackage {
             pushHostDiagnostics(c, host.CheckReleaseLockfile(self.Root, self.Manifest))
@@ -238,7 +256,7 @@ pub struct Runner {
         c
     }
     fn checkSemver(self) -> Check {
-        let mut c = Check {Name: CheckSemver, Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
+        let mut c = Check {Name: ciCheckSemverName(), Passed: false, Skipped: false, Note: "", Diags: host.EmptyDiagnostics()}
         if self.Opts.Baseline == "" {
             c.Diags.push(host.Synthetic("error", "CI401", "semver check enabled but --baseline was not set"))
             return c

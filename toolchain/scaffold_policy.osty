@@ -10,6 +10,12 @@ use std.strings as strings
 /// flag default (3) and the cap (64) live in one place.
 let scaffoldFixtureCasesDefault: Int = 3
 let scaffoldFixtureCasesMax: Int = 64
+fn scaffoldFixtureCasesDefaultValue() -> Int {
+    3
+}
+fn scaffoldFixtureCasesMaxValue() -> Int {
+    64
+}
 /// isValidScaffoldName reports whether `name` can be used as both
 /// a directory name and the `name` field of osty.toml.
 ///
@@ -48,11 +54,11 @@ pub struct FixtureCaseCount {
     pub overCap: Bool,
 }
 pub fn resolveFixtureCases(requested: Int) -> FixtureCaseCount {
-    if requested > scaffoldFixtureCasesMax {
-        return FixtureCaseCount {count: scaffoldFixtureCasesMax, overCap: true}
+    if requested > scaffoldFixtureCasesMaxValue() {
+        return FixtureCaseCount {count: scaffoldFixtureCasesMaxValue(), overCap: true}
     }
     if requested <= 0 {
-        return FixtureCaseCount {count: scaffoldFixtureCasesDefault, overCap: false}
+        return FixtureCaseCount {count: scaffoldFixtureCasesDefaultValue(), overCap: false}
     }
     FixtureCaseCount {count: requested, overCap: false}
 }

@@ -56,8 +56,11 @@ pub struct ElabCx {
     pub typedExprNodes: List<Int>,
     pub typedExprCoreNodes: List<Int>,
     pub typedExprTypes: List<Int>,
+    pub typedExprCoreByNode: List<Int>,
+    pub typedExprTypeByNode: List<Int>,
     pub typedStmtNodes: List<Int>,
     pub typedStmtCoreNodes: List<Int>,
+    pub typedStmtCoreByNode: List<Int>,
 }
 pub struct InstSession {
     pub solver: Solver,
@@ -67,7 +70,7 @@ pub struct InstSession {
 pub fn newElabCx(ast: AstFile, tys: TyArena) -> ElabCx {
     let env = emptyCheckEnv(tys)
     checkInstallPrelude(env)
-    ElabCx {ast, core: emptyCoreArena(), env, typedExprNodes: [], typedExprCoreNodes: [], typedExprTypes: [], typedStmtNodes: [], typedStmtCoreNodes: []}
+    ElabCx {ast, core: emptyCoreArena(), env, typedExprNodes: [], typedExprCoreNodes: [], typedExprTypes: [], typedExprCoreByNode: [], typedExprTypeByNode: [], typedStmtNodes: [], typedStmtCoreNodes: [], typedStmtCoreByNode: []}
 }
 // ---------------------------------------------------------------------
 // Expression elaboration.
@@ -82,39 +85,87 @@ fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
         return elabErrResult(cx, 0, 0)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
-    // Keep this guard outside the match: stage0's guarded-match fallback
-    // can turn the final `_` arm into `unreachable` in osty-self builds.
+    // Keep this guard outside the dispatch: stage0's guarded-match fallback
+    // can turn the final fallback arm into `unreachable` in osty-self builds.
     if node.kind == AstNFor && node.text == "loopexpr" {
         return elabInferLoop(cx, idx, node)
     }
-    match node.kind {
-        AstNIntLit -> elabInferIntLit(cx, idx, node),
-        AstNFloatLit -> elabInferFloatLit(cx, node),
-        AstNStringLit -> elabInferStringLit(cx, node),
-        AstNBoolLit -> elabInferBoolLit(cx, node),
-        AstNCharLit -> elabInferCharLit(cx, node),
-        AstNByteLit -> elabInferByteLit(cx, node),
-        AstNBytesLit -> elabInferBytesLit(cx, node),
-        AstNIdent -> elabInferIdent(cx, node),
-        AstNParen -> elabInfer(cx, node.left),
-        AstNBlock -> elabInferBlock(cx, idx, node),
-        AstNUnary -> elabInferUnary(cx, node),
-        AstNBinary -> elabInferBinary(cx, node),
-        AstNCall -> elabInferCall(cx, idx, node, tErr(cx.env.tys)),
-        AstNField -> elabInferField(cx, node),
-        AstNIndex -> elabInferIndex(cx, node),
-        AstNList -> elabInferList(cx, node, tErr(cx.env.tys)),
-        AstNMap -> elabInferMap(cx, node, tErr(cx.env.tys)),
-        AstNTuple -> elabInferTuple(cx, node, tErr(cx.env.tys)),
-        AstNStructLit -> elabInferStructLit(cx, node, tErr(cx.env.tys)),
-        AstNClosure -> elabInferClosure(cx, node, tErr(cx.env.tys)),
-        AstNRange -> elabInferRange(cx, node),
-        AstNTurbofish -> elabInferTurbofish(cx, node),
-        AstNIf -> elabInferIf(cx, node, tErr(cx.env.tys)),
-        AstNMatch -> elabInferMatch(cx, node, tErr(cx.env.tys)),
-        AstNQuestion -> elabInferQuestion(cx, node),
-        _ -> elabErrResult(cx, node.start, node.end),
+    if node.kind == AstNIntLit {
+        return elabInferIntLit(cx, idx, node)
     }
+    if node.kind == AstNFloatLit {
+        return elabInferFloatLit(cx, node)
+    }
+    if node.kind == AstNStringLit {
+        return elabInferStringLit(cx, node)
+    }
+    if node.kind == AstNBoolLit {
+        return elabInferBoolLit(cx, node)
+    }
+    if node.kind == AstNCharLit {
+        return elabInferCharLit(cx, node)
+    }
+    if node.kind == AstNByteLit {
+        return elabInferByteLit(cx, node)
+    }
+    if node.kind == AstNBytesLit {
+        return elabInferBytesLit(cx, node)
+    }
+    if node.kind == AstNIdent {
+        return elabInferIdent(cx, node)
+    }
+    if node.kind == AstNParen {
+        return elabInfer(cx, node.left)
+    }
+    if node.kind == AstNBlock {
+        return elabInferBlock(cx, idx, node)
+    }
+    if node.kind == AstNUnary {
+        return elabInferUnary(cx, node)
+    }
+    if node.kind == AstNBinary {
+        return elabInferBinary(cx, node)
+    }
+    if node.kind == AstNCall {
+        return elabInferCall(cx, idx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNField {
+        return elabInferField(cx, node)
+    }
+    if node.kind == AstNIndex {
+        return elabInferIndex(cx, node)
+    }
+    if node.kind == AstNList {
+        return elabInferList(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNMap {
+        return elabInferMap(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNTuple {
+        return elabInferTuple(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNStructLit {
+        return elabInferStructLit(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNClosure {
+        return elabInferClosure(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNRange {
+        return elabInferRange(cx, node)
+    }
+    if node.kind == AstNTurbofish {
+        return elabInferTurbofish(cx, node)
+    }
+    if node.kind == AstNIf {
+        return elabInferIf(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNMatch {
+        return elabInferMatch(cx, node, tErr(cx.env.tys))
+    }
+    if node.kind == AstNQuestion {
+        return elabInferQuestion(cx, node)
+    }
+    elabErrResult(cx, node.start, node.end)
 }
 // G22 §A.4: `loop { ... }` arrives as AstNFor with text="loopexpr".
 // Route to the dedicated loop-expression handler.
@@ -131,23 +182,49 @@ fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
         return elabInferImpl(cx, idx)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
-    match node.kind {
-        AstNIntLit -> elabCheckIntLit(cx, idx, node, expected),
-        AstNFloatLit -> elabCheckFloatLit(cx, node, expected),
-        AstNBinary -> elabCheckBinary(cx, idx, node, expected),
-        AstNParen -> elabCheck(cx, node.left, expected),
-        AstNBlock -> elabCheckBlock(cx, idx, node, expected),
-        AstNIdent -> elabCheckViaInfer(cx, idx, expected),
-        AstNCall -> elabInferCall(cx, idx, node, expected),
-        AstNList -> elabInferList(cx, node, expected),
-        AstNMap -> elabInferMap(cx, node, expected),
-        AstNTuple -> elabInferTuple(cx, node, expected),
-        AstNStructLit -> elabInferStructLit(cx, node, expected),
-        AstNClosure -> elabInferClosure(cx, node, expected),
-        AstNIf -> elabInferIf(cx, node, expected),
-        AstNMatch -> elabInferMatch(cx, node, expected),
-        _ -> elabCheckViaInfer(cx, idx, expected),
+    if node.kind == AstNIntLit {
+        return elabCheckIntLit(cx, idx, node, expected)
     }
+    if node.kind == AstNFloatLit {
+        return elabCheckFloatLit(cx, node, expected)
+    }
+    if node.kind == AstNBinary {
+        return elabCheckBinary(cx, idx, node, expected)
+    }
+    if node.kind == AstNParen {
+        return elabCheck(cx, node.left, expected)
+    }
+    if node.kind == AstNBlock {
+        return elabCheckBlock(cx, idx, node, expected)
+    }
+    if node.kind == AstNIdent {
+        return elabCheckViaInfer(cx, idx, expected)
+    }
+    if node.kind == AstNCall {
+        return elabInferCall(cx, idx, node, expected)
+    }
+    if node.kind == AstNList {
+        return elabInferList(cx, node, expected)
+    }
+    if node.kind == AstNMap {
+        return elabInferMap(cx, node, expected)
+    }
+    if node.kind == AstNTuple {
+        return elabInferTuple(cx, node, expected)
+    }
+    if node.kind == AstNStructLit {
+        return elabInferStructLit(cx, node, expected)
+    }
+    if node.kind == AstNClosure {
+        return elabInferClosure(cx, node, expected)
+    }
+    if node.kind == AstNIf {
+        return elabInferIf(cx, node, expected)
+    }
+    if node.kind == AstNMatch {
+        return elabInferMatch(cx, node, expected)
+    }
+    elabCheckViaInfer(cx, idx, expected)
 }
 /// elabCheckViaInfer is the default `check(e, T)` rule: elaborate as
 /// infer, then subtype against `T` and emit a mismatch diagnostic if
@@ -740,17 +817,27 @@ pub fn elabStmt(cx: ElabCx, idx: Int) -> Int {
         return -1
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
-    let out = match node.kind {
-        AstNLet -> elabLetStmt(cx, node),
-        AstNAssign -> elabAssignStmt(cx, node),
-        AstNReturn -> elabReturnStmt(cx, node),
-        AstNDefer -> elabDeferStmt(cx, node),
-        AstNFor -> elabForStmt(cx, node),
-        AstNChanSend -> elabChanSendStmt(cx, node),
-        AstNExprStmt -> elabExprStmt(cx, node),
-        AstNBreak -> coreBreakStmt(cx.core, node.start, node.end),
-        AstNContinue -> coreContinueStmt(cx.core, node.start, node.end),
-        _ -> elabExprAsStmt(cx, idx, node),
+    let mut out = -1
+    if node.kind == AstNLet {
+        out = elabLetStmt(cx, node)
+    } else if node.kind == AstNAssign {
+        out = elabAssignStmt(cx, node)
+    } else if node.kind == AstNReturn {
+        out = elabReturnStmt(cx, node)
+    } else if node.kind == AstNDefer {
+        out = elabDeferStmt(cx, node)
+    } else if node.kind == AstNFor {
+        out = elabForStmt(cx, node)
+    } else if node.kind == AstNChanSend {
+        out = elabChanSendStmt(cx, node)
+    } else if node.kind == AstNExprStmt {
+        out = elabExprStmt(cx, node)
+    } else if node.kind == AstNBreak {
+        out = coreBreakStmt(cx.core, node.start, node.end)
+    } else if node.kind == AstNContinue {
+        out = coreContinueStmt(cx.core, node.start, node.end)
+    } else {
+        out = elabExprAsStmt(cx, idx, node)
     }
     elabRecordTypedStmt(cx, idx, out)
     out
@@ -1010,34 +1097,25 @@ fn astIsExprKindAt(ast: AstFile, idx: Int) -> Bool {
         return false
     }
     let node = astArenaNodeAt(ast.arena, idx)
-    match node.kind {
-        AstNIntLit -> true,
-        AstNFloatLit -> true,
-        AstNStringLit -> true,
-        AstNBoolLit -> true,
-        AstNCharLit -> true,
-        AstNByteLit -> true,
-        AstNBytesLit -> true,
-        AstNIdent -> true,
-        AstNParen -> true,
-        AstNBlock -> true,
-        AstNUnary -> true,
-        AstNBinary -> true,
-        AstNIf -> true,
-        AstNMatch -> true,
-        AstNCall -> true,
-        AstNField -> true,
-        AstNIndex -> true,
-        AstNList -> true,
-        AstNMap -> true,
-        AstNTuple -> true,
-        AstNStructLit -> true,
-        AstNRange -> true,
-        AstNClosure -> true,
-        AstNQuestion -> true,
-        AstNTurbofish -> true,
-        _ -> false,
+    if node.kind == AstNIntLit || node.kind == AstNFloatLit || node.kind == AstNStringLit {
+        return true
     }
+    if node.kind == AstNBoolLit || node.kind == AstNCharLit || node.kind == AstNByteLit || node.kind == AstNBytesLit {
+        return true
+    }
+    if node.kind == AstNIdent || node.kind == AstNParen || node.kind == AstNBlock || node.kind == AstNUnary || node.kind == AstNBinary {
+        return true
+    }
+    if node.kind == AstNIf || node.kind == AstNMatch || node.kind == AstNCall || node.kind == AstNField || node.kind == AstNIndex {
+        return true
+    }
+    if node.kind == AstNList || node.kind == AstNMap || node.kind == AstNTuple || node.kind == AstNStructLit || node.kind == AstNRange {
+        return true
+    }
+    if node.kind == AstNClosure || node.kind == AstNQuestion || node.kind == AstNTurbofish {
+        return true
+    }
+    false
 }
 fn astExprEscapesMatchResult(ast: AstFile, idx: Int) -> Bool {
     if idx < 0 {
@@ -1092,6 +1170,10 @@ fn elabRecordTypedExpr(cx: ElabCx, idx: Int, out: ElabResult) {
     if idx < 0 || out.node < 0 || tyIsBad(cx.env.tys, out.ty) {
         return
     }
+    elabEnsureIntListLen(cx.typedExprCoreByNode, idx + 1)
+    elabEnsureIntListLen(cx.typedExprTypeByNode, idx + 1)
+    cx.typedExprCoreByNode[idx] = out.node
+    cx.typedExprTypeByNode[idx] = out.ty
     cx.typedExprNodes.push(idx)
     cx.typedExprCoreNodes.push(out.node)
     cx.typedExprTypes.push(out.ty)
@@ -1101,10 +1183,23 @@ fn elabRecordTypedStmt(cx: ElabCx, idx: Int, coreIdx: Int) {
     if idx < 0 || coreIdx < 0 {
         return
     }
+    elabEnsureIntListLen(cx.typedStmtCoreByNode, idx + 1)
+    cx.typedStmtCoreByNode[idx] = coreIdx
     cx.typedStmtNodes.push(idx)
     cx.typedStmtCoreNodes.push(coreIdx)
 }
+fn elabEnsureIntListLen(items: List<Int>, targetLen: Int) {
+    for items.len() < targetLen {
+        items.push(0 - 1)
+    }
+}
 pub fn elabTypedExprCoreAt(cx: ElabCx, idx: Int) -> Int {
+    if idx >= 0 && idx < cx.typedExprCoreByNode.len() {
+        let cached = cx.typedExprCoreByNode[idx]
+        if cached >= 0 {
+            return cached
+        }
+    }
     let mut i = cx.typedExprNodes.len() - 1
     for i >= 0 {
         if cx.typedExprNodes[i] == idx {
@@ -1115,6 +1210,12 @@ pub fn elabTypedExprCoreAt(cx: ElabCx, idx: Int) -> Int {
     -1
 }
 pub fn elabTypedExprTyAt(cx: ElabCx, idx: Int) -> Int {
+    if idx >= 0 && idx < cx.typedExprTypeByNode.len() {
+        let cached = cx.typedExprTypeByNode[idx]
+        if cached >= 0 {
+            return cached
+        }
+    }
     let mut i = cx.typedExprNodes.len() - 1
     for i >= 0 {
         if cx.typedExprNodes[i] == idx {
@@ -1125,6 +1226,12 @@ pub fn elabTypedExprTyAt(cx: ElabCx, idx: Int) -> Int {
     -1
 }
 pub fn elabTypedStmtCoreAt(cx: ElabCx, idx: Int) -> Int {
+    if idx >= 0 && idx < cx.typedStmtCoreByNode.len() {
+        let cached = cx.typedStmtCoreByNode[idx]
+        if cached >= 0 {
+            return cached
+        }
+    }
     let mut i = cx.typedStmtNodes.len() - 1
     for i >= 0 {
         if cx.typedStmtNodes[i] == idx {

@@ -905,25 +905,87 @@ pub fn mirFunctionTerminate(func: MirFunction, blockId: Int, term: MirTerm) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
-    mirBlockSetTerminator(func.blocks[blockId], term)
+    func.blocks[blockId].term.kind = term.kind
+    func.blocks[blockId].term.span = term.span
+    func.blocks[blockId].term.target = term.target
+    func.blocks[blockId].term.thenBlock = term.thenBlock
+    func.blocks[blockId].term.elseBlock = term.elseBlock
+    func.blocks[blockId].term.cases = term.cases
+    func.blocks[blockId].term.cond = term.cond
+    func.blocks[blockId].term.loopBackEdge = term.loopBackEdge
+    func.blocks[blockId].termKind = term.kind
+    func.blocks[blockId].termTarget = term.target
+    func.blocks[blockId].termThenBlock = term.thenBlock
+    func.blocks[blockId].termElseBlock = term.elseBlock
+    func.blocks[blockId].termCases = term.cases
+    func.blocks[blockId].termCond = term.cond
+    func.blocks[blockId].termLoopBackEdge = term.loopBackEdge
+    func.blocks[blockId].hasTerm = true
 }
 pub fn mirFunctionTerminateGoto(func: MirFunction, blockId: Int, target: Int, span: MirSpan, loopBackEdge: Bool) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
-    mirBlockSetGotoTerminator(func.blocks[blockId], target, span, loopBackEdge)
+    let cases: List<MirSwitchCase> = []
+    func.blocks[blockId].term.kind = MirTermGoto
+    func.blocks[blockId].term.span = span
+    func.blocks[blockId].term.target = target
+    func.blocks[blockId].term.thenBlock = -1
+    func.blocks[blockId].term.elseBlock = -1
+    func.blocks[blockId].term.cases = cases
+    func.blocks[blockId].term.cond = mirOperandInvalid()
+    func.blocks[blockId].term.loopBackEdge = loopBackEdge
+    func.blocks[blockId].termKind = MirTermGoto
+    func.blocks[blockId].termTarget = target
+    func.blocks[blockId].termThenBlock = -1
+    func.blocks[blockId].termElseBlock = -1
+    func.blocks[blockId].termCases = cases
+    func.blocks[blockId].termCond = mirOperandInvalid()
+    func.blocks[blockId].termLoopBackEdge = loopBackEdge
+    func.blocks[blockId].hasTerm = true
 }
 pub fn mirFunctionTerminateBranch(func: MirFunction, blockId: Int, cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
-    mirBlockSetBranchTerminator(func.blocks[blockId], cond, thenB, elseB, span)
+    let cases: List<MirSwitchCase> = []
+    func.blocks[blockId].term.kind = MirTermBranch
+    func.blocks[blockId].term.span = span
+    func.blocks[blockId].term.target = -1
+    func.blocks[blockId].term.thenBlock = thenB
+    func.blocks[blockId].term.elseBlock = elseB
+    func.blocks[blockId].term.cases = cases
+    func.blocks[blockId].term.cond = cond
+    func.blocks[blockId].term.loopBackEdge = false
+    func.blocks[blockId].termKind = MirTermBranch
+    func.blocks[blockId].termTarget = -1
+    func.blocks[blockId].termThenBlock = thenB
+    func.blocks[blockId].termElseBlock = elseB
+    func.blocks[blockId].termCases = cases
+    func.blocks[blockId].termCond = cond
+    func.blocks[blockId].termLoopBackEdge = false
+    func.blocks[blockId].hasTerm = true
 }
 pub fn mirFunctionTerminateSwitchInt(func: MirFunction, blockId: Int, scrutinee: MirOperand, cases: List<MirSwitchCase>, default: Int, span: MirSpan) {
     if blockId < 0 || blockId >= func.blocks.len() {
         return
     }
-    mirBlockSetSwitchIntTerminator(func.blocks[blockId], scrutinee, cases, default, span)
+    func.blocks[blockId].term.kind = MirTermSwitchInt
+    func.blocks[blockId].term.span = span
+    func.blocks[blockId].term.target = default
+    func.blocks[blockId].term.thenBlock = -1
+    func.blocks[blockId].term.elseBlock = -1
+    func.blocks[blockId].term.cases = cases
+    func.blocks[blockId].term.cond = scrutinee
+    func.blocks[blockId].term.loopBackEdge = false
+    func.blocks[blockId].termKind = MirTermSwitchInt
+    func.blocks[blockId].termTarget = default
+    func.blocks[blockId].termThenBlock = -1
+    func.blocks[blockId].termElseBlock = -1
+    func.blocks[blockId].termCases = cases
+    func.blocks[blockId].termCond = scrutinee
+    func.blocks[blockId].termLoopBackEdge = false
+    func.blocks[blockId].hasTerm = true
 }
 pub fn mirFunctionLocal(func: MirFunction, id: Int) -> MirLocal {
     if id < 0 || id >= func.locals.len() {

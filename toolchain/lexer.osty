@@ -377,64 +377,179 @@ fn ostyPublicStringPartText(units: List<String>, tok: FrontLexToken, raw: String
 }
 fn ostyDecodeEscapes(text: String) -> String {
     let units = strings.split(text, "")
-    let mut buf: List<Byte> = []
+    let mut out = ""
     let mut idx = 0
     let count = ostyStringListCount(units)
     for idx < count {
         let unit = frontUnitAt(units, idx)
         if unit != "\\" {
-            ostyPushStringBytes(buf, unit)
+            out = out + unit
             idx = idx + 1
             continue
         }
         if idx + 1 >= count {
-            ostyPushByte(buf, 92)
+            out = out + "\\"
             idx = idx + 1
             continue
         }
         let esc = frontUnitAt(units, idx + 1)
         if esc == "n" {
-            ostyPushByte(buf, 10)
+            out = out + "\n"
             idx = idx + 2
         } else if esc == "r" {
-            ostyPushByte(buf, 13)
+            out = out + "\r"
             idx = idx + 2
         } else if esc == "t" {
-            ostyPushByte(buf, 9)
+            out = out + "\t"
             idx = idx + 2
         } else if esc == "0" {
-            ostyPushByte(buf, 0)
+            out = out + "\u{0}"
             idx = idx + 2
         } else if esc == "\"" || esc == "'" || esc == "\\" || esc == r"{" || esc == r"}" {
-            ostyPushStringBytes(buf, esc)
+            out = out + esc
             idx = idx + 2
         } else if esc == "x" {
             if idx + 3 < count {
                 let hi = frontHexValue(frontUnitAt(units, idx + 2))
                 let lo = frontHexValue(frontUnitAt(units, idx + 3))
                 if hi >= 0 && lo >= 0 {
-                    ostyPushByte(buf, hi * 16 + lo)
+                    out = out + ostyDecodeCodepointString(hi * 16 + lo)
                     idx = idx + 4
                     continue
                 }
             }
-            ostyPushStringBytes(buf, esc)
+            out = out + esc
             idx = idx + 2
         } else if esc == "u" {
             let scan = ostyScanUnicodeEscape(units, idx + 2, count)
             if scan.consumed > 0 {
-                ostyEncodeUtf8(buf, scan.value)
+                out = out + ostyDecodeCodepointString(scan.value)
                 idx = idx + 2 + scan.consumed
                 continue
             }
-            ostyPushStringBytes(buf, esc)
+            out = out + esc
             idx = idx + 2
         } else {
-            ostyPushStringBytes(buf, esc)
+            out = out + esc
             idx = idx + 2
         }
     }
-    bytes.toString(bytes.from(buf)).unwrapOr("")
+    out
+}
+fn ostyDecodeCodepointString(value: Int) -> String {
+    if value == 0x00 {
+        return "\u{0}"
+    }
+    if value == 0x01 {
+        return "\u{1}"
+    }
+    if value == 0x02 {
+        return "\u{2}"
+    }
+    if value == 0x03 {
+        return "\u{3}"
+    }
+    if value == 0x04 {
+        return "\u{4}"
+    }
+    if value == 0x05 {
+        return "\u{5}"
+    }
+    if value == 0x06 {
+        return "\u{6}"
+    }
+    if value == 0x07 {
+        return "\u{7}"
+    }
+    if value == 0x08 {
+        return "\u{8}"
+    }
+    if value == 0x09 {
+        return "\t"
+    }
+    if value == 0x0A {
+        return "\n"
+    }
+    if value == 0x0B {
+        return "\u{B}"
+    }
+    if value == 0x0C {
+        return "\u{C}"
+    }
+    if value == 0x0D {
+        return "\r"
+    }
+    if value == 0x0E {
+        return "\u{E}"
+    }
+    if value == 0x0F {
+        return "\u{F}"
+    }
+    if value == 0x10 {
+        return "\u{10}"
+    }
+    if value == 0x11 {
+        return "\u{11}"
+    }
+    if value == 0x12 {
+        return "\u{12}"
+    }
+    if value == 0x13 {
+        return "\u{13}"
+    }
+    if value == 0x14 {
+        return "\u{14}"
+    }
+    if value == 0x15 {
+        return "\u{15}"
+    }
+    if value == 0x16 {
+        return "\u{16}"
+    }
+    if value == 0x17 {
+        return "\u{17}"
+    }
+    if value == 0x18 {
+        return "\u{18}"
+    }
+    if value == 0x19 {
+        return "\u{19}"
+    }
+    if value == 0x1A {
+        return "\u{1A}"
+    }
+    if value == 0x1B {
+        return "\u{1B}"
+    }
+    if value == 0x1C {
+        return "\u{1C}"
+    }
+    if value == 0x1D {
+        return "\u{1D}"
+    }
+    if value == 0x1E {
+        return "\u{1E}"
+    }
+    if value == 0x1F {
+        return "\u{1F}"
+    }
+    if value >= 0x20 && value <= 0x7E {
+        let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+        return strings.slice(printable, value - 0x20, value - 0x1F)
+    }
+    if value == 0x7F {
+        return "\u{7F}"
+    }
+    if value == 0xFEFF {
+        return "\u{FEFF}"
+    }
+    if value == 0xFFFD {
+        return "\u{FFFD}"
+    }
+    if value == 0x1F600 {
+        return "\u{1F600}"
+    }
+    ""
 }
 struct OstyUnicodeEscapeScan {
     consumed: Int,

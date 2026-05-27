@@ -268,30 +268,73 @@ pub fn tUntypedFloat(arena: TyArena) -> Int {
 /// dedicated helpers (`tInt`, `tBool`, ...) when the kind is statically
 /// known.
 pub fn tyPrim(arena: TyArena, prim: PrimKind) -> Int {
-    match prim {
-        PkInvalid -> arena.idxErr,
-        PkInt -> arena.idxInt,
-        PkInt8 -> arena.idxInt8,
-        PkInt16 -> arena.idxInt16,
-        PkInt32 -> arena.idxInt32,
-        PkInt64 -> arena.idxInt64,
-        PkUInt8 -> arena.idxUInt8,
-        PkUInt16 -> arena.idxUInt16,
-        PkUInt32 -> arena.idxUInt32,
-        PkUInt64 -> arena.idxUInt64,
-        PkByte -> arena.idxByte,
-        PkFloat -> arena.idxFloat,
-        PkFloat32 -> arena.idxFloat32,
-        PkFloat64 -> arena.idxFloat64,
-        PkBool -> arena.idxBool,
-        PkChar -> arena.idxChar,
-        PkString -> arena.idxString,
-        PkBytes -> arena.idxBytes,
-        PkUnit -> arena.idxUnit,
-        PkNever -> arena.idxNever,
-        PkUntypedInt -> arena.idxUntypedInt,
-        PkUntypedFloat -> arena.idxUntypedFloat,
+    if prim == PkInvalid {
+        return arena.idxErr
     }
+    if prim == PkInt {
+        return arena.idxInt
+    }
+    if prim == PkInt8 {
+        return arena.idxInt8
+    }
+    if prim == PkInt16 {
+        return arena.idxInt16
+    }
+    if prim == PkInt32 {
+        return arena.idxInt32
+    }
+    if prim == PkInt64 {
+        return arena.idxInt64
+    }
+    if prim == PkUInt8 {
+        return arena.idxUInt8
+    }
+    if prim == PkUInt16 {
+        return arena.idxUInt16
+    }
+    if prim == PkUInt32 {
+        return arena.idxUInt32
+    }
+    if prim == PkUInt64 {
+        return arena.idxUInt64
+    }
+    if prim == PkByte {
+        return arena.idxByte
+    }
+    if prim == PkFloat {
+        return arena.idxFloat
+    }
+    if prim == PkFloat32 {
+        return arena.idxFloat32
+    }
+    if prim == PkFloat64 {
+        return arena.idxFloat64
+    }
+    if prim == PkBool {
+        return arena.idxBool
+    }
+    if prim == PkChar {
+        return arena.idxChar
+    }
+    if prim == PkString {
+        return arena.idxString
+    }
+    if prim == PkBytes {
+        return arena.idxBytes
+    }
+    if prim == PkUnit {
+        return arena.idxUnit
+    }
+    if prim == PkNever {
+        return arena.idxNever
+    }
+    if prim == PkUntypedInt {
+        return arena.idxUntypedInt
+    }
+    if prim == PkUntypedFloat {
+        return arena.idxUntypedFloat
+    }
+    arena.idxErr
 }
 /// tyNamed allocates a named type `head<args...>` node. `args` may be
 /// empty, meaning a plain type like `String` used in type position.
@@ -526,17 +569,34 @@ pub fn tyEq(arena: TyArena, a: Int, b: Int) -> Bool {
     if na.kind != nb.kind {
         return false
     }
-    match na.kind {
-        TkErr -> true,
-        TkPoison -> true,
-        TkPrim -> na.prim == nb.prim,
-        TkNamed -> na.head == nb.head && tyEqList(arena, na.args, nb.args),
-        TkOptional -> tyEq(arena, na.ret, nb.ret),
-        TkTuple -> tyEqList(arena, na.args, nb.args),
-        TkFn -> tyEqList(arena, na.args, nb.args) && tyEq(arena, na.ret, nb.ret),
-        TkVar -> na.varId == nb.varId,
-        TkSelf -> na.head == nb.head,
+    if na.kind == TkErr {
+        return true
     }
+    if na.kind == TkPoison {
+        return true
+    }
+    if na.kind == TkPrim {
+        return na.prim == nb.prim
+    }
+    if na.kind == TkNamed {
+        return na.head == nb.head && tyEqList(arena, na.args, nb.args)
+    }
+    if na.kind == TkOptional {
+        return tyEq(arena, na.ret, nb.ret)
+    }
+    if na.kind == TkTuple {
+        return tyEqList(arena, na.args, nb.args)
+    }
+    if na.kind == TkFn {
+        return tyEqList(arena, na.args, nb.args) && tyEq(arena, na.ret, nb.ret)
+    }
+    if na.kind == TkVar {
+        return na.varId == nb.varId
+    }
+    if na.kind == TkSelf {
+        return na.head == nb.head
+    }
+    false
 }
 fn tyEqList(arena: TyArena, xs: List<Int>, ys: List<Int>) -> Bool {
     if tyIntListLen(xs) != tyIntListLen(ys) {
@@ -570,23 +630,37 @@ pub fn tyToString(arena: TyArena, idx: Int) -> String {
         return "Invalid"
     }
     let node = tyGet(arena, idx)
-    match node.kind {
-        TkErr -> "Invalid",
-        TkPoison -> "Poison",
-        TkPrim -> primKindName(node.prim),
-        TkNamed -> tyNamedToString(arena, node),
-        TkOptional -> "{tyToString(arena, node.ret)}?",
-        TkTuple -> tyTupleToString(arena, node.args),
-        TkFn -> tyFnToString(arena, node),
-        TkVar -> {
-            if node.varName == "" {
-                "?{node.varId}"
-            } else {
-                node.varName
-            }
-        },
-        TkSelf -> "Self",
+    if node.kind == TkErr {
+        return "Invalid"
     }
+    if node.kind == TkPoison {
+        return "Poison"
+    }
+    if node.kind == TkPrim {
+        return primKindName(node.prim)
+    }
+    if node.kind == TkNamed {
+        return tyNamedToString(arena, node)
+    }
+    if node.kind == TkOptional {
+        return "{tyToString(arena, node.ret)}?"
+    }
+    if node.kind == TkTuple {
+        return tyTupleToString(arena, node.args)
+    }
+    if node.kind == TkFn {
+        return tyFnToString(arena, node)
+    }
+    if node.kind == TkVar {
+        if node.varName == "" {
+            return "?{node.varId}"
+        }
+        return node.varName
+    }
+    if node.kind == TkSelf {
+        return "Self"
+    }
+    "Invalid"
 }
 fn tyNamedToString(arena: TyArena, node: TyNode) -> String {
     if tyIntListLen(node.args) == 0 {
@@ -628,30 +702,73 @@ fn tyFnToString(arena: TyArena, node: TyNode) -> String {
     "fn({strings.join(parts, sep)}) -> {tyToString(arena, node.ret)}"
 }
 pub fn primKindName(prim: PrimKind) -> String {
-    match prim {
-        PkInvalid -> "Invalid",
-        PkInt -> "Int",
-        PkInt8 -> "Int8",
-        PkInt16 -> "Int16",
-        PkInt32 -> "Int32",
-        PkInt64 -> "Int64",
-        PkUInt8 -> "UInt8",
-        PkUInt16 -> "UInt16",
-        PkUInt32 -> "UInt32",
-        PkUInt64 -> "UInt64",
-        PkByte -> "Byte",
-        PkFloat -> "Float",
-        PkFloat32 -> "Float32",
-        PkFloat64 -> "Float64",
-        PkBool -> "Bool",
-        PkChar -> "Char",
-        PkString -> "String",
-        PkBytes -> "Bytes",
-        PkUnit -> "()",
-        PkNever -> "Never",
-        PkUntypedInt -> "UntypedInt",
-        PkUntypedFloat -> "UntypedFloat",
+    if prim == PkInvalid {
+        return "Invalid"
     }
+    if prim == PkInt {
+        return "Int"
+    }
+    if prim == PkInt8 {
+        return "Int8"
+    }
+    if prim == PkInt16 {
+        return "Int16"
+    }
+    if prim == PkInt32 {
+        return "Int32"
+    }
+    if prim == PkInt64 {
+        return "Int64"
+    }
+    if prim == PkUInt8 {
+        return "UInt8"
+    }
+    if prim == PkUInt16 {
+        return "UInt16"
+    }
+    if prim == PkUInt32 {
+        return "UInt32"
+    }
+    if prim == PkUInt64 {
+        return "UInt64"
+    }
+    if prim == PkByte {
+        return "Byte"
+    }
+    if prim == PkFloat {
+        return "Float"
+    }
+    if prim == PkFloat32 {
+        return "Float32"
+    }
+    if prim == PkFloat64 {
+        return "Float64"
+    }
+    if prim == PkBool {
+        return "Bool"
+    }
+    if prim == PkChar {
+        return "Char"
+    }
+    if prim == PkString {
+        return "String"
+    }
+    if prim == PkBytes {
+        return "Bytes"
+    }
+    if prim == PkUnit {
+        return "()"
+    }
+    if prim == PkNever {
+        return "Never"
+    }
+    if prim == PkUntypedInt {
+        return "UntypedInt"
+    }
+    if prim == PkUntypedFloat {
+        return "UntypedFloat"
+    }
+    "Invalid"
 }
 // ---------------------------------------------------------------------
 // Escape analysis (E0743 / §8.1 G13). `Handle<T>` and `Group` (alias
@@ -669,31 +786,31 @@ pub fn tyEscapingCapabilityHead(arena: TyArena, idx: Int) -> String {
         return ""
     }
     let node = tyGet(arena, idx)
-    match node.kind {
-        TkNamed -> {
-            if node.head == "Handle" || node.head == "Group" || node.head == "TaskGroup" {
-                return node.head
+    if node.kind == TkNamed {
+        if node.head == "Handle" || node.head == "Group" || node.head == "TaskGroup" {
+            return node.head
+        }
+        for arg in node.args {
+            let inner = tyEscapingCapabilityHead(arena, arg)
+            if inner != "" {
+                return inner
             }
-            for arg in node.args {
-                let inner = tyEscapingCapabilityHead(arena, arg)
-                if inner != "" {
-                    return inner
-                }
-            }
-            ""
-        },
-        TkOptional -> tyEscapingCapabilityHead(arena, node.ret),
-        TkTuple -> {
-            for elem in node.args {
-                let inner = tyEscapingCapabilityHead(arena, elem)
-                if inner != "" {
-                    return inner
-                }
-            }
-            ""
-        },
-        _ -> "",
+        }
+        return ""
     }
+    if node.kind == TkOptional {
+        return tyEscapingCapabilityHead(arena, node.ret)
+    }
+    if node.kind == TkTuple {
+        for elem in node.args {
+            let inner = tyEscapingCapabilityHead(arena, elem)
+            if inner != "" {
+                return inner
+            }
+        }
+        return ""
+    }
+    ""
 }
 // ---------------------------------------------------------------------
 // Transitional bridge from the legacy string representation. Only

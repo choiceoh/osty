@@ -61,6 +61,15 @@ pub fn mirLowerFnSignature(name: String, params: List<HirParam>, retType: HirTyp
 pub fn mirLowerMethodSignature(owner: String, name: String, params: List<HirParam>, retType: HirType, span: HirSpan) -> MirLowerFnSignature {
     MirLowerFnSignature {name, owner, symbol: mangleMethodSymbol(owner, name), params, retType, isMethod: true, span}
 }
+fn mirLowerMethodParamsWithSelf(owner: String, decl: HirFnDecl) -> List<HirParam> {
+    let selfParam = hirParam("self", hirTypeNamed(owner, []), decl.span)
+    let mut out: List<HirParam> = []
+    out.push(selfParam)
+    for p in decl.params {
+        out.push(p)
+    }
+    out
+}
 /// mangleMethodSymbol is the MIR symbol mangling for methods. Must
 /// stay in sync with Go's `mangleMethodSymbol` (`Type__method`); the
 /// LLVM emitter and this lowerer both depend on the exact string
@@ -116,17 +125,23 @@ pub struct MirLowerer {
     pub out: MirModule,
     pub fnSigs: List<MirLowerFnSignature>,
     pub fnSigNames: List<String>,
+    pub fnSigIndex: Map<String, Int>,
     pub methodSigs: List<MirLowerFnSignature>,
     pub methodSigKeys: List<String>,
+    pub methodSigIndex: Map<String, Int>,
     pub structs: List<HirStructDecl>,
     pub structNames: List<String>,
+    pub structIndex: Map<String, Int>,
     pub enums: List<HirEnumDecl>,
     pub enumNames: List<String>,
+    pub enumIndex: Map<String, Int>,
     pub interfaces: List<HirInterfaceDecl>,
     pub globals: List<HirLetDecl>,
     pub globalNames: List<String>,
+    pub globalIndex: Map<String, Int>,
     pub useAliases: List<HirUseDecl>,
     pub useAliasKeys: List<String>,
+    pub useAliasIndex: Map<String, Int>,
     pub issues: List<String>,
     pub closureSeq: Int,
 }
@@ -139,7 +154,13 @@ pub fn mirLowerer(src: HirModule) -> MirLowerer {
     for msg in src.issues {
         issues.push(msg)
     }
-    MirLowerer {src, out: mirModule(src.packageName), fnSigs: [], fnSigNames: [], methodSigs: [], methodSigKeys: [], structs: [], structNames: [], enums: [], enumNames: [], interfaces: [], globals: [], globalNames: [], useAliases: [], useAliasKeys: [], issues, closureSeq: 0}
+    let fnSigIndex: Map<String, Int> = {:}
+    let methodSigIndex: Map<String, Int> = {:}
+    let structIndex: Map<String, Int> = {:}
+    let enumIndex: Map<String, Int> = {:}
+    let globalIndex: Map<String, Int> = {:}
+    let useAliasIndex: Map<String, Int> = {:}
+    MirLowerer {src, out: mirModule(src.packageName), fnSigs: [], fnSigNames: [], fnSigIndex, methodSigs: [], methodSigKeys: [], methodSigIndex, structs: [], structNames: [], structIndex, enums: [], enumNames: [], enumIndex, interfaces: [], globals: [], globalNames: [], globalIndex, useAliases: [], useAliasKeys: [], useAliasIndex, issues, closureSeq: 0}
 }
 /// mirLowerNoteIssue records incomplete MIR coverage. Issues are surfaced
 /// to callers through `MirModule.Issues` after `run()`.
@@ -150,6 +171,13 @@ pub fn mirLowerNoteIssue(l: MirLowerer, msg: String) {
 /// mirLowerSignatureForFn returns the signature index for the named
 /// free fn or -1 when unknown.
 pub fn mirLowerSignatureForFn(l: MirLowerer, name: String) -> Int {
+    match l.fnSigIndex.get(name) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for n in l.fnSigNames {
         if n == name {
@@ -163,6 +191,13 @@ pub fn mirLowerSignatureForFn(l: MirLowerer, name: String) -> Int {
 /// named method on `typeName`, or -1 when unknown.
 pub fn mirLowerSignatureForMethod(l: MirLowerer, typeName: String, method: String) -> Int {
     let key = methodKey(typeName, method)
+    match l.methodSigIndex.get(key) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for k in l.methodSigKeys {
         if k == key {
@@ -174,6 +209,13 @@ pub fn mirLowerSignatureForMethod(l: MirLowerer, typeName: String, method: Strin
 }
 /// mirLowerLookupStruct returns the struct decl index or -1.
 pub fn mirLowerLookupStruct(l: MirLowerer, name: String) -> Int {
+    match l.structIndex.get(name) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for n in l.structNames {
         if n == name {
@@ -185,6 +227,13 @@ pub fn mirLowerLookupStruct(l: MirLowerer, name: String) -> Int {
 }
 /// mirLowerLookupEnum returns the enum decl index or -1.
 pub fn mirLowerLookupEnum(l: MirLowerer, name: String) -> Int {
+    match l.enumIndex.get(name) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for n in l.enumNames {
         if n == name {
@@ -196,6 +245,13 @@ pub fn mirLowerLookupEnum(l: MirLowerer, name: String) -> Int {
 }
 /// mirLowerLookupGlobal returns the global let decl index or -1.
 pub fn mirLowerLookupGlobal(l: MirLowerer, name: String) -> Int {
+    match l.globalIndex.get(name) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for n in l.globalNames {
         if n == name {
@@ -207,6 +263,13 @@ pub fn mirLowerLookupGlobal(l: MirLowerer, name: String) -> Int {
 }
 /// mirLowerLookupUseAlias returns the use decl index by alias or -1.
 pub fn mirLowerLookupUseAlias(l: MirLowerer, alias: String) -> Int {
+    match l.useAliasIndex.get(alias) {
+        Some(idx) -> {
+            return idx
+        },
+        None -> {
+        },
+    }
     let mut i = 0
     for k in l.useAliasKeys {
         if k == alias {
@@ -253,20 +316,27 @@ pub fn mirLowerCollectSignatures(l: MirLowerer) {
             mirLowerNoteIssue(l, "generic free fn \"" + decl.name + "\" reached MIR (monomorphize first)")
         } else {
             let sig = mirLowerFnSignature(decl.name, decl.params, decl.ret, decl.span)
+            let idx = l.fnSigs.len()
             l.fnSigs.push(sig)
             l.fnSigNames.push(decl.name)
+            l.fnSigIndex.insert(decl.name, idx)
         }
     }
     for s in l.src.structs {
         if s.generics.len() > 0 {
             mirLowerNoteIssue(l, "generic struct \"" + s.name + "\" reached MIR (monomorphize first)")
         } else {
+            let structIdx = l.structs.len()
             l.structs.push(s)
             l.structNames.push(s.name)
+            l.structIndex.insert(s.name, structIdx)
             for m in s.methods {
-                let sig = mirLowerMethodSignature(s.name, m.name, m.params, m.ret, m.span)
+                let sig = mirLowerMethodSignature(s.name, m.name, mirLowerMethodParamsWithSelf(s.name, m), m.ret, m.span)
+                let methodIdx = l.methodSigs.len()
                 l.methodSigs.push(sig)
-                l.methodSigKeys.push(methodKey(s.name, m.name))
+                let key = methodKey(s.name, m.name)
+                l.methodSigKeys.push(key)
+                l.methodSigIndex.insert(key, methodIdx)
             }
         }
     }
@@ -274,12 +344,17 @@ pub fn mirLowerCollectSignatures(l: MirLowerer) {
         if e.generics.len() > 0 {
             mirLowerNoteIssue(l, "generic enum \"" + e.name + "\" reached MIR (monomorphize first)")
         } else {
+            let enumIdx = l.enums.len()
             l.enums.push(e)
             l.enumNames.push(e.name)
+            l.enumIndex.insert(e.name, enumIdx)
             for m in e.methods {
-                let sig = mirLowerMethodSignature(e.name, m.name, m.params, m.ret, m.span)
+                let sig = mirLowerMethodSignature(e.name, m.name, mirLowerMethodParamsWithSelf(e.name, m), m.ret, m.span)
+                let methodIdx = l.methodSigs.len()
                 l.methodSigs.push(sig)
-                l.methodSigKeys.push(methodKey(e.name, m.name))
+                let key = methodKey(e.name, m.name)
+                l.methodSigKeys.push(key)
+                l.methodSigIndex.insert(key, methodIdx)
             }
         }
     }
@@ -289,13 +364,17 @@ pub fn mirLowerCollectSignatures(l: MirLowerer) {
         }
     }
     for g in l.src.lets {
+        let globalIdx = l.globals.len()
         l.globals.push(g)
         l.globalNames.push(g.name)
+        l.globalIndex.insert(g.name, globalIdx)
     }
     for u in l.src.uses {
         if u.alias != "" {
+            let aliasIdx = l.useAliases.len()
             l.useAliases.push(u)
             l.useAliasKeys.push(u.alias)
+            l.useAliasIndex.insert(u.alias, aliasIdx)
         }
         mirLowerEmitUse(l, u)
     }
@@ -614,7 +693,7 @@ pub fn mirLowerFunction(l: MirLowerer, decl: HirFnDecl, owner: String, asMethod:
         return out
     }
     mirLowerSeedFunction(out, params, retT, span)
-    mirLowerFunctionBody(l, out, decl, retT, asMethod, span)
+    mirLowerFunctionBody(l, out, decl, retT, owner, asMethod, span)
     out
 }
 // Synthesise a self parameter at position 0 so downstream
@@ -634,11 +713,16 @@ pub fn mirLowerFunction(l: MirLowerer, decl: HirFnDecl, owner: String, asMethod:
 /// fns) or Unreachable (non-unit fns whose body fell through — the
 /// checker already forbids this so the terminator is defensive
 /// poison).
-pub fn mirLowerFunctionBody(l: MirLowerer, out: MirFunction, decl: HirFnDecl, retT: HirType, asMethod: Bool, span: MirSpan) {
+pub fn mirLowerFunctionBody(l: MirLowerer, out: MirFunction, decl: HirFnDecl, retT: HirType, owner: String, asMethod: Bool, span: MirSpan) {
     let bs = mirLowerBodyState(l, out, retT)
     let mut params = decl.params
     if asMethod {
-        let selfParam = hirParam("self", hirTypeNamed(mirLowerSelfOwnerName(decl), []), decl.span)
+        let selfOwner = if owner != "" {
+            owner
+        } else {
+            mirLowerSelfOwnerName(decl)
+        }
+        let selfParam = hirParam("self", hirTypeNamed(selfOwner, []), decl.span)
         let mut withSelf: List<HirParam> = []
         withSelf.push(selfParam)
         for p in decl.params {
@@ -651,7 +735,7 @@ pub fn mirLowerFunctionBody(l: MirLowerer, out: MirFunction, decl: HirFnDecl, re
     }
     if asMethod && bs.paramLocals.len() > 0 {
         bs.self.hasOwner = true
-        bs.self.typeName = mirLowerSelfOwnerName(decl)
+        bs.self.typeName = owner
         bs.self.localId = bs.paramLocals[0]
     }
     for s in decl.body.stmts {
@@ -1191,6 +1275,14 @@ pub fn mirLowerLookupName(bs: MirLowerBodyState, name: String) -> Int {
         }
         i = i - 1
     }
+    let mut localIdx = bs.fn_.locals.len() - 1
+    for localIdx >= 0 {
+        let loc = bs.fn_.locals[localIdx]
+        if loc.name == name {
+            return loc.id
+        }
+        localIdx = localIdx - 1
+    }
     -1
 }
 /// mirLowerRegisterScopeLocal marks `id` as owned by the top scope
@@ -1586,7 +1678,19 @@ fn mirLowerIdentRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
         }
         i = i + 1
     }
-    hirTypeInvalid()
+    mirLowerRecoveredLocalType(bs, id)
+}
+fn mirLowerRecoveredLocalType(bs: MirLowerBodyState, id: Int) -> HirType {
+    if id < 0 || id >= bs.fn_.locals.len() {
+        return hirTypeInvalid()
+    }
+    let typ = bs.fn_.locals[id].typ
+    if typ == "" || typ == "<nil>" || typ == "<error>" {
+        return hirTypeInvalid()
+    }
+    let arena = emptyTyArena()
+    let parsed = tyFromString(arena, typ)
+    hirLowerTyToHirType(arena, parsed)
 }
 fn mirLowerFieldExprRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
     if e.fieldTarget.len() == 0 {
@@ -1853,16 +1957,31 @@ fn mirLowerIdentOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
         }
         return mirOperandCopy(mirPlace(localId), localTypeText)
     }
-    match e.identKind {
-        HirIdentLocal -> mirLowerIdentLocalOperand(bs, e, typeText),
-        HirIdentParam -> mirLowerIdentLocalOperand(bs, e, typeText),
-        HirIdentFn -> mirOperandConst(mirConstFn(e.identName, hirTypeString(mirLowerFnValueType(bs.l, e.identName, e.typ)))),
-        HirIdentGlobal -> mirLowerIdentGlobalOperand(bs, e, typeText),
-        HirIdentVariant -> mirLowerIdentVariantOperand(bs, e),
-        HirIdentTypeName -> mirLowerIdentUnsupported(bs, e, "type-name"),
-        HirIdentBuiltin -> mirLowerIdentUnsupported(bs, e, "builtin"),
-        HirIdentUnknown -> mirLowerIdentUnsupported(bs, e, "unresolved"),
+    if mirLowerEnumForVariant(bs.l, e.identName) != "" {
+        return mirLowerIdentVariantOperand(bs, e)
     }
+    if e.identKind == HirIdentLocal {
+        return mirLowerIdentLocalOperand(bs, e, typeText)
+    }
+    if e.identKind == HirIdentParam {
+        return mirLowerIdentLocalOperand(bs, e, typeText)
+    }
+    if e.identKind == HirIdentFn {
+        return mirOperandConst(mirConstFn(e.identName, hirTypeString(mirLowerFnValueType(bs.l, e.identName, e.typ))))
+    }
+    if e.identKind == HirIdentGlobal {
+        return mirLowerIdentGlobalOperand(bs, e, typeText)
+    }
+    if e.identKind == HirIdentVariant {
+        return mirLowerIdentVariantOperand(bs, e)
+    }
+    if e.identKind == HirIdentTypeName {
+        return mirLowerIdentUnsupported(bs, e, "type-name")
+    }
+    if e.identKind == HirIdentBuiltin {
+        return mirLowerIdentUnsupported(bs, e, "builtin")
+    }
+    mirLowerIdentUnsupported(bs, e, "unresolved")
 }
 fn mirLowerFnValueType(l: MirLowerer, name: String, annotated: HirType) -> HirType {
     let sigIdx = mirLowerSignatureForFn(l, name)
@@ -1988,22 +2107,60 @@ fn mirLowerIndexExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
 /// appropriate handler. The match is exhaustive (G17): every
 /// `HirStmtKind` lands on a handler.
 pub fn mirLowerStmt(bs: MirLowerBodyState, s: HirStmt) {
-    match s.kind {
-        HirStmtInvalid -> {
-        },
-        HirStmtBlock -> mirLowerBlockStmt(bs, s.block),
-        HirStmtLet -> mirLowerLetStmt(bs, s),
-        HirStmtExpr -> mirLowerExprStmtInner(bs, s),
-        HirStmtReturn -> mirLowerReturnStmt(bs, s),
-        HirStmtBreak -> mirLowerBreakStmt(bs, s),
-        HirStmtContinue -> mirLowerContinueStmt(bs, s),
-        HirStmtDefer -> mirLowerAddDefer(bs, s.deferBody),
-        HirStmtError -> mirLowerNoteIssue(bs.l, "mir_lower: error stmt reached MIR: " + s.errorNote),
-        HirStmtAssign -> mirLowerAssignStmt(bs, s),
-        HirStmtIf -> mirLowerIfStmt(bs, s),
-        HirStmtFor -> mirLowerForStmt(bs, s),
-        HirStmtMatch -> mirLowerMatchStmt(bs, s),
-        HirStmtChanSend -> mirLowerChanSendStmt(bs, s),
+    if s.kind == HirStmtInvalid {
+        return
+    }
+    if s.kind == HirStmtBlock {
+        mirLowerBlockStmt(bs, s.block)
+        return
+    }
+    if s.kind == HirStmtLet {
+        mirLowerLetStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtExpr {
+        mirLowerExprStmtInner(bs, s)
+        return
+    }
+    if s.kind == HirStmtReturn {
+        mirLowerReturnStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtBreak {
+        mirLowerBreakStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtContinue {
+        mirLowerContinueStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtDefer {
+        mirLowerAddDefer(bs, s.deferBody)
+        return
+    }
+    if s.kind == HirStmtError {
+        mirLowerNoteIssue(bs.l, "mir_lower: error stmt reached MIR: " + s.errorNote)
+        return
+    }
+    if s.kind == HirStmtAssign {
+        mirLowerAssignStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtIf {
+        mirLowerIfStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtFor {
+        mirLowerForStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtMatch {
+        mirLowerMatchStmt(bs, s)
+        return
+    }
+    if s.kind == HirStmtChanSend {
+        mirLowerChanSendStmt(bs, s)
+        return
     }
 }
 /// mirLowerBlockStmt lowers a block used in statement position
@@ -2175,30 +2332,13 @@ fn mirLowerIdentPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     if localId >= 0 {
         return mirPlace(localId)
     }
-    match e.identKind {
-        HirIdentLocal -> {
-            let id = mirLowerLookupName(bs, e.identName)
-            if id < 0 {
-                return mirPlace(-1)
-            }
-            mirPlace(id)
-        },
-        HirIdentParam -> {
-            let id = mirLowerLookupName(bs, e.identName)
-            if id < 0 {
-                return mirPlace(-1)
-            }
-            mirPlace(id)
-        },
-        HirIdentUnknown -> {
-            let id = mirLowerLookupName(bs, e.identName)
-            if id < 0 {
-                return mirPlace(-1)
-            }
-            mirPlace(id)
-        },
-        _ -> mirPlace(-1),
+    if e.identKind == HirIdentLocal || e.identKind == HirIdentParam || e.identKind == HirIdentUnknown {
+        let id = mirLowerLookupName(bs, e.identName)
+        if id >= 0 {
+            return mirPlace(id)
+        }
     }
+    mirPlace(-1)
 }
 /// mirLowerFieldExprPlace lowers `x.name` into a MirPlace:
 /// receiver-as-place + FieldProj. Optional chains (`x?.name`) cannot
@@ -2720,24 +2860,40 @@ fn mirLowerForBodyWithFramesStep(bs: MirLowerBodyState, body: HirBlock, stepBloc
 /// intentionally diagnosed rather than treated as a runtime test;
 /// decision-tree lowering owns those tests.
 fn mirLowerBindPattern(bs: MirLowerBodyState, pat: HirPattern, scrutinee: MirPlace, scrutT: HirType, span: MirSpan) {
-    match pat.kind {
-        HirPatInvalid -> {
-        },
-        HirPatWild -> {
-        },
-        HirPatIdent -> mirLowerBindPatternName(bs, pat.identName, pat.identMut, scrutinee, scrutT, span),
-        HirPatBinding -> {
-            mirLowerBindPatternName(bs, pat.bindingName, false, scrutinee, scrutT, span)
-            if pat.bindingChild.len() > 0 {
-                mirLowerBindPattern(bs, pat.bindingChild[0], scrutinee, scrutT, span)
-            }
-        },
-        HirPatTuple -> mirLowerBindTuplePattern(bs, pat, scrutinee, scrutT, span),
-        HirPatStruct -> mirLowerBindStructPattern(bs, pat, scrutinee, scrutT, span),
-        HirPatVariant -> mirLowerBindVariantPattern(bs, pat, scrutinee, scrutT, span),
-        HirPatError -> mirLowerNoteIssue(bs.l, "mir_lower: error pattern reached MIR: " + pat.errorNote),
-        _ -> mirLowerNoteIssue(bs.l, "mir_lower: refutable pattern kind " + hirPatternKindName(pat.kind) + " cannot bind without a decision tree"),
+    if pat.kind == HirPatInvalid {
+        return
     }
+    if pat.kind == HirPatWild {
+        return
+    }
+    if pat.kind == HirPatIdent {
+        mirLowerBindPatternName(bs, pat.identName, pat.identMut, scrutinee, scrutT, span)
+        return
+    }
+    if pat.kind == HirPatBinding {
+        mirLowerBindPatternName(bs, pat.bindingName, false, scrutinee, scrutT, span)
+        if pat.bindingChild.len() > 0 {
+            mirLowerBindPattern(bs, pat.bindingChild[0], scrutinee, scrutT, span)
+        }
+        return
+    }
+    if pat.kind == HirPatTuple {
+        mirLowerBindTuplePattern(bs, pat, scrutinee, scrutT, span)
+        return
+    }
+    if pat.kind == HirPatStruct {
+        mirLowerBindStructPattern(bs, pat, scrutinee, scrutT, span)
+        return
+    }
+    if pat.kind == HirPatVariant {
+        mirLowerBindVariantPattern(bs, pat, scrutinee, scrutT, span)
+        return
+    }
+    if pat.kind == HirPatError {
+        mirLowerNoteIssue(bs.l, "mir_lower: error pattern reached MIR: " + pat.errorNote)
+        return
+    }
+    mirLowerNoteIssue(bs.l, "mir_lower: refutable pattern kind " + hirPatternKindName(pat.kind) + " cannot bind without a decision tree")
 }
 fn mirLowerBindPatternName(bs: MirLowerBodyState, name: String, mutable: Bool, scrutinee: MirPlace, scrutT: HirType, span: MirSpan) {
     if name == "" {
@@ -2947,29 +3103,73 @@ fn mirLowerExprIntoPlaceImpl(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, 
     if !hirExprIsValid(e) {
         return
     }
-    match e.kind {
-        HirExprIf -> mirLowerIfExprInto(bs, e, dest, destT),
-        HirExprBlock -> mirLowerBlockExprInto(bs, e, dest, destT),
-        HirExprCoalesce -> mirLowerCoalesceExprInto(bs, e, dest, destT),
-        HirExprCall -> mirLowerCallExprInto(bs, e, dest, destT),
-        HirExprIntrinsic -> mirLowerIntrinsicCallInto(bs, e, dest, destT),
-        HirExprStructLit -> mirLowerStructLitInto(bs, e, dest, destT),
-        HirExprVariantLit -> mirLowerVariantLitInto(bs, e, dest, destT),
-        HirExprRange -> mirLowerRangeLitInto(bs, e, dest, destT),
-        HirExprQuestion -> mirLowerQuestionInto(bs, e, dest, destT),
-        HirExprIfLet -> mirLowerIfLetExprInto(bs, e, dest, destT),
-        HirExprMethod -> mirLowerMethodCallInto(bs, e, dest, destT),
-        HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
-        HirExprMatch -> mirLowerMatchExprInto(bs, e, dest, destT),
-        HirExprField -> {
-            if e.fieldOptional {
-                mirLowerOptionalFieldInto(bs, e, dest, destT)
-            } else {
-                mirLowerExprIntoPlaceRValue(bs, e, dest, destT)
-            }
-        },
-        _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
+    if e.kind == HirExprIf {
+        mirLowerIfExprInto(bs, e, dest, destT)
+        return
     }
+    if e.kind == HirExprBlock {
+        mirLowerBlockExprInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprCoalesce {
+        mirLowerCoalesceExprInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprCall {
+        mirLowerCallExprInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprIntrinsic {
+        mirLowerIntrinsicCallInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprStructLit {
+        mirLowerStructLitInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprVariantLit {
+        mirLowerVariantLitInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprRange {
+        mirLowerRangeLitInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprQuestion {
+        mirLowerQuestionInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprIfLet {
+        mirLowerIfLetExprInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprMethod {
+        mirLowerMethodCallInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprMapLit {
+        mirLowerMapLitInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprMatch {
+        mirLowerMatchExprInto(bs, e, dest, destT)
+        return
+    }
+    if e.kind == HirExprBinary {
+        if !(mirLowerBoolShortCircuitInto(bs, e, dest, destT)) {
+            mirLowerExprIntoPlaceRValue(bs, e, dest, destT)
+        }
+        return
+    }
+    if e.kind == HirExprField {
+        if e.fieldOptional {
+            mirLowerOptionalFieldInto(bs, e, dest, destT)
+        } else {
+            mirLowerExprIntoPlaceRValue(bs, e, dest, destT)
+        }
+        return
+    }
+    mirLowerExprIntoPlaceRValue(bs, e, dest, destT)
 }
 // Match drives the decision-tree walker further down the file.
 /// mirLowerExprIntoPlaceRValue is the default path: lower `e` to an
@@ -2979,6 +3179,43 @@ fn mirLowerExprIntoPlaceImpl(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, 
 fn mirLowerExprIntoPlaceRValue(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, destT: HirType) {
     let rv = mirLowerExprToRValue(bs, e, destT)
     mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
+}
+fn mirLowerBoolShortCircuitInto(bs: MirLowerBodyState, e: HirExpr, dest: MirPlace, destT: HirType) -> Bool {
+    let _ = destT
+    if e.binaryOp != HirBinAnd && e.binaryOp != HirBinOr {
+        return false
+    }
+    if e.binaryLeft.len() == 0 || e.binaryRight.len() == 0 {
+        return false
+    }
+    let span = mirSpanFromHir(e.span)
+    let left = mirLowerExprAsOperand(bs, e.binaryLeft[0])
+    let rightBB = mirLowerNewBlock(bs, span)
+    let constBB = mirLowerNewBlock(bs, span)
+    let mergeBB = mirLowerNewBlock(bs, span)
+    if e.binaryOp == HirBinAnd {
+        mirLowerTerminateBranch(bs, left, rightBB, constBB, span)
+        bs.cur = constBB
+        mirLowerAssignBoolConst(bs, dest, false, span)
+        mirLowerTerminateGoto(bs, mergeBB, span)
+        bs.cur = rightBB
+        mirLowerExprIntoPlaceImpl(bs, e.binaryRight[0], dest, hirTBool())
+        mirLowerTerminateGoto(bs, mergeBB, span)
+        bs.cur = mergeBB
+        return true
+    }
+    mirLowerTerminateBranch(bs, left, constBB, rightBB, span)
+    bs.cur = constBB
+    mirLowerAssignBoolConst(bs, dest, true, span)
+    mirLowerTerminateGoto(bs, mergeBB, span)
+    bs.cur = rightBB
+    mirLowerExprIntoPlaceImpl(bs, e.binaryRight[0], dest, hirTBool())
+    mirLowerTerminateGoto(bs, mergeBB, span)
+    bs.cur = mergeBB
+    true
+}
+fn mirLowerAssignBoolConst(bs: MirLowerBodyState, dest: MirPlace, value: Bool, span: MirSpan) {
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstBool(value))), span))
 }
 // ====================================================================
 // Expression → RValue dispatcher (Stage 4d)

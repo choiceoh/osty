@@ -9,8 +9,8 @@ Runs the self-rebuild ratchet:
 
   1. host osty validates the toolchain sources and current MIR gates
   2. host osty builds osty-self-1 from toolchain/
-  3. host osty front-end rebuilds the MIR-driver package while osty-self-1,
-     osty-self-2-seed, and osty-self-2 provide the MIR JSON -> LIR Proto backend
+  3. osty-self-1, osty-self-2-seed, and osty-self-2 rebuild toolchain/ from
+     source through HIR -> Mono -> MIR -> LIR Proto -> LLVM IR
   5. osty-self-2 and osty-self-3 are compared byte-for-byte
 
 Environment overrides:
@@ -266,160 +266,6 @@ install_into_selfhostcache() {
 	log "stage1: promoted into selfhostcache $target"
 }
 
-selfhost_driver_source_files() {
-	cat <<'FILES'
-toolchain/mir.osty
-toolchain/mir_validator.osty
-toolchain/mir_json.osty
-scripts/selfhost_mir_support.osty
-toolchain/lir_proto.osty
-toolchain/selfhost_mir_driver.osty
-FILES
-}
-
-bundle_selfhost_driver_source() {
-	local out="$1"
-	{
-		printf 'use std.env\nuse std.fs\nuse std.os\nuse std.process\nuse std.strings\n\n'
-		while IFS= read -r rel; do
-			local path="$root/$rel"
-			[[ -f "$path" ]] || fail "selfhost driver source not found: $rel"
-			printf '// ---- %s ----\n' "$path"
-			if [[ "$rel" == "toolchain/core.osty" ]]; then
-				awk '
-				/^use std\.env$/ || /^use std\.fs$/ || /^use std\.os$/ || /^use std\.process$/ || /^use std\.strings$/ || /^use std\.strings as strings$/ { next }
-				/^pub fn binOpSymbol/ {
-					print "pub fn binOpSymbol(op: BinOp) -> String {"
-					print "    let _ = op"
-					print "    \"?\""
-					print "}"
-					skip = "bin"
-					next
-				}
-				skip == "bin" && /^\/\/ B2:/ { skip = ""; print; next }
-				skip == "bin" { next }
-				/^pub fn unOpSymbol/ {
-					print "pub fn unOpSymbol(op: UnOp) -> String {"
-					print "    let _ = op"
-					print "    \"?\""
-					print "}"
-					skip = "un"
-					next
-				}
-				skip == "un" && /^\/\/ B2:/ { skip = ""; print; next }
-				skip == "un" { next }
-				/^pub fn coreKindName/ {
-					print "pub fn coreKindName(kind: CoreKind) -> String {"
-					print "    let _ = kind"
-					print "    \"Core\""
-					print "}"
-					skip = "kind"
-					next
-				}
-				skip == "kind" && /^\/\/ B2:/ { skip = ""; print; next }
-				skip == "kind" { next }
-				/^pub fn corePrintModule/ { skip = "print"; next }
-				skip == "print" && /^fn coreIntLen/ { skip = ""; print; next }
-				skip == "print" { next }
-				{ print }
-				' "$path"
-			else
-				sed '/^use std\.env$/d;/^use std\.fs$/d;/^use std\.os$/d;/^use std\.process$/d;/^use std\.strings$/d;/^use std\.strings as strings$/d' "$path"
-			fi
-			printf '\n'
-		done < <(selfhost_driver_source_files)
-		printf 'fn main() {\n    selfhostMirDriverMain()\n}\n'
-	} >"$out"
-}
-
-build_self_binary_with_compile_driver() {
-	local driver="$1"
-	local label="$2"
-	local dest="$3"
-	local work="$stage_root/$label-work"
-	local bundle="$work/self-rebuild-bundle.osty"
-	local ir="$work/main.ll"
-	local object="$work/main.o"
-	local runtime_object="$work/osty_runtime.o"
-	local candidate="$work/osty-self"
-	local runtime_source="$root/internal/backend/runtime/osty_runtime.c"
-
-	require_exec "$driver" "$label driver"
-	rm -rf "$work"
-	mkdir -p "$work"
-	bundle_selfhost_driver_source "$bundle"
-	log "$label: compile selfhost driver bundle with $driver"
-	if ! "$driver" compile "$bundle" >"$ir"; then
-		fail "$label failed to compile selfhost driver source"
-	fi
-	log "$label: compile lowered LLVM IR"
-	clang -O3 -flto=thin -c "$ir" -o "$object"
-	clang -O3 -flto=thin -std=c11 -c "$runtime_source" -o "$runtime_object"
-	local link_args=(-O3 -flto=thin "$object" "$runtime_object" -pthread -lz -o "$candidate" -lm)
-	case "$(uname -s)" in
-	Darwin)
-		link_args+=(-framework Security -framework CoreFoundation)
-		;;
-	esac
-	clang "${link_args[@]}"
-	cp "$candidate" "$dest"
-	chmod +x "$dest"
-}
-
-find_single_binary_candidate() {
-	local dir="$1"
-	local candidates="$2"
-	: >"$candidates"
-	while IFS= read -r -d '' path; do
-		[[ -x "$path" ]] || continue
-		kind="$(file -b "$path" 2>/dev/null || true)"
-		case "$kind" in
-		*Mach-O* | *ELF* | *PE32*) printf '%s\n' "$path" ;;
-		esac
-	done < <(find "$dir" -type f -print0 2>/dev/null) | LC_ALL=C sort -u >>"$candidates"
-}
-
-build_self_binary_with_host_mir_backend() {
-	local driver="$1"
-	local label="$2"
-	local dest="$3"
-	local work="$stage_root/$label-work"
-	local bundle="$work/main.osty"
-	local candidates="$work/candidates"
-	local candidate=""
-	local count
-
-	require_exec "$driver" "$label MIR backend"
-	rm -rf "$work"
-	mkdir -p "$work"
-	bundle_selfhost_driver_source "$bundle"
-	cat >"$work/osty.toml" <<'TOML'
-[package]
-name = "selfhost-mir-driver"
-version = "0.1.0"
-edition = "0.3"
-
-[bin]
-name = "osty-self"
-path = "main.osty"
-
-[capabilities]
-runtime = true
-TOML
-	log "$label: build MIR driver package with self-host backend $driver"
-	OSTY_SELF_BIN="$driver" OSTY_SELF_REGISTRY_OFFLINE=1 "$host_bin" build --backend=llvm --emit binary --force "$work"
-	find_single_binary_candidate "$work/.osty/out" "$candidates"
-	count="$(wc -l <"$candidates" | tr -d '[:space:]')"
-	if [[ "$count" != "1" ]]; then
-		printf 'self-rebuild: %s produced %s binary candidates:\n' "$label" "$count" >&2
-		sed 's/^/  /' "$candidates" >&2
-		fail "$label did not produce exactly one MIR driver binary"
-	fi
-	candidate="$(sed -n '1p' "$candidates")"
-	cp "$candidate" "$dest"
-	chmod +x "$dest"
-}
-
 build_self_binary() {
 	local driver="$1"
 	local label="$2"
@@ -430,10 +276,6 @@ build_self_binary() {
 	local candidates="$stage_root/$label.candidates"
 
 	require_exec "$driver" "$label driver"
-	if [[ "$label" != "stage1" ]]; then
-		build_self_binary_with_compile_driver "$driver" "$label" "$dest"
-		return
-	fi
 	if [[ -z "$host_guard" ]]; then
 		rm -f "$toolchain_dir/.osty/out/debug/llvm/osty-self" "$toolchain_dir/.osty/out/debug/llvm/osty-self.exe"
 		rm -f "$toolchain_dir/.osty/out/release/llvm/osty-self" "$toolchain_dir/.osty/out/release/llvm/osty-self.exe"
@@ -508,9 +350,9 @@ smoke_self_driver() {
 		printf '%s\n' "$out" >&2
 		fail "$label selfhost doctor did not report host-free OK"
 	fi
-	if [[ "$out" != *"osty-self source compiler: enabled"* && "$out" != *"osty-self MIR JSON backend: enabled"* ]]; then
+	if [[ "$out" != *"osty-self source compiler: enabled"* ]]; then
 		printf '%s\n' "$out" >&2
-		fail "$label selfhost doctor did not report an enabled selfhost pipeline"
+		fail "$label selfhost doctor did not report the source compiler pipeline"
 	fi
 }
 
@@ -648,15 +490,15 @@ if [[ "$mode" == "stage1" ]]; then
 	exit 0
 fi
 
-build_self_binary_with_host_mir_backend "$stage1" "stage2-seed" "$stage2_seed"
+build_self_binary "$stage1" "stage2-seed" "$stage2_seed" "$host_guard"
 
 smoke_self_driver "$stage2_seed" "stage2-seed"
 
-build_self_binary_with_host_mir_backend "$stage2_seed" "stage2" "$stage2"
+build_self_binary "$stage2_seed" "stage2" "$stage2" "$host_guard"
 
 smoke_self_driver "$stage2" "stage2"
 
-build_self_binary_with_host_mir_backend "$stage2" "stage3" "$stage3"
+build_self_binary "$stage2" "stage3" "$stage3" "$host_guard"
 
 smoke_self_driver "$stage3" "stage3"
 

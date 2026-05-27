@@ -112,17 +112,26 @@ fn pkgPathBase(p: String) -> String {
 pub let pkgSourceKindPath: Int = 0
 pub let pkgSourceKindGit: Int = 1
 pub let pkgSourceKindRegistry: Int = 2
+fn pkgSourceKindPathCode() -> Int {
+    0
+}
+fn pkgSourceKindGitCode() -> Int {
+    1
+}
+fn pkgSourceKindRegistryCode() -> Int {
+    2
+}
 /// pkgSourceKindString maps a SourceKind int back to its
 /// human-readable label. Unknown / out-of-range values collapse
 /// to `"unknown"` so log lines never surface a bare number.
 pub fn pkgSourceKindString(kind: Int) -> String {
-    if kind == pkgSourceKindPath {
+    if kind == pkgSourceKindPathCode() {
         return "path"
     }
-    if kind == pkgSourceKindGit {
+    if kind == pkgSourceKindGitCode() {
         return "git"
     }
-    if kind == pkgSourceKindRegistry {
+    if kind == pkgSourceKindRegistryCode() {
         return "registry"
     }
     "unknown"

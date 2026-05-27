@@ -142,17 +142,26 @@ pub fn diagRenderReplacement(replacement: String, excerpt: String, haveExcerpt: 
 pub let diagSeverityError: Int = 0
 pub let diagSeverityWarning: Int = 1
 pub let diagSeverityNote: Int = 2
+fn diagSeverityErrorCode() -> Int {
+    0
+}
+fn diagSeverityWarningCode() -> Int {
+    1
+}
+fn diagSeverityNoteCode() -> Int {
+    2
+}
 /// diagSeverityString maps a `Severity` int back to its
 /// human-readable label. Unknown / out-of-range values collapse
 /// to `"unknown"` so log lines never surface a bare number.
 pub fn diagSeverityString(sev: Int) -> String {
-    if sev == diagSeverityError {
+    if sev == diagSeverityErrorCode() {
         return "error"
     }
-    if sev == diagSeverityWarning {
+    if sev == diagSeverityWarningCode() {
         return "warning"
     }
-    if sev == diagSeverityNote {
+    if sev == diagSeverityNoteCode() {
         return "note"
     }
     "unknown"
@@ -174,13 +183,13 @@ pub fn diagShortError(code: String, severity: Int, line: Int, column: Int, messa
 /// Returns the empty string for unknown severities so a stray
 /// value doesn't accidentally tint the rest of the line.
 pub fn diagSeverityAnsiColor(sev: Int) -> String {
-    if sev == diagSeverityError {
+    if sev == diagSeverityErrorCode() {
         return "\u{1b}[31m"
     }
-    if sev == diagSeverityWarning {
+    if sev == diagSeverityWarningCode() {
         return "\u{1b}[33m"
     }
-    if sev == diagSeverityNote {
+    if sev == diagSeverityNoteCode() {
         return "\u{1b}[36m"
     }
     ""
