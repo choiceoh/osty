@@ -35,12 +35,12 @@ stage0 fallback is enabled, but a full source bootstrap currently
 requires opt-in because it can exceed memory/time limits before the
 emergency emitter is reached.
 to attempt the heavy source bootstrap anyway, set
-OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1.
+OSTY_STAGE0_FALLBACK=1.
 ```
 
 `install-self` 는 source bootstrap 진입에 추가 opt-in 필요. heavy run (수 분 + 메모리 폭주 위험). 본 PR1b 진입 조건은 아님 — **PR1b 는 단일 `osty-native-checker-llvm` binary 의 stdin echo 만 필요하며 toolchain 전체 monomorph 와 무관**.
 
-**Q7 결정**: 본 spike scope 바깥. 별도 measurement PR (`OSTY_INSTALL_SELF_ALLOW_SOURCE_BOOTSTRAP=1` heavy run) 또는 stage0 100% 도달 시 자동 종결.
+**Q7 결정**: 본 spike scope 바깥. 별도 measurement PR (`OSTY_STAGE0_FALLBACK=1` heavy run) 또는 stage0 100% 도달 시 자동 종결.
 
 ## Q8 — `readAll` 추가 시 수정해야 하는 backend 매핑 site (inventory)
 
