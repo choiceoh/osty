@@ -6339,14 +6339,16 @@ fn lirLowerMirStringConcat(l: LirMirFunctionLowerer, instr: MirInstr) {
 // Mirror that here so LIR Proto and the production MIR generator agree
 // on which `osty_rt_<container>_<op>_<lane>` to call.
 fn lirContainerInnerArg(typeName: String, prefix: String) -> String {
-    if !(strings.startsWith(typeName, prefix)) {
+    if prefix.len() == 0 || typeName.len() <= prefix.len() {
         return ""
     }
-    if !(strings.endsWith(typeName, ">")) {
+    if strings.slice(typeName, 0, prefix.len()) != prefix {
         return ""
     }
-    let inner = strings.trimPrefix(typeName, prefix)
-    strings.trimSuffix(inner, ">")
+    if strings.slice(typeName, typeName.len() - 1, typeName.len()) != ">" {
+        return ""
+    }
+    strings.slice(typeName, prefix.len(), typeName.len() - 1)
 }
 struct LirMangledLengthParse {
     text: String,
@@ -6646,13 +6648,13 @@ fn lirMapValueTypeName(l: LirMirFunctionLowerer, typeName: String) -> String {
 fn lirFirstTopLevelComma(s: String) -> Int {
     let mut depth = 0
     let mut i = 0
-    let chars = strings.chars(s)
-    for ch in chars {
-        if ch == '<' {
+    for i < s.len() {
+        let ch = strings.slice(s, i, i + 1)
+        if ch == "<" {
             depth = depth + 1
-        } else if ch == '>' {
+        } else if ch == ">" {
             depth = depth - 1
-        } else if ch == ',' && depth == 0 {
+        } else if ch == "," && depth == 0 {
             return i
         }
         i = i + 1

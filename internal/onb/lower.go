@@ -148,6 +148,7 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 	}
 	state := &lowerState{target: target, mod: mod}
 	out := &Program{Target: target}
+	reachable := reachableFunctionsFromMain(mod, mainFn)
 
 	// Lower main first — its layout decisions (vararg slot, etc.) drive the
 	// shared cstring set used by every other function in the same module.
@@ -161,6 +162,9 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 		if fn == nil || fn == mainFn {
 			continue
 		}
+		if !reachable[fn] {
+			continue
+		}
 		lowered, err := state.lowerFunction(fn)
 		if err != nil {
 			return nil, err
@@ -169,6 +173,91 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 	}
 	out.CStrings = state.cstrings
 	return out, nil
+}
+
+func reachableFunctionsFromMain(mod *mir.Module, mainFn *mir.Function) map[*mir.Function]bool {
+	reachable := map[*mir.Function]bool{}
+	byName := map[string]*mir.Function{}
+	for _, fn := range mod.Functions {
+		if fn != nil && fn.Name != "" {
+			byName[fn.Name] = fn
+		}
+	}
+	var visit func(*mir.Function)
+	visit = func(fn *mir.Function) {
+		if fn == nil || reachable[fn] {
+			return
+		}
+		reachable[fn] = true
+		for _, symbol := range functionReferences(fn) {
+			visit(byName[symbol])
+		}
+	}
+	visit(mainFn)
+	return reachable
+}
+
+func functionReferences(fn *mir.Function) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(symbol string) {
+		if symbol == "" || seen[symbol] {
+			return
+		}
+		seen[symbol] = true
+		out = append(out, symbol)
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			collectInstrFunctionRefs(instr, add)
+		}
+	}
+	return out
+}
+
+func collectInstrFunctionRefs(instr mir.Instr, add func(string)) {
+	switch i := instr.(type) {
+	case *mir.AssignInstr:
+		collectRValueFunctionRefs(i.Src, add)
+	case *mir.IntrinsicInstr:
+		for _, arg := range i.Args {
+			collectOperandFunctionRefs(arg, add)
+		}
+	case *mir.CallInstr:
+		switch c := i.Callee.(type) {
+		case *mir.FnRef:
+			add(c.Symbol)
+		case *mir.IndirectCall:
+			collectOperandFunctionRefs(c.Callee, add)
+		}
+		for _, arg := range i.Args {
+			collectOperandFunctionRefs(arg, add)
+		}
+	}
+}
+
+func collectRValueFunctionRefs(rv mir.RValue, add func(string)) {
+	switch r := rv.(type) {
+	case *mir.UseRV:
+		collectOperandFunctionRefs(r.Op, add)
+	case *mir.BinaryRV:
+		collectOperandFunctionRefs(r.Left, add)
+		collectOperandFunctionRefs(r.Right, add)
+	case *mir.AggregateRV:
+		for _, f := range r.Fields {
+			collectOperandFunctionRefs(f, add)
+		}
+	}
+}
+
+func collectOperandFunctionRefs(op mir.Operand, add func(string)) {
+	c, ok := op.(*mir.ConstOp)
+	if !ok {
+		return
+	}
+	if fn, ok := c.Const.(*mir.FnConst); ok {
+		add(fn.Symbol)
+	}
 }
 
 type lowerState struct {
@@ -304,7 +393,7 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 	// AggregateRV writer needs a slot to stamp each field into, and
 	// the epilogue needs that same slot to load slot+0 → x0 and
 	// slot+8 → x1. Force the slot in by inserting $ret into `read`.
-	if fn.ReturnType == mir.TUnit || isABIScalarType(fn.ReturnType) {
+	if fn.ReturnType == mir.TUnit || s.isABIScalarType(fn.ReturnType) {
 		delete(read, fn.ReturnLocal)
 	} else {
 		read[fn.ReturnLocal] = true
@@ -623,7 +712,7 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 	// take the slot if there is one.
 	slot, hasSlot := s.localSlots[instr.Dest.Local]
 	if !hasSlot {
-		if instr.Dest.Local == fn.ReturnLocal && isABIScalarType(fn.ReturnType) {
+		if instr.Dest.Local == fn.ReturnLocal && s.isABIScalarType(fn.ReturnType) {
 			// allocate a synthetic slot at frame's tail
 			slot = s.allocateReturnSlot(fn)
 			hasSlot = true
@@ -1009,7 +1098,7 @@ func (s *lowerState) lowerStructLiteralAssign(rv *mir.AggregateRV, destSlot int6
 	}
 	var out []Instr
 	for i, field := range rv.Fields {
-		if !isABIScalarType(layout.Fields[i].Type) {
+		if !s.isABIScalarType(layout.Fields[i].Type) {
 			return nil, fmt.Errorf("%w: struct %s field %s has non-scalar type %s", ErrUnsupportedShape, rv.T, layout.Fields[i].Name, layout.Fields[i].Type)
 		}
 		mat, err := s.materialiseOperand(field, RegX9)
@@ -1039,6 +1128,10 @@ func isABIScalarType(t mir.Type) bool {
 		return true
 	}
 	return isBuiltinPointerType(t)
+}
+
+func (s *lowerState) isABIScalarType(t mir.Type) bool {
+	return isABIScalarType(t) || s.isBuiltinSourcePointerType(t)
 }
 
 // isClosureScalarType reports whether t is a closure-shaped pointer
@@ -1077,6 +1170,14 @@ func isBuiltinPointerType(t mir.Type) bool {
 	return false
 }
 
+func builtinPointerName(name string) bool {
+	switch name {
+	case "List", "Map", "Set", "Channel", "Bytes", "Handle":
+		return true
+	}
+	return false
+}
+
 // isFloatABIType reports whether t is a Float / Float64 — values that
 // occupy a d-register on AAPCS64 calls and need fmov / fadd opcodes
 // rather than the integer-side str / add lowerings.
@@ -1092,12 +1193,12 @@ func (s *lowerState) abiRegSlots(t mir.Type) (int, bool) {
 	if t == mir.TUnit {
 		return 0, true
 	}
-	if isABIScalarType(t) {
+	if s.isABIScalarType(t) {
 		return 1, true
 	}
 	if layout := s.lookupStructLayout(t); layout != nil {
 		for _, f := range layout.Fields {
-			if !isABIScalarType(f.Type) {
+			if !s.isABIScalarType(f.Type) {
 				return 0, false
 			}
 		}
@@ -1140,7 +1241,7 @@ func (s *lowerState) abiRegSlots(t mir.Type) (int, bool) {
 // builtin generics (List<T>, Map<K,V>, etc.) and large structs stay out
 // until a follow-up slice teaches the lowerer about indirect passing.
 func (s *lowerState) isABIPassableType(t mir.Type) bool {
-	if isABIScalarType(t) {
+	if s.isABIScalarType(t) {
 		return true
 	}
 	_, ok := s.abiRegSlots(t)
@@ -1159,7 +1260,7 @@ func (s *lowerState) abiUsesIndirectStruct(t mir.Type) bool {
 		return false
 	}
 	for _, f := range layout.Fields {
-		if !isABIScalarType(f.Type) {
+		if !s.isABIScalarType(f.Type) {
 			return false
 		}
 	}
@@ -1183,9 +1284,6 @@ func (s *lowerState) indirectStructByteSize(t mir.Type) int64 {
 // per-field offsets — Phase B.5 v1 only handles all-scalar structs so a
 // straightforward `field_index * 8` is enough.
 func (s *lowerState) lookupStructLayout(t mir.Type) *mir.StructLayout {
-	if s.mod == nil || s.mod.Layouts == nil {
-		return nil
-	}
 	nt, ok := t.(*ir.NamedType)
 	if !ok || nt == nil {
 		return nil
@@ -1193,11 +1291,41 @@ func (s *lowerState) lookupStructLayout(t mir.Type) *mir.StructLayout {
 	if !structLayoutSupported(nt) {
 		return nil
 	}
+	layout := s.structLayoutForNamedType(nt)
+	if layout != nil && layout.BuiltinSource != "" {
+		return nil
+	}
+	return layout
+}
+
+func (s *lowerState) structLayoutForNamedType(nt *ir.NamedType) *mir.StructLayout {
+	if s.mod == nil || s.mod.Layouts == nil || nt == nil {
+		return nil
+	}
 	key := nt.Name
 	if nt.Package != "" && !nt.Builtin {
 		key = strings.TrimPrefix(nt.Package, "std.") + "." + nt.Name
 	}
 	return s.mod.Layouts.Structs[key]
+}
+
+func (s *lowerState) builtinSourceArgs(t mir.Type) (string, []mir.Type) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil {
+		return "", nil
+	}
+	if nt.Builtin {
+		return nt.Name, nt.Args
+	}
+	if layout := s.structLayoutForNamedType(nt); layout != nil && layout.BuiltinSource != "" {
+		return layout.BuiltinSource, layout.BuiltinSourceArgs
+	}
+	return "", nil
+}
+
+func (s *lowerState) isBuiltinSourcePointerType(t mir.Type) bool {
+	name, _ := s.builtinSourceArgs(t)
+	return builtinPointerName(name)
 }
 
 // structLayoutSupported reports whether the named type is a Phase B.5 v1
@@ -1352,7 +1480,7 @@ func (s *lowerState) payloadAllScalar(fields []mir.FieldLayout) bool {
 // and no-payload enums qualify; structs always need ≥1 register
 // per field so a struct with 1 scalar field also passes.
 func (s *lowerState) isABIWordType(t mir.Type) bool {
-	if isABIScalarType(t) {
+	if s.isABIScalarType(t) {
 		return true
 	}
 	slots, ok := s.abiRegSlots(t)
@@ -1390,7 +1518,7 @@ func (s *lowerState) localTypeSize(t mir.Type) int64 {
 	if t == mir.TUnit {
 		return 0
 	}
-	if isABIScalarType(t) {
+	if s.isABIScalarType(t) {
 		return 8
 	}
 	if sl := s.lookupStructLayout(t); sl != nil {
@@ -1400,7 +1528,7 @@ func (s *lowerState) localTypeSize(t mir.Type) int64 {
 		// to "treat as opaque pointer" so pre-existing List/Map locals
 		// keep their 8-byte slot.
 		for _, f := range sl.Fields {
-			if !isABIScalarType(f.Type) {
+			if !s.isABIScalarType(f.Type) {
 				return 8
 			}
 		}
@@ -2299,7 +2427,7 @@ func (s *lowerState) lowerMapNew(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	if destLoc == nil {
 		return nil, fmt.Errorf("%w: map_new dest local missing", ErrUnsupportedShape)
 	}
-	keyT, valT := mapKeyValueTypes(destLoc.Type)
+	keyT, valT := s.mapKeyValueTypes(destLoc.Type)
 	if keyT == nil || valT == nil {
 		return nil, fmt.Errorf("%w: map_new dest type %s isn't Map<K,V>", ErrUnsupportedShape, destLoc.Type)
 	}
@@ -2545,12 +2673,12 @@ func mapRemoveSymbolForKeyKind(kind int) (string, error) {
 
 // mapKeyValueTypes extracts the K, V parameterisation from a
 // `Map<K,V>` named type. Returns (nil, nil) for non-map types.
-func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
-	nt, ok := t.(*ir.NamedType)
-	if !ok || nt == nil || !nt.Builtin || nt.Name != "Map" || len(nt.Args) < 2 {
+func (s *lowerState) mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
+	name, args := s.builtinSourceArgs(t)
+	if name != "Map" || len(args) < 2 {
 		return nil, nil
 	}
-	return nt.Args[0], nt.Args[1]
+	return args[0], args[1]
 }
 
 // mapInsertSymbolForKeyKind picks the runtime insert symbol from a

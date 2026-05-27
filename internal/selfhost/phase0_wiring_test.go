@@ -1666,7 +1666,11 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 		"lirEmitContainerCall(l, instr, llvmMapRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1)",
 		"let boxType = lirRawType(lirBraced(\"i64, ptr, ptr\"))",
 		"l.instrs.push(lirSelect(payloadI64, lirIntType(64), isOk, okPayloadI64, errPayloadI64))",
+		"if strings.slice(typeName, 0, prefix.len()) != prefix",
+		`if strings.slice(typeName, typeName.len() - 1, typeName.len()) != ">"`,
+		"strings.slice(typeName, prefix.len(), typeName.len() - 1)",
 		"let comma = lirFirstTopLevelComma(args)",
+		"let ch = strings.slice(s, i, i + 1)",
 		"strings.trim(strings.slice(args, 0, comma))",
 	} {
 		if !strings.Contains(text, needle) {
@@ -1675,6 +1679,14 @@ func TestLirProtoStage2SeedCoercionAndIndexStoreGuards(t *testing.T) {
 	}
 	if strings.Contains(text, "strings.fromChar(ch)") {
 		t.Fatalf("lir_proto.osty reintroduced stage2-unsafe strings.fromChar(ch) in generic arg splitting")
+	}
+	if strings.Contains(text, `strings.trimPrefix(typeName, prefix)`) || strings.Contains(text, `strings.trimSuffix(inner, ">")`) {
+		t.Fatalf("lir_proto.osty reintroduced helper-based generic arg slicing in lirContainerInnerArg")
+	}
+	if strings.Contains(text, "let typeChars = strings.chars(typeName)") ||
+		strings.Contains(text, "let prefixChars = strings.chars(prefix)") ||
+		strings.Contains(text, "let ch = chars[i]") {
+		t.Fatalf("lir_proto.osty reintroduced stage2-unsafe Char generic parsing")
 	}
 }
 
