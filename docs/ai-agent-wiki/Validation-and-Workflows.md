@@ -39,6 +39,12 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - keep unsupported shapes on structured diagnostic paths
 - use focused backend/codegen tests first
 - expand to broader verification when emission behavior changes
+- many `internal/backend` LLVM integration tests call `requireRealLLVMEmission`:
+  they **skip** when `osty-self` is not resolvable unless
+  **`OSTY_REQUIRE_REAL_LLVM_EMISSION=1`** is set (then they **fail** — CI uses
+  this after bootstrap). See `README.md` bootstrap env-var table and
+  `internal/backend/native_mir_payload_stub_test.go`. A strict-mode failure
+  inventory lives in `docs/backend-test-failures-audit-2026-05-26.md`
 
 ## Common repo recipes
 

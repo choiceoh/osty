@@ -11,7 +11,7 @@ Runs the self-rebuild ratchet:
   2. host osty builds osty-self-1 from toolchain/
   3. host osty front-end rebuilds the MIR-driver package while osty-self-1,
      osty-self-2-seed, and osty-self-2 provide the MIR JSON -> LIR Proto backend
-  5. osty-self-2 and osty-self-3 are compared byte-for-byte
+  4. osty-self-2 and osty-self-3 are compared byte-for-byte
 
 Environment overrides:
 

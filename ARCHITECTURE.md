@@ -39,7 +39,7 @@ Each stage produces diagnostics as it goes; they accumulate in a single
 
 ### Self-hosted toolchain (Osty-authored compiler core)
 
-The repo ships ~110 `.osty` files under `toolchain/` that reimplement
+The repo ships ~120 `.osty` files under `toolchain/` that reimplement
 the compiler pipeline in Osty itself. These are merged into a single
 bootstrap core by `internal/selfhost/bundle/bundle.go`, compiled to
 Go via the frozen seed in `internal/selfhost/generated.go`, and wired
@@ -104,10 +104,13 @@ through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
 | `semver_parse.osty` | ~240 | SemVer string parsing |
 | `semver_req.osty` | ~145 | SemVer requirement operators |
 | `pipeline.osty` | ~110 | Pipeline report — aggregate counters per stage |
+| `mir_json.osty` | ~1,760 | MIR JSON wire decoder — rebuilds self-host `MirModule` from Go `internal/mirjson` payloads for the LIR Proto subprocess path |
+| `check_json.osty` | ~1,360 | `FrontCheckResult` JSON serializers aligned with `internal/selfhost/api` (`CheckResult` wire shape; LLVM-built checker M3/M4 parity) |
+| `check_imports.osty` | ~750 | `PackageCheckImport` decoder plus cross-package import surface installation (`frontInstallImportSurfaces`) before elaboration |
 
 Builder/derive policy: `builder_policy.osty` (~60 lines), `check_bridge.osty` (~9 lines), `check_env.osty`, `inspect_hint.osty` (~200 lines).
 
-Test files: ~59 `*_test.osty` covering all production modules.
+Test files: ~80 `*_test.osty` covering all production modules.
 
 ### Default path: self-host arena (since Phase 1c.1, updated 2026-04-27)
 

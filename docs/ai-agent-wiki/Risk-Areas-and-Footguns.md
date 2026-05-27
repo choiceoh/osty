@@ -30,6 +30,12 @@
 - unsupported source shapes should stay on structured diagnostic paths
 - runtime ABI changes can affect emitted binaries far from the edited file
 - backend docs may describe migration history; check current shipped behavior too
+- **`OSTY_REQUIRE_REAL_LLVM_EMISSION`**: without it, a large slice of
+  `internal/backend` tests **skip** when `osty-self` is missing — a green
+  `go test ./internal/backend/ -short` locally does not prove the LIR Proto
+  chain is healthy. CI sets the strict flag after bootstrap; compare against
+  `docs/backend-test-failures-audit-2026-05-26.md` when triaging strict-only
+  failures
 
 ## Spec traps
 

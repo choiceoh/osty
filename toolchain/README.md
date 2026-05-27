@@ -27,3 +27,23 @@ embedded in-process fallback (`SUBPROCESS_SWITCHOVER.md`).
 transpiler that produced it has been removed. Changes to `toolchain/*.osty`
 reach Go via the LLVM self-host path only; there is no `go generate` regen
 pipeline.
+
+## Wire-format bridges (Go subprocess ↔ Osty toolchain)
+
+Several modules exist only to decode or serialize JSON shapes that cross the
+Go bridge. They are part of the native checker and `osty-self` pipelines, not
+user-facing language surface:
+
+- **`mir_json.osty`** — consumes MIR JSON from `internal/mirjson` and
+  reconstructs the self-host MIR module used by LIR Proto lowering (no
+  front-end re-run).
+- **`check_json.osty`** — serializes checker output to the `CheckResult` wire
+  format consumed by `internal/selfhost/api` (LLVM-built `osty-native-checker`
+  uses this for real check results instead of a stub).
+- **`check_imports.osty`** — decodes `PackageCheckImport` requests and installs
+  imported surfaces into the elaboration environment so cross-package references
+  resolve in multi-file / package-mode checks.
+
+See the module table in [`ARCHITECTURE.md`](../ARCHITECTURE.md) (self-hosted
+toolchain section) for approximate sizes and the file headers in each `.osty`
+for pipeline ordering notes.

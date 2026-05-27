@@ -47,7 +47,7 @@ native-only through the LLVM backend.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, `String.bytes` / `String.chars` lowering, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize. The merged toolchain native gate is not clean yet; current short-suite blockers are tracked below. |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, `String.bytes` / `String.chars` lowering, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize. The merged toolchain native gate is not clean yet; current short-suite blockers are tracked below. With **`OSTY_REQUIRE_REAL_LLVM_EMISSION=1`** (CI), integration tests that need a real `osty-self` + LIR Proto path **fail** if the artifact is missing instead of skipping — see the bootstrap env-var table and [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md) for the strict-mode failure baseline. |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
@@ -368,6 +368,12 @@ linked.
 | `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
 | `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
 
+**Backend LLVM integration tests** ([`internal/backend/native_mir_payload_stub_test.go`](./internal/backend/native_mir_payload_stub_test.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When set to `1`, `true`, `yes`, or `on` (case variants as in source), tests that call `requireRealLLVMEmission` **fatal** if `osty-self` cannot be resolved via `selfhostcache.ResolveBinary` instead of `t.Skip`. CI enables this after bootstrap so regressions in the MIR → LIR Proto subprocess chain cannot hide behind silent skips. Unset (default): same tests skip when no artifact — normal on machines that have not run `just bootstrap` / `osty build toolchain/`. |
+
 **Common recipes** (pick one row per scenario):
 
 | Scenario | Env |
@@ -377,6 +383,7 @@ linked.
 | Manually verify the prebuilt-only path | `OSTY_STAGE0_FALLBACK= just bootstrap` (registry must be reachable) |
 | Pin a specific `osty-self` | `OSTY_SELF_BIN=/path/to/osty-self` |
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
+| Run `internal/backend` tests with the strict emission gate (matches the audit driver in [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md)) | `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -timeout 20m ./internal/backend/` (requires resolvable `osty-self` + `clang`; baseline failures are documented in that audit until Map-iteration lowering is fixed) |
 
 ### Cache maintenance
 
