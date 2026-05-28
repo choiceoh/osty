@@ -545,6 +545,31 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
+
+`PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
+lowers Osty-authored stdlib method bodies from `internal/stdlib/modules/`
+into the user module before MIR. **Default is ON** — only `0`, `false`, or
+`off` disable it. OFF mode keeps only intrinsic/runtime-backed helpers and
+is useful when bisecting link failures or exercising stage0 paths that must
+not depend on freshly injected bodies. `just bootstrap` runs with the default
+so per-PR CI (`fresh-clone-source-bootstrap.yml`) matches production `osty
+build` behavior.
+
+#### Backend integration tests and `osty-self`
+
+Many `internal/backend/*_test.go` files call `requireRealLLVMEmission`
+(`internal/backend/native_mir_payload_stub_test.go`), which needs a resolvable
+`osty-self` because MIR-owned LLVM emission forks `osty-self
+lir-proto-lower`. Without a cached artifact the helper **skips** (local
+fresh-clone friendly). Set **`OSTY_REQUIRE_REAL_LLVM_EMISSION=1`** (truthy:
+`1` / `true` / `yes` / `on`) to **fail** instead, which CI uses after
+`just bootstrap` in `fresh-clone-source-bootstrap.yml` so regressions cannot
+hide behind skips. Other tests install deterministic stubs via
+`installNativeMIRPayloadStub` and do not need `osty-self`. Known strict-mode
+failures are catalogued in
+[`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

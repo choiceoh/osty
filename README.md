@@ -353,6 +353,12 @@ linked.
 | `OSTY_STAGE0_FALLBACK` | **Single source of truth** for the chicken-and-egg bootstrap. When `=1`: `install-self` runs the stage0 source-bootstrap path (Go-side emitter) when no prebuilt `osty-self` is resolvable, AND `buildNativeChecker` detours to `go build ./cmd/osty-native-checker` instead of the LLVM build path (which would need the very `osty-self` we are trying to produce). `just bootstrap` bakes this in. The previous `--bootstrap-stage0` CLI flag was retired in favour of this gate. |
 | `OSTY_STAGE0_LIST_ALL_DECLINES` | Stage0 emitter prints every stdlib-generic-method decline as a warning instead of just summary counts. Useful when diagnosing decline cascades. Auto-set by `install-self` when stage0 fallback runs. |
 
+**LLVM backend / stdlib lowering** ([`internal/backend/entry.go`](./internal/backend/entry.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
+
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
 | Var | Purpose |
@@ -368,6 +374,12 @@ linked.
 | `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
 | `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
 
+**Backend test strictness** ([`internal/backend/native_mir_payload_stub_test.go`](./internal/backend/native_mir_payload_stub_test.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When truthy, `requireRealLLVMEmission` **fails** tests if `osty-self` is not cached instead of skipping them. Use after `just bootstrap` (or any path that populated `.osty/cache/self-host/`) to surface MIR-direct regressions that would otherwise look like a clean skip on a fresh clone. CI sets this in [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) after the offline bootstrap step. Without it, local `go test ./internal/backend/` stays fresh-clone-friendly. Known failing baseline when strict: [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md). |
+
 **Common recipes** (pick one row per scenario):
 
 | Scenario | Env |
@@ -377,6 +389,20 @@ linked.
 | Manually verify the prebuilt-only path | `OSTY_STAGE0_FALLBACK= just bootstrap` (registry must be reachable) |
 | Pin a specific `osty-self` | `OSTY_SELF_BIN=/path/to/osty-self` |
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
+| Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
+| Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+
+### CI bootstrap gates
+
+Two workflows cover the complementary fresh-clone paths (see
+[`docs/osty_self_bootstrap_design.md`](./docs/osty_self_bootstrap_design.md)):
+
+| Workflow | Schedule | Path exercised |
+|---|---|---|
+| [`bootstrap-smoke-test.yml`](.github/workflows/bootstrap-smoke-test.yml) | Weekly | Online registry fetch → cached `osty-self` |
+| [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) | Every PR + push to `main` | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` (stage0 source bootstrap, same recipe contributors run offline) |
+
+The per-PR workflow also runs `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` against the artifact it just built, so MIR-direct backend tests cannot silently skip when `osty-self` was missing.
 
 ### Cache maintenance
 

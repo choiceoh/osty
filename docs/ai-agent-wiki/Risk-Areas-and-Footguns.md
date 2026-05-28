@@ -30,6 +30,12 @@
 - unsupported source shapes should stay on structured diagnostic paths
 - runtime ABI changes can affect emitted binaries far from the edited file
 - backend docs may describe migration history; check current shipped behavior too
+- `requireRealLLVMEmission` tests look green on a fresh clone when they all
+  **skipped** — run `just bootstrap` then
+  `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` before
+  claiming a backend fix is CI-safe
+- `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
+  `just bootstrap` no longer forces `=0` (PR #2013)
 
 ## Spec traps
 

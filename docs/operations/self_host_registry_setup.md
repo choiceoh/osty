@@ -134,7 +134,10 @@ Run through these before the start of each month — about 10 minutes:
    gh issue list --label bootstrap-smoke-failure --state open
    ```
    Empty output = the weekly fresh-clone smoke test
-   (`bootstrap-smoke-test.yml`) has been green. Otherwise: walk
+   (`bootstrap-smoke-test.yml`) has been green. The per-PR offline path
+   (`fresh-clone-source-bootstrap.yml`, `OSTY_SELF_REGISTRY_OFFLINE=1 just
+   bootstrap`) is a separate gate — check its workflow runs on `main` if
+   contributors report fresh-clone bootstrap failures. Otherwise: walk
    `docs/security/bootstrap-recovery.md` §3 to recover.
 
 2. **Rolling release sane?**
