@@ -115,6 +115,57 @@ pub fn frontCheckPackageToWireJson(packageJson: String) -> String {
     let result = frontendCheckLexedSourceWithImports(lexed, imports)
     frontCheckResultToWireJsonForLexedAndPackage(result, lexed, table)
 }
+/// frontNativeCheckerIsPackageRequest reports whether a raw
+/// `api.CheckRequest` JSON body carries a top-level `"package"` object
+/// value. This is the request-shape gate used by the LLVM-built
+/// `cmd/osty-native-checker` entry before it chooses the package
+/// checker path. The scan skips complete JSON strings and only accepts
+/// top-level object keys, so user source text containing `"package"`
+/// cannot redirect single-file requests.
+pub fn frontNativeCheckerIsPackageRequest(requestJson: String) -> Bool {
+    let bs = requestJson.bytes()
+    let bounds = frontFindPackageObjectBounds(bs, bs.len())
+    bounds.start >= 0
+}
+/// frontNativeCheckerSourceFromRequest extracts the top-level
+/// `"source"` string from a raw `api.CheckRequest` JSON body. It
+/// shares the same escape-aware string decoder as package-file
+/// extraction and ignores nested objects / source text strings, so
+/// metadata like `{"meta":{"source":"..."}}` cannot replace the real
+/// request source.
+pub fn frontNativeCheckerSourceFromRequest(requestJson: String) -> String {
+    let bs = requestJson.bytes()
+    let len = bs.len()
+    let mut depth = 0
+    let mut i = 0
+    for i < len {
+        let b = bs[i].toInt()
+        if b == 0x22 {
+            if depth == 1 && frontMatchKeyBytes(bs, i, len, "source") {
+                let afterKey = i + 8
+                let colonAt = frontSkipAsciiWs(bs, afterKey, len)
+                if colonAt < len && bs[colonAt].toInt() == 0x3A {
+                    let valAt = frontSkipAsciiWs(bs, colonAt + 1, len)
+                    if valAt < len && bs[valAt].toInt() == 0x22 {
+                        let scan = frontDecodeJsonStringAt(bs, valAt + 1, len)
+                        return scan.value
+                    }
+                }
+            }
+            i = frontSkipJsonString(bs, i, len)
+            continue
+        }
+        if b == 0x7B || b == 0x5B {
+            depth = depth + 1
+        } else if b == 0x7D || b == 0x5D {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        }
+        i = i + 1
+    }
+    ""
+}
 /// frontExtractPackageFileSources is the legacy single-key extractor
 /// kept for callers (e.g. focused tests) that only need the decoded
 /// `source` strings. New code should prefer `frontExtractPackageFiles`
@@ -314,11 +365,12 @@ pub struct FrontPackageBounds {
 /// `frontSkipJsonObject` to find the matching `}`. Returns `start =
 /// end = -1` when no top-level `"package":{...}` is present.
 fn frontFindPackageObjectBounds(bs: List<Byte>, len: Int) -> FrontPackageBounds {
+    let mut depth = 0
     let mut i = 0
     for i < len {
         let b = bs[i].toInt()
         if b == 0x22 {
-            if frontMatchKeyBytes(bs, i, len, "package") {
+            if depth == 1 && frontMatchKeyBytes(bs, i, len, "package") {
                 let afterKey = i + 9
                 let colonAt = frontSkipAsciiWs(bs, afterKey, len)
                 if colonAt < len && bs[colonAt].toInt() == 0x3A {
@@ -332,6 +384,13 @@ fn frontFindPackageObjectBounds(bs: List<Byte>, len: Int) -> FrontPackageBounds 
             let stringEnd = frontSkipJsonString(bs, i, len)
             i = stringEnd
             continue
+        }
+        if b == 0x7B || b == 0x5B {
+            depth = depth + 1
+        } else if b == 0x7D || b == 0x5D {
+            if depth > 0 {
+                depth = depth - 1
+            }
         }
         i = i + 1
     }

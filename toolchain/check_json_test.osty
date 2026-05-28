@@ -588,6 +588,24 @@ fn testCheckPackageToWireJsonConcatenatesFilesWithNewline() {
     let out = frontCheckPackageToWireJson("\{\"package\":\{\"files\":[\{\"source\":\"\"\},\{\"source\":\"\"\}]\}\}")
     testing.assertEq(out, "\{\"summary\":\{\"assignments\":0,\"accepted\":0,\"errors\":0\},\"typedNodes\":[],\"bindings\":[],\"symbols\":[],\"instantiations\":[]\}")
 }
+fn testNativeCheckerRequestSourceIgnoresNestedAndEscapedKeys() {
+    let nested = "\{\"meta\":\{\"source\":\"fn bad() \{ let broken: Int = \\\"no\\\" \}\"\},\"source\":\"fn main() \{\}\\n\"\}"
+    testing.assertEq(frontNativeCheckerSourceFromRequest(nested), "fn main() {}\n")
+
+    let escaped = "\{\"note\":\"\\\"source\\\":\\\"fn bad() \{\}\\\"\",\"source\":\"fn main() \{ let ok = 1 \}\\n\"\}"
+    testing.assertEq(frontNativeCheckerSourceFromRequest(escaped), "fn main() { let ok = 1 }\n")
+}
+fn testNativeCheckerPackageRequestRequiresTopLevelObject() {
+    let sourceOnly = "\{\"source\":\"fn main() \{ let label = \\\"package\\\" \}\\n\"\}"
+    testing.assert(!frontNativeCheckerIsPackageRequest(sourceOnly))
+
+    let nested = "\{\"meta\":\{\"package\":\{\"files\":[\{\"source\":\"fn bad() \{\}\"\}]\}\},\"source\":\"fn main() \{\}\\n\"\}"
+    testing.assert(!frontNativeCheckerIsPackageRequest(nested))
+    testing.assertEq(frontExtractPackageFiles(nested).len(), 0)
+
+    let pretty = "\{\n  \"package\" : \n  \{\"files\":[]\}\n\}"
+    testing.assert(frontNativeCheckerIsPackageRequest(pretty))
+}
 // ---------------------------------------------------------------------
 // Per-file token layout + metadata propagation tests (closure of
 // PR #1966 limits 1 + 3). `frontExtractPackageFiles` exposes the full

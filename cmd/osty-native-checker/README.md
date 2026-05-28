@@ -9,7 +9,7 @@ matching responsibilities, built from disjoint sources.
 | target | command | source | status |
 |---|---|---|---|
 | Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **M4 byte parity — bricks A/B/C all wired (byte offsets, telemetry, sha256 stable IDs)** |
+| LLVM-built | `OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **input + wire parity logic wired; current binary link still blocked by cross-package `toolchain.front*` symbols** |
 
 ## Why two targets
 
@@ -18,10 +18,14 @@ under the plan tracked in [docs/llvm-selfhost-plan.md](../../docs/llvm-selfhost-
 The Go-built target remains the production checker until the LLVM-built one
 reaches behavior parity (plan §12 M3/M4).
 
-## Current state (2026-05-19)
+## Current state (2026-05-28)
 
-- ✓ **M1** — LLVM-built binary builds + runs (`OSTY_STAGE0_FALLBACK=1`; the legacy `--bootstrap-stage0` CLI flag was retired in favour of the env-var gate)
-- ✓ **M2 (partial)** — empty-source fixture byte-parity:
+- Historical **M1/M2** covered the earlier stub/empty-source binary path, but
+  the current real-checker entry is not link-clean yet. A direct build now
+  reaches `clang` link and fails on unresolved cross-package symbols such as
+  `toolchain.frontCheckSourceToWireJson`.
+- **M2 fixture shape** remains the target parity check once the link wall is
+  closed:
   ```
   $ echo '{"source":""}' | /tmp/go-checker
   $ echo '{"source":""}' | ./.osty/out/debug/llvm/osty-native-checker-llvm
@@ -55,20 +59,30 @@ reaches behavior parity (plan §12 M3/M4).
   tuples the Go adapter uses, so identical wire records always hash to
   identical keys.
 
-With bricks A + B + C wired the LLVM-built and Go-built native checker
-emit byte-identical JSON for non-empty inputs (modulo any
-non-determinism in token ordering, which is upstream of the wire layer).
+- ✓ **Input request handling** — `main.osty` now reads the complete request
+  with `io.readAllStdin()`, routes only on top-level `"package"` keys, and
+  extracts only the top-level `"source"` string using the shared
+  escape-aware decoder in `toolchain/check_json.osty`.
+
+With bricks A + B + C wired, the remaining blocker is no longer the wire
+shape or request parser. It is producing and linking the transitive
+`toolchain.front*` dependency object for the LLVM-built binary.
 
 ## Build (LLVM-built)
+
+Current build probe:
 
 ```sh
 # from repo root
 go build -o .bin/osty ./cmd/osty
 OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/
-
-# run
-echo '{"source":""}' | ./cmd/osty-native-checker/.osty/out/debug/llvm/osty-native-checker-llvm
 ```
+
+Expected current result: front-end + object emission reach the clang link
+step; link fails on unresolved `toolchain.front*` symbols. Enabling
+`OSTY_CROSS_PKG_LINK=1` attempts to compile the `toolchain` dependency
+object, but that path currently declines in LIR Proto on `<error>` composite
+layout shapes before producing an object.
 
 ### Bootstrap escape — prebuilt binary slot
 
@@ -121,7 +135,7 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
   runtime symbol). 줄바꿈된 JSON request 가 통째로 읽힌다.
 - ✓ JSON value escape (`\"` / `\\` / `\n` / `\t` / `\r` / `\b` /
   `\f` / `\/` / `\uXXXX` + surrogate pair) 디코딩
-  (`extractJsonStringValueAt`).
+  (`frontNativeCheckerSourceFromRequest` → `frontDecodeJsonStringAt`).
 - ✓ `CheckRequest.package` 모드 — multi-file dispatch 가 `frontExtractPackageFiles`
   로 `{source, name, path, base, sourceFileId}` 메타데이터 전체를 추출하고
   `frontCheckPackageToWireJson` 으로 라우팅. 각 파일의 combined-buffer
@@ -137,9 +151,13 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
   binding + import alias 마킹 + 모든 exported surface 등록. Go-side
   `selfhostInstallImportSurfaces` (`internal/selfhost/package_adapter.go`)
   와 동등. `use std.io` / `use toolchain as tc` 같은 cross-pkg 참조가
-  E0501 / E0703 / E0702 없이 정상 resolve.
-- 잔여: 다른 key 가 `"source"` 를 substring 으로 포함하면 오인지
-  (key-boundary 엄격 매칭 후속 batch).
+  front-end 에서는 E0501 / E0703 / E0702 없이 resolve 된다. 남은 벽은
+  LLVM link 단계에서 해당 `toolchain.front*` 정의 오브젝트를 함께
+  공급하는 일이다.
+- ✓ request-shape key-boundary matching — `main.osty` 가 JSON 문자열을
+  통째로 건너뛰고 top-level request object 의 `"source"` / `"package"`
+  key 만 인정한다. 사용자 코드 문자열 안의 `"package"` 나 nested
+  metadata 의 `"source"` 가 입력 모드를 바꾸지 않는다.
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
   (`toolchain/check_json.osty` + `toolchain/check_stable_id.osty`) 가
   lex/parse/check 한 후 wire JSON 으로 직렬화. M4 byte parity 의 세
