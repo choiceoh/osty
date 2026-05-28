@@ -34,66 +34,11 @@ func warningContaining(warnings []error, substr string) error {
 	return nil
 }
 
-// TestLLVMBackendEmitStringsCompareFlagOff records the flag-off
-// baseline as pure telemetry, matching its `FlagOn` sibling.
-//
-// The original assertion ("Emit must fail with an `LLVM0xx`
-// diagnostic when `OSTY_STDLIB_BODY_LOWER` is unset") guarded against
-// a silent default-flip of the body-injection rollout. That gap is
-// now covered by other dispatcher paths, so the `strings.compare`
-// call can succeed end-to-end with the flag off — the original
-// regression-detection contract no longer applies. Keeping the test
-// as a logger leaves a breadcrumb for the next iteration without
-// pinning the build to a behaviour we have already moved past.
-func TestLLVMBackendEmitStringsCompareFlagOff(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "")
-	err, warnings := llvmEmitDiagnostics(t, `fn main() {
-    let order = strings.compare("a", "b")
-    println(order)
-}
-`)
-	for i, w := range warnings {
-		t.Logf("flag-off warning[%d]: %v", i, w)
-	}
-	if err != nil {
-		t.Logf("flag-off strings.compare top err: %v", err)
-		return
-	}
-	t.Logf("flag-off strings.compare succeeded end-to-end")
-}
-
-// TestLLVMBackendEmitStringsCompareFlagOn is the optimistic half: with
-// OSTY_STDLIB_BODY_LOWER=1 the stdlib injection path should provide
-// strings.compare's body. If this test fails with something OTHER than
-// the flag-off LLVM016, it tells us the first concrete backend gap that
-// still blocks bodied stdlib lowering end-to-end. We capture the error
-// as a log so the next iteration has a precise target to fix.
-func TestLLVMBackendEmitStringsCompareFlagOn(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-	err, warnings := llvmEmitDiagnostics(t, `fn main() {
-    let order = strings.compare("a", "b")
-    println(order)
-}
-`)
-	if err != nil {
-		// Log the first llvmgen warning so the next iteration has a
-		// precise target. Flip to Fatalf on err only when the injection
-		// path is known to succeed end-to-end.
-		for i, w := range warnings {
-			t.Logf("warning[%d]: %v", i, w)
-		}
-		t.Logf("flag-on strings.compare top err: %v", err)
-		return
-	}
-	t.Logf("flag-on strings.compare succeeded end-to-end")
-}
-
-// TestPrepareEntryInjectsStdlibWhenFlagOn verifies injection actually
-// runs in the real PrepareEntry path by inspecting entry.IR directly —
-// bypasses the llvmgen/AST legacy bridge so we see the HIR-level result
-// without any downstream transformations.
-func TestPrepareEntryInjectsStdlibWhenFlagOn(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+// TestPrepareEntryInjectsStdlib verifies injection runs in the real
+// PrepareEntry path by inspecting entry.IR directly — bypasses the
+// llvmgen/AST legacy bridge so we see the HIR-level result without
+// any downstream transformations.
+func TestPrepareEntryInjectsStdlib(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {
@@ -122,7 +67,6 @@ fn main() {
 				names = append(names, fn.DeclName())
 			}
 		}
-		t.Logf("flag read: %v", stdlibBodyLoweringEnabled())
 		t.Fatalf("entry.IR has no osty_std_strings__* decl; have: %v", names)
 	}
 	// Confirm the user callsite was rewritten: walk every FnDecl in
@@ -145,7 +89,7 @@ fn main() {
 	}
 }
 
-// TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn verifies that the
+// TestPrepareEntryInjectsStdlibGlobals verifies that the
 // body-injection pipeline pulls in stdlib `pub let` definitions
 // (top-level globals) referenced by injected fn bodies. Concrete case:
 // `strings.graphemes` chains through `graphemeBreakProperty` which
@@ -159,8 +103,7 @@ fn main() {
 // body may still carry a bare `Ident{Kind: IdentGlobal, Name:
 // "graphemeBreakCR"}` — every reference must resolve to the
 // mangled name.
-func TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+func TestPrepareEntryInjectsStdlibGlobals(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {

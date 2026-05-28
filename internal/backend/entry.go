@@ -19,26 +19,12 @@ import (
 // list is a compiler/backend coverage bug that must be fixed at the MIR layer.
 var ErrMIRCoverageIncomplete = errors.New("backend: MIR coverage incomplete")
 
-// stdlibBodyLoweringEnabled reports whether the `PrepareEntry` step
-// should inject Osty-bodied stdlib functions into the user module.
+// stdlibBodyLoweringEnabled reports whether PrepareEntry should inject
+// Osty-bodied stdlib functions into the user module.
 //
-// Default: ON. The pipeline reached PR3-C steady state in PR #1997
-// (flatMap end-to-end), so the rollout gate is flipped — bodied
-// stdlib methods now monomorphize out of `toolchain/`-authored
-// sources in the default build. Most common combinators
-// (`map`, `filter`, `len`) already had `osty_rt_list_*` runtime
-// intrinsics covering them in OFF mode; the ones that did NOT and
-// would fall through with "no such symbol" at link time
-// (`flatMap`, `scan`, `chunked`, `windowed`, `zip`, …) are what
-// gated this flip. With injection ON those bodies are emitted out
-// of `internal/stdlib/modules/collections.osty`.
-//
-// Escape hatch: `OSTY_STDLIB_BODY_LOWER=0` (or `off` / `false`) still
-// disables injection so regression bisection and the install-self
-// stage0 bootstrap can opt out when a fresh-clone path or unrelated
-// stdlib-injected body trips an unrelated backend gap. The escape
-// hatch will be retired once we have one full release with the
-// default-on path proven through CI.
+// Default: ON since PR #1997 (flatMap end-to-end). `OSTY_STDLIB_BODY_LOWER=0`
+// (or `off` / `false`) is the bisect escape hatch and is still used by a
+// few backend tests that pin the pre-flip intrinsic-only path.
 func stdlibBodyLoweringEnabled() bool {
 	switch os.Getenv("OSTY_STDLIB_BODY_LOWER") {
 	case "0", "false", "off":

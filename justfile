@@ -66,9 +66,8 @@ bootstrap: build-all
     #
     # If you hit a fresh stdlib-body lowering regression while
     # extending this recipe, set `OSTY_STDLIB_BODY_LOWER=0 just
-    # bootstrap` from the shell as the escape hatch — same
-    # contract as before, just no longer the default. Removing the
-    # default workaround means the CI gate
+    # bootstrap` from the shell as the bisect escape hatch (default
+    # is ON). The CI gate
     # (`fresh-clone-source-bootstrap.yml`) now actually catches
     # regressions that need body-lowering ON to surface, which is
     # what reviewer feedback flagged after PR #1998 silently
