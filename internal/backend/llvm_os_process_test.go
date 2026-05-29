@@ -131,8 +131,8 @@ fn main() {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	if !strings.Contains(string(irBytes), "osty LLVM MIR backend") {
-		t.Fatalf("std.os split-arg test did not exercise MIR backend:\n%s", irBytes)
+	if !strings.Contains(string(irBytes), "osty LIR Proto") {
+		t.Fatalf("std.os split-arg test did not exercise LIR Proto backend:\n%s", irBytes)
 	}
 	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
 	if err != nil {

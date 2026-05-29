@@ -1272,10 +1272,10 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 // TestLLVMBackendBinaryMIRBackendStringCharsBytes — Stage 5 prep
 // parity check. On binary emission (MIR-first by default),
 // `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on a String must
-// lower through the MIR-direct emitter (no silent fallback to the
-// legacy AST bridge). The emitted IR header is the only stable tell of
-// which path ran; this test locks in both that signal AND the linked
-// binary's output so a regression on either side surfaces immediately.
+// lower through the MIR-direct route (no silent fallback to the legacy
+// AST bridge). With `mir-backend` set, native-owned is skipped and the
+// LIR Proto subprocess emits the IR; this test locks in that header
+// signal and the linked binary output.
 func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
 	parallelClangBackendTest(t)
 	requireRealLLVMEmission(t)
@@ -1304,13 +1304,14 @@ func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
 	ir := string(irBytes)
-	if !strings.Contains(ir, "osty LLVM MIR backend") {
-		t.Fatalf("mir-backend feature did not reach MIR emitter (header missing):\n%s", ir)
+	if !strings.Contains(ir, "osty LIR Proto") {
+		t.Fatalf("mir-backend feature did not reach LIR Proto emitter (header missing):\n%s", ir)
 	}
 	for _, want := range []string{
 		"@osty_rt_strings_Chars",
 		"@osty_rt_strings_Bytes",
 		"@osty_rt_strings_ByteLen",
+		"define void @main()",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)

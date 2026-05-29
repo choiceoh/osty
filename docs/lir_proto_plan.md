@@ -1290,66 +1290,30 @@ baseline (16 manual / 9 source). Catalog drift now surfaces as a failing
 Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
-## Phase 7: one-shot wiring behind a gate
+## Phase 7: one-shot wiring behind a gate — **retired**
+
+**Status (2026-05)**: Completed and the env gate removed. PR #1405 deleted
+`internal/llvmgen`; production MIR→LLVM IR now always routes through the
+`osty-native-llvmgen` / `osty-self` LIR Proto subprocess
+(`toolchain/lir_proto.osty`). The interim `OSTY_LLVM_LIR_PROTO` host gate,
+`internal/llvmgen/lir_proto_gate.go`, and the `TestLLVMDispatch*LIRProto*`
+warning pins were retired when the Go MIR emitter path was deleted — there
+is no second backend to gate against anymore.
+
+Historical deliverables (archived):
+
+- Env gate `OSTY_LLVM_LIR_PROTO=1` to opt into LIR Proto while the Go MIR
+  emitter remained the default fallback.
+- Gate-off parity pins so flipping the gate early did not change production
+  output until the runner landed.
+
+## Phase 8: default-on decision — **done**
 
 Deliverables:
 
-- Add an explicit gate, for example:
-
-```text
-OSTY_LLVM_LIR_PROTO=1
-```
-
-- Route only the selected backend entry point through LIR Proto when the gate
-  is enabled.
-- Keep automatic fallback to the current MIR emitter on structured unsupported
-  diagnostics.
-- Add focused backend dispatch tests.
-
-Exit criteria:
-
-- Gate off: output is unchanged.
-- Gate on: selected fixtures use LIR Proto and pass.
-- Unsupported prototype shapes fall back cleanly.
-
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
-
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
-
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
-
-## Phase 8: default-on decision
-
-Deliverables:
-
-- Flip a narrow default-on subset only after Phase 7 has been stable.
-- Remove duplicate code only when coverage and diagnostics are better in the
-  prototype path.
-- Decide whether `proto` should be renamed or remain an internal detail.
+- LIR Proto is the only LLVM lowering path; the Go MIR emitter is gone.
+- Remaining cleanup is test/doc drift (for example IR headers that still
+  mention `osty LLVM MIR backend` while production IR says `osty LIR Proto`).
 
 Exit criteria:
 
