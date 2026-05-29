@@ -25,5 +25,9 @@ embedded in-process fallback (`SUBPROCESS_SWITCHOVER.md`).
 
 `internal/selfhost/generated.go` is a committed seed — the Osty→Go bootstrap
 transpiler that produced it has been removed. Changes to `toolchain/*.osty`
-reach Go via the LLVM self-host path only; there is no `go generate` regen
-pipeline.
+reach production front-end checks via the **LLVM-built** managed
+`osty-native-checker` subprocess (`toolchain.EnsureNativeChecker`, PR #1954),
+not by regenerating `generated.go`. The seed remains for Go-bootstrap builds and
+tests only. There is no `go generate` regen pipeline. Trajectory:
+[`docs/llvm-selfhost-plan.md`](../docs/llvm-selfhost-plan.md),
+[`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md).

@@ -74,11 +74,19 @@ the only path.
 `internal/check` routes package checks through the native checker subprocess:
 the CLI installs `check.UseManagedSubprocessChecker` at startup, which lazily
 builds or reuses `.osty/toolchain/<ver>/osty-native-checker` via
-`toolchain.EnsureNativeChecker`. Setting `OSTY_NATIVE_CHECKER_BIN` to an
-executable path overrides that managed binary (debug / CI prebuild). If
-neither a managed build nor an override resolves, callers get a clear
-checker-unavailable diagnostic — production no longer silently falls back to
-the frozen in-process seed (`SUBPROCESS_SWITCHOVER.md`, gate b-hard).
+`toolchain.EnsureNativeChecker`. After PR #1954 the managed artifact is the
+**LLVM-built** `cmd/osty-native-checker/` binary (live `toolchain/*.osty`), not
+the Go shell at `main.go`. Fresh clones use `OSTY_STAGE0_FALLBACK=1`
+(`just bootstrap`) so `buildNativeChecker` temporarily installs the Go-built
+shell until `osty-self` exists; a short recursion detour during the LLVM build
+can do the same, then the outer build overwrites the slot with the LLVM
+artifact. Setting `OSTY_NATIVE_CHECKER_BIN` overrides the managed path with a
+prebuilt Go-built binary (debug / CI). `OSTY_NATIVE_CHECKER_LLVM_BIN` pins a
+prebuilt LLVM-built binary without rebuilding. If no managed build and no
+override resolve, callers get a clear checker-unavailable diagnostic — production
+no longer silently falls back to the frozen in-process seed
+(`SUBPROCESS_SWITCHOVER.md`, gates b-hard and b-llvm). Details:
+[`cmd/osty-native-checker/README.md`](./cmd/osty-native-checker/README.md).
 
 The front-end astbridge-free guards currently pass for the CLI and the
 selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,

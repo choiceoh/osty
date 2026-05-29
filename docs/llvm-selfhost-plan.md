@@ -62,6 +62,8 @@
 
 **갱신 (2026-05-28)**: LLVM-built `main.osty` 는 Go shell 과 동일한 `CheckRequest` JSON 을 받아 top-level `"source"` / `"package"` request shape 를 먼저 분기한 뒤 `tc.frontCheckSourceToWireJson` / `tc.frontCheckPackageToWireJson` (`toolchain/check_json.osty`) 로 checker 결과를 직렬화한다 — frozen seed 의 multi-step adapter 를 한 entry 에서 흉내 내는 형태가 아니라, Osty 측 front-check 가 wire 레이어까지 한 번에 처리한다. 현재 직접 빌드는 `clang` link 단계까지 도달하지만 `toolchain.front*` cross-package symbol 정의 오브젝트가 없어서 실패한다 (세부 milestone 은 [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md)).
 
+**갱신 (managed slot, PR [#1954](https://github.com/choiceoh/osty/pull/1954))**: `toolchain.EnsureNativeChecker` 가 production CLI 에서 채우는 `.osty/toolchain/<ver>/osty-native-checker` 는 이제 **LLVM-built** artifact 를 promote 한다 (Go shell 은 `OSTY_STAGE0_FALLBACK=1` / recursion detour / `OSTY_NATIVE_CHECKER_BIN` 전용). Link wall 이 남아 있어도 steady-state policy 는 live `toolchain/*.osty` 를 우선한다 — `SUBPROCESS_SWITCHOVER.md` gate **(b-llvm)**.
+
 `cmd/osty-native-checker/main.go` (38 LOC, Go shell):
 
 ```

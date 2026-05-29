@@ -72,6 +72,17 @@ is on record before any flip.
 | **(a)** | Flip default from embedded to subprocess | Per-shape cold cost ratios within the thresholds listed below | shipped (PRs #1669 + #1671) |
 | **(b-soft)** | Remove the silent embedded fallback in `UseManagedSubprocessChecker` so production failures surface | Subprocess error reporting good enough that opaque fallback is not needed | shipped (#1674) |
 | **(b-hard)** | Delete `embeddedNativeChecker` and the embedded factory default | Tests migrated off the embedded default + production paths route exclusively through the subprocess factory | shipped (this gate's PR) |
+| **(b-llvm)** | Managed subprocess binary is LLVM-built from `main.osty`, not the Go `main.go` shell | `EnsureNativeChecker` drives `osty build --backend llvm cmd/osty-native-checker/` when `osty-self` is available; `OSTY_STAGE0_FALLBACK=1` and the recursion detour keep Go-built bootstrap working | shipped (PR #1954) |
+
+Gate **(b-llvm)** does not change the subprocess IPC shape from gate (a): stdin
+still carries `api.CheckRequest` JSON and stdout still carries
+`api.CheckResult`. What changed is **which executable** populates
+`.osty/toolchain/<ver>/osty-native-checker` in steady state — the LLVM artifact
+compiled from live `toolchain/*.osty`, so front-end policy edits reach
+production without waiting on the frozen `generated.go` seed. Operational
+notes: [`cmd/osty-native-checker/README.md`](cmd/osty-native-checker/README.md),
+README bootstrap env-var table (`OSTY_STAGE0_FALLBACK`,
+`OSTY_NATIVE_CHECKER_LLVM_BIN`).
 
 ## Reproduction
 
