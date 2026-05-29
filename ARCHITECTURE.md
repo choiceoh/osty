@@ -313,11 +313,18 @@ additions) are wired here:
   patterns and rejects refutable patterns with a stable diagnostic.
 
 The v0.4 and v0.5 language-decision sweeps are closed in
-`SPEC_GAPS.md` (zero open G-numbers); remaining work is implementation
-backlog — the host-side legacy checker boundary
-(`internal/check/host_boundary.go`) still acts as a fallback under the
-native checker, and retiring it is the main architectural cleanup
-tracked outside spec gaps.
+`SPEC_GAPS.md` (zero open G-numbers); remaining implementation backlog is
+mostly backend/self-host link parity, not spec gaps. The production checker
+boundary is `internal/check/host_boundary.go`: it selects a **subprocess**
+checker only (no embedded `generated.go` fallback — see
+`SUBPROCESS_SWITCHOVER.md` gate b-hard). CLI startup installs
+`UseManagedSubprocessChecker`, which drives `toolchain.EnsureNativeChecker` to
+build or reuse an **LLVM-built** managed binary from `cmd/osty-native-checker/`
+(gate b-llvm, PR #1954). `host_boundary.go` itself is a thin JSON/exec adapter;
+it does not implement inference. Override paths: `OSTY_NATIVE_CHECKER_BIN`
+(Go-built), `OSTY_NATIVE_CHECKER_LLVM_BIN` (LLVM-built prebuild). Cheap CLI
+entry points probe an existing managed path via `ProbeManagedNativeChecker`
+without triggering a cold LLVM build.
 
 #### Type inference algorithm
 

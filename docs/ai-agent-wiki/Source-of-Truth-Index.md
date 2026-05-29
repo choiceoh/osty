@@ -29,6 +29,9 @@
 - backend corpus: [`/LLVM_BACKEND_CORPUS.md`](../../LLVM_BACKEND_CORPUS.md)
 - runtime GC: [`/RUNTIME_GC.md`](../../RUNTIME_GC.md)
 - self-host artifact/bootstrap docs: `/docs/osty_self_artifact_design.md`, `/docs/osty_self_bootstrap_design.md`
+- native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
+- dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
+- subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)
 
 ## Useful code anchors
 

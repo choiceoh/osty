@@ -21,9 +21,23 @@
 - The self-host/native checker path is the default CLI path (managed
   `osty-native-checker` subprocess after `UseManagedSubprocessChecker`; see
   `SUBPROCESS_SWITCHOVER.md`).
-- `OSTY_NATIVE_CHECKER_BIN` is for override/debug use.
-- Stage0 fallback is emergency-only and opt-in.
-- Production behavior should fail clearly rather than silently downgrade.
+- **Do not assume the Go-built checker is production.** Post PR #1954 the
+  managed slot targets the **LLVM-built** `cmd/osty-native-checker/` artifact.
+  The Go shell (`main.go` + frozen `generated.go`) is bootstrap-only:
+  `OSTY_STAGE0_FALLBACK=1`, recursion detour during managed build, explicit
+  `OSTY_NATIVE_CHECKER_BIN`, or test helpers.
+- `EnsureNativeChecker` **builds on first use**; `ProbeManagedNativeChecker`
+  only returns an existing path (used from `osty fmt` / `--help` so cold starts
+  do not pay for an LLVM checker build).
+- `OSTY_NATIVE_CHECKER_BIN` overrides with a **Go-built** binary.
+  `OSTY_NATIVE_CHECKER_LLVM_BIN` pins a prebuilt **LLVM-built** binary (CI /
+  cross-worktree). Do not pin stale paths in a global shell profile.
+- After `osty install-self`, all managed slots are invalidated via
+  `InvalidateAllManagedNativeCheckers` so sibling toolchain version directories
+  do not keep serving an old Go-built fallback.
+- Stage0 fallback (`OSTY_STAGE0_FALLBACK`) is opt-in bootstrap, not the normal
+  `osty build` path. Production should fail clearly rather than silently
+  downgrade to embedded `generated.go` (removed — gate b-hard).
 
 ## Backend traps
 

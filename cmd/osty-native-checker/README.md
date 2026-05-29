@@ -6,17 +6,23 @@ matching responsibilities, built from disjoint sources.
 
 ## Targets
 
-| target | command | source | status |
+| target | command | source | role |
 |---|---|---|---|
-| Go-built | `go build -o /tmp/go-checker ./cmd/osty-native-checker` | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | production |
-| LLVM-built | `OSTY_STAGE0_FALLBACK=1 .bin/osty build --backend llvm cmd/osty-native-checker/` | `main.osty` + `tc.frontCheckSourceToWireJson` | **input + wire parity logic wired; current binary link still blocked by cross-package `toolchain.front*` symbols** |
+| **LLVM-built (managed)** | `osty build --backend llvm cmd/osty-native-checker/` (needs resolvable `osty-self`) | `main.osty` + `tc.frontCheckSourceToWireJson` | **Production** — copied into `.osty/toolchain/<ver>/osty-native-checker` by `toolchain.EnsureNativeChecker` (PR #1954). |
+| Go-built (bootstrap) | `go build -o /tmp/go-checker ./cmd/osty-native-checker` or `OSTY_STAGE0_FALLBACK=1` detour | `main.go` (~38 LOC) + `internal/selfhost/generated.go` (frozen seed) | **Bootstrap / override only** — fresh clones (`just bootstrap`), recursion detour while building the LLVM artifact, `OSTY_NATIVE_CHECKER_BIN`, and in-tree tests via `testsupport.BuildSharedNativeCheckerForTests`. Not the steady-state managed slot. |
+
+The LLVM-built row still **link-fails today** on unresolved cross-package
+`toolchain.front*` symbols unless a dependency object path succeeds; see
+**Build (LLVM-built)** below. Wire parity (M3/M4) is ahead of link parity.
 
 ## Why two targets
 
 The LLVM-built target is the **smallest meaningful unit of true self-hosting**
 under the plan tracked in [docs/llvm-selfhost-plan.md](../../docs/llvm-selfhost-plan.md).
-The Go-built target remains the production checker until the LLVM-built one
-reaches behavior parity (plan §12 M3/M4).
+The managed CLI slot already prefers the LLVM-built artifact when
+`osty-self` is available; the Go-built shell remains for bootstrap,
+overrides, and parity experiments until link + byte-identical corpus gates
+close (plan §12 L2/L3).
 
 ## Current state (2026-05-28)
 
