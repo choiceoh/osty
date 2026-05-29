@@ -1022,7 +1022,11 @@ fn mirJsonFunctionBuildCore(obj: List<MirJsonEntry>, params: List<Int>, locals: 
     let span = mirJsonSpanField(obj, 4020328, "span")?
     let returnLocal = mirJsonIntField(obj, 11161188, "returnLocal", 0)?
     let entry = mirJsonIntField(obj, 5034129, "entry", 0)?
-    let exportSymbol = name
+    let isExternal = mirJsonBoolField(obj, 10134379, "isExternal", false)?
+    let isIntrinsic = mirJsonBoolField(obj, 11166750, "isIntrinsic", false)?
+    let exported = mirJsonBoolField(obj, 8084068, "exported", false)?
+    let exportSymbol = mirJsonStringField(obj, 12204474, "exportSymbol", "")?
+    let cAbi = mirJsonBoolField(obj, 4018021, "cAbi", false)?
     // A5–A13 annotation flags. Go-side `internal/mirjson/json.go`
     // serializes every flag set on `ir.FnDecl`; this decoder threads
     // each through to `MirFunction` so the downstream emitters
@@ -1047,7 +1051,7 @@ fn mirJsonFunctionBuildCore(obj: List<MirJsonEntry>, params: List<Int>, locals: 
     let noaliasAll = mirJsonBoolField(obj, 10127269, "noaliasAll", false)?
     let targetFeatures = mirJsonStringList(mirJsonArrayField(obj, 14288238, "targetFeatures")?)?
     let noaliasParams = mirJsonStringList(mirJsonArrayField(obj, 13238031, "noaliasParams")?)?
-    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal: false, isIntrinsic: false, exported: false, exportSymbol, cAbi: false, span, vectorize, noVectorize, vectorizeWidth, vectorizeScalable, vectorizePredicate, parallel, unroll, unrollCount, inlineMode, hot, cold, targetFeatures, noaliasAll, noaliasParams, pure})
+    Ok(MirFunction {name, params, returnType, returnLocal, locals, blocks, entry, isExternal, isIntrinsic, exported, exportSymbol, cAbi, span, vectorize, noVectorize, vectorizeWidth, vectorizeScalable, vectorizePredicate, parallel, unroll, unrollCount, inlineMode, hot, cold, targetFeatures, noaliasAll, noaliasParams, pure})
 }
 
 fn mirJsonFunctionParamsField(obj: List<MirJsonEntry>, params: List<Int>) -> Result<Bool, String> {

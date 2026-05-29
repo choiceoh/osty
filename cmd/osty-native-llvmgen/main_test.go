@@ -20,6 +20,48 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
+func TestWritePackageRequestPreservesRelativePaths(t *testing.T) {
+	req := llvmgenRequest{
+		Path: "/repo/demo/src/main.osty",
+		Package: &llvmgenPackageInput{Files: []llvmgenPackageFile{
+			{Path: "/repo/demo/main.osty", Name: "main.osty", Source: "fn root() {}\n"},
+			{Path: "/repo/demo/src/main.osty", Name: filepath.Join("src", "main.osty"), Source: "fn nested() {}\n"},
+		}},
+	}
+
+	root, entry, err := writePackageRequest(req)
+	if err != nil {
+		t.Fatalf("writePackageRequest error: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	if got, want := entry, filepath.Join(root, "src", "main.osty"); got != want {
+		t.Fatalf("entry = %q, want %q", got, want)
+	}
+	if got := readTextFile(t, filepath.Join(root, "main.osty")); got != "fn root() {}\n" {
+		t.Fatalf("root file = %q", got)
+	}
+	if got := readTextFile(t, filepath.Join(root, "src", "main.osty")); got != "fn nested() {}\n" {
+		t.Fatalf("nested file = %q", got)
+	}
+}
+
+func TestWritePackageRequestRejectsDuplicateDestinations(t *testing.T) {
+	req := llvmgenRequest{
+		Path: "/repo/demo/main.osty",
+		Package: &llvmgenPackageInput{Files: []llvmgenPackageFile{
+			{Name: "main.osty", Source: "fn a() {}\n"},
+			{Name: "main.osty", Source: "fn b() {}\n"},
+		}},
+	}
+	root, _, err := writePackageRequest(req)
+	if root != "" {
+		t.Cleanup(func() { os.RemoveAll(root) })
+	}
+	if err == nil || !strings.Contains(err.Error(), "duplicate materialized path") {
+		t.Fatalf("writePackageRequest err = %v, want duplicate materialized path", err)
+	}
+}
+
 func TestRunEmitsLLVMIRForMIRPayload(t *testing.T) {
 	bin := buildFakeNativeLIRProto(t)
 	t.Setenv("OSTY_NATIVE_LIRPROTO_BIN", bin)
@@ -215,6 +257,15 @@ func decodeCapturedLIRRequest(t *testing.T, path string, out any) {
 	if err := json.Unmarshal(data, out); err != nil {
 		t.Fatalf("decode %s: %v", path, err)
 	}
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 const fakeNativeLIRProtoProgram = `package main

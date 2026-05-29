@@ -191,16 +191,9 @@ func RequestFromPackage(entryPath string, pkg *resolve.Package) (Request, error)
 		if pf == nil {
 			continue
 		}
-		name := strings.TrimSpace(filepath.Base(pf.Path))
-		if name == "." || name == string(filepath.Separator) {
-			name = ""
-		}
-		if name == "" {
-			name = fmt.Sprintf("file%d.osty", i)
-		}
 		files = append(files, PackageFile{
 			Path:   pf.Path,
-			Name:   name,
+			Name:   packageRelativeFileName(pkg.Dir, pf.Path, i),
 			Source: string(pf.Source),
 		})
 	}
@@ -215,6 +208,22 @@ func RequestFromPackage(entryPath string, pkg *resolve.Package) (Request, error)
 			PackageName:       pkg.Name,
 		},
 	}, nil
+}
+
+func packageRelativeFileName(pkgDir, filePath string, idx int) string {
+	if pkgDir != "" && filePath != "" {
+		if rel, err := filepath.Rel(pkgDir, filePath); err == nil {
+			rel = filepath.Clean(rel)
+			if rel != "." && rel != "" && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+				return rel
+			}
+		}
+	}
+	name := strings.TrimSpace(filepath.Base(filePath))
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return fmt.Sprintf("file%d.osty", idx)
+	}
+	return name
 }
 
 func warningErrors(warnings []string) []error {

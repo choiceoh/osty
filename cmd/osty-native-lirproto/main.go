@@ -396,9 +396,6 @@ func lowerMIRJSONStage0Compat(req nativelirproto.Request) (nativelirproto.Respon
 		EmitGC:      true,
 	})
 	if err != nil {
-		if len(ir) > 0 && stage0.IsListAllDeclines() {
-			return nativelirproto.Response{LLVMIR: string(ir)}, true
-		}
 		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: %v", err)}, true
 	}
 	return nativelirproto.Response{LLVMIR: string(ir)}, true

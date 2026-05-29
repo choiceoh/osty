@@ -325,6 +325,48 @@ fn testMirJsonDecodeFnAnnotationFlagsDefaults() {
     testing.assertEq(fn_.noaliasParams.len(), 0)
 }
 
+// Core function metadata must survive the MIR-JSON route. External
+// functions intentionally have no blocks; if `isExternal` is dropped,
+// validation rejects valid FFI modules as "function ...: no blocks".
+// `exportSymbol` is also ABI-significant because LIR renders that
+// symbol instead of the internal MIR name.
+fn testMirJsonDecodeExternalExportMetadataRoundTrip() {
+    let moduleText = r"""
+{
+  "version": 1,
+  "packageName": "main",
+  "functions": [
+    {
+      "name": "pkg.internalHostCall",
+      "returnType": {"kind": "prim", "display": "Int", "prim": "Int"},
+      "returnLocal": 0,
+      "locals": [],
+      "blocks": [],
+      "isExternal": true,
+      "exported": true,
+      "exportSymbol": "host_call",
+      "cAbi": true
+    }
+  ]
+}
+"""
+    let m = mjDecodeModule(moduleText)
+    testing.assertEq(m.functions.len(), 1)
+    let fn_ = m.functions[0]
+    testing.assert(fn_.isExternal)
+    testing.assert(!fn_.isIntrinsic)
+    testing.assert(fn_.exported)
+    testing.assertEq(fn_.exportSymbol, "host_call")
+    testing.assert(fn_.cAbi)
+    let errors = mirValidateModule(m)
+    testing.assertEq(errors.len(), 0)
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/mir_json_external_test.mir.json", ""), m)
+    testing.assert(lirLowerOK(result))
+    let ir = lirRenderModule(result.module)
+    testing.assert(strings.contains(ir, "declare i64 @host_call()"))
+    testing.assert(!strings.contains(ir, "@pkg.internalHostCall()"))
+}
+
 // `#[cold]` round-trip — separate from the all-flags test because
 // `hot` and `cold` are mutually exclusive at the source level
 // (the resolver rejects both on the same function), so the LLVM
