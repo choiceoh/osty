@@ -1,5 +1,7 @@
 package api
 
+import "encoding/json"
+
 // PackageCheckFile is the per-file input accepted by the structured
 // self-host check / resolve adapters.
 type PackageCheckFile struct {
@@ -14,6 +16,49 @@ type PackageCheckFile struct {
 	// need to guess which file owned a given span.
 	Path         string `json:"path,omitempty"`
 	SourceFileID string `json:"sourceFileId,omitempty"`
+}
+
+// MarshalJSON keeps package source on the wire as raw UTF-8 text. The
+// default encoding/json handling for []byte is base64, but the LLVM-built
+// native checker parses the request in Osty and consumes files[].source as the
+// actual source string.
+func (f PackageCheckFile) MarshalJSON() ([]byte, error) {
+	type packageCheckFileJSON struct {
+		Source       string `json:"source,omitempty"`
+		Base         int    `json:"base,omitempty"`
+		Name         string `json:"name,omitempty"`
+		Path         string `json:"path,omitempty"`
+		SourceFileID string `json:"sourceFileId,omitempty"`
+	}
+	return json.Marshal(packageCheckFileJSON{
+		Source:       string(f.Source),
+		Base:         f.Base,
+		Name:         f.Name,
+		Path:         f.Path,
+		SourceFileID: f.SourceFileID,
+	})
+}
+
+// UnmarshalJSON mirrors MarshalJSON so the Go-built checker shim and tests
+// accept the same raw-source request shape as the Osty-owned checker.
+func (f *PackageCheckFile) UnmarshalJSON(data []byte) error {
+	type packageCheckFileJSON struct {
+		Source       string `json:"source,omitempty"`
+		Base         int    `json:"base,omitempty"`
+		Name         string `json:"name,omitempty"`
+		Path         string `json:"path,omitempty"`
+		SourceFileID string `json:"sourceFileId,omitempty"`
+	}
+	var in packageCheckFileJSON
+	if err := json.Unmarshal(data, &in); err != nil {
+		return err
+	}
+	f.Source = []byte(in.Source)
+	f.Base = in.Base
+	f.Name = in.Name
+	f.Path = in.Path
+	f.SourceFileID = in.SourceFileID
+	return nil
 }
 
 // PackageCheckGenericBound describes one `<T: Iface>` constraint on a

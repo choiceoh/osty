@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestCheckResultIndexUsesStableIDs(t *testing.T) {
 	result := CheckResult{
@@ -96,5 +100,38 @@ func TestNilCheckResultIndexIsEmpty(t *testing.T) {
 		len(idx.InstantiationsByID) != 0 ||
 		len(idx.InstantiationsByStableID) != 0 {
 		t.Fatalf("nil result index = %#v, want empty maps", idx)
+	}
+}
+
+func TestPackageCheckFileSourceJSONUsesRawText(t *testing.T) {
+	req := CheckRequest{
+		Package: &PackageCheckInput{
+			Files: []PackageCheckFile{{
+				Source: []byte("fn main() { println(\"é\") }\n"),
+				Name:   "main.osty",
+			}},
+		},
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, `fn main()`) {
+		t.Fatalf("payload did not contain raw source text: %s", text)
+	}
+	if strings.Contains(text, "Zm4gbWFpbg") {
+		t.Fatalf("payload encoded source as base64: %s", text)
+	}
+
+	var decoded CheckRequest
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Package == nil || len(decoded.Package.Files) != 1 {
+		t.Fatalf("decoded package files = %#v, want one file", decoded.Package)
+	}
+	if got, want := string(decoded.Package.Files[0].Source), "fn main() { println(\"é\") }\n"; got != want {
+		t.Fatalf("decoded source = %q, want %q", got, want)
 	}
 }

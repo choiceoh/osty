@@ -119,6 +119,31 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 	}
 }
 
+func TestRequestFromPackagePreservesRelativeFileNames(t *testing.T) {
+	pkg := &resolve.Package{
+		Dir:  "/tmp/demo",
+		Name: "demo",
+		Files: []*resolve.PackageFile{
+			{Path: "/tmp/demo/main.osty", Source: []byte("fn root() {}\n")},
+			{Path: "/tmp/demo/src/main.osty", Source: []byte("fn nested() {}\n")},
+		},
+	}
+
+	req, err := RequestFromPackage("/tmp/demo/src/main.osty", pkg)
+	if err != nil {
+		t.Fatalf("RequestFromPackage error: %v", err)
+	}
+	if req.Package == nil || len(req.Package.Files) != 2 {
+		t.Fatalf("package files = %#v, want 2 files", req.Package)
+	}
+	if got, want := req.Package.Files[0].Name, "main.osty"; got != want {
+		t.Fatalf("file[0].name = %q, want %q", got, want)
+	}
+	if got, want := req.Package.Files[1].Name, filepath.Join("src", "main.osty"); got != want {
+		t.Fatalf("file[1].name = %q, want %q", got, want)
+	}
+}
+
 func TestTryPackageLibraryForSymbolsForwardsRequiredSymbols(t *testing.T) {
 	bin := buildFakeNativeLLVMGen(t)
 	capture := filepath.Join(t.TempDir(), "request.json")

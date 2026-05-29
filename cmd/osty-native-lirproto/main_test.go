@@ -475,7 +475,7 @@ func TestRunMIRPayloadPreservesLargeIntJSONNumbers(t *testing.T) {
 	}
 }
 
-func TestRunMIRPayloadAcceptsStage0PartialIRWhenListAllDeclines(t *testing.T) {
+func TestRunMIRPayloadDeclinesStage0PartialIRWhenListAllDeclines(t *testing.T) {
 	bin := buildFakeOstySelf(t)
 
 	payload, err := mirjson.FromModule(&mir.Module{
@@ -544,15 +544,14 @@ func TestRunMIRPayloadAcceptsStage0PartialIRWhenListAllDeclines(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v\n%s", err, stdout.String())
 	}
-	if resp.Declined {
-		t.Fatalf("Declined = true, want partial stage0 IR: %+v", resp)
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want partial stage0 IR rejected: %+v", resp)
 	}
-	if !strings.Contains(resp.LLVMIR, "define i64 @main()") || !strings.Contains(resp.LLVMIR, "ret i64 7") {
-		t.Fatalf("LLVMIR missing emitted main:\n%s", resp.LLVMIR)
+	if !strings.Contains(resp.Error, "stage0 MIR compat:") || !strings.Contains(resp.Error, "declinedHelper") {
+		t.Fatalf("Error = %q, want stage0 decline details", resp.Error)
 	}
-	if !strings.Contains(resp.LLVMIR, "define i64 @declinedHelper()") ||
-		!strings.Contains(resp.LLVMIR, "osty_rt_stage0_declined") {
-		t.Fatalf("LLVMIR missing decline stub:\n%s", resp.LLVMIR)
+	if strings.Contains(resp.LLVMIR, "osty_rt_stage0_declined") {
+		t.Fatalf("partial decline-stub IR leaked into response:\n%s", resp.LLVMIR)
 	}
 }
 

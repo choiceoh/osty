@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -506,12 +507,27 @@ func writePackageRequest(req llvmgenRequest) (string, string, error) {
 	}
 	entryName := packageEntryName(req)
 	if entryName == "" {
-		entryName = packageFileName(files[0], 0)
+		var nameErr error
+		entryName, nameErr = packageFileName(files[0], 0)
+		if nameErr != nil {
+			os.RemoveAll(root)
+			return "", "", nameErr
+		}
 	}
 	entryPath := ""
+	seen := map[string]struct{}{}
 	for i, file := range files {
-		name := packageFileName(file, i)
+		name, err := packageFileName(file, i)
+		if err != nil {
+			os.RemoveAll(root)
+			return "", "", err
+		}
 		dst := filepath.Join(root, name)
+		if _, ok := seen[dst]; ok {
+			os.RemoveAll(root)
+			return "", "", fmt.Errorf("prepare llvmgen package: duplicate materialized path %q", name)
+		}
+		seen[dst] = struct{}{}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			os.RemoveAll(root)
 			return "", "", err
@@ -520,12 +536,19 @@ func writePackageRequest(req llvmgenRequest) (string, string, error) {
 			os.RemoveAll(root)
 			return "", "", err
 		}
-		if filepath.Base(name) == entryName {
+		if file.Path != "" && req.Path != "" && filepath.Clean(file.Path) == filepath.Clean(req.Path) {
+			entryPath = dst
+		} else if name == entryName || filepath.Base(name) == entryName {
 			entryPath = dst
 		}
 	}
 	if entryPath == "" {
-		entryPath = filepath.Join(root, packageFileName(files[0], 0))
+		name, err := packageFileName(files[0], 0)
+		if err != nil {
+			os.RemoveAll(root)
+			return "", "", err
+		}
+		entryPath = filepath.Join(root, name)
 	}
 	absEntry, err := filepath.Abs(entryPath)
 	if err != nil {
@@ -542,14 +565,31 @@ func packageEntryName(req llvmgenRequest) string {
 	return filepath.Base(req.Path)
 }
 
-func packageFileName(file llvmgenPackageFile, idx int) string {
+func packageFileName(file llvmgenPackageFile, idx int) (string, error) {
 	if file.Name != "" {
-		return filepath.Base(file.Name)
+		if name, ok := safeRelativePackageName(file.Name); ok {
+			return name, nil
+		}
+		return "", fmt.Errorf("prepare llvmgen package: unsafe file name %q", file.Name)
 	}
 	if file.Path != "" {
-		return filepath.Base(file.Path)
+		if name, ok := safeRelativePackageName(file.Path); ok {
+			return name, nil
+		}
+		name := filepath.Base(file.Path)
+		if name != "." && name != string(filepath.Separator) && name != "" {
+			return name, nil
+		}
 	}
-	return fmt.Sprintf("file%d.osty", idx)
+	return fmt.Sprintf("file%d.osty", idx), nil
+}
+
+func safeRelativePackageName(name string) (string, bool) {
+	name = filepath.Clean(strings.TrimSpace(name))
+	if name == "." || name == "" || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return name, true
 }
 
 func renderWarnings(warnings []error) []string {
