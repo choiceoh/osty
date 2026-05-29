@@ -691,13 +691,12 @@ fn testLirProtoParityManualBuildersLowerThroughOsty() {
     assertLirContains(lirParityCheckSummary(checks), "projected_intrinsic_result: ok")
 }
 fn testLirProtoLowererEnvelopeAndPackageFallbackOstyOwned() {
-    let mut cfg = lirLowerConfig("", "/tmp/empty.osty", "arm64-apple-macosx")
-    testing.assert(lirLowerConfigAddFeatureGate(cfg, "x"))
+    let cfg = lirLowerConfig("pkg-a", "/tmp/empty.osty", "arm64-apple-macosx")
     let lowerer = lirNewLowerer(cfg)
     let mut snapshot = lirLowererConfig(lowerer)
-    testing.assert(lirLowerConfigHasFeatureGate(snapshot, "x"))
-    testing.assert(lirLowerConfigAddFeatureGate(snapshot, "y"))
-    testing.assert(!(lirLowerConfigHasFeatureGate(lirLowererConfig(lowerer), "y")))
+    testing.assertEq(snapshot.packageName, "pkg-a")
+    snapshot.packageName = "pkg-b"
+    testing.assertEq(lirLowererConfig(lowerer).packageName, "pkg-a")
     let mut empty = mirModule("pkg")
     let result = lirLowererLowerMIR(lowerer, empty)
     testing.assert(lirLowerOK(result))
