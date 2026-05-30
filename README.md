@@ -380,6 +380,7 @@ linked.
 | Var | Purpose |
 |---|---|
 | `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
+| `OSTY_STAGE0_AUDIT` | When truthy, `TestStage0ToolchainAudit` (`./internal/backend/`) walks every `toolchain/*.osty` function through the stage0 emitter and fails if any shape is not covered (currently **100%** / 8714 functions — audit-pass only, not full `osty-self` link). Use after extending `internal/backend/stage0/emit.go`. |
 | `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
 
 **Backend test strictness** ([`internal/backend/native_mir_payload_stub_test.go`](./internal/backend/native_mir_payload_stub_test.go)):

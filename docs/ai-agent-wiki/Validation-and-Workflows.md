@@ -49,6 +49,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- stage0 emitter coverage gate (checker bundle only, currently 100%):
+  `OSTY_STAGE0_AUDIT=1 go test -count=1 -run TestStage0ToolchainAudit ./internal/backend/`
 
 ## Common repo recipes
 
