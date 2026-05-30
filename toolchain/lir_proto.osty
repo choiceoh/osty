@@ -3908,7 +3908,8 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
             l.instrs.push(lirStore(lirOperand(destType, "zeroinitializer"), slot.slot, 0))
             return
                 } else if lirTypeIsVoid(value.typ) {
-                    value = LirOperand {typ: destType, value: lirZeroValue(destType)}
+                    lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
+                    return
                 } else {
                     let castOp = lirPlanSameFamilyCoercionOpcode(value.typ, destType, lirPrimitiveTypeIsUnsigned(instr.src.typ))
                     if castOp == "" {
@@ -4007,7 +4008,8 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
                     l.instrs.push(lirStore(lirOperand(destType, "zeroinitializer"), voidSlot.slot, 0))
                     return
                 } else if lirTypeIsVoid(value.typ) {
-                    value = LirOperand {typ: destType, value: lirZeroValue(destType)}
+                    lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
+                    return
                 } else {
                     lirLowerError(l, LirDiagUnsupported, "assign coercion `" + value.typ.llvm + "` → `" + destType.llvm + "` is not supported (dest `" + destLoc.name + ":" + destLoc.typ + "`, src `" + instr.src.typ + "`)", "assign")
                     return

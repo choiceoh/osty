@@ -732,3 +732,19 @@ fn testLirProtoLowererReportsVoidDestinationMismatchOstyOwned() {
     mirFunctionTerminate(caller, entry, mirReturnTerm(mirNoSpan()))
     assertLirLoweredDiagnosticsContain(lirTestModule([noop, caller]), "cannot store void result into non-unit local")
 }
+fn testLirProtoLowererRejectsVoidAssignToRealBindingOstyOwned() {
+    let mut fn_ = lirTestFunction("main", "Int")
+    let n = lirTestAddLocal(fn_, "n", "Int")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(n), mirRVUse(mirOperandConst(mirConstUnit())), mirNoSpan()))
+    lirTestAppendConstReturn(fn_, entry, 1)
+    assertLirLoweredDiagnosticsContain(lirTestModule([fn_]), "assign coercion `void` → `i64` is not supported")
+}
+fn testLirProtoLowererAllowsDiscardVoidAssignConventionOstyOwned() {
+    let mut fn_ = lirTestFunction("main", "Int")
+    let discard = lirTestAddLocal(fn_, "_discard", "Int")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(discard), mirRVUse(mirOperandConst(mirConstUnit())), mirNoSpan()))
+    lirTestAppendConstReturn(fn_, entry, 1)
+    assertLirLoweredContains(lirTestModule([fn_]), ["define i64 @main()", "store i64 zeroinitializer", "ret i64"])
+}
