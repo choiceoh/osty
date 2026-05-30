@@ -18,7 +18,7 @@
 - lexer: `internal/lexer`, `toolchain/lexer.osty`, `toolchain/frontend.osty`
 - parser: `internal/parser`, `toolchain/parser.osty`
 - resolver: `internal/resolve`, `toolchain/resolve.osty`
-- checker: `internal/check`, `toolchain/check.osty`, `toolchain/elab.osty`, `toolchain/check_env.osty`, `toolchain/check_diag.osty`, `toolchain/check_gates.osty`
+- checker: `internal/check`, `toolchain/check.osty`, `toolchain/check_imports.osty`, `toolchain/check_json.osty`, `toolchain/elab.osty`, `toolchain/check_env.osty`, `toolchain/check_diag.osty`, `toolchain/check_gates.osty`
 
 ### Formatting, lint, LSP, docs, CI
 

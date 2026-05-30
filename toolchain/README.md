@@ -31,3 +31,18 @@ not by regenerating `generated.go`. The seed remains for Go-bootstrap builds and
 tests only. There is no `go generate` regen pipeline. Trajectory:
 [`docs/llvm-selfhost-plan.md`](../docs/llvm-selfhost-plan.md),
 [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md).
+
+### Checker modules (multi-file / subprocess wire)
+
+The type checker is split across several files so package-mode requests stay
+testable without pulling the entire MIR stack:
+
+| File | Role |
+|---|---|
+| `check.osty` | Orchestration: lex → parse → `frontInstallImportSurfaces` → `elabFile` → diagnostics |
+| `check_imports.osty` | Decode `PackageCheckInput.imports[]` and register cross-package surfaces before elaboration (fixes spurious `E0501` on `alias.member` in package mode) |
+| `check_json.osty` | Escape-aware JSON decode/encode for `api.CheckRequest` / `CheckResult`, combined-buffer file tables, M4 telemetry + stable IDs |
+| `check_env.osty` / `elab.osty` / `check_diag.osty` / `check_gates.osty` | Environment, elaboration, diagnostics, post-check policy gates |
+
+Focused tests: `check_imports_test.osty`, `check_json_test.osty`. Go mirror for import install:
+`internal/selfhost/package_adapter.go`.

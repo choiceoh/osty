@@ -4,15 +4,26 @@
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 측정
+
+### 0.1 현재 (2026-05-30, revalidated)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|
-| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
-| `install-self` 실제 decline | **1340 functions** | `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self` |
-| 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 위 audit 명령 출력 |
+| Stage0 audit cover (`toolchain/*.osty` checker bundle) | **100.0%** (8714 / 8714 real emit, 0 decline-stub) | `OSTY_STAGE0_AUDIT=1 go test -count=1 -run TestStage0ToolchainAudit -v ./internal/backend/` |
+| `install-self` end-to-end | **audit-pass ≠ build-pass** — monomorphized `osty-self` / LIR Proto walls remain; re-measure declines with `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self` after bootstrap | [`docs/llvm-selfhost-next-session-handoff.md`](llvm-selfhost-next-session-handoff.md) §audit vs build |
 
-audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
+PR [#1858](https://github.com/choiceoh/osty/pull/1858) closed the audit milestone; later P-phases expanded the audited function set (8714 today vs 6489 in the 2026-05-11 snapshot). **This scope doc’s per-function shape notes (§1) remain useful** for understanding historical P24 targets even though the audit gate is green.
+
+### 0.2 아카이브 (2026-05-11 — superseded by §0.1)
+
+| 메트릭 | 값 |
+|---|---|
+| Stage0 audit cover | 94.2% (6112 / 6489) |
+| `install-self` decline (reported) | **1340 functions** |
+| 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate |
+
+당시 audit % 와 install-self decline 의 격차 = audit이 checker bundle 만 측정, install-self는 monomorphization 등으로 함수 인스턴스가 더 많음.
 
 ## 1. P24 후보 함수 — shape 별 분리
 

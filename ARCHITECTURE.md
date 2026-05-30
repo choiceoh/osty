@@ -55,10 +55,12 @@ through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
 | `resolve.osty` | ~3,700 | Self-hosted name resolver — symbol table, scope resolution, `SelfSymbol` records |
 | `elab.osty` | ~5,400 | Bidirectional elaborator — type inference engine (`elabInfer` / `elabCheck`) |
 | `solve.osty` | ~390 | Local constraint solver for generic type inference |
-| `check.osty` | ~1,530 | Type checker entry point — orchestrates lexer → parser → elaboration → serialization |
-| `check_env.osty` | ~3,010 | Elaboration environment — lexical binding stack, generic bounds, `Ty` arena indices |
+| `check.osty` | ~1,440 | Type checker entry point — orchestrates lexer → parser → import install → elaboration → wire JSON |
+| `check_imports.osty` | ~750 | `PackageCheckImport` decoder + `frontInstallImportSurfaces` — cross-package import surfaces for multi-file check requests (PR #1966) |
+| `check_json.osty` | ~1,420 | Native-checker wire JSON — request decode, `CheckResult` encode, package/file tables, telemetry fields |
+| `check_env.osty` | ~2,360 | Elaboration environment — lexical binding stack, generic bounds, `Ty` arena indices |
 | `check_diag.osty` | ~700 | Structured diagnostics with stable `Exxxx` codes (E0700–E0799) |
-| `check_gates.osty` | ~1,110 | Post-elaboration policy gates — LANG_SPEC privilege/shape rules |
+| `check_gates.osty` | ~1,690 | Post-elaboration policy gates — LANG_SPEC privilege/shape rules |
 | `ty.osty` | ~915 | Type arena — `TyArena` with interned primitives, structural key interning |
 | `core.osty` | ~1,800 | Core IR — typed intermediate representation, arena-based kind discriminators |
 | `ir.osty` | ~1,400 | Legacy untyped IR — `IrNodeKind` enum, AST-based bridge |

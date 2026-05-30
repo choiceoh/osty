@@ -182,8 +182,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P18 | `\|\|` short-circuit + if-else struct return | (#1461) — **구현 완료** |
 | P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
 | P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
-| **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (`OSTY_STAGE0_AUDIT=1 ./internal/backend/`). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
-| **P24+** | **active — master plan v2 진행 중**. 현 `install-self` 시 `OSTY_STAGE0_LIST_ALL_DECLINES=1` → 1340 function declines (audit %에도 불구하고 부트스트랩은 unique shape × 함수 instance 단위로 cumulative). 다음 P-phase 후보는 `b2_1_audit.md §4.3` 의 master plan v2 표 참조. | 측정 중 |
+| **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (2026-05-11) → **100%** (8714/8714, PR #1858 + follow-on P-phases, revalidated 2026-05-30). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
+| **P24+** | **audit gate closed**; remaining bootstrap work is **build-pass** (monomorphized `osty-self`, LIR Proto, cross-pkg link) not checker-bundle audit %. Historical P24 shape targets: [`docs/stage0_p24_scope.md`](stage0_p24_scope.md). `install-self` decline counts from 2026-05-11 (~1340) are stale — re-measure with `OSTY_STAGE0_LIST_ALL_DECLINES=1` when debugging. | TestStage0ToolchainAudit + `install-self` E2E |
 
 각 Phase는 independent PR. P0은 수십 줄. P1~P23 합산 emit.go 4253 + P21–P23 추가분 = ~5K+ 줄.
 
