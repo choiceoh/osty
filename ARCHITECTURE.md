@@ -577,6 +577,41 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge (`osty-native-lirproto`)
+
+Production MIR → LLVM IR forks `cmd/osty-native-lirproto`, which stages a
+MIR JSON or source payload and execs `osty-self lir-proto-lower*`. When
+`osty-self` is missing or declines, the dispatcher falls back to the in-process
+stage0 emitter only if `OSTY_STAGE0_FALLBACK=1`.
+
+Compatibility env vars (see `cmd/osty-native-lirproto/main.go`):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | unset | Subprocess timeout; `0` disables |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | unset | Stage0 retry after timeout; `0` disables |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **off** | Opt-in source re-lowering for older `osty-self` without MIR JSON support |
+| `OSTY_LIRPROTO_KEEP_STAGED` | unset | Keep temp files (debug) |
+| `OSTY_LIRPROTO_DEBUG` | unset | Log staged path to stderr |
+
+#### Self-rebuild ratchet
+
+`scripts/verify-self-rebuild` rebuilds `toolchain/` through stage1 (host
+`osty` + stage0 fallback) then stage2/stage3 (`osty-self` driving the full
+HIR → LIR Proto pipeline) and asserts byte parity. Just recipes:
+`just verify-self-rebuild`, `just verify-self-rebuild-fast`. Stage overrides
+via `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` are intentionally rejected.
+
+#### Cross-package interface lowering (partial)
+
+PRs [#2004](https://github.com/choiceoh/osty/pull/2004)–[#2010](https://github.com/choiceoh/osty/pull/2010)
+landed cross-package interface type recovery, MIR signature registration,
+struct→interface boxing for `Error` assigns, and impl-method reach expansion.
+Virtual dispatch on cross-package interfaces (vtable injection for methods
+like `err.message()`) remains incomplete — see
+`internal/backend/llvm_crosspkg_iface_box_test.go` and `SPEC_GAPS.md`
+(`cross-pkg-module-resolution`).
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

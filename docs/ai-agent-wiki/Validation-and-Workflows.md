@@ -32,6 +32,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - include `just verify-selfhost`
 - include `just ci`
 - consider `just repair-check`
+- for toolchain/backend parity after bootstrap, run `just verify-self-rebuild`
+  (full ratchet) or `just verify-self-rebuild-fast` (skip gates, reuse stage1)
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
 ### Backend changes
@@ -49,6 +51,25 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess env vars (`OSTY_LIRPROTO_*`) are documented in
+  `README.md` **Bootstrap env-var reference**; source compat is opt-in via
+  `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` (default off)
+
+## Self-rebuild ratchet
+
+After `just bootstrap`, the byte-parity gate exercises the full self-host
+pipeline:
+
+```sh
+just verify-self-rebuild        # gates + full ratchet (--reuse-stage1)
+just verify-self-rebuild-fast   # skip gates, reuse cached stage1
+just verify-self-rebuild-gates  # gates only
+```
+
+Stage1 uses `OSTY_STAGE0_FALLBACK=1` internally so the host Go-built `osty`
+can emit without a pre-existing `osty-self`. Details:
+[`docs/osty_self_bootstrap_design.md`](../osty_self_bootstrap_design.md)
+Appendix A.
 
 ## Common repo recipes
 
