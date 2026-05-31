@@ -1,5 +1,7 @@
 package api
 
+import "encoding/json"
+
 // PackageCheckFile is the per-file input accepted by the structured
 // self-host check / resolve adapters.
 type PackageCheckFile struct {
@@ -14,6 +16,42 @@ type PackageCheckFile struct {
 	// need to guess which file owned a given span.
 	Path         string `json:"path,omitempty"`
 	SourceFileID string `json:"sourceFileId,omitempty"`
+}
+
+type packageCheckFileJSON struct {
+	Source       string `json:"source,omitempty"`
+	Base         int    `json:"base,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Path         string `json:"path,omitempty"`
+	SourceFileID string `json:"sourceFileId,omitempty"`
+}
+
+// MarshalJSON keeps package source on the checker wire as raw UTF-8 text.
+// The default encoding/json behavior for []byte is base64, but the LLVM-built
+// native checker parses files[].source as source text.
+func (f PackageCheckFile) MarshalJSON() ([]byte, error) {
+	return json.Marshal(packageCheckFileJSON{
+		Source:       string(f.Source),
+		Base:         f.Base,
+		Name:         f.Name,
+		Path:         f.Path,
+		SourceFileID: f.SourceFileID,
+	})
+}
+
+// UnmarshalJSON mirrors MarshalJSON so the Go native-checker shim accepts the
+// same raw-source package request shape as the LLVM-built checker.
+func (f *PackageCheckFile) UnmarshalJSON(data []byte) error {
+	var wire packageCheckFileJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	f.Source = []byte(wire.Source)
+	f.Base = wire.Base
+	f.Name = wire.Name
+	f.Path = wire.Path
+	f.SourceFileID = wire.SourceFileID
+	return nil
 }
 
 // PackageCheckGenericBound describes one `<T: Iface>` constraint on a
