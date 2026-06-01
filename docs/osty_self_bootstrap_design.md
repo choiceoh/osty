@@ -183,7 +183,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
 | P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
 | **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (`OSTY_STAGE0_AUDIT=1 ./internal/backend/`). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
-| **P24+** | **active — master plan v2 진행 중**. 현 `install-self` 시 `OSTY_STAGE0_LIST_ALL_DECLINES=1` → 1340 function declines (audit %에도 불구하고 부트스트랩은 unique shape × 함수 instance 단위로 cumulative). 다음 P-phase 후보는 `b2_1_audit.md §4.3` 의 master plan v2 표 참조. | 측정 중 |
+| **P24+** | **audit 100% 달성 후 build-pass 축으로 이동** — `TestStage0ToolchainAudit` 는 PR #1858 이후 100% cover, #2023/#179006c2 가 decline-stub → real emit 전환. `install-self` / monomorph / LIR Proto 단계 decline 은 audit % 와 별도 (`SPEC_GAPS.md` `cross-pkg-module-resolution`). Fresh clone 은 `OSTY_STAGE0_FALLBACK=1 just bootstrap` 로 stage0 source-bootstrap + managed Go checker detour 후 `osty-self` 승격. P24 shape 분석·후보 함수 표는 [docs/stage0_p24_scope.md](stage0_p24_scope.md) (§0 은 historical 스냅샷). | `TestStage0ToolchainAudit` + `just bootstrap` |
 
 각 Phase는 independent PR. P0은 수십 줄. P1~P23 합산 emit.go 4253 + P21–P23 추가분 = ~5K+ 줄.
 

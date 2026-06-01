@@ -41,6 +41,10 @@
 
 ## Backend traps
 
+- **audit-pass ≠ build-pass** — `OSTY_STAGE0_AUDIT=1` /
+  `TestStage0ToolchainAudit` can report 100% stage0 cover while
+  `install-self`, monomorphized `osty-self`, or LIR Proto still decline
+  different shapes. Do not cite audit % alone as “bootstrap unblocked”.
 - unsupported source shapes should stay on structured diagnostic paths
 - runtime ABI changes can affect emitted binaries far from the edited file
 - backend docs may describe migration history; check current shipped behavior too

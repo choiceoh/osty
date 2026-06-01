@@ -39,6 +39,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - keep unsupported shapes on structured diagnostic paths
 - use focused backend/codegen tests first
 - expand to broader verification when emission behavior changes
+- stage0 surface coverage (per-function decline histogram):
+  `OSTY_STAGE0_AUDIT=1 go test -count=1 -run TestStage0ToolchainAudit -v ./internal/backend/`
+  — audit-pass is necessary but not sufficient for `install-self` / LIR Proto
+  (`docs/llvm-selfhost-plan.md` §3.1)
 - MIR-direct tests call `requireRealLLVMEmission` — they need a cached
   `osty-self` (`just bootstrap` or `osty build toolchain/`). Without
   `osty-self`, they **skip** locally; set

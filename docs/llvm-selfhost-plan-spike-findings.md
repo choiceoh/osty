@@ -172,7 +172,7 @@ fn main() {
 
 ## stage0 trajectory 진척 메모
 
-본 plan §3.1 의 측정값 (94.2% / 1340) 이 **5일만에 99.8% / 16 decline** 으로 점프. stage0 PR chain (P24, P25, ...) 진척이 plan 작성 시 예상보다 빠름. 본 plan 의 PR3 (L1 byte parity) 시점에 stage0 100% 가 거의 확실 — 본 plan 의 PR 4–N (stage0 gap 깎기) 가 사실상 불필요해질 가능성.
+본 plan §3.1 의 측정값 (94.2% / 1340) 이 **5일만에 99.8% / 16 decline** 으로 점프. stage0 PR chain (P24, P25, ...) 진척이 plan 작성 시 예상보다 빠름. 이후 PR #1858 / #2023 / real-coverage follow-ups 로 audit 100% + stub→real emit 전환 — **현행 권위는 [llvm-selfhost-plan.md](llvm-selfhost-plan.md) §3.1**; [stage0_p24_scope.md](stage0_p24_scope.md) §0 은 historical 스냅샷.
 
 다만 audit cover 와 install-self decline 사이의 monomorph 격차 (`stage0_p24_scope.md §0`) 는 여전히 적용 — 99.8% audit 가 install-self 의 ~99.7% 와 같다는 보장 없음. install-self 측정은 PR1 시점에 한 번 더.
 
