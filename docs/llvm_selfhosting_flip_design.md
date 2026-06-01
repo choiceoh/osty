@@ -8,7 +8,7 @@
 
 "Self-hosting flip" = `cmd/osty-native-checker` (Go binary, `internal/selfhost/generated.go` frozen seed 의존) → **LLVM 으로 컴파일된 native binary** 로 production 경로 전환. 결과: `toolchain/*.osty` 모든 수정이 즉시 production 에 반영됨 (현재 dormant 작업 한 번에 활성).
 
-**현재 차단 상태**: **chicken-egg circular bootstrap**. `toolchain/*.osty` 를 LLVM 으로 컴파일하려면 `osty-self` 바이너리 필요 → 그 바이너리는 `toolchain/*.osty` 컴파일 결과. Bootstrap chain 의 stage0 가 1340 declines 로 막혀 있어 `osty install-self` 미완료.
+**현재 차단 상태 (2026-06-01 갱신)**: **chicken-egg + production link wall**. `toolchain/*.osty` → LLVM 은 `osty-self` 가 필요하고, fresh clone 은 `OSTY_STAGE0_FALLBACK=1` stage0 source-bootstrap (`just bootstrap`) 로 `osty-self` 를 먼저 만든다. Stage0 **audit** 은 `TestStage0ToolchainAudit` 기준 100% (PR #1858, real-emit hardening #2023) — **audit-pass ≠ build-pass** (`install-self` monomorph / LIR Proto / cross-pkg link). Managed `osty-native-checker` 는 PR #1954 이후 LLVM-built 슬롯을 우선하나 `toolchain.front*` link 가 아직 미완 ([`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md)).
 
 **단일 PR 로 도전 가능한 첫 단계**: Phase A1 — `lirLowerMirType_module` 폴스루 → 명시적 `lirLowerError` 진단 (~30 LOC, `toolchain/lir_proto.osty`). 직접 효과는 없지만 이후 모든 phase 의 fail site 가시화 → blocker 정확히 겨냥 가능.
 
@@ -21,7 +21,7 @@
 - 공개 백엔드: LLVM only. 부트스트랩 Osty→Go 트랜스파일러는 PR #854 (2026-04-23) 로 폐기.
 - `internal/selfhost/generated.go` (70.6K LOC): frozen seed. 재생성 경로 없음.
 - `cmd/osty-native-checker`, `cmd/osty-native-llvmgen`, `cmd/osty-native-lirproto`: Go shim/launcher (합계 ~250 LOC). 실제 emit 은 `osty-self` subprocess.
-- `internal/llvmgen` Go 패키지는 **PR #1405 이후 제거**. 모든 MIR→LLVM IR 변환은 `toolchain/lir_proto.osty` (7422 LOC, 306 함수) + `toolchain/mir_generator.osty` 경유.
+- `internal/llvmgen` Go 패키지는 **PR #1405 이후 제거**. 모든 MIR→LLVM IR 변환은 `toolchain/lir_proto.osty` (~11k LOC) + `toolchain/mir_generator.osty` 경유.
 
 ### 1.2 emit 경로
 
@@ -36,7 +36,7 @@ osty build foo.osty
               → clang → binary
 ```
 
-핵심: `osty-self` 가 활성 binary 인가 / Go-built `osty-native-checker` 가 활성 binary 인가 의 차이. 현재 production 은 Go-built (frozen seed) 사용.
+핵심: `osty-self` 가 활성 binary 인가 / stage0 fallback emitter 인가 / Go-built `osty-native-checker` override 인가 의 차이. Managed CLI 슬롯은 PR #1954 이후 **LLVM-built** `main.osty` 를 promote 하려 한다 (link 미완 시 `OSTY_STAGE0_FALLBACK=1` detour 또는 `OSTY_NATIVE_CHECKER_BIN`). Steady-state checker wire 는 live `toolchain/*.osty` (`tc.frontCheckSourceToWireJson`).
 
 ### 1.3 MIR→LLVM IR coverage (`lir_proto.osty`)
 
@@ -64,7 +64,7 @@ osty build foo.osty
 4. 그 다음 osty invocation 부터 이 binary 사용 (production flip)
 ```
 
-**Blocker**: 2단계가 실패. `osty install-self` 가 stage0 P24+ 에서 1340 declines (LLVM 미지원 MIR shape) 로 멈춤.
+**Blocker**: production 경로(2단계, `OSTY_STAGE0_FALLBACK` 없음) 는 `osty-self` LIR Proto subprocess + cross-pkg link 가 필요. Bootstrap 경로(`just bootstrap`) 는 stage0 emitter 로 `install-self` 를 완료할 수 있으나, LLVM-built `osty-native-checker` / registry-only prebuilt 경로는 여전히 `SPEC_GAPS.md` 의 LIR Proto·cross-pkg wall 에 막힌다.
 
 ### 2.2 Hybrid partial-flip 가능성
 
@@ -134,7 +134,7 @@ fn lirLowerMirType_module(ctx, module, typeName) {
 
 | Phase | 상태 | 다음 액션 |
 |---|---|---|
-| **0** Bootstrap chain | ⏸️ blocked (1340 declines) | Stage0 P24+ audit/fix (master plan v2) |
+| **0** Bootstrap chain | 🟡 stage0 audit 100%; production link / LIR Proto wall | `just bootstrap` + [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) |
 | **A** Infra | 🟡 in-progress | A1 첫 PR 준비 |
 | **B** Map/List | 🟡 in-progress | LIR Proto 검증 대기 (osty-self 필요) |
 | **C** Optional/Result | 🟡 partial-merge | C1/C2 verify (osty-self), C3/C4 coding |
@@ -147,7 +147,7 @@ fn lirLowerMirType_module(ctx, module, typeName) {
 
 **이번 세션의 dormant 작업들** (287eea05, 2ec78df1, 255552d6, 5dee3b0c, A13 toolchain scaffold) **모두 LLVM self-hosting flip 까지 production 영향 없음**. 이건 잘못된 작업이 아니라 **올바른 작업이지만 활성화 시점이 미래**. flip 자체는:
 
-1. **단일 PR 로 도전 불가능** — chicken-egg + 1340 declines + 4 phase 미완.
+1. **단일 PR 로 도전 불가능** — chicken-egg + LIR Proto / cross-pkg link + 잔여 phase 미완 (stage0 audit % 는 별도 trajectory).
 2. **첫 진전**: Phase A1 진단 강화 (이 세션 외 별도 PR).
 3. **전체 일정**: 10–15 stage0 PR + 4 phase code-only PR + bootstrap unblock 검증 → 수 주 단위 epic.
 
@@ -159,7 +159,7 @@ fn lirLowerMirType_module(ctx, module, typeName) {
 - `LLVM_BACKEND_GAP_PLAN.md` — GAP-IFACE / GAP-INSTR / GAP-RECV / GAP-TYP 카탈로그
 - `MIR_EMITTER_PORT.md` — Go MIR → toolchain port 트래킹
 - `LLVM_PHASE1_BASELINE.md` — Phase 1 측정 baseline
-- `toolchain/lir_proto.osty` — MIR→LLVM IR 변환 본체 (7422 LOC)
+- `toolchain/lir_proto.osty` — MIR→LLVM IR 변환 본체 (~11k LOC)
 - `toolchain/mir_generator.osty` — MIR generation 보조
 - `cmd/osty-native-*` — Go shim/launcher 들
 - `SELFHOST_PORT_MATRIX.md` 2026-05-16 섹션 — frontend self-host status (이 flip 의 관심사와 구분)

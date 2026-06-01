@@ -4,7 +4,17 @@
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+> **측정 갱신 (2026-06-01)** — 아래 §0 표는 **2026-05-11 스냅샷** (P24 착수 시점) 으로
+> 보존한다. 이후 `TestStage0ToolchainAudit` 는 PR [#1858](https://github.com/choiceoh/osty/pull/1858)
+> 에서 **100% audit cover** 를 달성했고, PR [#2023](https://github.com/choiceoh/osty/pull/2023) /
+> follow-up [#179006c2](https://github.com/choiceoh/osty/commit/179006c2) 가 decline-stub 을
+> real emit 경로로 옮겼다. **현행 수치·audit-pass vs build-pass 논점** 은
+> [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md) §3.1 과
+> [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인을 따른다.
+> 재측정: `OSTY_STAGE0_AUDIT=1 go test -count=1 -run TestStage0ToolchainAudit -v ./internal/backend/`
+> (고급 env: `internal/backend/stage0_toolchain_audit_test.go`).
+
+## 0. 현 측정 (2026-05-11, historical)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|
