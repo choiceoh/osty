@@ -2,10 +2,14 @@
 
 - **Scope**: LIR prototype plan — isolated prototype for low-level IR
 - **Type**: Plan
-Status: isolated prototype in progress. No production wiring yet.
+Status: **production-wired** for LLVM emission via the Phase-7 subprocess
+bridge (`cmd/osty-native-lirproto` → `osty-self lir-proto-lower` /
+`lir-proto-lower-mir-json`, with stage0 and bounded legacy fallbacks in
+`cmd/osty-native-lirproto/main.go`). Ongoing work is parity expansion and
+self-host wall closure, not first-time wiring.
 Authoring direction: new LIR Proto shape is Osty-first in
 `toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
-removed so new shape lands in Osty before production wiring.
+removed so new shape lands in Osty before further production cuts.
 
 LIR Proto is the working name for a low-level prototype between
 `internal/mir` and backend text emission. It starts LLVM-aware because the

@@ -28,6 +28,9 @@
 - artifact layout: [`/LLVM_ARTIFACT_LAYOUT.md`](../../LLVM_ARTIFACT_LAYOUT.md)
 - backend corpus: [`/LLVM_BACKEND_CORPUS.md`](../../LLVM_BACKEND_CORPUS.md)
 - runtime GC: [`/RUNTIME_GC.md`](../../RUNTIME_GC.md)
+- LIR Proto subprocess env vars + fallback chain: [`/README.md`](../../README.md)
+  (bootstrap env-var reference), [`/ARCHITECTURE.md`](../../ARCHITECTURE.md)
+  (LIR Proto bridge subsection), [`/docs/lir_proto_plan.md`](../lir_proto_plan.md)
 - strict backend test baseline (Map iteration mis-lowering, etc.):
   [`/docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
 - self-host artifact/bootstrap docs: `/docs/osty_self_artifact_design.md`, `/docs/osty_self_bootstrap_design.md`

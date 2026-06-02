@@ -552,6 +552,38 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### LIR Proto subprocess bridge (`cmd/osty-native-lirproto`)
+
+Production LLVM emission (`internal/backend/llvm.go` `emitLLVMFallback`)
+forks `osty-native-lirproto`, which stages stdin JSON and invokes a cached
+`osty-self` binary:
+
+| Request shape | `osty-self` subcommand |
+|---|---|
+| `source` field set | `lir-proto-lower <staged-file>` |
+| `mir` field set (pre-lowered MIR JSON) | `lir-proto-lower-mir-json <staged-file>` |
+
+On success the subprocess returns LLVM IR text; on recoverable failure it
+returns `declined: true` so the host can fall back to the in-process stage0
+emitter (`internal/backend/stage0/`) or other legacy paths without aborting
+the whole build.
+
+**MIR JSON compat chain** (when `lir-proto-lower-mir-json` is unsupported,
+invalid, or times out within budget — see `cmd/osty-native-lirproto/main.go`):
+
+1. In-process stage0 lowering of the staged MIR JSON payload (no `osty-self`
+   subcommand required).
+2. If `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive limit and the
+   request still carries embedded `source` under that byte count, retry
+   `lir-proto-lower` on the source (for bootstrap seeds that predate the MIR
+   JSON entry point). Unset/`0` skips this step explicitly.
+
+Timeouts default to 20s plus a size-scaled budget for MIR JSON (+15s/MiB,
+cap 10m). Override with `OSTY_LIRPROTO_SELF_TIMEOUT`; bound timeout-stage0
+retries with `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`. Debug with
+`OSTY_LIRPROTO_DEBUG` and `OSTY_LIRPROTO_KEEP_STAGED`. Full operator index:
+`README.md` bootstrap env-var reference.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
