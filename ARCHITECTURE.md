@@ -552,16 +552,12 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
-#### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
+#### Stdlib body injection
 
-`PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
-lowers Osty-authored stdlib method bodies from `internal/stdlib/modules/`
-into the user module before MIR. **Default is ON** — only `0`, `false`, or
-`off` disable it. OFF mode keeps only intrinsic/runtime-backed helpers and
-is useful when bisecting link failures or exercising stage0 paths that must
-not depend on freshly injected bodies. `just bootstrap` runs with the default
-so per-PR CI (`fresh-clone-source-bootstrap.yml`) matches production `osty
-build` behavior.
+`PrepareEntry` (`internal/backend/entry.go`) always monomorphizes and lowers
+Osty-authored stdlib method bodies from `internal/stdlib/modules/` into the
+user module before MIR. The former `OSTY_STDLIB_BODY_LOWER` rollout gate was
+removed once the default-on path was proven through CI.
 
 #### Backend integration tests and `osty-self`
 

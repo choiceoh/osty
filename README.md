@@ -361,12 +361,6 @@ linked.
 | `OSTY_STAGE0_FALLBACK` | **Single source of truth** for the chicken-and-egg bootstrap. When `=1`: `install-self` runs the stage0 source-bootstrap path (Go-side emitter) when no prebuilt `osty-self` is resolvable, AND `buildNativeChecker` detours to `go build ./cmd/osty-native-checker` instead of the LLVM build path (which would need the very `osty-self` we are trying to produce). `just bootstrap` bakes this in. The previous `--bootstrap-stage0` CLI flag was retired in favour of this gate. |
 | `OSTY_STAGE0_LIST_ALL_DECLINES` | Stage0 emitter prints every stdlib-generic-method decline as a warning instead of just summary counts. Useful when diagnosing decline cascades. Auto-set by `install-self` when stage0 fallback runs. |
 
-**LLVM backend / stdlib lowering** ([`internal/backend/entry.go`](./internal/backend/entry.go)):
-
-| Var | Purpose |
-|---|---|
-| `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
-
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
 | Var | Purpose |
@@ -398,7 +392,6 @@ linked.
 | Pin a specific `osty-self` | `OSTY_SELF_BIN=/path/to/osty-self` |
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
-| Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
 
 ### CI bootstrap gates
 
