@@ -363,6 +363,8 @@ String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/mod
 
    세 use form 모두 같은 본질 — cross-package symbol 의 type/signature lookup 부재. resolver 가 use-decl path 의 leaf symbol 의 sig 를 cross-package 로 가져오지 못함. **우회 path 없음** — 옵션 c (spec narrow exception + impl) 가 단일 unlock path.
 
+   **2026-05-27 LLVM cross-pkg interface (PRs [#2004](https://github.com/choiceoh/osty/pull/2004)–[#2010](https://github.com/choiceoh/osty/pull/2010))**: checker-side import surfaces and MIR signature registration for cross-pkg interfaces progressed; LLVM assign-coercion now **boxes** struct aggregates into cross-pkg interface slots (e.g. `Err(error.new("…"))` with `std.error.Error`). Regression lock: `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`. **Still open**: cross-pkg **vtable dispatch** (step 3.5) — `err.message()`-style virtual calls on a cross-pkg interface type are out of scope for the boxing PR; discriminant-only `Err(_)` match arms are the verified subset.
+
 **관련 PR**: TBD (다음 세션 PR3-B/C).
 
 **관련 doc**: [docs/llvm-selfhost-plan-pr3-attempt.md](docs/llvm-selfhost-plan-pr3-attempt.md), [docs/llvm-selfhost-plan-pr3-design.md](docs/llvm-selfhost-plan-pr3-design.md).

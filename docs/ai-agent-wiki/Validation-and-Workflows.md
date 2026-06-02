@@ -49,6 +49,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess tuning (`OSTY_LIRPROTO_*` in `README.md`): use when
+  debugging `osty-self` lower timeouts or legacy MIR JSON compat on old seeds
 
 ## Common repo recipes
 

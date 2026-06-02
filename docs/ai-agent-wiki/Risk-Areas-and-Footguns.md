@@ -50,6 +50,13 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- LIR Proto subprocess (`osty-native-lirproto` → `osty-self`) can **stall**
+  on large packages (`toolchain/` has been observed at 10+ minutes). Use
+  `OSTY_LIRPROTO_DEBUG` + `OSTY_LIRPROTO_KEEP_STAGED` to inspect payloads;
+  do not assume a hang is a deadlock without checking staged MIR size.
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is **opt-in** — unset means no
+  legacy source re-lower on old `osty-self` seeds. Set a positive byte limit
+  only when you intentionally need that compat path.
 
 ## Spec traps
 
