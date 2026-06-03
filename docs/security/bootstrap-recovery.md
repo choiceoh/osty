@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | **Audit**: toolchain stage0 cover **100%** (8240/8241, PR #1858 — see [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md) §3.1). **Production `install-self` / LIR Proto** can still decline on monomorph or backend-only shapes (**audit-pass ≠ build-pass**). Fresh-clone offline bootstrap uses this layer via `just bootstrap` (`OSTY_SELF_REGISTRY_OFFLINE=1`). |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -100,22 +100,22 @@ Trigger when:
 - The rolling release is wiped or otherwise unreachable for an extended
   period AND
 - No maintainer-side `osty-self` binary exists AND
-- L5 (`OSTY_STAGE0_FALLBACK=1`) cannot cover the current toolchain.
+- L5 (`OSTY_STAGE0_FALLBACK=1`) **and** L3 in-tree `osty-self` are both
+  unreachable **and** no maintainer can run DR1.
 
-This is the worst case. The procedure pulls together two work streams
-already documented:
+This is the worst case. Stage0 **audit** for `toolchain/*.osty` reached
+100% in PR #1858; remaining bootstrap risk is mostly **build-path**
+(LIR Proto subprocess, LLVM link, cross-pkg objects) rather than the
+old “11% stage0 cover” gap. Recovery still centers on:
 
-1. **Toolchain simplification** — `docs/osty_self_b2_1_audit.md`
-   v2 master plan, batches B2.2–B2.3. ~244 source-level mechanical
-   `match → if-else` rewrites. ~10–15 hours.
-2. **Stage0 unlocks** — same document, batches B2.4–B2.7. ~4 stage0
-   phases (P21–P24) covering the basic-shape gaps that block 88.7% of
-   toolchain functions today. ~1500 lines of Go in
-   `internal/backend/stage0/`. ~1–2 weeks dedicated work.
+1. **DR1 hand-publish** (§3) when any working `osty-self` exists on a
+   maintainer machine — preferred path.
+2. **Toolchain / backend reconstruction** — `docs/osty_self_b2_1_audit.md`
+   v2 master plan and [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md)
+   for LLVM self-host and production-link blockers (not re-deriving the
+   pre-#1858 audit percentages).
 
-Combined, these two streams reach ~40% MIR coverage, which is enough
-to bootstrap a build of the current toolchain into a fresh osty-self
-binary on a single host. From that point, DR1 applies normally.
+From a recovered `osty-self`, DR1 applies normally.
 
 DR2 is a last-resort plan, not an operational recipe. Most outages
 recover via DR1.

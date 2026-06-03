@@ -1,10 +1,15 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
-> **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
-> **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
-> **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
+> **상태**: **역사 스코프 문서** — P24 타겟 분석용. 아래 §0 수치는 2026-05-11 스냅샷.
+> **현재 (2026-05-17+, PR [#1858](https://github.com/choiceoh/osty/pull/1858))**:
+> `TestStage0ToolchainAudit` 기준 toolchain stage0 **audit cover 100.0% (8240 / 8241)**.
+> 권위 있는 후속 측정·audit-pass ≠ build-pass 논점은
+> [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 과 [`SPEC_GAPS.md`](../SPEC_GAPS.md)
+> `cross-pkg-module-resolution` 타임라인.
+> **선행 (당시)**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2.
+> **차단 대상 (당시)**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A.
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11 스냅샷 — superseded for audit %)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|

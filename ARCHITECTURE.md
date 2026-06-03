@@ -56,6 +56,7 @@ through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
 | `elab.osty` | ~5,400 | Bidirectional elaborator — type inference engine (`elabInfer` / `elabCheck`) |
 | `solve.osty` | ~390 | Local constraint solver for generic type inference |
 | `check.osty` | ~1,530 | Type checker entry point — orchestrates lexer → parser → elaboration → serialization |
+| `check_imports.osty` | ~750 | `PackageCheckImport` JSON decode + `frontInstallImportSurfaces` — binds cross-package import surfaces before elaboration (package-mode `tc.foo` / `std.io.bar`; PR #1966 limit 2) |
 | `check_env.osty` | ~3,010 | Elaboration environment — lexical binding stack, generic bounds, `Ty` arena indices |
 | `check_diag.osty` | ~700 | Structured diagnostics with stable `Exxxx` codes (E0700–E0799) |
 | `check_gates.osty` | ~1,110 | Post-elaboration policy gates — LANG_SPEC privilege/shape rules |
@@ -249,6 +250,15 @@ Notable rules:
   bind a new name.
 - Typo suggestions use Levenshtein edit distance ≤ 2 against every
   symbol in the active scope chain.
+
+**Native resolve bridge** (`resolve_bridge.go`, used on large workspace
+builds such as `install-self`): per-file `walkIdentAndNamedType` in
+`ast_walk.go` replaces the former reflect-based `walkReflect` when
+building the ident/named-type index for the self-host arena bridge.
+Same semantics (every `*ast.Ident` and `*ast.NamedType`, including
+generic args); parity is locked by `ast_walk_parity_test.go`. This was
+the dominant CPU cost in `resolve.native.bridgeLoop` on toolchain-scale
+trees.
 
 ### `internal/types`
 Pure data types for Osty's semantic world — named types, type
