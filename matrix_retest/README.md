@@ -15,7 +15,7 @@
 ```sh
 export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
 export OSTY_SELF_BIN="$PWD/toolchain/.osty/out/debug/llvm/osty-self"
-export OSTY_STDLIB_BODY_LOWER=1
+# Stdlib body injection is default-on; set OSTY_STDLIB_BODY_LOWER=0 only to bisect.
 
 for d in matrix_retest/*/; do
   [ -f "$d/osty.toml" ] || continue
