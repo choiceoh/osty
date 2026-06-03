@@ -31,3 +31,14 @@ not by regenerating `generated.go`. The seed remains for Go-bootstrap builds and
 tests only. There is no `go generate` regen pipeline. Trajectory:
 [`docs/llvm-selfhost-plan.md`](../docs/llvm-selfhost-plan.md),
 [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md).
+
+### Package-mode cross-package imports
+
+Multi-file / package-mode check requests carry peer surfaces on the wire as
+`PackageCheckImport` JSON (`internal/selfhost/api/package.go`). The Go host
+builds those records (`import_surface_arena.go`, `package_adapter.go`); the
+native checker decodes and installs them in `check_imports.osty` via
+`frontExtractPackageImports` → `frontInstallImportSurfaces`, called from
+`frontendCheckLexedSourceWithImports` in `check.osty` **before** `elabFile`.
+Without that step, qualified references like `tc.foo()` spuriously hit E0501.
+Focused fixtures: `check_imports_test.osty`.

@@ -34,6 +34,8 @@
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
 - subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)
+- stdlib LLVM e2e regression fixtures: [`/matrix_retest/README.md`](../../matrix_retest/README.md) (pairs with [`/STDLIB_MATRIX.md`](../../STDLIB_MATRIX.md) §2.1.A.2)
+- stage0 P24 historical scope (superseded audit %): [`/docs/stage0_p24_scope.md`](../stage0_p24_scope.md)
 
 ## Useful code anchors
 
