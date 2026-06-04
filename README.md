@@ -375,6 +375,19 @@ linked.
 | `OSTY_NATIVE_CHECKER_LLVM_BIN` | Absolute path to a prebuilt LLVM-built `osty-native-checker-llvm`. Consulted by `ResolveNativeCheckerLLVM` before falling back to the in-tree build output at `cmd/osty-native-checker/.osty/out/debug/llvm/`. |
 | `OSTY_BUILDING_NATIVE_CHECKER` | **Internal**, set by `buildNativeChecker` on its subprocess fork to abort nested re-entries (recursion guard). Do NOT set this manually. |
 
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto`](./cmd/osty-native-lirproto/) / [`internal/nativelirproto`](./internal/nativelirproto/)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_NATIVE_LIRPROTO_BIN` | Absolute path to `osty-native-lirproto`. Wins over the managed slot under `.osty/toolchain/<ver>/`. Built by `just bootstrap` into `.osty/bin/osty-native-lirproto`. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override per-call timeout for `osty-self lir-proto-lower*` (`0` disables). Unset uses a size-aware budget (20s base + up to 10m for large MIR JSON). |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After a MIR JSON **timeout**, max staged bytes eligible for stage0 compat retry (default `1048576`; `0` disables). |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy **source** re-lowering when `osty-self` lacks `lir-proto-lower-mir-json`. **Default off** (`0` / unset). Set a positive byte cap only when debugging old `osty-self` artifacts. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Keep temp staging files after the subprocess returns (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Log staged path + `osty-self` subcommand to stderr. |
+
+Runbook: [`cmd/osty-native-lirproto/README.md`](./cmd/osty-native-lirproto/README.md).
+
 **Diagnostic & debug**:
 
 | Var | Purpose |
@@ -399,6 +412,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Split self-host checker errors by code | `osty check toolchain/ --dump-check-diags` |
+| Pin LIR Proto shim for backend experiments | `OSTY_NATIVE_LIRPROTO_BIN=/path/to/osty-native-lirproto` |
 
 ### CI bootstrap gates
 
@@ -571,6 +586,12 @@ Global flags (precede the subcommand):
 - `--inspect` — `check`-only: emit one record per expression naming the
   inference rule and the type/hint the checker used. Pairs with `--json` for
   NDJSON output. See [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md).
+- `--dump-check-diags` — `check` / `typecheck`-only: after a successful run,
+  print the native checker's per-code error histogram (`errorsByContext` /
+  `errorDetails` with `@Lline:Ccol` suffixes) to stderr. Useful when aggregate
+  error counts (for example self-host parity sweeps) need splitting by stable
+  `Exxxx` code without regenerating `internal/selfhost/generated.go`. Silent when
+  the checker was unavailable or reported zero errors.
 
 `fmt`-specific flags (after the subcommand):
 

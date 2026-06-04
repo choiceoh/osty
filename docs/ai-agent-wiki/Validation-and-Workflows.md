@@ -26,6 +26,9 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - start with focused package tests or `just front`
 - use the spec corpus when parser/checker behavior changes
 - add focused diagnostic tests for new `Exxxx` codes
+- when debugging native-checker parity against aggregate error counts, run
+  `osty check DIR --dump-check-diags` — stderr prints per-code histograms with
+  `@Lline:Ccol` detail rows (`internal/selfhost/check_telemetry.go`)
 
 ### CLI, toolchain, generated-output, or self-host path changes
 

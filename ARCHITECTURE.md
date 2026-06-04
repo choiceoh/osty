@@ -563,6 +563,18 @@ not depend on freshly injected bodies. `just bootstrap` runs with the default
 so per-PR CI (`fresh-clone-source-bootstrap.yml`) matches production `osty
 build` behavior.
 
+#### LIR Proto subprocess (`osty-native-lirproto`)
+
+MIR-owned LLVM emission forks the managed **`osty-native-lirproto`**
+binary (`internal/nativelirproto.Run`), which stages either source or MIR
+JSON and execs `osty-self` with `lir-proto-lower` or
+`lir-proto-lower-mir-json`. A structured **`declined`** response lets
+`internal/backend/llvm.go` fall back to the legacy MIR-direct path instead
+of aborting the build. Legacy source re-lowering is **opt-in** via
+`OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` (default off). Operator runbook:
+[`cmd/osty-native-lirproto/README.md`](cmd/osty-native-lirproto/README.md);
+env vars are listed in the README bootstrap table.
+
 #### Backend integration tests and `osty-self`
 
 Many `internal/backend/*_test.go` files call `requireRealLLVMEmission`
