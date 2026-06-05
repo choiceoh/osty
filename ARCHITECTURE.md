@@ -109,6 +109,17 @@ Builder/derive policy: `builder_policy.osty` (~60 lines), `check_bridge.osty` (~
 
 Test files: ~59 `*_test.osty` covering all production modules.
 
+### Self-host verification
+
+Two complementary checks — do not conflate them:
+
+| Command | What it proves |
+|---|---|
+| `just verify-selfhost` | Frozen `internal/selfhost/generated.go` seed ↔ live `toolchain/*.osty` snapshot parity (`internal/ci`, `internal/runner` tests). |
+| `just verify-self-rebuild` | End-to-end: host builds `osty-self-1`, then `osty-self-2` and `osty-self-3` rebuild `toolchain/` through the **source compiler** and must match byte-for-byte (Mach-O metadata normalized on Darwin). Implemented in [`scripts/verify-self-rebuild`](scripts/verify-self-rebuild). |
+
+The rebuild script also runs `osty check toolchain/`, `OSTY_STAGE0_AUDIT=1` (`TestStage0ToolchainAudit` in `internal/backend`), and native LLVM route probes before building. Stage1 requires `OSTY_STAGE0_FALLBACK=1` (same gate as `just bootstrap`). Stage2+ forbid forwarding to the host compiler. Design context: [`docs/osty_self_bootstrap_design.md`](docs/osty_self_bootstrap_design.md).
+
 ### Default path: self-host arena (since Phase 1c.1, updated 2026-04-27)
 
 `osty check` and `osty typecheck` now dispatch to the **self-host arena

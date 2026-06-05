@@ -29,9 +29,18 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 
 ### CLI, toolchain, generated-output, or self-host path changes
 
-- include `just verify-selfhost`
-- include `just ci`
-- consider `just repair-check`
+- `just verify-selfhost` — **snapshot parity only**
+  (`SnapshotParity|CoreSnapshotParity` in `./internal/ci` and `./internal/runner`).
+  Fast; does not rebuild `osty-self`.
+- `just verify-self-rebuild` — **full self-rebuild ratchet**
+  (`scripts/verify-self-rebuild --reuse-stage1`). Runs toolchain check, snapshot
+  parity, `OSTY_STAGE0_AUDIT=1` stage0 audit, native route probes, then builds
+  `osty-self-1` → `osty-self-2` → `osty-self-3` and asserts byte parity.
+  Stage1 uses host `.bin/osty` with `OSTY_STAGE0_FALLBACK=1`; stage2+ must use
+  the **source compiler** (`lir-proto-lower`), not MIR-JSON-only paths.
+  Variants: `just verify-self-rebuild-gates`, `verify-self-rebuild-fast`
+  (`--skip-gates`), `verify-self-rebuild-stage1`, `backend-loop`.
+- include `just ci` and consider `just repair-check` for wider toolchain/CLI edits
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
 ### Backend changes
