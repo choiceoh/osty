@@ -43,7 +43,6 @@ import (
 // specialized); (b) monomorphize emits no arity / unresolved
 // type-var diagnostic.
 func TestListResidualHelpersSpecializeCleanly(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	cases := []struct {
 		helper string
 		src    string
