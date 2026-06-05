@@ -48,7 +48,6 @@ import (
 // injection pipeline must lower for stdlib `std.strings` to ship
 // end-to-end through the native LLVM route.
 func TestStringsPureBodyHelpersLowerThroughInjection(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	cases := []struct {
 		helper string
 		src    string

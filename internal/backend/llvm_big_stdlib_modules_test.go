@@ -11,8 +11,6 @@ import (
 func TestLLVMBackendBinaryRunsStdZipStoredArchive(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.zip
 
@@ -49,8 +47,6 @@ fn main() {
 func TestLLVMBackendBinaryRunsStdXlsxRowsEncode(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.xlsx
 use std.zip
@@ -90,8 +86,6 @@ fn main() {
 func TestLLVMBackendBinaryRunsStdImageMetadata(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.bytes as bytes
 use std.image
@@ -130,8 +124,6 @@ fn main() {
 func TestLLVMBackendBinaryRunsStdSmtpPlanning(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.email
 use std.smtp
@@ -197,8 +189,6 @@ fn main() {
 func TestLLVMBackendBinaryRunsStdKvFileStore(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	path := filepath.Join(t.TempDir(), "cache.jsonl")
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, fmt.Sprintf(`use std.kv
@@ -255,8 +245,6 @@ fn main() {
 func TestLLVMBackendBinaryRunsStdWatchDiffPlanning(t *testing.T) {
 	requireClangForBackendTest(t)
 	requireRealLLVMEmission(t)
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use std.watch as watch
 
