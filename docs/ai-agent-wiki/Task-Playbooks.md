@@ -34,6 +34,13 @@
 - preserve structured unsupported diagnostics for uncovered shapes
 - use focused backend/codegen tests before broader runs
 
+## If you are changing toolchain lowering or self-host rebuild paths
+
+- policy and lowering live in `toolchain/lir_proto.osty`, `toolchain/mir_lower.osty`, `toolchain/main.osty` — not new Go emitters
+- stage0 surface: `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/`
+- self-rebuild contract: `just verify-self-rebuild` or `bash scripts/verify-self-rebuild --reuse-stage1 .bin/osty` — see [`docs/osty_self_bootstrap_design.md`](../osty_self_bootstrap_design.md) Appendix A
+- do not reintroduce MIR-JSON-only ratchet paths; `internal/selfhost/phase0_wiring_test.go` guards `scripts/verify-self-rebuild`
+
 ## If you are changing manifests, package manager, or registry behavior
 
 - inspect `internal/manifest`, `internal/lockfile`, `internal/pkgmgr`, `internal/registry`

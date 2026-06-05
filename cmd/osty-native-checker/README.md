@@ -65,10 +65,13 @@ close (plan §12 L2/L3).
   tuples the Go adapter uses, so identical wire records always hash to
   identical keys.
 
-- ✓ **Input request handling** — `main.osty` now reads the complete request
-  with `io.readAllStdin()`, routes only on top-level `"package"` keys, and
-  extracts only the top-level `"source"` string using the shared
-  escape-aware decoder in `toolchain/check_json.osty`.
+- ✓ **Input request handling** — `main.osty` reads the complete request with
+  `io.readAllStdin()` and delegates package vs source routing to
+  `toolchain/check_json.osty` (`frontNativeCheckerIsPackageRequest`,
+  `frontNativeCheckerSourceFromRequest`, `frontCheckPackageToWireJson`). Request
+  shape scanning (top-level key boundaries, escape-aware string decode) lives
+  in the toolchain module so tests can cover it without rebuilding the checker
+  binary.
 
 With bricks A + B + C wired, the remaining blocker is no longer the wire
 shape or request parser. It is producing and linking the transitive
@@ -160,10 +163,12 @@ every monomorphized build of `osty-self` or every package is LIR-Proto clean;
   front-end 에서는 E0501 / E0703 / E0702 없이 resolve 된다. 남은 벽은
   LLVM link 단계에서 해당 `toolchain.front*` 정의 오브젝트를 함께
   공급하는 일이다.
-- ✓ request-shape key-boundary matching — `main.osty` 가 JSON 문자열을
-  통째로 건너뛰고 top-level request object 의 `"source"` / `"package"`
-  key 만 인정한다. 사용자 코드 문자열 안의 `"package"` 나 nested
-  metadata 의 `"source"` 가 입력 모드를 바꾸지 않는다.
+- ✓ request-shape key-boundary matching — `toolchain/check_json.osty`
+  (`frontNativeCheckerIsPackageRequest`, `frontNativeCheckerSourceFromRequest`)
+  가 complete JSON string 을 건너뛰며 top-level `"source"` / `"package"` key 만
+  인정한다. `main.osty` 는 stdin → package vs source 라우팅만 담당. 사용자
+  코드 문자열 안의 `"package"` 나 nested metadata 의 `"source"` 가 입력 모드를
+  바꾸지 않는다.
 - 출력 측은 진짜 checker 호출 — `tc.frontCheckSourceToWireJson`
   (`toolchain/check_json.osty` + `toolchain/check_stable_id.osty`) 가
   lex/parse/check 한 후 wire JSON 으로 직렬화. M4 byte parity 의 세

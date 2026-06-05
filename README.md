@@ -293,6 +293,21 @@ in order:
 3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
    content-addressed cache. Populated by `osty install-self` and
    `verify-self-rebuild --reuse-stage1`.
+
+### Self-rebuild ratchet
+
+After bootstrap, validate that successive `osty-self` binaries rebuild
+`toolchain/` identically:
+
+```sh
+just verify-self-rebuild          # gates + stage1–3 byte parity (--reuse-stage1)
+just verify-self-rebuild-gates    # check + snapshot parity + stage0 audit only
+```
+
+Stage1 uses the host `.bin/osty` with stage0 fallback; stages 2–3 use the
+previous binary as the compiler (source `lir-proto-lower` path). See
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) and
+[`docs/osty_self_bootstrap_design.md`](./docs/osty_self_bootstrap_design.md).
 4. **Network fetch** from `$OSTY_SELF_REGISTRY_URL`, falling back to
    `selfhostcache.DefaultRegistryURL` (the upstream `choiceoh/osty`
    rolling release `osty-self-snapshots`) when the env var is unset.
