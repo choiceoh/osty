@@ -200,12 +200,51 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 ## Appendix A. 현재 verify-self-rebuild 흐름
 
+> **갱신 (2026-05-27)**: source selfhost ratchet 완료. MIR-JSON-only /
+> backend-only 우회 경로는 제거됐고, stage2+ 는 **source compiler**
+> (`lir-proto-lower`) 파이프라인이 켜진 `osty-self` 만 통과한다.
+> 계약은 `internal/selfhost/phase0_wiring_test.go` 의
+> `TestVerifySelfRebuildRequiresSourceCompilerStages` 가 고정한다.
+
 ```
-host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
-    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
-    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
+host_osty (.bin/osty, Go-built CLI)
+    ├─ gates (default): osty check toolchain/, snapshot parity,
+    │                  stage0 audit, native route probes
+    └─ stage1: host_osty build toolchain/  →  osty-self-1
+               (OSTY_STAGE0_FALLBACK=1 — stage1 only)
+    └─ smoke: --selfhost-doctor reports
+              "osty-self source compiler: enabled"
+              (or lir-proto-lower probe on stage0 partial decline)
+    └─ stage2-seed: osty-self-1 build toolchain/  →  osty-self-2-seed
+                    (host compiler forwarding forbidden via host_guard)
+    └─ stage2: osty-self-2-seed build toolchain/  →  osty-self-2
+    └─ stage3: osty-self-2 build toolchain/  →  osty-self-3
     └─ assert byte_eq(osty-self-2, osty-self-3)
+         (Mach-O UUID / code-signature normalized when needed)
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+**진입점**: `scripts/verify-self-rebuild` 또는 `just verify-self-rebuild`
+(`--reuse-stage1` 로 content-addressed selfhostcache / mtime cache 활용).
+
+**주요 플래그**:
+
+| Flag | Effect |
+|---|---|
+| `--gates-only` | gates 만 실행 후 종료 |
+| `--skip-gates` | stage 빌드 루프만 (반복 개발용) |
+| `--reuse-stage1` | selfhostcache → mtime cache → rebuild 순으로 stage1 재사용 |
+| `--no-selfhostcache` | A7 cache 비활성, legacy mtime cache 만 |
+| `--stage1-only` / `--ir-only` | 부분 검증 |
+
+**금지**: `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` — 모든 stage 는 이전 stage
+산출물로만 생성해야 한다 (`reject_external_stage_overrides`).
+
+stage1 은 host osty + stage0 fallback 으로 `osty-self` 를 처음 만든다.
+stage2+ 는 이미 빌드된 `osty-self` 가 **source** (`HIR → Mono → MIR → LIR
+Proto → LLVM`) 로 `toolchain/` 을 다시 컴파일해야 한다. stage0 IR 과
+production IR 의 byte 동일성은 요구하지 않는다 — ratchet 은
+**self-hosted compiler 고정점** (stage2 ≡ stage3) 만 검증한다.
+
+`verify-selfhost` (`just verify-selfhost`) 와 혼동하지 말 것: 후자는
+`internal/ci` + `internal/runner` 의 snapshot parity 테스트만 돌린다.
+self-rebuild ratchet 은 훨씬 넓다 (gates + multi-stage binary parity).

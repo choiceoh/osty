@@ -577,6 +577,33 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess (`cmd/osty-native-lirproto`)
+
+Production LLVM emission forks `osty-self` through
+`internal/nativelirproto` → `cmd/osty-native-lirproto`. The Go shim
+stages MIR JSON or source to a temp file and runs `lir-proto-lower-mir-json`
+(preferred) or `lir-proto-lower`. Declines fall back to in-process stage0
+compat only within explicit byte/timeout guards.
+
+| Env var | Role |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-request timeout (`0` disables). Default 20s + size budget for large MIR JSON. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Stage0 retry after MIR JSON timeout when payload ≤ limit. `0` = off. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source re-lowering for pre–MIR-JSON `osty-self`. Unset/`0` = off (default). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Retain staged inputs for debugging. |
+| `OSTY_LIRPROTO_DEBUG` | Log staged paths to stderr. |
+
+#### Self-rebuild ratchet (`scripts/verify-self-rebuild`)
+
+Distinct from `just verify-selfhost` (snapshot parity only). The ratchet
+runs host gates, builds `osty-self-1` via host osty + stage0 fallback,
+then rebuilds `toolchain/` through `osty-self-2-seed` → `osty-self-2` →
+`osty-self-3` with host-compiler forwarding forbidden after stage1. Asserts
+byte parity between the last two binaries (Mach-O metadata normalized when
+needed). Stage2+ requires the source compiler pipeline. See
+[`docs/osty_self_bootstrap_design.md`](docs/osty_self_bootstrap_design.md)
+Appendix A and `just verify-self-rebuild*`.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
