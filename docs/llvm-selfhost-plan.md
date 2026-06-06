@@ -35,7 +35,7 @@
 
 - **PR #1405** (2026-05-05) — `internal/llvmgen` Go MIR emitter 112K LOC 삭제. LLVM 백엔드의 MIR→LLVM IR 변환은 이제 `osty-self lir-proto-lower` 서브프로세스 = `toolchain/{llvmgen,lir_proto,mir_generator}.osty` 컴파일 산출물에 의존.
 - **stage0 fallback** — `osty-self` 가 부재할 때만 작동하는 Go 측 의도적으로 좁은 emitter (`internal/backend/stage0/`). bootstrap 닭-달걀 해소. **production 빌드 경로 아님**.
-- **`scripts/verify-self-rebuild`** — stage2/stage3 byte parity 강제. fresh checkout 에서 self-host 부트스트랩이 가능한지 확인.
+- **`scripts/verify-self-rebuild`** — gates (check, snapshot parity, stage0 audit, route probes) + multi-stage rebuild (`osty-self-1` … `osty-self-3`) + stage2/stage3 byte parity. **2026-05-27 이후 source compiler ratchet** — stage2+ 는 `lir-proto-lower` source pipeline 이 켜진 `osty-self` 만 통과 (`TestVerifySelfRebuildRequiresSourceCompilerStages`). `just verify-self-rebuild` / `just verify-self-rebuild-fast`.
 - **`scripts/audit-stage0-coverage.sh`** + `TestStage0ToolchainAudit` (`OSTY_STAGE0_AUDIT=1`) — toolchain/*.osty 함수가 stage0 surface 안에 머무는 비율 측정.
 - **스파이크 측정 (2026-05-16 — [llvm-selfhost-plan-spike-findings.md §Q1](llvm-selfhost-plan-spike-findings.md))** — 역사적 스냅샷:
 
@@ -421,7 +421,7 @@ L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 | 셀프호스팅의 종착지 | **LLVM 백엔드로 toolchain/*.osty 자체 컴파일 (진짜 셀프호스팅)** | Go resolver 4파일 삭제 (Phase 1c.5) / 현재 first-walls 만 닫기 (Phase 3) |
 | 자체 컴파일의 산출물 범위 | **osty-native-checker 만 LLVM 으로 자체 빌드 (최소)** | toolchain 전체 / Go shell 포함 완전 탈Go |
 | 검증 기준 | **Behavior parity — 같은 input 에 같은 JSON output (바이트 동일)** | self-build smoke 만 / fixed-point byte equality (`B2 ≡ B3`) — 후자는 결정성 작업 추가 필요 |
-| stdlib body injection | **OFF (현재 default) — stdlib 은 runtime symbol 호출** | ON — monomorph hang 선행 |
+| stdlib body injection | **ON (현재 default, PR #1998) — bodied stdlib helpers inject** | OFF (`OSTY_STDLIB_BODY_LOWER=0`) 로 bisect |
 | 진행 방식 | **Spec/design 먼저, 실제 PR 은 다음 세션** | walking skeleton 으로 바로 시작 / walls-first batch |
 | Fixture corpus | **점진: 시드 → spec/positive 흡수 → toolchain/ self-input** | testdata/spec/positive 만 / toolchain self 만 |
 | JSON ser/de 방식 | **Manual parseValue + stringifyValue 조합** | `#[json(key)]` derive — LLVM 백엔드의 generic encode/parse 완성도 미지 |
@@ -435,8 +435,10 @@ L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 # 현재 stage0 coverage 측정 (이미 존재)
 OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/
 
-# self-host 부트스트랩 byte parity 검증 (이미 존재)
-scripts/verify-self-rebuild
+# self-host 부트스트랩 byte parity + source compiler ratchet (이미 존재)
+just verify-self-rebuild          # full gates + ratchet
+just verify-self-rebuild-fast     # --skip-gates --reuse-stage1
+just verify-self-rebuild-gates    # gates only
 
 # 본 plan 이 도입하는 target (작성 시점에 부재):
 just parity                  # PR3 도입 — L1 fixture byte parity

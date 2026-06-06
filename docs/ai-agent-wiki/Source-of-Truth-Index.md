@@ -31,6 +31,8 @@
 - strict backend test baseline (Map iteration mis-lowering, etc.):
   [`/docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
 - self-host artifact/bootstrap docs: `/docs/osty_self_artifact_design.md`, `/docs/osty_self_bootstrap_design.md`
+- self-rebuild ratchet script: `/scripts/verify-self-rebuild` (Appendix A in bootstrap design doc)
+- LIR Proto subprocess env vars: `/cmd/osty-native-lirproto/main.go`, `README.md` bootstrap section
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
 - subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)

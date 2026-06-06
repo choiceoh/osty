@@ -399,6 +399,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Full self-rebuild ratchet (toolchain edits) | `just verify-self-rebuild` or `just verify-self-rebuild-fast` for iteration |
+| Debug LIR Proto subprocess stalls | `OSTY_LIRPROTO_DEBUG=1` and optionally `OSTY_LIRPROTO_KEEP_STAGED=1` |
 
 ### CI bootstrap gates
 
@@ -411,6 +413,40 @@ Two workflows cover the complementary fresh-clone paths (see
 | [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) | Every PR + push to `main` | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` (stage0 source bootstrap, same recipe contributors run offline) |
 
 The per-PR workflow also runs `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` against the artifact it just built, so MIR-direct backend tests cannot silently skip when `osty-self` was missing.
+
+### Self-rebuild ratchet (`verify-self-rebuild`)
+
+`just bootstrap` proves a fresh clone can produce `osty-self`. The
+**self-rebuild ratchet** (`scripts/verify-self-rebuild`, wired as
+`just verify-self-rebuild`) goes further: it rebuilds `toolchain/` through
+multiple generations of `osty-self` and asserts **byte parity** between the
+last two (`osty-self-2` ≡ `osty-self-3`). Since 2026-05-27 the ratchet
+requires the **source compiler** pipeline (`osty-self source compiler:
+enabled` in `--selfhost-doctor`); MIR-JSON-only shortcuts are retired.
+
+Typical local loop after editing `toolchain/*.osty`:
+
+```sh
+just verify-self-rebuild-fast   # skip gates, reuse cached stage1
+just verify-self-rebuild        # full gates + ratchet (slower)
+just verify-self-rebuild-gates  # gates only — check/lint/snapshot/stage0 audit
+```
+
+Do not confuse this with `just verify-selfhost`, which only runs
+`SnapshotParity|CoreSnapshotParity` under `internal/ci` and
+`internal/runner`. Flow details:
+[`docs/osty_self_bootstrap_design.md`](./docs/osty_self_bootstrap_design.md)
+(Appendix A).
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go)) — used when the LLVM backend forks `osty-self` for `lir-proto-lower` / `lir-proto-lower-mir-json`:
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-request timeout (`20s` default + size budget for large MIR JSON payloads). Set `0` to disable. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After a MIR JSON timeout, retry via in-process stage0 only when the staged payload is ≤ this many bytes. Unset / `0` disables. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy path: re-run `lir-proto-lower` on source when an older `osty-self` lacks MIR JSON support. Unset / `0` disables (production default). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Keep staged temp files for post-mortem inspection. |
+| `OSTY_LIRPROTO_DEBUG` | Log staged paths to stderr. |
 
 ### Cache maintenance
 
