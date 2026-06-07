@@ -34,6 +34,9 @@
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
 - subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)
+- self-rebuild byte parity ratchet: [`/scripts/verify-self-rebuild`](../../scripts/verify-self-rebuild) (`just verify-self-rebuild`)
+- LIR Proto subprocess env vars: [`/cmd/osty-native-lirproto/main.go`](../../cmd/osty-native-lirproto/main.go), `README.md` env matrix
+- bootstrap recovery playbook: [`/docs/security/bootstrap-recovery.md`](../security/bootstrap-recovery.md)
 
 ## Useful code anchors
 

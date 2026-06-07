@@ -3,7 +3,7 @@
 > **상태**: 제안 (draft). 합의 후 별도 PR chain.
 > **연관**:
 > - [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) — 옵션 C (stage0 fallback emitter) 결정
-> - [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) — stage0 coverage 11.3% 시점 audit (2026-04-29 측정)
+> - [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) — stage0 coverage **11.3% 시점 audit (2026-04-29, archived)**; 현행 **100%** (8714/8714, PR #1858)
 > - [docs/stage0_p24_scope.md](stage0_p24_scope.md) — 2026-05-11 시점 94.2% audit + P24 첫 target
 > - [docs/post_1405_coverage_audit_design.md](post_1405_coverage_audit_design.md) — PR #1405가 삭제한 ~36k줄 회복 audit
 > - [docs/osty_self_artifact_design.md](osty_self_artifact_design.md) — `osty-self` artifact 캐시
@@ -421,7 +421,7 @@ L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 | 셀프호스팅의 종착지 | **LLVM 백엔드로 toolchain/*.osty 자체 컴파일 (진짜 셀프호스팅)** | Go resolver 4파일 삭제 (Phase 1c.5) / 현재 first-walls 만 닫기 (Phase 3) |
 | 자체 컴파일의 산출물 범위 | **osty-native-checker 만 LLVM 으로 자체 빌드 (최소)** | toolchain 전체 / Go shell 포함 완전 탈Go |
 | 검증 기준 | **Behavior parity — 같은 input 에 같은 JSON output (바이트 동일)** | self-build smoke 만 / fixed-point byte equality (`B2 ≡ B3`) — 후자는 결정성 작업 추가 필요 |
-| stdlib body injection | **OFF (현재 default) — stdlib 은 runtime symbol 호출** | ON — monomorph hang 선행 |
+| stdlib body injection | **ON (default since PR #1998)** — `PrepareEntry` injects Osty-bodied stdlib methods; set `OSTY_STDLIB_BODY_LOWER=0` to bisect | OFF — monomorph hang 선행 (2026-05-16 결정, 이후 flip) |
 | 진행 방식 | **Spec/design 먼저, 실제 PR 은 다음 세션** | walking skeleton 으로 바로 시작 / walls-first batch |
 | Fixture corpus | **점진: 시드 → spec/positive 흡수 → toolchain/ self-input** | testdata/spec/positive 만 / toolchain self 만 |
 | JSON ser/de 방식 | **Manual parseValue + stringifyValue 조합** | `#[json(key)]` derive — LLVM 백엔드의 generic encode/parse 완성도 미지 |
@@ -436,7 +436,10 @@ L1/L2/L3 = corpus level (§4.2). M1–M4 = 본 plan 의 PR 머지 milestone:
 OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/
 
 # self-host 부트스트랩 byte parity 검증 (이미 존재)
+# Requires osty-self source compiler pipeline (not MIR-JSON-only backend).
+# stage2/stage3 must rebuild toolchain/ from source and compare byte-for-byte.
 scripts/verify-self-rebuild
+just verify-self-rebuild   # wraps --reuse-stage1 against cached stage1 seed
 
 # 본 plan 이 도입하는 target (작성 시점에 부재):
 just parity                  # PR3 도입 — L1 fixture byte parity

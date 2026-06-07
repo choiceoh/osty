@@ -1,8 +1,16 @@
 # B2.1 — Stage0 coverage audit (source + MIR ground truth)
 
-> **상태**: 측정 (이 PR).
-> **연관**: `docs/osty_self_b1_findings.md` (부트스트랩 갭),
-> `docs/osty_self_b2_audit.md` (B2 시범 재작성),
+> **상태**: **ARCHIVED measurement baseline (2026-04-29)** — 아래 §3 MIR 수치
+> (11.3%, 899/7932) 는 **역사적 스냅샷**이다. **현행 ground truth**:
+> `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit ./internal/backend/`
+> → **8714/8714 (100.0%)** real cover, 0 decline-stub (2026-06-07 재측정).
+> PR [#1858](https://github.com/choiceoh/osty/pull/1858) (2026-05-17) 이
+> audit 100% 를 닫았다. **audit-pass ≠ build-pass** — monomorph / LIR Proto /
+> cross-pkg link 는 별도 추적 (`SPEC_GAPS.md`, `docs/llvm-selfhost-plan.md` §3.1).
+> 새 작업의 baseline 으로 §3 퍼센트를 인용하지 말 것.
+>
+> **연관**: `docs/osty_self_b1_findings.md` (ARCHIVED),
+> `docs/osty_self_b2_audit.md` (ARCHIVED),
 > `docs/osty_self_bootstrap_design.md` (P0–P20).
 > **소유**: backend / toolchain.
 

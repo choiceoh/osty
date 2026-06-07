@@ -577,6 +577,35 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess env vars
+
+Production MIR → LLVM IR forks `cmd/osty-native-lirproto`, which stages
+source or MIR JSON and invokes `osty-self lir-proto-lower` /
+`lir-proto-lower-mir-json`. Useful overrides (see also `README.md` env
+matrix):
+
+| Var | Effect |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Timeout per `osty-self` invocation; `"0"` disables. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After MIR JSON timeout, allow stage0 retry when staged payload ≤ limit. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** — re-run `lir-proto-lower` on source when an older `osty-self` lacks MIR JSON support. Unset/`0` = disabled (default). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Retain temp staged files (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Log staged path + subcommand to stderr. |
+
+Legacy source compat is intentionally **off by default** so production
+paths cannot silently bypass the source compiler ratchet enforced by
+`scripts/verify-self-rebuild` and
+`TestVerifySelfRebuildRequiresSourceCompilerStages`.
+
+#### Self-rebuild ratchet
+
+`scripts/verify-self-rebuild` (wrapped by `just verify-self-rebuild`)
+builds `osty-self-1` from the host `osty`, then requires stage2/stage3
+to rebuild `toolchain/` through the **source compiler** pipeline
+(`--selfhost-doctor` must report `osty-self source compiler: enabled`).
+MIR-JSON-only rebuild shortcuts are forbidden — see
+`internal/selfhost/phase0_wiring_test.go`.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

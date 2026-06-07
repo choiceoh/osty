@@ -50,6 +50,11 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults off — enabling it lets
+  `osty-native-lirproto` re-run source lowering on legacy `osty-self` seeds
+  and can mask missing MIR JSON support
+- stage0 **audit** is 100% (`TestStage0ToolchainAudit`) but **audit-pass ≠
+  build-pass** — do not cite the old 11.3% figure from archived audit docs
 
 ## Spec traps
 

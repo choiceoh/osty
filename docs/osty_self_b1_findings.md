@@ -3,7 +3,8 @@
 > **상태**: **ARCHIVED — superseded by `docs/osty_self_b2_1_audit.md`**.
 > 이 문서는 P0–P15 시점의 측정 + UX 개선이다. P20 머지 + B2 4 PR
 > 변환 이후의 정확한 stage0 coverage 는 11.3% (`b2_1_audit.md` §3)
-> 임이 측정으로 확정됐고, 본 문서의 §3 "다음 작업" 옵션 (B2/B3/B4)
+> 로 **2026-04-29 에 측정**됐다. **현행**: audit **100%** (8714/8714,
+> PR #1858, 2026-06-07 재측정). 본 문서의 §3 "다음 작업" 옵션 (B2/B3/B4)
 > 는 옵션 (C) registry 결정 (`osty_self_artifact_design.md` §8
 > RESOLVED) 으로 흡수됐다. 본문은 측정 baseline 으로 보존하되 새
 > 작업의 baseline 으로 인용하지 말 것 — 대신 `b2_1_audit.md` 를
