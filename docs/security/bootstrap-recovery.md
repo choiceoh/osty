@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` reports **100%** toolchain audit cover (8714/8714 as of 2026-06-07). **Audit-pass ≠ build-pass** — monomorphized `install-self` / LIR Proto paths can still decline shapes the per-function audit does not reach. See `SPEC_GAPS.md` (`cross-pkg-module-resolution`) and [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md) §3.1. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -130,13 +130,13 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
-  `internal/backend/stage0/`.
+  prior binary. Per-function audit cover is **100%** (PR #1858, revalidated
+  2026-06-07), but production `osty build` / `install-self` can still hit
+  monomorph / LIR Proto walls the audit does not model. Stage0 remains
+  invaluable for diagnosis: when bootstrap fails, its decline message names
+  the missing MIR shape. Do not retire stage0 just because audit cover is
+  complete — the ~6K lines in `internal/backend/stage0/` are the offline
+  fallback and the bisect path behind `OSTY_STAGE0_FALLBACK=1`.
 
 - **DR2** is the only path that does not depend on any maintainer
   asset — neither the GitHub Release, nor the maintainer's machine,

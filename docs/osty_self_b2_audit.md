@@ -5,7 +5,9 @@
 > awk brace-tracking 도입 + match-arm 분류 + `?` 세분화 + MIR
 > ground-truth audit 가 들어간 v2 (`b2_1_audit.md`) 가 있는 한
 > 새 작업의 baseline 으로 사용하지 말 것. v2 의 결정적 발견:
-> stage0 가 toolchain 의 11.3% (899/7932) 만 cover, top decline 이
+> stage0 가 toolchain 의 11.3% (899/7932) 만 cover (**2026-04-29
+> 스냅샷**; 현행 audit **100%**, 8714/8714 — `b2_1_audit.md` 헤더 참조),
+> top decline 이
 > match 가 아니라 basic-shape gaps (call/intr/agg). 본문의
 > §6 "다음 작업" 옵션은 `b2_1_audit.md` 의 v2 마스터 플랜 (B2.2–B2.10)
 > 으로 superseded.
