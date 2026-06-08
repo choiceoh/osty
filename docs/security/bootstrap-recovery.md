@@ -19,9 +19,9 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` covers **~100%** of `toolchain/*.osty` functions (8240/8241 after PR #1858). Emits LLVM IR for audited shapes via `internal/backend/stage0/`. **Audit-pass ≠ build-pass** — monomorphized `install-self` / LIR Proto / link walls can still decline after audit passes. See [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md) and [`SPEC_GAPS.md`](../../SPEC_GAPS.md). |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
-| **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
+| **DR2** Maintainer reconstruction | [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md), `scripts/verify-self-rebuild` | Last resort when L4 and L5 both fail to produce a linkable `osty-self`. No longer a mechanical "rewrite 88% of toolchain" plan — stage0 audit is complete; remaining work is production-path link / cross-pkg / LIR Proto gaps. |
 
 ## 2. Diagnosis — which layer am I on?
 
@@ -35,8 +35,12 @@ The verbose output prints which layer fired. Common signals:
 - `env override OSTY_SELF_BIN=...` → L2.
 - `in-tree build .../debug/llvm/osty-self` → L3.
 - `fetched from <URL>` → L4 OK.
-- `stage0 fallback declined: ...` → L5 active but cannot cover the
-  current toolchain. Time to invoke DR1 if the registry is also down.
+- `stage0 fallback declined: ...` → L5 active but a **build-pass**
+  shape is missing (monomorph specialization, link symbol, or LIR Proto
+  wall — not necessarily an audit gap). Capture the decline message;
+  cross-check [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md).
+  Invoke DR1 if the registry is also down and you need users online
+  immediately.
 
 ## 3. DR1 — Registry outage manual hand-publish
 
@@ -100,25 +104,34 @@ Trigger when:
 - The rolling release is wiped or otherwise unreachable for an extended
   period AND
 - No maintainer-side `osty-self` binary exists AND
-- L5 (`OSTY_STAGE0_FALLBACK=1`) cannot cover the current toolchain.
+- `OSTY_STAGE0_FALLBACK=1 install-self` (or
+  `scripts/verify-self-rebuild`) still cannot produce a linkable
+  `osty-self` after exhausting decline diagnostics.
 
-This is the worst case. The procedure pulls together two work streams
-already documented:
+This is the worst case. Historical DR2 notes in
+`docs/osty_self_b2_1_audit.md` (11.3% stage0 coverage, mechanical
+`match → if-else` rewrites) are **obsolete** — stage0 audit reached
+100% in May 2026 (PR #1858). Today's reconstruction path is:
 
-1. **Toolchain simplification** — `docs/osty_self_b2_1_audit.md`
-   v2 master plan, batches B2.2–B2.3. ~244 source-level mechanical
-   `match → if-else` rewrites. ~10–15 hours.
-2. **Stage0 unlocks** — same document, batches B2.4–B2.7. ~4 stage0
-   phases (P21–P24) covering the basic-shape gaps that block 88.7% of
-   toolchain functions today. ~1500 lines of Go in
-   `internal/backend/stage0/`. ~1–2 weeks dedicated work.
+1. **Diagnose the build-pass wall** — run
+   `OSTY_STAGE0_LIST_ALL_DECLINES=1 OSTY_STAGE0_FALLBACK=1 .bin/osty install-self`
+   and/or `just verify-self-rebuild-gates` (includes
+   `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit`).
+   Decline text names the missing MIR/LIR/link shape.
+2. **Close the specific gap** — follow the active trajectory in
+   [`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md) (cross-pkg
+   link, native checker LLVM build, LIR Proto subprocess). Audit
+   histograms alone are no longer the bottleneck.
+3. **Ratchet** — `just verify-self-rebuild` enforces host-free
+   stage2/stage3 byte parity and requires the **source compiler**
+   pipeline (`osty-self source compiler: enabled` from
+   `--selfhost-doctor`); MIR-JSON-only backend shortcuts are rejected
+   by `internal/selfhost/phase0_wiring_test.go`.
 
-Combined, these two streams reach ~40% MIR coverage, which is enough
-to bootstrap a build of the current toolchain into a fresh osty-self
-binary on a single host. From that point, DR1 applies normally.
+From a working `osty-self` on any host, DR1 applies normally.
 
-DR2 is a last-resort plan, not an operational recipe. Most outages
-recover via DR1.
+DR2 is a last-resort engineering plan, not an operator recipe. Most
+outages recover via DR1.
 
 ## 5. Why these layers exist
 
@@ -130,13 +143,12 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
-  `internal/backend/stage0/`.
+  prior binary. Audit coverage is ~100%, but production bootstrap still
+  depends on link/LIR Proto paths that can decline after audit passes.
+  Stage0 remains invaluable for diagnosis: decline messages name the
+  exact MIR shape or emit stub that blocked progress. Do not retire
+  stage0 while `OSTY_STAGE0_FALLBACK=1` is the fresh-clone escape hatch
+  documented in `README.md` and `just bootstrap`.
 
 - **DR2** is the only path that does not depend on any maintainer
   asset — neither the GitHub Release, nor the maintainer's machine,

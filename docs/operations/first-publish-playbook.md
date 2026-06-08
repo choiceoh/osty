@@ -148,12 +148,13 @@ gh workflow run build-osty-self.yml \
 ```
 
 `skip_seed_fetch=true` tells the workflow to skip the prior-seed
-download step. With no seed available, the build will fall through to
-`OSTY_STAGE0_FALLBACK=1`, which today only succeeds for trivial
-toolchains — for the real toolchain it produces an error. **That is
-expected**: the dispatch will fail, but it leaves an
-`actions/upload-artifact` bundle of the partial state we can pull
-down for diagnosis.
+download step. With no seed available, the build falls through to
+`OSTY_STAGE0_FALLBACK=1`. Stage0 **audit** covers ~100% of
+`toolchain/*.osty`, but the workflow still may fail on **build-pass**
+walls (link, cross-pkg symbols, LIR Proto subprocess) — see
+[`docs/llvm-selfhost-plan.md`](../llvm-selfhost-plan.md). **A failed
+dispatch is often expected** on a seedless first run; it still leaves an
+`actions/upload-artifact` bundle of partial state for diagnosis.
 
 For darwin-amd64 specifically you have two real options:
 

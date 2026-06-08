@@ -50,6 +50,14 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` enables a **legacy** source
+  re-lowering path in `osty-native-lirproto` when MIR JSON is declined.
+  Default is off. Do not use it to greenwash the self-rebuild ratchet —
+  `verify-self-rebuild` requires the source compiler pipeline.
+- Stage0 **audit-pass ≠ build-pass**: `TestStage0ToolchainAudit` at
+  ~100% does not guarantee `install-self` or monomorphized LIR Proto
+  paths succeed. Treat decline messages as the source of truth for
+  production walls.
 
 ## Spec traps
 

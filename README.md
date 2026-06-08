@@ -360,12 +360,23 @@ linked.
 |---|---|
 | `OSTY_STAGE0_FALLBACK` | **Single source of truth** for the chicken-and-egg bootstrap. When `=1`: `install-self` runs the stage0 source-bootstrap path (Go-side emitter) when no prebuilt `osty-self` is resolvable, AND `buildNativeChecker` detours to `go build ./cmd/osty-native-checker` instead of the LLVM build path (which would need the very `osty-self` we are trying to produce). `just bootstrap` bakes this in. The previous `--bootstrap-stage0` CLI flag was retired in favour of this gate. |
 | `OSTY_STAGE0_LIST_ALL_DECLINES` | Stage0 emitter prints every stdlib-generic-method decline as a warning instead of just summary counts. Useful when diagnosing decline cascades. Auto-set by `install-self` when stage0 fallback runs. |
+| `OSTY_STAGE0_AUDIT` | Set to `1` to run `TestStage0ToolchainAudit` (normally skipped). Walks every `toolchain/*.osty` function through stage0 and prints a decline histogram. Invoked by `scripts/verify-self-rebuild` gates and `just verify-self-rebuild-gates`. |
 
 **LLVM backend / stdlib lowering** ([`internal/backend/entry.go`](./internal/backend/entry.go)):
 
 | Var | Purpose |
 |---|---|
 | `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy **source re-lowering** when `osty-self` cannot handle MIR JSON. Unset or `0` disables (default). Positive value sets a byte-size guard on the staged source. The self-rebuild ratchet requires the source compiler path and does not rely on this fallback. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Bounds a legacy stage0 retry after MIR JSON timeout. `0` disables timeout-compat retries. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override timeout for the `osty-self` subprocess invoked by `osty-native-lirproto`. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain staged input files for post-mortem debugging. |
+| `OSTY_LIRPROTO_DEBUG` | Print staged paths to stderr. |
 
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
@@ -399,6 +410,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Run stage0 toolchain audit histogram | `OSTY_STAGE0_AUDIT=1 go test -count=1 -vet=off ./internal/backend/ -run TestStage0ToolchainAudit -v` or `just verify-self-rebuild-gates` |
+| Full self-rebuild byte-parity ratchet | `just verify-self-rebuild` (after `just build-all`; uses `--reuse-stage1` + selfhostcache) |
 
 ### CI bootstrap gates
 
