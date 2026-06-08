@@ -34,6 +34,32 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
+### Self-rebuild ratchet (`scripts/verify-self-rebuild`)
+
+End-to-end host-free parity check: host osty builds `osty-self-1`, then
+stage2/stage3 rebuild `toolchain/` and compare byte-for-byte (Mach-O
+UUID/signature normalized when needed).
+
+| Recipe | What it runs |
+|---|---|
+| `just verify-self-rebuild` | Full ratchet with gates + `--reuse-stage1` |
+| `just verify-self-rebuild-fast` | Skip gates, reuse stage1 |
+| `just verify-self-rebuild-gates` | Host-side gates only (check, snapshot parity, stage0 audit, native route probes) |
+| `just verify-self-rebuild-stage1` | Build `osty-self-1` only |
+
+Contract enforced by `internal/selfhost/phase0_wiring_test.go`:
+
+- Every stage after stage1 must be produced by the previous stage (no
+  `OSTY_SELF_REBUILD_STAGE*_BIN` overrides).
+- `--selfhost-doctor` must report `osty-self source compiler: enabled`
+  (MIR-JSON-only backend shortcuts are forbidden).
+- Gates include `OSTY_STAGE0_AUDIT=1` → `TestStage0ToolchainAudit`.
+
+Stage1 uses `OSTY_STAGE0_FALLBACK=1` + `OSTY_SELF_REGISTRY_OFFLINE=1` so
+the ratchet does not depend on the registry. See
+[`docs/osty_self_artifact_design.md`](../osty_self_artifact_design.md)
+for selfhostcache / `--reuse-stage1` behavior.
+
 ### Backend changes
 
 - keep unsupported shapes on structured diagnostic paths
