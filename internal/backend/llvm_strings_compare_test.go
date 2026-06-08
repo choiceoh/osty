@@ -16,11 +16,12 @@ func warningContaining(warnings []error, substr string) error {
 	return nil
 }
 
-// TestPrepareEntryInjectsStdlibWhenFlagOn verifies injection actually
-// runs in the real PrepareEntry path by inspecting entry.IR directly —
-// bypasses the llvmgen/AST legacy bridge so we see the HIR-level result
-// without any downstream transformations.
-func TestPrepareEntryInjectsStdlibWhenFlagOn(t *testing.T) {
+// TestPrepareEntryInjectsStdlib verifies injection actually runs in the
+// real PrepareEntry path by inspecting entry.IR directly — bypasses the
+// llvmgen/AST legacy bridge so we see the HIR-level result without any
+// downstream transformations. Stdlib body injection is default-on since
+// PR #1998; no env override is required.
+func TestPrepareEntryInjectsStdlib(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {
@@ -72,8 +73,8 @@ fn main() {
 	}
 }
 
-// TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn verifies that the
-// body-injection pipeline pulls in stdlib `pub let` definitions
+// TestPrepareEntryInjectsStdlibGlobals verifies that the body-injection
+// pipeline pulls in stdlib `pub let` definitions
 // (top-level globals) referenced by injected fn bodies. Concrete case:
 // `strings.graphemes` chains through `graphemeBreakProperty` which
 // reads `graphemeBreakCR` (a `pub let`) — without this pass the
@@ -86,7 +87,7 @@ fn main() {
 // body may still carry a bare `Ident{Kind: IdentGlobal, Name:
 // "graphemeBreakCR"}` — every reference must resolve to the
 // mangled name.
-func TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn(t *testing.T) {
+func TestPrepareEntryInjectsStdlibGlobals(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {

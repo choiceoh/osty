@@ -1290,57 +1290,33 @@ baseline (16 manual / 9 source). Catalog drift now surfaces as a failing
 Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
-## Phase 7: one-shot wiring behind a gate
+## Phase 7: production wiring (gate retired)
 
-Deliverables:
+**Status: complete.** The interim `OSTY_LLVM_LIR_PROTO` env gate,
+`internal/llvmgen/lir_proto_gate.go`, and the scaffold dispatch tests
+(`TestLLVMDispatchAppendsLIRProtoFallbackWarning`,
+`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff`) were removed once the
+native subprocess bridge became the sole LLVM IR path (PR #2029 and
+follow-ups). There is no host-side opt-in anymore.
 
-- Add an explicit gate, for example:
+Current routing (`internal/backend/llvm.go::generateLLVMIR`):
 
-```text
-OSTY_LLVM_LIR_PROTO=1
-```
+- MIR → LLVM IR is delegated to the native-owned subprocess
+  (`osty-native-llvmgen` → `nativelirproto` → `toolchain/lir_proto.osty`).
+- Preflight capability checks run first; unsupported shapes get skeleton IR
+  with structured diagnostics.
+- When the subprocess declines coverage, the dispatcher surfaces the
+  decline as the normal unsupported diagnostic — there is no legacy HIR
+  bridge retry behind the user's back.
+- `bootstrapStage0` (driven by `OSTY_STAGE0_FALLBACK=1` on install-self)
+  remains the only separate bootstrap shortcut when `osty-self` is missing.
 
-- Route only the selected backend entry point through LIR Proto when the gate
-  is enabled.
-- Keep automatic fallback to the current MIR emitter on structured unsupported
-  diagnostics.
-- Add focused backend dispatch tests.
+Exit criteria (met):
 
-Exit criteria:
-
-- Gate off: output is unchanged.
-- Gate on: selected fixtures use LIR Proto and pass.
-- Unsupported prototype shapes fall back cleanly.
-
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
-
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
-
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
+- Production builds always route through LIR Proto when the subprocess
+  accepts the MIR payload.
+- Unsupported prototype shapes decline cleanly with structured diagnostics.
+- No duplicate env-gate plumbing remains in the Go dispatcher.
 
 ## Phase 8: default-on decision
 
