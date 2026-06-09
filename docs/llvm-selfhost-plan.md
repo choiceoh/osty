@@ -35,7 +35,7 @@
 
 - **PR #1405** (2026-05-05) — `internal/llvmgen` Go MIR emitter 112K LOC 삭제. LLVM 백엔드의 MIR→LLVM IR 변환은 이제 `osty-self lir-proto-lower` 서브프로세스 = `toolchain/{llvmgen,lir_proto,mir_generator}.osty` 컴파일 산출물에 의존.
 - **stage0 fallback** — `osty-self` 가 부재할 때만 작동하는 Go 측 의도적으로 좁은 emitter (`internal/backend/stage0/`). bootstrap 닭-달걀 해소. **production 빌드 경로 아님**.
-- **`scripts/verify-self-rebuild`** — stage2/stage3 byte parity 강제. fresh checkout 에서 self-host 부트스트랩이 가능한지 확인.
+- **`scripts/verify-self-rebuild`** — stage2/stage3 byte parity 강제 + 각 stage 의 `--selfhost-doctor` / source `lir-proto-lower` probe (source-compiler ratchet, PR [#2022](https://github.com/choiceoh/osty/pull/2022)). `just verify-self-rebuild` = gates + `--reuse-stage1`. Env vars: `README.md` **Self-rebuild ratchet**.
 - **`scripts/audit-stage0-coverage.sh`** + `TestStage0ToolchainAudit` (`OSTY_STAGE0_AUDIT=1`) — toolchain/*.osty 함수가 stage0 surface 안에 머무는 비율 측정.
 - **스파이크 측정 (2026-05-16 — [llvm-selfhost-plan-spike-findings.md §Q1](llvm-selfhost-plan-spike-findings.md))** — 역사적 스냅샷:
 

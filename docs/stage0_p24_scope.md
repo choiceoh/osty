@@ -1,14 +1,14 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
-> **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
+> **상태**: **역사적 스코프 문서** (2026-05-11 측정 기준). `TestStage0ToolchainAudit` 는 PR [#1858](https://github.com/choiceoh/osty/pull/1858) 이후 **100.0% (8240 / 8241)** 에 도달했다 — 현행 수치·후속 wall 은 [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 과 [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인을 따른다. 아래 P24 함수 분석은 여전히 emitter shape 디버깅 레퍼런스로 유효하나, §0 퍼센트는 superseded.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11 — superseded)
 
-| 메트릭 | 값 | 출처 |
+| 메트릭 | 값 (당시) | 현행 (2026-05-17+) |
 |---|---|---|
-| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
+| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | **100.0% (8240 / 8241)** — `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
 | `install-self` 실제 decline | **1340 functions** | `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self` |
 | 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 위 audit 명령 출력 |
 

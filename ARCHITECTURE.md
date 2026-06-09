@@ -577,6 +577,38 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess wrapper (`cmd/osty-native-lirproto`)
+
+Production MIR → LLVM IR emission forks a managed helper at
+`cmd/osty-native-lirproto` (`internal/nativelirproto`). The helper JSON-decodes
+a MIR payload, stages it to disk, and execs `osty-self lir-proto-lower` (or
+`lir-proto-lower-mir-json` when the cached seed supports it). Declines return
+as structured JSON so `internal/backend/llvm.go` can fall back to the in-process
+stage0 emitter when `OSTY_STAGE0_FALLBACK=1`.
+
+Fallback order inside the helper (`lower` → `lowerLegacyMIRJSON`):
+
+1. Primary: `osty-self` subprocess on the staged MIR JSON payload.
+2. On decline from seeds without MIR JSON support: in-process stage0 MIR compat
+   (`lowerMIRJSONStage0Compat`) when the payload is present.
+3. **Last resort (opt-in)**: legacy source re-lowering via
+   `lir-proto-lower` on the original `.osty` source — only when
+   `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive byte limit. Unset/`0`
+   is the production default (PR ratchet: source compat must not mask missing
+   MIR JSON support).
+
+Operational env vars are listed in `README.md` under **LIR Proto subprocess**.
+`OSTY_LIRPROTO_SELF_TIMEOUT` bounds subprocess wall time;
+`OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` caps the stage0 retry after timeout;
+`OSTY_LIRPROTO_KEEP_STAGED` / `OSTY_LIRPROTO_DEBUG` aid post-mortem debugging.
+
+The self-rebuild ratchet (`scripts/verify-self-rebuild`, `just
+verify-self-rebuild`) additionally requires each produced `osty-self` to report
+`osty-self source compiler: enabled` via `--selfhost-doctor` (or pass a direct
+`lir-proto-lower` probe). Stage2+ builds set `OSTY_SELF_REBUILD_HOST_BIN` to a
+forbidden stub so the ratchet cannot silently call back into the Go-built host
+`osty`.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
