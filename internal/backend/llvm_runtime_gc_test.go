@@ -7396,12 +7396,11 @@ int main(void) {
 	}
 }
 
-// Phase 3 of the tiny-tag young-space landing: `find_header` now dispatches
-// through the young-page hook before the arena fast path, but the hook
-// returns false today and the feature flag defaults to off. Both must hold
-// or Phase 5 will land on top of a silently-active young route. The flag
-// also has to flip when the env var is set, otherwise the future cutover
-// can't be exercised in tests.
+// Phase 3 of the tiny-tag young-space landing: `find_header` dispatches
+// through the young-page hook before the arena fast path. The feature
+// flag defaults on (Phase 8 step 2); `OSTY_GC_TINYTAG_YOUNG=0` is the
+// opt-out kill switch. This test locks both the default-on path and the
+// explicit off path so a silent regression on either side surfaces.
 func TestBundledRuntimeFindHeaderBranchingParity(t *testing.T) {
 	parallelClangBackendTest(t)
 
