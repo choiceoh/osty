@@ -1,7 +1,7 @@
 # `osty-self` 부트스트랩 설계 — Post-#1405 follow-up
 
-> **상태**: 제안 (draft). 합의 후 별도 PR에서 구현.
-> **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구).
+> **상태**: **부분 구현됨** — 옵션 C (stage0 fallback) 가 `internal/backend/stage0/` 에 랜딩됐고, `OSTY_STAGE0_FALLBACK=1` + registry fetch + `just bootstrap` 가 fresh-clone 경로를 커버한다. `verify-self-rebuild` 는 source-compiler ratchet (PR [#2022](https://github.com/choiceoh/osty/pull/2022)) 까지 wired. 남은 wall 은 LIR Proto link / cross-pkg / production `osty-self` without stage0 — [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md), [`README.md`](../README.md) bootstrap 섹션.
+> **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구), #1858 (stage0 audit 100%), #2022 (self-rebuild source ratchet).
 > **소유**: backend / toolchain.
 
 ## 1. 문제 정의
@@ -23,11 +23,12 @@ host osty (Go 부트스트랩)
 
 #1405 머지 이전에는 같은 호출 시점에 `llvmgen.GenerateFromMIR(entry.MIR, opts)` (in-process Go 코드)이 fallback이었기 때문에 `osty-self`가 없어도 MIR→LLVM이 가능했다. #1405는 그 in-process 경로를 삭제하면서 fallback도 같이 제거했다.
 
-### 1.1 현재 관찰 가능한 결과
+### 1.1 현재 관찰 가능한 결과 (2026-05-29 갱신)
 
-- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
-- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+- `osty-self` **없이** `osty build --backend=llvm …` 은 production 경로에서 LIR Proto subprocess decline → (옵션적으로) stage0 emitter. Stage0 는 `OSTY_STAGE0_FALLBACK=1` 일 때만 bootstrap/install-self 가 진입한다 (`README.md` bootstrap env-var reference).
+- **Fresh clone (online)**: `just bootstrap` → registry fetch 시도 → miss 시 stage0 source bootstrap → `.osty/cache/self-host/<sha>-<triple>/osty-self` promote. Offline 은 `OSTY_SELF_REGISTRY_OFFLINE=1` (CI `fresh-clone-source-bootstrap.yml`).
+- **`verify-self-rebuild`**: stage1 은 host `osty` + stage0 fallback; stage2/3 은 이전 stage 가 만든 `osty-self` 로 `toolchain/` 재빌드 후 byte parity. 각 stage 는 `--selfhost-doctor` 로 **source compiler enabled** 를 강제 (또는 stage0 partial 시 direct `lir-proto-lower` probe). `OSTY_SELF_REBUILD_HOST_BIN` 가 stage2+ 에서 host compiler 재진입을 차단. `just verify-self-rebuild` = gates + `--reuse-stage1`.
+- **남은 gap**: audit-pass ≠ build-pass. Stage0 audit 100% (PR #1858) 이어도 monomorph / LIR Proto `<error>` layout / cross-pkg link wall 은 별도 — [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution`.
 
 ### 1.2 설계 목표
 
@@ -201,11 +202,20 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 ## Appendix A. 현재 verify-self-rebuild 흐름
 
 ```
+run_gates (optional)
+  ├─ host osty check toolchain/
+  ├─ SnapshotParity / CoreSnapshotParity
+  ├─ OSTY_STAGE0_AUDIT=1 TestStage0ToolchainAudit
+  └─ native llvmgen / lirproto route probes
+
 host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
-    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
-    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
-    └─ assert byte_eq(osty-self-2, osty-self-3)
+    └─ stage1: OSTY_STAGE0_FALLBACK=1 build toolchain/  →  osty-self-1
+         (stage0 emitter when osty-self subprocess declines)
+    └─ smoke: --selfhost-doctor → "source compiler: enabled"
+    └─ stage2: osty-self-1 build toolchain/  →  osty-self-2
+         (OSTY_SELF_REBUILD_HOST_BIN=forbidden — no host re-entry)
+    └─ stage3: osty-self-2 build toolchain/  →  osty-self-3
+    └─ assert normalized_sha256_eq(osty-self-2, osty-self-3)
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+Stage1 은 host `osty` 가 stage0 fallback 으로 첫 `osty-self` 를 만든다. Stage2+ 는 반드시 이전 stage 의 `osty-self` 만 사용 — external `OSTY_SELF_REBUILD_STAGE*_BIN` override 는 ratchet 에서 거부된다. Env vars: `README.md` **Self-rebuild ratchet**; script help: `scripts/verify-self-rebuild --help`.

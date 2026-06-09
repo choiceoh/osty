@@ -382,6 +382,26 @@ linked.
 | `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
 | `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
 
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — the Go wrapper around `osty-self lir-proto-lower`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override the timeout (seconds) around `osty-self lir-proto-lower`. `0` disables the guard. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Max MIR JSON payload (bytes) for the in-process stage0 retry after a subprocess timeout. Default `1048576` (1 MiB). `0` disables timeout-compat retries. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy source re-lowering when an older `osty-self` lacks `lir-proto-lower-mir-json`. Unset or `0` = disabled (production default). Set a positive byte limit to allow bounded source retry on decline. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, preserve staged MIR/source temp files instead of deleting them after the subprocess returns. |
+| `OSTY_LIRPROTO_DEBUG` | Print staged input path and `osty-self` subcommand to stderr. |
+
+**Self-rebuild ratchet** ([`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild) — internal; not for normal `osty build`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REBUILD_DIR` | Staging directory (default `.osty/self-rebuild`). |
+| `OSTY_SELF_REBUILD_TOOLCHAIN_DIR` | Toolchain package root (default `toolchain`). |
+| `OSTY_SELF_REBUILD_STAGE1_CACHE` | Reusable `osty-self-1` cache path for `--reuse-stage1`. |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | **Internal** — forwarded `osty build` argv for nested self-host builds. Cleared in child env so stage2+ cannot re-enter the host compiler. |
+| `OSTY_SELF_REBUILD_HOST_BIN` | **Internal** — host-compiler guard script used after stage1 so later stages cannot call back into the Go-built `osty`. |
+
 **Backend test strictness** ([`internal/backend/native_mir_payload_stub_test.go`](./internal/backend/native_mir_payload_stub_test.go)):
 
 | Var | Purpose |
@@ -399,6 +419,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Debug a declined LIR Proto payload | `OSTY_LIRPROTO_KEEP_STAGED=1 OSTY_LIRPROTO_DEBUG=1` on the failing `osty build` |
+| Run the self-rebuild ratchet locally | `just verify-self-rebuild` (needs `just bootstrap` first; uses `--reuse-stage1`) |
 
 ### CI bootstrap gates
 
