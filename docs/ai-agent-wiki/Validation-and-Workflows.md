@@ -32,6 +32,11 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - include `just verify-selfhost`
 - include `just ci`
 - consider `just repair-check`
+- for self-rebuild / source-compiler regressions, run `just verify-self-rebuild`
+  (full gates + byte parity) or `just verify-self-rebuild-fast` when stage1 is
+  already cached (`--skip-gates --reuse-stage1`). Gates-only:
+  `just verify-self-rebuild-gates`. Script:
+  [`scripts/verify-self-rebuild`](../scripts/verify-self-rebuild).
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
 ### Backend changes
@@ -49,6 +54,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess timeouts / legacy compat are opt-in — see
+  `OSTY_LIRPROTO_*` env vars in [`README.md`](../../README.md) (bootstrap
+  env-var reference). `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults to
+  disabled; do not enable in production profiles.
 
 ## Common repo recipes
 

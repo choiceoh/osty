@@ -388,6 +388,17 @@ linked.
 |---|---|
 | `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When truthy, `requireRealLLVMEmission` **fails** tests if `osty-self` is not cached instead of skipping them. Use after `just bootstrap` (or any path that populated `.osty/cache/self-host/`) to surface MIR-direct regressions that would otherwise look like a clean skip on a fresh clone. CI sets this in [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) after the offline bootstrap step. Without it, local `go test ./internal/backend/` stays fresh-clone-friendly. Known failing baseline when strict: [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md). |
 
+**LIR Proto subprocess bridge** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_BIN` | (also above) Pins the `osty-self` binary the LIR Proto shim forks for `lir-proto-lower` / `lir-proto-lower-mir-json`. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override the per-request timeout around `osty-self` lowering. Default: 20s for source, 20s + 15s/MiB (capped at 10m) for MIR JSON. Set `0` to disable. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | When MIR JSON lowering times out, retry via stage0 compat if the staged payload is at most this many bytes. Default: 1 MiB. Set `0` to disable timeout compat retries. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy fallback: when an older `osty-self` rejects MIR JSON, re-lower from source if the request source is within this byte limit. **Unset or `0` disables** (production default). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, keep the temp file passed to `osty-self` after lowering (debugging staged MIR/source). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged path + subcommand to stderr before forking `osty-self`. |
+
 **Common recipes** (pick one row per scenario):
 
 | Scenario | Env |
@@ -399,6 +410,9 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Run the self-rebuild ratchet (full) | `just verify-self-rebuild` (gates + stage1→stage3 byte parity) |
+| Fast parity loop after stage1 cached | `just verify-self-rebuild-fast` (`--skip-gates --reuse-stage1`) |
+| Gates only (check + snapshot parity + stage0 audit) | `just verify-self-rebuild-gates` |
 
 ### CI bootstrap gates
 
