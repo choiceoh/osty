@@ -76,16 +76,24 @@ legacy 의 109 - 정밀 89 = **20 개의 type-optional false positive** (예:
 
 ## 3. MIR-level 현황 (ground truth)
 
+> **역사 스냅샷 (B2.1 측정 시점, 2026-05 초)**. 현행 수치는
+> **100.0% (8240 / 8241)** — PR [#1858](https://github.com/choiceoh/osty/pull/1858)
+> 머지 후 `TestStage0ToolchainAudit` 기준. 아래 표·decline top 30 은
+> P21–P23 unlock 전 관찰이며 unlock 우선순위 의사결정용으로만 보존한다.
+> 최신 측정·audit-pass ≠ build-pass 논점은
+> [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 과
+> [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 참조.
+
 `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v
 ./internal/backend/`. 150 초 동안 toolchain 의 7,932 함수를 stage0
 emitter 에 단독 lowering 시도.
 
 ```
-toolchain stage0 audit: 899 / 7932 functions covered (11.3%)
+toolchain stage0 audit: 899 / 7932 functions covered (11.3%)   # 역사
 ```
 
-**88.7% 의 toolchain 함수가 현재 stage0 로 emit 안 됨.** decline 사유
-top 30 (실측):
+**88.7% 의 toolchain 함수가 당시 stage0 로 emit 안 됨** (현재는 종결).
+decline 사유 top 30 (B2.1 실측, 역사):
 
 | 카운트 | shape | 해석 |
 |---|---|---|

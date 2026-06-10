@@ -25,9 +25,27 @@ host osty (Go 부트스트랩)
 
 ### 1.1 현재 관찰 가능한 결과
 
-- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
-- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+> **갱신 (2026-05-27)**: stage0 source emitter + `OSTY_STAGE0_FALLBACK=1`
+> 경로가 fresh-clone 부트스트랩을 복구했다. `just bootstrap` 과
+> `verify-self-rebuild` stage1 은 stage0 emitter 를 통해 `osty-self-1` 을
+> 생산하고, stage2/3 는 **source compiler** (HIR → Mono → MIR → LIR Proto)
+> 로 toolchain/ 을 재빌드해 byte parity 를 검증한다. 아래 bullet 은
+> #1405 직후 관찰이며 역사 기록으로만 유지한다.
+
+- (역사) `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
+- (역사) `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
+- (역사) `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+
+**현행 (2026-05-27 이후)**:
+
+- `just bootstrap` — registry fetch (online) 또는 `OSTY_STAGE0_FALLBACK=1`
+  stage0 source bootstrap (offline) 로 `osty-self` + managed checker 슬롯 설치.
+- `scripts/verify-self-rebuild` — stage1 은 host + stage0 fallback; stage2/3 는
+  이전 단계 binary 가 source compiler 로 toolchain/ 재빌드. MIR-JSON-only
+  shortcut 금지 (`phase0_wiring_test.go` 계약).
+- 남은 격차: production `osty-self` (stage0 fallback 없이) link-clean,
+  cross-pkg vtable dispatch, LIR Proto `<error>` layout wall — `SPEC_GAPS.md`
+  `cross-pkg-module-resolution` 타임라인 참조.
 
 ### 1.2 설계 목표
 
@@ -200,12 +218,31 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 ## Appendix A. 현재 verify-self-rebuild 흐름
 
+> **갱신 (2026-05-27)**: source selfhost ratchet 완료. stage1 은
+> `OSTY_STAGE0_FALLBACK=1` 로 stage0 emitter 경유; stage2+ 는 source
+> compiler 필수.
+
 ```
 host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
-    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
-    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
+    └─ gates: osty check toolchain/, snapshot parity, stage0 audit
+    └─ stage1: host_osty build toolchain/
+         (OSTY_STAGE0_FALLBACK=1 + registry offline on fresh stage1)
+         → osty-self-1
+    └─ stage2-seed: osty-self-1 build toolchain/  (host compiler guard)
+    └─ stage2: stage2-seed build toolchain/
+    └─ stage3: stage2 build toolchain/
+    └─ smoke: each stage passes --selfhost-doctor
+         ("osty-self source compiler: enabled")
     └─ assert byte_eq(osty-self-2, osty-self-3)
+         [Mach-O: UUID + code-signature normalized]
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+`--reuse-stage1` 은 `.osty/cache/self-host/<sha>-<triple>/` (A7
+selfhostcache) 또는 legacy mtime cache 를 우선한다. Recipe:
+`just verify-self-rebuild` (full), `just verify-self-rebuild-fast`
+(`--skip-gates --reuse-stage1`).
+
+stage1 은 host 의 stage0 fallback emitter 로 `osty-self` 없이도 가능.
+stage2/3 parity 는 **Osty source compiler** 가 동일 입력에서 동일
+바이너리를 재생산하는지 검증한다 — stage0 IR 과 production IR 이
+다를 수 있음 (§1.2 reproducibility 목표는 stage2/3 byte parity).

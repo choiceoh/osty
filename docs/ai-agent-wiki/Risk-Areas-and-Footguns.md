@@ -50,6 +50,12 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` enables legacy source re-lowering
+  when MIR JSON is rejected — unset/`0` is production default. Setting a
+  positive limit in a shell profile can hide MIR JSON regressions.
+- `verify-self-rebuild` forbids `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides
+  and MIR-JSON-only ratchet shortcuts — every stage must be produced by the
+  prior stage's source compiler (`phase0_wiring_test.go` contract).
 
 ## Spec traps
 

@@ -577,6 +577,65 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge (`osty-native-lirproto`)
+
+Production MIR-owned LLVM emission forks `cmd/osty-native-lirproto`, a thin Go
+shim that stages source or MIR JSON to a temp file and execs `osty-self
+lir-proto-lower` (source) or `lir-proto-lower-mir-json` (pre-lowered MIR).
+Declines return `declined: true` so `internal/backend/llvm.go` can fall back to
+the in-process stage0 emitter when `OSTY_STAGE0_FALLBACK=1`.
+
+Compatibility retries (all **opt-in** unless noted):
+
+- **MIR JSON timeout** — default budget is 20s + 15s/MiB (cap 10m). On timeout,
+  payloads ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default 1 MiB) may retry
+  through stage0 MIR compat.
+- **Legacy `osty-self` without MIR JSON** — `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES`
+  must be set to a positive byte limit to allow source re-lowering; unset/`0`
+  is the production default (disabled).
+- **Debug** — `OSTY_LIRPROTO_DEBUG` logs the staged path; `OSTY_LIRPROTO_KEEP_STAGED`
+  preserves temp files. Override timeout with `OSTY_LIRPROTO_SELF_TIMEOUT` (`0`
+  disables).
+
+See the bootstrap env-var table in [`README.md`](README.md) for the full list.
+
+#### Cross-package interface boxing (LLVM, partial)
+
+PRs #2004–#2010 added incremental cross-package interface support in MIR and
+LIR Proto: interface layouts register in the MIR signature table, struct values
+assignable to a cross-package `Error` interface are heap-boxed before coercion,
+and `Result<T, Error>` `Err(...)` construct paths lower through the boxed
+interface value. Virtual dispatch on cross-package interface methods (step 3.5)
+remains incomplete — `Err(_)` pattern arms work; `err.message()`-style vtable
+calls are still tracked in `SPEC_GAPS.md` / the LLVM self-host plan.
+
+#### Self-rebuild ratchet (`scripts/verify-self-rebuild`)
+
+The ratchet proves the Osty-authored **source compiler** can rebuild itself
+byte-for-byte:
+
+```
+host osty (.bin/osty)
+  └─ stage1: build toolchain/  (OSTY_STAGE0_FALLBACK=1 on fresh stage1)
+  └─ stage2-seed / stage2 / stage3: each prior binary rebuilds toolchain/
+       through source → HIR → Mono → MIR → LIR Proto → LLVM (no host compiler
+       forwarding after stage1; `OSTY_SELF_REBUILD_HOST_BIN` guard)
+  └─ assert byte_eq(osty-self-2, osty-self-3)  [Mach-O UUID/signature normalized]
+```
+
+Each stage after stage1 must pass `--selfhost-doctor` with `osty-self source
+compiler: enabled`. MIR-JSON-only backend shortcuts are forbidden — guarded by
+`internal/selfhost/phase0_wiring_test.go`. Entry points:
+
+| Recipe | Script flags |
+|---|---|
+| `just verify-self-rebuild` | full gates + `--reuse-stage1` |
+| `just verify-self-rebuild-fast` | `--skip-gates --reuse-stage1` |
+| `just verify-self-rebuild-gates` | `--gates-only` |
+
+Gates include `osty check toolchain/`, snapshot parity
+(`internal/ci` + `internal/runner`), and `TestStage0ToolchainAudit`.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
