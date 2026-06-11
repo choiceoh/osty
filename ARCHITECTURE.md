@@ -577,6 +577,17 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### Self-rebuild ratchet (`verify-self-rebuild`)
+
+`scripts/verify-self-rebuild` is the end-to-end toolchain self-host gate: host
+`osty` (with `OSTY_STAGE0_FALLBACK=1` on stage1 only) builds `osty-self-1`,
+then two further source-compiler stages must rebuild `toolchain/` without
+delegating to the Go host, and `osty-self-2` / `osty-self-3` must be
+byte-identical. `just verify-self-rebuild` runs preflight gates plus the ratchet
+with `--reuse-stage1` (content-addressed selfhostcache, then mtime cache).
+`just verify-selfhost` is narrower — snapshot parity only. Operational detail:
+[`docs/operations/verify-self-rebuild.md`](docs/operations/verify-self-rebuild.md).
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

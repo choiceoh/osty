@@ -292,7 +292,8 @@ in order:
    development build is never shadowed by a stale artifact.
 3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
    content-addressed cache. Populated by `osty install-self` and
-   `verify-self-rebuild --reuse-stage1`.
+   `verify-self-rebuild --reuse-stage1` (see
+   [`docs/operations/verify-self-rebuild.md`](./docs/operations/verify-self-rebuild.md)).
 4. **Network fetch** from `$OSTY_SELF_REGISTRY_URL`, falling back to
    `selfhostcache.DefaultRegistryURL` (the upstream `choiceoh/osty`
    rolling release `osty-self-snapshots`) when the env var is unset.
