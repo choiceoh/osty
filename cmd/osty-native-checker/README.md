@@ -65,10 +65,13 @@ close (plan §12 L2/L3).
   tuples the Go adapter uses, so identical wire records always hash to
   identical keys.
 
-- ✓ **Input request handling** — `main.osty` now reads the complete request
-  with `io.readAllStdin()`, routes only on top-level `"package"` keys, and
-  extracts only the top-level `"source"` string using the shared
-  escape-aware decoder in `toolchain/check_json.osty`.
+- ✓ **Input request handling** — `main.osty` reads the complete request with
+  `io.readAllStdin()` and delegates shape detection + field extraction to
+  `toolchain/check_json.osty` (`frontNativeCheckerIsPackageRequest`,
+  `frontNativeCheckerSourceFromRequest`, `frontExtractPackageFiles`). The
+  toolchain-owned scanner skips nested JSON strings and only matches top-level
+  `"source"` / `"package"` keys so user source text cannot be mistaken for
+  request metadata. Tests: `toolchain/check_json_test.osty`.
 
 With bricks A + B + C wired, the remaining blocker is no longer the wire
 shape or request parser. It is producing and linking the transitive

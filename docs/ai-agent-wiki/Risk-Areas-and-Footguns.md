@@ -50,6 +50,10 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `just verify-selfhost` is **not** the full self-rebuild ratchet — it only
+  runs snapshot parity. Toolchain/backend emit changes need
+  `just verify-self-rebuild-fast` or `just verify-self-rebuild` (see
+  [`docs/operations/verify-self-rebuild.md`](../operations/verify-self-rebuild.md))
 
 ## Spec traps
 

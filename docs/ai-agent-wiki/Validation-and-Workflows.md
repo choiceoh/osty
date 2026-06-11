@@ -29,7 +29,11 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 
 ### CLI, toolchain, generated-output, or self-host path changes
 
-- include `just verify-selfhost`
+- include `just verify-selfhost` (snapshot parity only)
+- for `toolchain/*.osty` or backend emit changes, also run
+  `just verify-self-rebuild-fast` or full `just verify-self-rebuild`
+  (self-rebuild ratchet — stage2/stage3 byte parity); see
+  [`docs/operations/verify-self-rebuild.md`](../operations/verify-self-rebuild.md)
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
