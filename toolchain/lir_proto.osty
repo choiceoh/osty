@@ -804,13 +804,12 @@ pub struct LirLowerConfig {
     pub packageName: String,
     pub sourcePath: String,
     pub target: String,
-    pub emitGC: Bool,
 }
 pub fn lirLowerConfig(packageName: String, sourcePath: String, target: String) -> LirLowerConfig {
-    LirLowerConfig {packageName, sourcePath, target, emitGC: false}
+    LirLowerConfig {packageName, sourcePath, target}
 }
 pub fn lirLowerConfigCopy(cfg: LirLowerConfig) -> LirLowerConfig {
-    LirLowerConfig {packageName: cfg.packageName, sourcePath: cfg.sourcePath, target: cfg.target, emitGC: cfg.emitGC}
+    LirLowerConfig {packageName: cfg.packageName, sourcePath: cfg.sourcePath, target: cfg.target}
 }
 pub struct LirLowerResult {
     pub module: LirModule,
