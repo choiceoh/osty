@@ -367,6 +367,16 @@ linked.
 |---|---|
 | `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
 
+**LIR Proto host wrapper** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — forks `osty-self lir-proto-lower*` when the production LLVM path needs MIR-owned emission):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override the subprocess timeout around `osty-self lir-proto-lower` / `lir-proto-lower-mir-json`. Accepts a Go duration (`30s`, `5m`). `0` disables the guard. Default scales with staged MIR size (20s base + 15s per MiB, capped at 10m). |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | When MIR JSON lowering times out, retry through the legacy stage0-compat path only if the staged payload is at most this many bytes. Default `1048576` (1 MiB). Set `0` to disable timeout compat retries. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** last-resort: when an older `osty-self` cannot handle MIR JSON, re-run `lir-proto-lower` from the original Osty source. Unset or `0` disables (default). Set a positive byte limit to allow bounded source re-lowering (for example `1048576`). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain staged MIR/source temp files after the subprocess exits (debug only). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged command/path diagnostics to stderr. |
+
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
 | Var | Purpose |
@@ -399,6 +409,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Debug LIR Proto staged inputs | `OSTY_LIRPROTO_KEEP_STAGED=1 OSTY_LIRPROTO_DEBUG=1` on `osty build` |
+| Allow legacy source re-lowering (old `osty-self`) | `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES=1048576` (positive byte cap required) |
 
 ### CI bootstrap gates
 

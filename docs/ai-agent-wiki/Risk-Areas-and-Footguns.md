@@ -51,6 +51,22 @@
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
 
+## LIR Proto subprocess traps
+
+- Production LLVM emission goes through `cmd/osty-native-lirproto`, which
+  forks `osty-self lir-proto-lower-mir-json`. Without a cached `osty-self`,
+  builds decline unless `OSTY_STAGE0_FALLBACK=1` opts into the Go-side
+  stage0 emitter.
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is **off by default**. Legacy
+  source re-lowering only runs when you set a positive byte cap — do not
+  assume it is enabled when debugging MIR JSON declines.
+- Large `toolchain/` MIR payloads can take many minutes; the default timeout
+  scales with staged size. Override with `OSTY_LIRPROTO_SELF_TIMEOUT` when
+  profiling, or use `OSTY_LIRPROTO_KEEP_STAGED=1` to inspect temp files.
+- Stage0 audit at 100% does not guarantee the LIR Proto path succeeds —
+  monomorphized builds and cross-pkg walls are tracked separately in
+  `SPEC_GAPS.md`.
+
 ## Spec traps
 
 - `LANG_SPEC_v0.5/` tells you what is authoritative
