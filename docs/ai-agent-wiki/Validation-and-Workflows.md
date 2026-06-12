@@ -44,8 +44,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   `osty-self`, they **skip** locally; set
   `OSTY_REQUIRE_REAL_LLVM_EMISSION=1` after bootstrap to match CI strict
   mode (`fresh-clone-source-bootstrap.yml`)
-- stdlib bodied helpers are injected by default (`OSTY_STDLIB_BODY_LOWER`
-  ON in `internal/backend/entry.go`). Bisect with `OSTY_STDLIB_BODY_LOWER=0`
+- stdlib bodied helpers are always injected in `internal/backend/entry.go`
+  (`PrepareEntry`); the `OSTY_STDLIB_BODY_LOWER` rollout gate was retired
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
