@@ -32,6 +32,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - include `just verify-selfhost`
 - include `just ci`
 - consider `just repair-check`
+- for MIR/LIR Proto / `toolchain/lir_proto.osty` changes, run
+  `scripts/verify-self-rebuild` (or `just verify-self-rebuild` when wired)
+  — stages 2–3 rebuild `toolchain/` through HIR → Mono → MIR → LIR Proto →
+  LLVM IR and assert byte parity between successive `osty-self` builds
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
 ### Backend changes

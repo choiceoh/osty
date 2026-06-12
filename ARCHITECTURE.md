@@ -552,6 +552,30 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### LIR Proto host wrapper (`cmd/osty-native-lirproto`)
+
+Production LLVM emission forks `osty-self` through the Go host wrapper in
+`cmd/osty-native-lirproto/main.go` (invoked from `internal/backend/llvm.go`
+and `internal/nativellvmgen/`). The wrapper stages MIR JSON or source,
+runs `osty-self lir-proto-lower-mir-json` (preferred) or
+`lir-proto-lower`, validates the returned LLVM IR, and returns a structured
+`Declined` response when the subprocess cannot complete so the backend can
+fall back to stage0 (`OSTY_STAGE0_FALLBACK=1`) instead of aborting.
+
+Operator-facing env vars (full table in `README.md`):
+
+| Var | Default | Role |
+|---|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | size-scaled (20s + 15s/MiB, max 10m) | Subprocess wall-clock guard |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | `1048576` | Bound for stage0-compat retry after MIR JSON timeout |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **off** (`0`) | Opt-in source re-lowering when MIR JSON is unsupported |
+| `OSTY_LIRPROTO_KEEP_STAGED` | off | Retain temp MIR/source files for debugging |
+| `OSTY_LIRPROTO_DEBUG` | off | Print staged command/path to stderr |
+
+Legacy compatibility paths are **opt-in by design**: source re-lowering
+requires an explicit positive `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` cap so
+stale `osty-self` seeds cannot silently bypass the MIR JSON contract.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
