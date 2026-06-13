@@ -577,6 +577,24 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess compat (`cmd/osty-native-lirproto`)
+
+The host forks `osty-self` for MIR JSON lowering. When the self-built compiler
+declines MIR JSON, the host can optionally retry via legacy **source**
+re-lowering — gated by `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` (unset/`0` =
+disabled, production default). Related knobs: `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`
+(timeout retry bound), `OSTY_LIRPROTO_SELF_TIMEOUT` (subprocess timeout),
+`OSTY_LIRPROTO_KEEP_STAGED` (retain temp files). Implementation:
+`cmd/osty-native-lirproto/main.go`.
+
+#### Cross-package interface boxing (partial)
+
+PRs #2004–#2007 landed cross-package interface type lowering and struct→`Error`
+boxing for `Result<T, Error>` assign paths (`TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`).
+Cross-package **vtable dispatch** (for example `err.message()` on an imported
+interface) remains open — tracked as step 3.5 in the cross-pkg interface
+trajectory. Same-package interface dispatch is unaffected.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

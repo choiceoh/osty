@@ -50,6 +50,11 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` enables legacy source re-lowering in
+  the LIR Proto host when MIR JSON is declined. Unset/`0` is production default
+  — do not set globally; use only when bisecting an older `osty-self`
+- `verify-self-rebuild` is the full self-host ratchet (`just verify-self-rebuild`);
+  `just verify-selfhost` is only snapshot parity — do not confuse them
 
 ## Spec traps
 
