@@ -1,10 +1,12 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
-> **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
+> **상태**: **역사적 스코프 문서** (2026-05-11 측정). Stage0 audit cover 는 PR #1858 이후 **100.0% (8240 / 8241)** — 현행 수치·후속 trajectory 는 [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 과 [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인 참조. 아래 P24 shape 분석은 여전히 matcher 설계 레퍼런스로 유효.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11, superseded)
+
+> **2026-05-17 갱신**: `TestStage0ToolchainAudit` 기준 audit cover **100.0% (8240 / 8241)** — PR #1858. 아래 표는 P24 작업 시작 시점 스냅샷.
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|

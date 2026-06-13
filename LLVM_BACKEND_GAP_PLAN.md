@@ -130,7 +130,9 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 ### Phase 0 — Bootstrap chain unblock (모든 phase 선행 필수)
 
-**상태 (2026-05-11)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능. 현재 상태:
+> **상태 갱신 (2026-05-17)**: Stage0 audit **100%** (PR #1858). `OSTY_STAGE0_FALLBACK=1 install-self` source-bootstrap **통과**. 아래 2026-05-11 수치(1340 declines, 94.2%)는 **역사적** — 현행 bootstrap 경로는 [`README.md`](README.md) · [`docs/osty_self_bootstrap_design.md`](docs/osty_self_bootstrap_design.md) · [`SPEC_GAPS.md`](SPEC_GAPS.md) `cross-pkg-module-resolution` 참조.
+
+**상태 (2026-05-11, superseded)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능. 현재 상태:
 - 디폴트 registry (`github.com/choiceoh/osty/releases/.../osty-self-snapshots`) — 자산 0건 (404 확인).
 - `OSTY_STAGE0_FALLBACK=1` — P21–P23 머지됨에도 `install-self`가 **1340 function declines** 로 차단 (`OSTY_STAGE0_LIST_ALL_DECLINES=1` 확인).
 - 캐시/사전빌드 osty-self 없음.

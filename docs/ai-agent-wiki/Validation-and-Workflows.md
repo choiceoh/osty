@@ -32,6 +32,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - include `just verify-selfhost`
 - include `just ci`
 - consider `just repair-check`
+- for full self-host ratchet (stage1→stage3 byte parity), run
+  `just verify-self-rebuild` or `just verify-self-rebuild-fast` (skips gates,
+  reuses stage1 cache). `--gates-only` / `--stage1-only` trim the loop — see
+  `scripts/verify-self-rebuild --help`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
 
 ### Backend changes
@@ -49,6 +53,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess compat env vars (`OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES`,
+  etc.) default to opt-in/off — see `README.md` bootstrap env-var table
 
 ## Common repo recipes
 
