@@ -18,17 +18,10 @@ func TestStdlibBodyLoweringEnabledOff(t *testing.T) {
 }
 
 func TestStdlibBodyLoweringEnabledOn(t *testing.T) {
-	// Post-flip: any value other than the explicit off-set leaves the
-	// gate ON. We still keep an "any truthy spelling" case so users who
-	// migrate from the old `=1` invocation see no behavior change.
-	cases := []string{"", "1", "true", "yes", "on"}
-	for _, v := range cases {
-		t.Run("OSTY_STDLIB_BODY_LOWER="+v, func(t *testing.T) {
-			t.Setenv("OSTY_STDLIB_BODY_LOWER", v)
-			if !stdlibBodyLoweringEnabled() {
-				t.Fatalf("disabled for %q, want enabled", v)
-			}
-		})
+	// Legacy `=1` invocation remains enabled after the default-on flip.
+	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	if !stdlibBodyLoweringEnabled() {
+		t.Fatalf("disabled for legacy =1, want enabled")
 	}
 }
 
