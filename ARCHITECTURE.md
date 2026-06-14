@@ -577,6 +577,51 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR-owned LLVM emission does not lower IR in-process. The LLVM
+backend (`internal/backend/llvm.go`) forks `cmd/osty-native-lirproto`, which
+stages either MIR JSON (`lir-proto-lower-mir-json`) or source
+(`lir-proto-lower`) and delegates to a resolved `osty-self` binary
+(`selfhostcache.ResolveBinary`). A structured `declined: true` response lets the
+dispatcher fall back to the in-process stage0 emitter without aborting the
+build.
+
+Compatibility retries are intentionally narrow:
+
+- **Timeout compat** (`OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`): after a MIR
+  JSON timeout, retry via in-process `stage0.EmitMIRAllowNoMain` when the
+  staged payload is small enough.
+- **Source compat** (`OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES`): when an older
+  `osty-self` lacks `lir-proto-lower-mir-json`, optionally re-run
+  `lir-proto-lower` on staged source — **opt-in** (unset/`0` = off).
+- **Timeout budget** (`OSTY_LIRPROTO_SELF_TIMEOUT`): default 20s + size-scaled
+  headroom for large toolchain MIR payloads (cap 10m).
+
+See the operator index in `README.md` (**LIR Proto subprocess** env table).
+
+#### Cross-package interface boxing (partial)
+
+Cross-package interface values historically failed at assign coercion because
+foreign interface MIR types lowered to opaque `ptr` without a boxing path. The
+trajectory (PRs #2004–#2007, step 3.5 follow-ups in flight) lands in stages:
+
+1. **Type lowering** — cross-package interface names register in the MIR
+   signature table instead of falling through to PascalCase struct fallback.
+2. **Impl-method reach** — cross-package interface methods are registered for
+   monomorph / dispatch expansion.
+3. **Struct→interface boxing** — when assigning a concrete struct to a
+   cross-package interface slot, LIR Proto GC-allocates, copies the value, and
+   uses the heap pointer as the interface value (`toolchain/lir_proto.osty`
+   assign path). Regression: `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`.
+4. **Virtual dispatch across packages** — still open for cases like
+   `err.message()` on a cross-package `Error` interface; pattern-match /
+   discriminant-only `Err(_)` arms are the current locked scope.
+
+This is orthogonal to **`OSTY_CROSS_PKG_LINK`**: link-time `.o` injection
+supplies symbol definitions; boxing fixes assign coercion inside a single
+linked module.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
