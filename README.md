@@ -366,6 +366,20 @@ linked.
 | Var | Purpose |
 |---|---|
 | `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
+| `OSTY_CROSS_PKG_LINK` | **Default OFF**. When truthy, `osty build` (LLVM binary emit, workspace mode) compiles each sibling package as a library `.o` and passes them on `backend.Request.ExtraObjects` for the final `clang` link. Experimental — see **LLVM workspace link** below and [`ARCHITECTURE.md`](./ARCHITECTURE.md). |
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto`](./cmd/osty-native-lirproto/main.go) / [`internal/nativelirproto`](./internal/nativelirproto/exec.go)):
+
+Production MIR→LLVM emission forks `osty-native-lirproto`, which stages MIR JSON (or source) and execs `osty-self lir-proto-lower-mir-json` / `lir-proto-lower`. On decline the backend falls back to in-process stage0 or MIR-direct emit.
+
+| Var | Purpose |
+|---|---|
+| `OSTY_NATIVE_LIRPROTO_BIN` | Absolute path to a prebuilt `osty-native-lirproto`. Wins over the managed slot under `.osty/toolchain/<ver>/`. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override the per-request timeout around `osty-self` lowering (`20s` base for MIR JSON, plus a size budget up to `10m`). Set `0` to disable. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After a MIR JSON timeout, retry through the in-process stage0 compat path only when the staged payload is ≤ this byte limit. Unset / `0` disables timeout compat retries. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy source re-lowering when an older `osty-self` rejects MIR JSON. Unset / `0` disables (default). Positive values bound the source byte size. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, do not delete staged MIR/source temp files after lowering (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged path + subcommand to stderr. |
 
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
@@ -411,6 +425,19 @@ Two workflows cover the complementary fresh-clone paths (see
 | [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) | Every PR + push to `main` | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` (stage0 source bootstrap, same recipe contributors run offline) |
 
 The per-PR workflow also runs `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` against the artifact it just built, so MIR-direct backend tests cannot silently skip when `osty-self` was missing.
+
+### Self-rebuild ratchet (`verify-self-rebuild` vs `verify-selfhost`)
+
+Two gates sound similar but exercise different surfaces:
+
+| Recipe | What it runs | Scope |
+|---|---|---|
+| `just verify-selfhost` | `go test -run 'SnapshotParity\|CoreSnapshotParity' ./internal/ci ./internal/runner` | Narrow — generated CI/runner snapshot parity only. Does **not** rebuild `osty-self` or exercise the MIR→LIR Proto→LLVM pipeline. |
+| `just verify-self-rebuild` | `scripts/verify-self-rebuild --reuse-stage1` | Broad — host validates toolchain sources, builds `osty-self-1` from `toolchain/`, then rebuilds `toolchain/` twice more through **source → HIR → Mono → MIR → LIR Proto → LLVM** and compares stage2/stage3 byte-for-byte. |
+
+`verify-self-rebuild` requires each stage binary to pass `--selfhost-doctor` with **source compiler enabled** (not MIR-JSON-only). Stage1 on fresh trees uses `OSTY_STAGE0_FALLBACK=1` + `OSTY_SELF_REGISTRY_OFFLINE=1` so the ratchet does not depend on the registry. `--reuse-stage1` consults `.osty/cache/self-host/<sha>-<triple>/` (A7) to skip the slow first build on repeat runs; `just backend-loop` chains backend tests with the same script.
+
+Variants: `verify-self-rebuild-gates` (gates only), `verify-self-rebuild-fast` / `verify-self-rebuild-ir` / `verify-self-rebuild-stage1` (partial stages). See `scripts/verify-self-rebuild --help`.
 
 ### Cache maintenance
 

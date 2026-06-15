@@ -552,6 +552,55 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### LIR Proto subprocess bridge
+
+MIR-owned LLVM emission (`internal/backend/llvm.go`) prefers the
+`nativelirproto.Run` path: Go JSON-encodes a `nativelirproto.Request`,
+spawns `osty-native-lirproto` (managed under
+`.osty/toolchain/<ver>/osty-native-lirproto` or
+`OSTY_NATIVE_LIRPROTO_BIN`), and receives LLVM IR text on stdout.
+
+The subprocess (`cmd/osty-native-lirproto/main.go`) stages either:
+
+- **MIR JSON** → `osty-self lir-proto-lower-mir-json` (production default;
+  avoids re-entering the partial Osty source compiler), or
+- **source** → `osty-self lir-proto-lower` (self-rebuild ratchet / doctor
+  probes).
+
+`osty-self` resolution reuses `selfhostcache.ResolveBinary` (`OSTY_SELF_BIN`
+wins). Responses with `declined: true` let the host fall back to in-process
+stage0 (`internal/backend/stage0/`) or legacy MIR-direct emit so gate-on/off
+output stays identical when `osty-self` is missing.
+
+Operator env vars are catalogued in `README.md` (**LIR Proto subprocess**).
+Notable defaults from source:
+
+- MIR JSON timeout: `20s` + `15s` per MiB staged (capped at `10m`).
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` and
+  `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` are **off unless set** — legacy
+  retries are opt-in bounded compat, not production defaults.
+
+#### Cross-package interface boxing (partial, PRs #2004–#2007)
+
+Cross-package interfaces were previously lowered to opaque `ptr` at assign
+sites, which broke patterns like `Err(error.new("…"))` when `Error` lives in
+another package. The current trajectory (steps 1–3 of 4 in the LLVM self-host
+plan):
+
+1. **Type lowering** — cross-pkg interface MIR types register in the signature
+   table instead of silently degrading to `ptr` (#2004, #2009).
+2. **Assign coercion** — `Aggregate → interface` boxes by GC-allocating the
+   struct, copying the value, and using the heap pointer as the interface
+   value (#2007). Regression: `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`.
+3. **Impl-method reach** — cross-pkg interface methods expand into the MIR
+   signature table (#2010).
+
+**Still open**: virtual dispatch across packages (`err.message()`-style) needs
+cross-pkg vtable injection (step 3.5). `Err(_)` pattern matching is in scope;
+method calls on boxed cross-pkg interfaces are not yet. Track
+`SPEC_GAPS.md` (`cross-pkg-module-resolution`) and
+`docs/llvm-selfhost-plan.md`.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
