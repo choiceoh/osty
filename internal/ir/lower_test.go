@@ -2235,7 +2235,7 @@ func TestLowerUseDeclRecoversBuiltinGenericTypesWithoutResolverTypeRefs(t *testi
 // TestRecoverMethodReturnTypeToStringOnPrimitives — `Char.toString()`,
 // `Int.toString()`, `Float.toString()`, `Byte.toString()`,
 // `Bool.toString()` must all recover to `String`. Without this arm,
-// a stdlib body injected under `OSTY_STDLIB_BODY_LOWER=1` that calls
+// a stdlib body injected by default-on PrepareEntry that calls
 // e.g. `fill.toString()` (Char receiver) ends up with an ErrType
 // destination local that the LLVM emitter rejects with
 // "unsupported local type <error> ... written by call Char__toString".
