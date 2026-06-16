@@ -1290,63 +1290,39 @@ baseline (16 manual / 9 source). Catalog drift now surfaces as a failing
 Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
-## Phase 7: one-shot wiring behind a gate
+## Phase 7: one-shot wiring behind a gate — **shipped; gate retired**
+
+**Status (2026-06):** Production LLVM dispatch routes through the LIR Proto
+subprocess (`mir-direct` in `internal/backend/llvm.go`) after the
+native-owned fast path declines. The interim `OSTY_LLVM_LIR_PROTO` env gate,
+`internal/llvmgen/lir_proto_gate.go`, and the `TestLLVMDispatch*LIRProto*`
+warning pins were removed once the subprocess runner landed (PR #1924 and
+follow-ups). There is no longer an opt-in env var — LIR Proto is the
+steady-state MIR→LLVM path.
+
+Historical deliverables (completed):
+
+- Route the backend entry point through LIR Proto when selected.
+- Keep automatic fallback to structured unsupported diagnostics when the
+  subprocess declines coverage.
+- Add focused backend dispatch tests (`TestLLVMBackendDispatchTraceReportsSelectedRoute`,
+  `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`, capability matrix tests).
+
+Exit criteria (met):
+
+- Default builds use LIR Proto for MIR-covered shapes.
+- Unsupported prototype shapes surface clean diagnostics instead of silently
+  retrying the legacy HIR bridge.
+- The retired `OSTY_LLVM_LIR_PROTO=1` gate and `ErrLIRProtoNotWired` scaffold
+  are gone — flipping an env var is no longer part of the dispatch contract.
+
+## Phase 8: default-on decision — **in progress**
 
 Deliverables:
 
-- Add an explicit gate, for example:
-
-```text
-OSTY_LLVM_LIR_PROTO=1
-```
-
-- Route only the selected backend entry point through LIR Proto when the gate
-  is enabled.
-- Keep automatic fallback to the current MIR emitter on structured unsupported
-  diagnostics.
-- Add focused backend dispatch tests.
-
-Exit criteria:
-
-- Gate off: output is unchanged.
-- Gate on: selected fixtures use LIR Proto and pass.
-- Unsupported prototype shapes fall back cleanly.
-
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
-
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
-
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
-
-## Phase 8: default-on decision
-
-Deliverables:
-
-- Flip a narrow default-on subset only after Phase 7 has been stable.
+- Flip a narrow default-on subset only after Phase 7 has been stable. *(Phase 7
+  subprocess routing is stable; remaining work is coverage expansion, not
+  re-gating.)*
 - Remove duplicate code only when coverage and diagnostics are better in the
   prototype path.
 - Decide whether `proto` should be renamed or remain an internal detail.
