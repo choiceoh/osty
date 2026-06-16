@@ -1,5 +1,16 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
+> **Historical snapshot (2026-05-11).** Stage0 **audit** coverage of
+> `toolchain/*.osty` reached **100%** after PR
+> [#1858](https://github.com/choiceoh/osty/pull/1858) (2026-05-17,
+> `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit
+> ./internal/backend/`). Metrics in §0 below predate that milestone.
+> `install-self` can still decline on monomorphized instances and LIR
+> Proto walls — audit-pass ≠ build-pass. See
+> [`cmd/osty-native-checker/README.md`](../cmd/osty-native-checker/README.md)
+> and [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 for
+> current blockers.
+>
 > **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).

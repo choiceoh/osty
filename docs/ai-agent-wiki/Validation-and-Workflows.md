@@ -30,6 +30,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 ### CLI, toolchain, generated-output, or self-host path changes
 
 - include `just verify-selfhost`
+- for end-to-end source rebuild proof, also run `just verify-self-rebuild`
+  (or `just verify-self-rebuild-gates` / `just verify-self-rebuild-fast`
+  for partial loops) — this is **much heavier** than `verify-selfhost` and
+  exercises source → HIR → MIR → LIR Proto → LLVM IR byte parity
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
@@ -55,6 +59,7 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - build CLI: `go build -o .bin/osty ./cmd/osty`
 - build native checker: `go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker`
 - verify self-host snapshots: `go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner`
+- verify full source rebuild ratchet: `just verify-self-rebuild` (see `scripts/verify-self-rebuild` and `README.md` **Self-rebuild ratchet**)
 - update diagnostic golden output: `go test ./internal/diag/ -run TestGolden -update`
 
 ## Validation strategy
