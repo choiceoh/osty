@@ -366,6 +366,7 @@ linked.
 | Var | Purpose |
 |---|---|
 | `OSTY_STDLIB_BODY_LOWER` | **Default ON** (unset or any value other than `0` / `false` / `off`). When enabled, `PrepareEntry` injects Osty-bodied stdlib methods (for example `collections.osty` `flatMap` / `zip`) into the user module so link resolves bodied helpers instead of stopping at missing `osty_rt_*` symbols. Set `=0` to bisect regressions or work around a fresh-clone path that trips an unrelated backend gap — `just bootstrap` no longer sets this by default (PR #2013), so CI exercises the production default. |
+| `OSTY_CROSS_PKG_LINK` | **Default OFF**. When truthy (`1` / `true` / `yes` / `on`), workspace LLVM **binary** builds compile sibling packages as library `.o` files and pass them on `backend.Request.ExtraObjects` for link. Experimental — see **LLVM workspace link** below and `ARCHITECTURE.md`. |
 
 **Native checker selection** ([`internal/check/host_boundary.go`](./internal/check/host_boundary.go) / [`internal/toolchain/native_checker.go`](./internal/toolchain/native_checker.go)):
 
@@ -387,6 +388,25 @@ linked.
 | Var | Purpose |
 |---|---|
 | `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When truthy, `requireRealLLVMEmission` **fails** tests if `osty-self` is not cached instead of skipping them. Use after `just bootstrap` (or any path that populated `.osty/cache/self-host/`) to surface MIR-direct regressions that would otherwise look like a clean skip on a fresh clone. CI sets this in [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) after the offline bootstrap step. Without it, local `go test ./internal/backend/` stays fresh-clone-friendly. Known failing baseline when strict: [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md). |
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — forks `osty-self lir-proto-lower` / `lir-proto-lower-mir-json`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Wall-clock guard around the `osty-self` lowering subprocess. Unset uses the built-in default; `0` disables the timeout. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | When a MIR JSON lowering times out, retry through the legacy compat path only if the staged payload is at most this many bytes. Unset or `0` disables timeout compat retries. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy source re-lowering when an older `osty-self` lacks `lir-proto-lower-mir-json`. Unset or `0` (default) skips source re-lowering; set a positive byte limit to enable with a size guard. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When truthy, retain staged source/MIR temp files after the subprocess exits (debug). |
+| `OSTY_LIRPROTO_DEBUG` | When truthy, print staged path + subcommand to stderr. |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | Forward extra argv to `toolchain/main.osty` before it falls back to `std.env.args()` (used by `scripts/verify-self-rebuild`). |
+
+**Self-rebuild ratchet staging** ([`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REBUILD_DIR` | Staging directory for intermediate `osty-self-*` artifacts (default `.osty/self-rebuild`). |
+| `OSTY_SELF_REBUILD_TOOLCHAIN_DIR` | Toolchain package directory under test (default `toolchain`). |
+| `OSTY_SELF_REBUILD_STAGE1_CACHE` | Reusable `osty-self-1` cache path (default `.osty/self-rebuild-cache/osty-self-1`). |
 
 **Common recipes** (pick one row per scenario):
 
@@ -411,6 +431,17 @@ Two workflows cover the complementary fresh-clone paths (see
 | [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) | Every PR + push to `main` | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` (stage0 source bootstrap, same recipe contributors run offline) |
 
 The per-PR workflow also runs `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` against the artifact it just built, so MIR-direct backend tests cannot silently skip when `osty-self` was missing.
+
+### Self-rebuild ratchet vs `verify-selfhost`
+
+Two gates cover different slices of the self-host trajectory — do not conflate them:
+
+| Gate | Command | What it proves |
+|---|---|---|
+| **Narrow snapshot parity** | `just verify-selfhost` | `SnapshotParity` / `CoreSnapshotParity` under `internal/ci` and `internal/runner` — host-side snapshot contracts only. |
+| **Full source rebuild** | `just verify-self-rebuild` (wraps [`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild)) | Host `osty` validates toolchain sources, builds `osty-self-1`, then rebuilds `toolchain/` through **source → HIR → Mono → MIR → LIR Proto → LLVM IR** twice and compares `osty-self-2` vs `osty-self-3` byte-for-byte. Requires a real source-compiler stage marker; MIR-JSON-only shortcuts are rejected (`internal/selfhost/phase0_wiring_test.go`). |
+
+Variants: `just verify-self-rebuild-gates` (gates only), `just verify-self-rebuild-fast` (`--skip-gates`), `just verify-self-rebuild-stage1` (stage1 only). Both ratchets are useful after toolchain or backend changes; the rebuild gate is the heavier end-to-end proof.
 
 ### Cache maintenance
 

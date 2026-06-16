@@ -50,6 +50,13 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults **off** — source
+  re-lowering for legacy `osty-self` seeds is opt-in only; do not assume
+  the 1 MiB default from older trees still applies
+- `just verify-selfhost` is narrow (CI/runner snapshot parity). Claiming
+  self-host health after backend/toolchain edits requires
+  `just verify-self-rebuild` or an equivalent `scripts/verify-self-rebuild`
+  loop
 
 ## Spec traps
 

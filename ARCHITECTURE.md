@@ -577,6 +577,37 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge (`osty-native-lirproto`)
+
+MIR-owned LLVM emission routes through `tryNativeOwnedMIRPayloadLLVMIRText`
+(`internal/backend/llvm.go`), which forks `cmd/osty-native-lirproto`. That
+binary stages either source or a pre-lowered MIR JSON payload and invokes
+`osty-self`:
+
+- **Source requests** → `lir-proto-lower <staged-source>`
+- **MIR JSON requests** → `lir-proto-lower-mir-json <staged-mir>` (production
+  path — avoids re-entering the partial Osty source compiler)
+
+When `osty-self` is missing or declines, `emitLLVMFallback` returns an
+unsupported diagnostic in normal builds. The `install-self` bootstrap path
+may opt into the in-process **stage0** emitter when
+`OSTY_STAGE0_FALLBACK=1` and the decline matches the canonical bootstrap
+symptom (`ShouldUseStage0BootstrapFallback`).
+
+**Compat and debug env vars** (full table in `README.md`):
+
+| Var | Default | Role |
+|---|---|---|
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | off (`0`) | Opt-in legacy source re-lowering for older `osty-self` seeds that lack MIR JSON entry. Positive value sets a byte guard. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | off | Retry through legacy compat when MIR JSON lowering times out, bounded by staged payload size. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | built-in | Override subprocess timeout; `0` disables. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | off | Retain staged temp files for inspection. |
+| `OSTY_LIRPROTO_DEBUG` | off | Log staged path + subcommand to stderr. |
+
+The self-rebuild ratchet (`scripts/verify-self-rebuild`) additionally honours
+`OSTY_SELF_REBUILD_*` staging vars and `OSTY_SELF_REBUILD_FORWARD_ARGS` for
+argv forwarding into `toolchain/main.osty`.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
