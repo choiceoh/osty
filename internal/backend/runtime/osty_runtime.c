@@ -3933,11 +3933,7 @@ static void osty_gc_note_old_allocation(size_t payload_size) {
  * the eligibility rules). The young arena is a separate mmap range so
  * that `arena_is_young_page` is a 2-compare range check, mirroring the
  * existing arena's invariant. Phase 6 swaps mark-sweep on YOUNG for a
- * Cheney copy that uses these same pages as from-space + to-space.
- *
- * The flag stays opt-in (default off) until Phase 8 flips it; today
- * `osty_gc_allocate_managed` never picks the young path, so the only
- * exercise is via the debug entry points the tests use. */
+ * Cheney copy that uses these same pages as from-space + to-space. */
 /* Phase 8 step 2: default-on cutover. Cheney_minor traces OLD
  * reachability transitively (see `osty_gc_collect_minor_cheney_*`)
  * so `Map<String, _>` and other typed collections with young
@@ -21483,10 +21479,8 @@ int64_t osty_gc_debug_dispatch_via_header_total(void) {
   return osty_gc_dispatch_via_header_total;
 }
 
-/* Phase 3 scaffolding accessors. The flag is opt-in via
- * `OSTY_GC_TINYTAG_YOUNG=1`; today it gates nothing observable but the
- * hook predicate exists so the eventual Phase 5 cutover is a one-line
- * change inside `osty_gc_arena_is_young_page`. */
+/* Phase 8 accessors. The env var defaults to on; only an explicit
+ * `OSTY_GC_TINYTAG_YOUNG=0` forces opt-out. */
 int64_t osty_gc_debug_tinytag_young_enabled(void) {
   return osty_gc_tinytag_young_now() ? 1 : 0;
 }
