@@ -50,6 +50,10 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` enables a **legacy source re-lowering**
+  path when `osty-self` rejects MIR JSON. Default is off — turning it on hides
+  MIR JSON regressions and should be limited to bisecting older cached `osty-self`
+  binaries (`cmd/osty-native-lirproto/main.go`)
 
 ## Spec traps
 

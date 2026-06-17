@@ -25,9 +25,10 @@ host osty (Go 부트스트랩)
 
 ### 1.1 현재 관찰 가능한 결과
 
-- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
-- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+- **Production `osty build`** (stage0 fallback 없음) 은 여전히 resolvable `osty-self` 를 전제한다. `osty-self` 부재 시 emit 단계는 in-process Go MIR emitter 없이 `osty-native-lirproto` → `osty-self lir-proto-lower(-mir-json)` subprocess 체인으로만 진행한다.
+- **Fresh-clone bootstrap** 은 `just bootstrap` (= `OSTY_STAGE0_FALLBACK=1 osty install-self`) 과 stage0 emergency emitter (`internal/backend/stage0/`) 로 닫혔다. Stage1 `verify-self-rebuild` 도 동일 env (`OSTY_SELF_REGISTRY_OFFLINE=1 OSTY_STAGE0_FALLBACK=1`) 로 host osty 가 toolchain/ 을 빌드한다.
+- **Source self-host ratchet** (PR [#2022](https://github.com/choiceoh/osty/pull/2022) 이후): `scripts/verify-self-rebuild` 는 stage2/stage3 byte parity 외에 `--selfhost-doctor` smoke 와 host-compiler guard 로 stage2+ 가 host osty 에 재귀하지 않음을 강제한다. Appendix A 참조.
+- `osty-self` 가 이미 캐시돼 있으면 production 경로가 기본이며, stage0 는 registry-down / air-gap DR 경로로 남는다.
 
 ### 1.2 설계 목표
 
@@ -200,12 +201,43 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 ## Appendix A. 현재 verify-self-rebuild 흐름
 
+Entry: `just verify-self-rebuild` (= `bash scripts/verify-self-rebuild --reuse-stage1 .bin/osty`).
+See `scripts/verify-self-rebuild --help` for `--gates-only`, `--skip-gates`, `--stage1-only`,
+`--ir-only`, `--reuse-stage1`, `--no-selfhostcache`.
+
+### Pre-build gates (default; skip with `--skip-gates`)
+
+1. `osty check --airepair=false toolchain/`
+2. `go test … -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner`
+3. `OSTY_STAGE0_AUDIT=1 go test … -run TestStage0ToolchainAudit ./internal/backend/` (100% expected)
+4. Focused native-owned / LIR Proto route probes under `./internal/llvmabi`, `./cmd/osty-native-llvmgen`, `./internal/nativellvmgen`, `./internal/toolchain`, `./internal/backend`
+
+### Rebuild ratchet
+
 ```
-host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
-    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
-    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
-    └─ assert byte_eq(osty-self-2, osty-self-3)
+host_osty (.bin/osty, Go bootstrap CLI)
+    └─ stage1: host build toolchain/ with OSTY_STAGE0_FALLBACK=1 + registry offline
+               → osty-self-1  (smoke: --selfhost-doctor or lir-proto-lower probe)
+    └─ stage2-seed: osty-self-1 build toolchain/ with host-compiler guard
+    └─ stage2: osty-self-2-seed build toolchain/ with host-compiler guard
+               → osty-self-2  (each stage: doctor smoke)
+    └─ stage3: osty-self-2 build toolchain/ with host-compiler guard
+               → osty-self-3
+    └─ assert byte_eq(osty-self-2, osty-self-3)  [Mach-O UUID/signature normalized on macOS]
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+Stage1 alone needs stage0 fallback because the production LLVM path subprocesses
+`osty-self`. Stages 2+ set `OSTY_SELF_REBUILD_HOST_BIN` to a stub that aborts if
+the driver tries to forward to the host compiler — the ratchet must be
+self-hosted end-to-end.
+
+`--reuse-stage1` prefers `.osty/cache/self-host/<sha>-<triple>/osty-self` (A7
+`osty cache-self --check`), then the legacy mtime cache under
+`.osty/self-rebuild-cache/osty-self-1`. Fresh stage1 builds promote into both.
+
+External stage binary overrides (`OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN`) are
+**rejected** — every stage must be produced by the previous stage in the script.
+
+Related env/debug for the LIR Proto subprocess bridge:
+[`README.md`](../README.md) “LIR Proto subprocess” table and
+[`cmd/osty-native-lirproto/main.go`](../cmd/osty-native-lirproto/main.go).
