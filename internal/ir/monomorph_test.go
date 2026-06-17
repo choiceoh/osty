@@ -1945,7 +1945,7 @@ func TestMonomorphizeBuiltinMapMethodMissingTemplateClearsReceiverTypeArgs(t *te
 }
 
 func TestMonomorphizeBuiltinSetMethodFallbackSubstitutesReceiverReturnType(t *testing.T) {
-	// Default-off stdlib body lowering still runs monomorphization. For
+	// Stdlib body injection always runs monomorphization. For
 	// builtin nongeneric methods like Set<T>.toList(), the call result
 	// type and any let binding that records it should inherit the
 	// receiver's concrete T even when no builtin owner template was
