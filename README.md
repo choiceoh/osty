@@ -93,9 +93,13 @@ selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,
 `TestCheckCLIDefaultPathExitsZero`, and the selfhost
 `Check*Structured*AstbridgeFree` tests). `just front`, `just spec`,
 `just verify-selfhost`, and `go run ./cmd/osty check toolchain` pass in the
-same audit (note: `verify-selfhost` is narrow — it runs
-`SnapshotParity|CoreSnapshotParity` under `internal/ci` and `internal/runner`,
-not the merged toolchain MIR pipeline).
+same audit. **`just verify-selfhost` is narrow** — it runs only
+`SnapshotParity|CoreSnapshotParity` under `internal/ci` and `internal/runner`.
+The full self-rebuild ratchet (`just verify-self-rebuild`) additionally runs
+`osty check toolchain/`, stage0 audit, native LIR Proto route probes, and
+stage2/stage3 `osty-self` byte parity; see
+[`docs/osty_self_bootstrap_design.md`](./docs/osty_self_bootstrap_design.md)
+Appendix A.
 
 As of the 2026-04-29 test cleanup, part of the broad Go front-end/mid-end test
 surface has moved toward Osty-authored fixtures. `just front` and `just short`
@@ -381,6 +385,20 @@ linked.
 |---|---|
 | `OSTY_BUILD_PHASE_TIMING` | Print wall-clock phase markers (`install-self.locate-and-key`, `install-self.build-via-stage0`, etc) to stderr. Useful when profiling `install-self` or slow toolchain builds. |
 | `OSTY_NATIVE_CHECKER_SOURCE_DUMP` | When set to a path, dumps the bytes handed to the native checker subprocess. Strictly a debug aid. |
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — JSON stdin/stdout bridge to `osty-self lir-proto-lower*`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-invocation timeout for `osty-self lir-proto-lower(-mir-json)` subprocess calls (Go duration syntax, e.g. `30s`). Unset ⇒ no timeout. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy fallback when an older `osty-self` rejects MIR JSON: re-run `lir-proto-lower` on staged source. Unset or `0` disables (default). Positive value bounds staged payload size. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After a MIR JSON **timeout**, optionally retry via stage0 compat lowering. Default `1048576` (1 MiB); set `0` to disable timeout compat retries. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain temp staged MIR/source files under the system temp dir (debug only). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged input path + subprocess command to stderr. |
+
+Production builds prefer `lir-proto-lower-mir-json`. Source compat exists only for
+rolling upgrades across `osty-self` versions — do not enable in CI unless bisecting
+a MIR JSON regression.
 
 **Backend test strictness** ([`internal/backend/native_mir_payload_stub_test.go`](./internal/backend/native_mir_payload_stub_test.go)):
 

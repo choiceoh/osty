@@ -34,6 +34,8 @@
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
 - subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)
+- self-rebuild ratchet runbook: [`/docs/osty_self_bootstrap_design.md`](../osty_self_bootstrap_design.md) Appendix A, [`/scripts/verify-self-rebuild`](../../scripts/verify-self-rebuild)
+- LIR Proto JSON bridge (MIR → `osty-self`): [`/cmd/osty-native-lirproto/main.go`](../../cmd/osty-native-lirproto/main.go) + `OSTY_LIRPROTO_*` env vars in [`/README.md`](../../README.md)
 
 ## Useful code anchors
 
