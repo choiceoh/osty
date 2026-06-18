@@ -49,7 +49,6 @@ import (
 // Auto-derived ToString implementations are tracked separately;
 // covered by a follow-up.
 func TestLLVMBackendEmitPrintlnStructAutoToString(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	cases := []struct {
 		name string
 		src  string
