@@ -77,7 +77,8 @@ Input:
 
 - A validated, monomorphic `*mir.Module`.
 - LLVM emission options that affect text shape: package, source path, target,
-  GC instrumentation, and feature gates.
+  GC instrumentation. Backend routing is subprocess- and env-driven (`OSTY_LIRPROTO_*`,
+  `OSTY_STAGE0_FALLBACK`); per-request `LirLowerConfig.featureGates` was removed (PR #2029).
 
 Output:
 

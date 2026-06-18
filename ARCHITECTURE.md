@@ -517,6 +517,51 @@ the explicit selected-file path used for bootstrap generation.
 Backend-aware callers can stop at HIR, MIR, or artifact emission without
 re-running unaffected upstream work.
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR for native-owned payloads follows:
+
+```
+internal/backend/llvm.go  emitLLVMFallback
+  → internal/nativellvmgen  (osty-native-llvmgen subprocess)
+    → internal/nativelirproto  (osty-native-lirproto subprocess)
+      → osty-self lir-proto-lower-mir-json   # preferred: pre-lowered MIR JSON
+      → osty-self lir-proto-lower            # legacy source path (opt-in compat)
+        → toolchain/lir_proto.osty
+```
+
+`cmd/osty-native-lirproto` stages the request to a temp file, resolves `osty-self` via
+[`selfhostcache.ResolveBinaryWithFetch`](internal/toolchain/selfhostcache), and returns
+JSON `{"llvmIr": "..."}` or `{"declined": true, "error": "..."}`. Declines are
+**recoverable** — `emitLLVMFallback` may fall through to the in-process stage0 emitter
+(`internal/backend/stage0/`) when `OSTY_STAGE0_FALLBACK=1`, or surface a warning and
+continue on skeleton paths.
+
+**MIR JSON legacy fallback** (`lowerLegacyMIRJSON` in
+[`cmd/osty-native-lirproto/main.go`](cmd/osty-native-lirproto/main.go)) runs only when
+`lir-proto-lower-mir-json` declines (unsupported command, invalid IR, or timeout within
+`OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`):
+
+1. **Stage0 MIR compat** — marshal the caller's MIR JSON and emit via
+   `stage0.EmitMIRAllowNoMain` (no `osty-self` required).
+2. **Source compat** (opt-in) — when `req.Source` is non-empty and
+   `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive byte limit, retry
+   `lir-proto-lower` on the original source. Unset/`0` skips this step (production
+   default after the source self-host ratchet landed).
+
+`LirLowerConfig` in `toolchain/lir_proto.osty` no longer carries rollout
+`featureGates` — backend routing is env- and subprocess-driven, not per-request
+gate lists (PR #2029).
+
+**Operator env vars** (full table in [`README.md`](README.md) bootstrap reference):
+
+| Var | Role |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Subprocess timeout override (`0` = off). |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Max staged MIR JSON bytes for timeout → stage0 retry (default 1 MiB). |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source re-lowering byte cap (default off). |
+| `OSTY_LIRPROTO_KEEP_STAGED` / `OSTY_LIRPROTO_DEBUG` | Debug staging retention / stderr tracing. |
+
 #### LLVM binary link: cross-package dependency objects (experimental)
 
 When `osty build` emits an LLVM **binary** (`--backend llvm` with binary
