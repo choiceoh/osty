@@ -30,6 +30,9 @@
 - runtime GC: [`/RUNTIME_GC.md`](../../RUNTIME_GC.md)
 - strict backend test baseline (Map iteration mis-lowering, etc.):
   [`/docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess env vars + self-rebuild ratchet:
+  [`/README.md`](../../README.md) (**Bootstrap env-var reference**, **Self-rebuild ratchet**)
+  and [`/ARCHITECTURE.md`](../../ARCHITECTURE.md) (**LIR Proto subprocess bridge**)
 - self-host artifact/bootstrap docs: `/docs/osty_self_artifact_design.md`, `/docs/osty_self_bootstrap_design.md`
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)

@@ -30,6 +30,9 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 ### CLI, toolchain, generated-output, or self-host path changes
 
 - include `just verify-selfhost`
+- for end-to-end compiler self-hosting, also run `just verify-self-rebuild`
+  (or `just verify-self-rebuild-gates` / `just verify-self-rebuild-fast` for
+  narrower loops — see **Self-rebuild ratchet** in `README.md`)
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)

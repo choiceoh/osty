@@ -50,6 +50,13 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- LIR Proto subprocess timeouts on large `toolchain/` MIR JSON are normal —
+  default budget scales with payload size; `OSTY_LIRPROTO_SELF_TIMEOUT` overrides.
+  Do not enable `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` in production CI — it is a
+  legacy compat escape hatch when `osty-self` predates `lir-proto-lower-mir-json`
+- `just verify-selfhost` is **not** the full self-rebuild ratchet; toolchain/backend
+  changes that affect emitted binaries need `just verify-self-rebuild` (or at least
+  `just verify-self-rebuild-gates`)
 
 ## Spec traps
 
