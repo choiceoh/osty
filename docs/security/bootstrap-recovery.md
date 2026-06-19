@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Checker-bundle audit **100%** (PR #1858); full `install-self` can still decline on monomorph/LIR Proto shapes outside the audit probe. Primary fresh-clone path via `just bootstrap`. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -130,12 +130,12 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
+  prior binary. Checker-bundle audit reached **100%** (PR #1858), but
+  `install-self` / LIR Proto can still decline on shapes outside the
+  audit probe — stage0's decline messages remain the fastest way to
+  diagnose a missing MIR shape (`docs/osty_self_b2_1_audit.md` §3 for
+  historical decline clusters). Do not retire stage0; its diagnostic
+  value plus the fresh-clone bootstrap path justify keeping
   `internal/backend/stage0/`.
 
 - **DR2** is the only path that does not depend on any maintainer

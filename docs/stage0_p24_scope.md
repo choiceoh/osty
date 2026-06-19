@@ -3,8 +3,15 @@
 > **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
+>
+> **Superseded metrics (2026-05-17)**: `TestStage0ToolchainAudit` reached
+> **100.0% (8240 / 8241)** after PR [#1858](https://github.com/choiceoh/osty/pull/1858).
+> The §0 table below is a **2026-05-11 snapshot** kept for P24 shape
+> analysis only. Current operator commands and audit scope limits are in
+> [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 and
+> [`SPEC_GAPS.md`](../SPEC_GAPS.md) (`cross-pkg-module-resolution`).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11, historical)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|

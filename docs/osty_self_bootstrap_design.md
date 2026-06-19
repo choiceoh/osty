@@ -26,7 +26,7 @@ host osty (Go 부트스트랩)
 ### 1.1 현재 관찰 가능한 결과
 
 - `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
+- **Fresh-clone bootstrap is wired** — `just bootstrap` (with `OSTY_STAGE0_FALLBACK=1` baked in) and the per-PR `fresh-clone-source-bootstrap.yml` workflow exercise the stage0 source-bootstrap path when the registry is offline or unreachable. `scripts/verify-self-rebuild` stage1 uses the same fallback to produce `osty-self-1` without a pre-existing `osty-self`.
 - `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
 
 ### 1.2 설계 목표
@@ -183,7 +183,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
 | P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
 | **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (`OSTY_STAGE0_AUDIT=1 ./internal/backend/`). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
-| **P24+** | **active — master plan v2 진행 중**. 현 `install-self` 시 `OSTY_STAGE0_LIST_ALL_DECLINES=1` → 1340 function declines (audit %에도 불구하고 부트스트랩은 unique shape × 함수 instance 단위로 cumulative). 다음 P-phase 후보는 `b2_1_audit.md §4.3` 의 master plan v2 표 참조. | 측정 중 |
+| **P24+** | **superseded for audit %** — PR [#1858](https://github.com/choiceoh/osty/pull/1858) closed the checker-bundle audit at **100.0% (8240/8241)** on 2026-05-17. Remaining work is **build-pass** (LIR Proto / monomorph / cross-pkg), not further audit %. See [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution`. | `install-self` / `verify-self-rebuild` |
 
 각 Phase는 independent PR. P0은 수십 줄. P1~P23 합산 emit.go 4253 + P21–P23 추가분 = ~5K+ 줄.
 
@@ -202,10 +202,18 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 ```
 host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
+    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (stage0 fallback + offline registry)
     └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
     └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
     └─ assert byte_eq(osty-self-2, osty-self-3)
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+Stage1 is the only stage that uses the host `osty` LLVM backend with
+`OSTY_STAGE0_FALLBACK=1`. Stages 2–3 use the prior stage's `osty-self`
+only. External `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides are
+rejected so the ratchet cannot be short-circuited.
+
+**Distinction from `just verify-selfhost`**: the ratchet exercises the
+full MIR → LIR Proto → LLVM pipeline and byte parity across rebuild
+generations. `verify-selfhost` runs narrow snapshot parity tests under
+`internal/ci` and `internal/runner` only.

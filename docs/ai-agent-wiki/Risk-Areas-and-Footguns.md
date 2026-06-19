@@ -50,6 +50,13 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `just verify-selfhost` is **not** the full self-rebuild ratchet — use
+  `just verify-self-rebuild` when touching MIR/LIR Proto emission
+- `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides are rejected by the
+  ratchet script; every stage must come from the prior stage
+- stage0 **audit** 100% (checker bundle, PR #1858) ≠ **build-pass**
+  for `install-self` / LIR Proto — see `SPEC_GAPS.md`
+  `cross-pkg-module-resolution`
 
 ## Spec traps
 
