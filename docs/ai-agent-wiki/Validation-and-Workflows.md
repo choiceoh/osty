@@ -30,6 +30,9 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 ### CLI, toolchain, generated-output, or self-host path changes
 
 - include `just verify-selfhost`
+- for end-to-end MIR → LIR Proto → LLVM rebuild parity, use
+  `just verify-self-rebuild` (or `just verify-self-rebuild-fast` when
+  stage1 is cached) — this is **broader** than `verify-selfhost`
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
@@ -49,6 +52,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess env vars (`OSTY_LIRPROTO_*`) and the MIR JSON
+  fallback chain are documented in `README.md` and `ARCHITECTURE.md`
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults **off** — opt in
+  only when debugging legacy `osty-self` without MIR JSON support
 
 ## Common repo recipes
 

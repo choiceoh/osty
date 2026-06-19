@@ -552,6 +552,44 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### LIR Proto subprocess bridge (`osty-native-lirproto`)
+
+`internal/backend/llvm.go` routes MIR-owned LLVM emission through
+`internal/nativelirproto.Run`, which forks `cmd/osty-native-lirproto`.
+That binary stages the request (MIR JSON preferred; source when the wire
+payload carries it) and subprocesses `osty-self` with
+`lir-proto-lower-mir-json` or `lir-proto-lower`. Declines return
+`declined: true` so the host can fall back to the stage0 bootstrap
+emitter when `OSTY_STAGE0_FALLBACK=1`.
+
+**Timeout policy** (`cmd/osty-native-lirproto/main.go`): base 20s for
+`lir-proto-lower-mir-json`, plus 15s per MiB of staged payload (capped
+at 10 minutes). Override with `OSTY_LIRPROTO_SELF_TIMEOUT`; `0`
+disables.
+
+**MIR JSON fallback chain** when `lir-proto-lower-mir-json` declines
+(unsupported command, invalid IR, or timeout within compat budget):
+
+1. **Stage0 MIR compat** — re-lowers the in-memory MIR JSON through
+   `internal/backend/stage0` without re-entering the Osty source compiler.
+2. **Source re-lowering** — only when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES`
+   is set to a positive limit (default **off**). Guards against
+   accidentally recompiling huge `toolchain/` sources on every decline.
+
+**Timeout compat** retries stage0 after a MIR JSON timeout only when the
+staged payload is ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default
+1 MiB; `0` disables).
+
+**Debug hooks**: `OSTY_LIRPROTO_KEEP_STAGED` retains temp files;
+`OSTY_LIRPROTO_DEBUG` logs staged paths. `OSTY_SELF_REBUILD_FORWARD_ARGS`
+forwards argv to `osty-self` during the self-rebuild ratchet
+(`scripts/verify-self-rebuild`).
+
+Operator index: `README.md` **LIR Proto subprocess** and
+**Self-rebuild ratchet** sections. `LirLowerConfig` in
+`toolchain/lir_proto.osty` no longer carries feature-gate plumbing
+(PR #2029) — only `packageName`, `sourcePath`, `target`, and `emitGC`.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
