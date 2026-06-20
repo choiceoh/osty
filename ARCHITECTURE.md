@@ -577,6 +577,51 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR does not call `toolchain/lir_proto.osty` in-process.
+The chain is:
+
+```
+LLVMBackend.Emit
+  └─ tryNativeOwnedMIRPayloadLLVMIRText
+      └─ exec(osty-native-llvmgen)
+          └─ tryMIRRequestViaLIRProto
+              └─ exec(osty-native-lirproto)     # cmd/osty-native-lirproto
+                  └─ exec(osty-self lir-proto-lower[-mir-json])
+```
+
+`cmd/osty-native-lirproto` reads `nativelirproto.Request` JSON on stdin and
+writes `nativelirproto.Response` on stdout. A `declined: true` response lets
+the dispatcher fall back to the Go stage0 emitter so fresh clones without
+`osty-self` still emit (lower fidelity) instead of hard-failing.
+
+**Timeout policy** (`selfLowerTimeout` in `cmd/osty-native-lirproto/main.go`):
+base 20s for lowering subcommands, plus ~15s per MiB of staged MIR JSON
+(capped at 10 minutes) so large toolchain payloads do not false-timeout during
+`verify-self-rebuild`.
+
+**Compat retries** when `lir-proto-lower-mir-json` declines:
+
+1. **Stage0 MIR compat** — re-lowers the staged MIR JSON through
+   `internal/backend/stage0` without source re-parse (always attempted when
+   MIR payload is present).
+2. **Timeout compat** — if decline reason is a timeout and staged MIR JSON
+   ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default 1 MiB), retry via
+   stage0 compat even when the primary path did not time out internally.
+3. **Source compat** — opt-in only (`OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` >
+   0). Re-stages source and calls `lir-proto-lower` for legacy `osty-self`
+   seeds that predate the MIR JSON entry point.
+
+`OSTY_SELF_REBUILD_FORWARD_ARGS` forwards ratchet/build argv into
+`toolchain/main.osty` so self-hosted drivers invoked from the subprocess
+inherit the same `build --backend=llvm ...` intent as the host CLI.
+
+Operator index: README **LIR Proto subprocess** and **Self-rebuild ratchet**
+sections. Ratchet contract: `scripts/verify-self-rebuild` rejects
+`OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides — every stage must be built
+by the previous one.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

@@ -50,6 +50,15 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `just verify-selfhost` (snapshot parity) is narrower than
+  `just verify-self-rebuild` (full source-compiler ratchet with byte parity).
+  Do not treat snapshot green as self-host compiler complete.
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is **opt-in** (default off). Timeout
+  compat uses stage0 MIR re-lowering for payloads ≤ 1 MiB
+  (`OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`). See README **LIR Proto subprocess**.
+- `LirLowerConfig.featureGates` was removed in PR #2029 — do not reintroduce
+  dead rollout plumbing; stdlib body injection is default-on via
+  `OSTY_STDLIB_BODY_LOWER`.
 
 ## Spec traps
 

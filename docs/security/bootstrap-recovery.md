@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Checker-bundle **audit** reached **100%** (PR #1858); `just bootstrap` / `fresh-clone-source-bootstrap.yml` exercise this path offline. Audit-pass ≠ full `install-self` build-pass — monomorph / LIR Proto / cross-pkg walls may still decline. See `SPEC_GAPS.md` `cross-pkg-module-resolution`. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -130,13 +130,13 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
-  `internal/backend/stage0/`.
+  prior binary. Checker-bundle audit coverage is **100%** (PR #1858), and
+  `OSTY_STAGE0_FALLBACK=1 just bootstrap` is the supported fresh-clone
+  offline path — but production `install-self` can still hit declines
+  outside the audit probe (monomorph reach, LIR Proto walls, cross-pkg
+  link). Stage0 decline messages remain invaluable for diagnosis: they
+  name the exact MIR shape that failed. Do not retire stage0; its
+  diagnostic value and offline bootstrap role justify `internal/backend/stage0/`.
 
 - **DR2** is the only path that does not depend on any maintainer
   asset — neither the GitHub Release, nor the maintainer's machine,
