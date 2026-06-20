@@ -33,6 +33,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
+- for end-to-end self-host compiler parity (not just snapshot tests), run
+  `just verify-self-rebuild` or `just backend-loop` — requires `just build-all`
+  first. The ratchet rejects `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides;
+  see README **Self-rebuild ratchet**
 
 ### Backend changes
 
