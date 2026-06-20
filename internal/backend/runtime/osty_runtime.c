@@ -21489,11 +21489,9 @@ int64_t osty_gc_debug_arena_is_young_page(void *payload) {
   return osty_gc_arena_is_young_page(payload) ? 1 : 0;
 }
 
-/* Phase 5 entry points + counters. The young arena is dormant in
- * production until Phase 6 starts routing allocs through it; tests
- * exercise it directly via these accessors so the infrastructure
- * (mmap, micro-header layout, find_header shim) can be validated
- * before the cutover. */
+/* Debug entry points + counters for the young arena. Production
+ * routing is on by default (Phase 8 step 2); tests use these accessors
+ * to validate mmap, micro-header layout, and find_header shims. */
 void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind) {
   if (byte_size <= 0) {
     return NULL;
