@@ -1,16 +1,16 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
-> **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
+> **상태**: **아카이브** (2026-05-11 스코프 문서). Stage0 audit는 PR [#2023](https://github.com/choiceoh/osty/pull/2023) 이후 **100%** (decline-stub 포함). 아래 P24/P25/P26 분할·측정값은 역사적 계획으로만 참조할 것. 현행 게이트: `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` + `just verify-self-rebuild`. audit-pass ≠ install-self build-pass — [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인 참조.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11 — superseded)
 
-| 메트릭 | 값 | 출처 |
+| 메트릭 | 값 (당시) | 현행 (2026-05-26+) |
 |---|---|---|
-| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
-| `install-self` 실제 decline | **1340 functions** | `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self` |
-| 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 위 audit 명령 출력 |
+| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | **100%** — `OSTY_STAGE0_AUDIT=1 TestStage0ToolchainAudit` (PR #2023) |
+| `install-self` 실제 decline | **1340 functions** (당시) | 별도 추적 — monomorph/LIR Proto/cross-pkg wall; audit % 와 독립 |
+| 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 종결 — 아래 §1–§3 은 당시 계획 |
 
 audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
 

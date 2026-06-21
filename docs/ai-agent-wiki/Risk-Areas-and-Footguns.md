@@ -51,6 +51,29 @@
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
 
+## LIR Proto dispatch traps
+
+- Production MIR lowering uses `osty-self lir-proto-lower-mir-json`
+  (host prepares MIR JSON; avoids re-entering the Osty source compiler).
+  The **source** path `lir-proto-lower` is for bootstrap/self-rebuild
+  (`toolchain/selfhost_driver.osty`) and compat retries — see
+  `cmd/osty-native-lirproto/main.go` header comments.
+- `verify-self-rebuild` **requires** the source compiler for stages 2+;
+  do not reintroduce MIR-JSON-only ratchet shortcuts
+  (`TestVerifySelfRebuildRequiresSourceCompilerStages`).
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` / `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`
+  opt into legacy retries; unset means disabled.
+- Stage0 audit at 100% does not imply `install-self` or cross-pkg production
+  link is clean — track separately in `SPEC_GAPS.md`.
+
+## Self-rebuild ratchet traps
+
+- `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides are **disabled** — every
+  stage must come from the previous stage (`scripts/verify-self-rebuild`).
+- `just verify-self-rebuild` is slow; use `verify-self-rebuild-fast` or
+  `verify-self-rebuild-gates` for iteration, full ratchet before shipping
+  toolchain/backend changes.
+
 ## Spec traps
 
 - `LANG_SPEC_v0.5/` tells you what is authoritative

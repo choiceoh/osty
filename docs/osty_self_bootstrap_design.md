@@ -1,7 +1,7 @@
 # `osty-self` 부트스트랩 설계 — Post-#1405 follow-up
 
-> **상태**: 제안 (draft). 합의 후 별도 PR에서 구현.
-> **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구).
+> **상태**: **옵션 C (stage0 fallback) 구현 완료** (2026-05). source self-host ratchet landed in PR [#2022](https://github.com/choiceoh/osty/pull/2022) — `verify-self-rebuild` stages 2+ require the Osty source compiler (`toolchain/selfhost_driver.osty`). Remaining gaps: production LIR Proto / cross-pkg link walls tracked in [`SPEC_GAPS.md`](../SPEC_GAPS.md).
+> **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구), #2022 (source selfhost ratchet), #2023 (stage0 audit 100%).
 > **소유**: backend / toolchain.
 
 ## 1. 문제 정의
@@ -25,9 +25,10 @@ host osty (Go 부트스트랩)
 
 ### 1.1 현재 관찰 가능한 결과
 
-- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
-- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+- `osty build --backend=llvm toolchain/` 는 resolvable `osty-self` 없을 때 **stage0 Go emitter** (`internal/backend/stage0/`, `OSTY_STAGE0_FALLBACK=1`) 로 bootstrap 가능. Production 경로는 여전히 `osty-self lir-proto-lower-mir-json` 서브프로세스.
+- `scripts/verify-self-rebuild` 는 stage1 을 host osty + stage0 fallback 으로 빌드한 뒤, stage2/3 을 **source compiler** (`HIR → Mono → MIR → LIR Proto`) 로 재빌드하고 byte parity 를 강제. `just verify-self-rebuild` / `just backend-loop` 가 래핑.
+- **audit-pass ≠ build-pass**: `TestStage0ToolchainAudit` 가 100% (PR #2023) 여도 `install-self` / monomorph / LIR Proto 단계에서 별도 decline 가능 — [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution`.
+- `osty-self` 가 미리 빌드돼 있으면 (CI 캐시, registry fetch, `just bootstrap`) production LIR Proto 경로가 정상 동작.
 
 ### 1.2 설계 목표
 
@@ -202,10 +203,12 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 ```
 host_osty (Go-built .bin/osty)
-    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
-    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
-    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
-    └─ assert byte_eq(osty-self-2, osty-self-3)
+    └─ gates (optional): check toolchain/, snapshot parity, stage0 audit, LLVM route probes
+    └─ stage1 build: host_osty build toolchain/  →  osty-self-1  (OSTY_STAGE0_FALLBACK=1)
+    └─ stage2-seed / stage2 / stage3: previous osty-self rebuilds toolchain/
+         via source compiler (selfhost_driver.osty: HIR → Mono → MIR → LIR Proto)
+         host compiler forwarding forbidden after stage1 (host_guard script)
+    └─ assert byte_eq(osty-self-2, osty-self-3)  [Mach-O metadata normalized on darwin]
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+Stage1 은 host osty 의 stage0 emitter 로 `osty-self` 를 처음 만든다. Stage2+ 는 그 바이너리의 **source compiler** 가 동일 toolchain 을 다시 컴파일해야 한다 — MIR-JSON-only shortcut 은 ratchet 에서 거부 (`TestVerifySelfRebuildRequiresSourceCompilerStages`). Production `osty build` 는 별도로 host-prepared MIR JSON → `lir-proto-lower-mir-json` 경로를 쓴다.
