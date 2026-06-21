@@ -307,6 +307,36 @@ when offline / registry-unreachable falls through to the stage0
 source-bootstrap path (the env var is baked into the recipe — see
 the "One-shot bootstrap" section above).
 
+### Self-rebuild ratchet
+
+`scripts/verify-self-rebuild` (wrapped by `just verify-self-rebuild`)
+validates the full LLVM self-host chain beyond snapshot parity:
+
+1. **Gates** (optional): `osty check toolchain/`, CI snapshot parity,
+   `OSTY_STAGE0_AUDIT=1 TestStage0ToolchainAudit`, and native LLVM
+   route probes.
+2. **Stage1**: host `.bin/osty` builds `osty-self-1` from `toolchain/`
+   (`OSTY_STAGE0_FALLBACK=1` during stage1 only).
+3. **Stages 2–3**: each subsequent stage rebuilds `toolchain/` using
+   only the previous stage's `osty-self`. Stages 2+ must pass
+   `osty-self --selfhost-doctor` with **source compiler enabled**
+   (`source → HIR → Mono → MIR → LIR Proto → LLVM IR` via
+   `toolchain/selfhost_driver.osty` — not a MIR-JSON-only shortcut).
+4. **Parity**: `osty-self-2` and `osty-self-3` are compared
+   byte-for-byte (Mach-O link metadata is normalized when needed).
+
+Fast iteration: `just verify-self-rebuild-fast` skips gates and reuses
+a cached stage1 (`--reuse-stage1`, preferring the content-addressed
+selfhostcache from `osty cache-self`). Stage override env vars
+(`OSTY_SELF_REBUILD_STAGE*_BIN`) are rejected so the ratchet cannot be
+short-circuited. Details: [`docs/ai-agent-wiki/Validation-and-Workflows.md`](./docs/ai-agent-wiki/Validation-and-Workflows.md).
+
+**Production vs ratchet paths:** day-to-day `osty build` still lowers
+MIR through `osty-native-lirproto` → `osty-self lir-proto-lower-mir-json`
+(the host-prepared MIR JSON path). The source compiler exercised by the
+ratchet is the bootstrap/self-rebuild pipeline inside `osty-self`; both
+paths share `toolchain/lir_proto.osty` but enter at different stages.
+
 ### Network fetch + signing
 
 CI dispatches the [`build-osty-self`](.github/workflows/build-osty-self.yml)
