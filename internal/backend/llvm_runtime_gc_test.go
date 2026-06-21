@@ -7284,9 +7284,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7372,9 +7370,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7396,12 +7392,10 @@ int main(void) {
 	}
 }
 
-// Phase 3 of the tiny-tag young-space landing: `find_header` now dispatches
-// through the young-page hook before the arena fast path, but the hook
-// returns false today and the feature flag defaults to off. Both must hold
-// or Phase 5 will land on top of a silently-active young route. The flag
-// also has to flip when the env var is set, otherwise the future cutover
-// can't be exercised in tests.
+// Phase 3 of the tiny-tag young-space landing: `find_header` dispatches
+// through the young-page hook before the arena fast path. Phase 8 step 2
+// flipped `OSTY_GC_TINYTAG_YOUNG` default-on; opt out via `=0`. This
+// test locks the env kill-switch and the default-on routing contract.
 func TestBundledRuntimeFindHeaderBranchingParity(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -7596,9 +7590,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7725,9 +7717,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7887,9 +7877,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7998,9 +7986,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -8263,9 +8249,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -8952,13 +8936,11 @@ int main(void) {
 	}
 }
 
-// Phase 8 step 1 of the tiny-tag young-space landing: end-to-end
-// routing. With the feature flag on, the production allocator entry
-// `osty.gc.alloc_v1` should pick the young arena for eligible kinds
-// (STRING, BYTES — immutable byte payloads) and the headerful path
-// for everything else. With the flag off, every kind takes the headerful
-// path — the change is an additive routing layer, not a behavioural
-// shift, until Phase 8 step 2 flips the default.
+// Phase 8 of the tiny-tag young-space landing: end-to-end routing.
+// With the feature flag on (default since step 2), the production
+// allocator entry `osty.gc.alloc_v1` picks the young arena for eligible
+// kinds and the headerful path for ineligible ones. Opt out via
+// `OSTY_GC_TINYTAG_YOUNG=0` to force every kind through headerful.
 func TestBundledRuntimeAllocV1RoutesToYoungWhenFlagOn(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -9156,9 +9138,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9253,9 +9233,7 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9370,7 +9348,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1", "OSTY_GC_NURSERY_BYTES=1")
+	runCmd.Env = append(os.Environ(), "OSTY_GC_NURSERY_BYTES=1")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
