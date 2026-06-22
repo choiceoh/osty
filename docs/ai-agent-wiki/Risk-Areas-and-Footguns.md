@@ -50,6 +50,12 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `just verify-self-rebuild` is the byte-parity self-host ratchet; do not
+  substitute `just verify-selfhost` when validating compiler rebuild behavior
+- cross-pkg **interface boxing** (struct → `Error` assign) is implemented for
+  pattern-match / discriminant use (PRs #2004–#2007); cross-pkg **vtable
+  virtual dispatch** (`err.message()`) is still tracked under
+  `SPEC_GAPS.md::cross-pkg-module-resolution` step 3.5
 
 ## Spec traps
 

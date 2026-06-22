@@ -25,9 +25,21 @@ host osty (Go 부트스트랩)
 
 ### 1.1 현재 관찰 가능한 결과
 
-- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
-- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
-- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+- `osty build --backend=llvm toolchain/` without a resolvable `osty-self` still
+  declines at emit (`native LIR Proto subprocess declined …`) unless
+  `OSTY_STAGE0_FALLBACK=1` engages the Go stage0 emitter.
+- **Fresh clones are not blocked**: `just bootstrap` (registry fetch, then
+  `OSTY_STAGE0_FALLBACK=1 install-self` when offline) produces a cached
+  `osty-self` and is exercised in CI
+  (`fresh-clone-source-bootstrap.yml`). The pre-registry chicken-and-egg
+  failure mode from #1405 is closed for normal contributor workflows.
+- `scripts/verify-self-rebuild` is the byte-parity ratchet across successive
+  self-built compilers; it requires a working host `.bin/osty` and currently
+  passes stage1 via the same stage0 fallback the bootstrap recipe uses.
+- Stage0 **audit** cover is 100% (`TestStage0ToolchainAudit`, PR #1858), but
+  **audit-pass ≠ build-pass** — `install-self`, monomorph, LIR Proto, and
+  cross-pkg link walls are tracked separately (`SPEC_GAPS.md`,
+  `docs/llvm-selfhost-plan.md` §3.1).
 
 ### 1.2 설계 목표
 

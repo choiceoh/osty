@@ -577,6 +577,49 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+`cmd/osty-native-lirproto` is the host shim between
+`internal/nativelirproto` and the self-hosted lowering commands on `osty-self`.
+It reads a `nativelirproto.Request` JSON blob from stdin, stages either source
+text or a MIR JSON payload to a temp file, and execs:
+
+- `osty-self lir-proto-lower <staged> --package-name=…` for source requests
+- `osty-self lir-proto-lower-mir-json <staged> …` for pre-lowered MIR
+
+Non-decode failures return `{declined: true, error: "…"}` on stdout so
+`internal/backend/llvm.go` can fall back to the Go stage0 emitter when
+`OSTY_STAGE0_FALLBACK=1` without treating a missing `osty-self` as a hard CLI
+error.
+
+**`osty-self` lookup** delegates to `selfhostcache.ResolveBinary` (same order as
+`README.md`: `OSTY_SELF_BIN` → in-tree `toolchain/.osty/out/…/osty-self` →
+content-addressed cache → registry fetch).
+
+**Timeout policy** (`selfLowerTimeout` in `cmd/osty-native-lirproto/main.go`):
+default 20 seconds for source lowering; MIR JSON adds 15 seconds per mebibyte of
+staged payload (max 10 minutes). Override with `OSTY_LIRPROTO_SELF_TIMEOUT`
+(Go `time.ParseDuration` syntax; `0` disables).
+
+**Compat fallbacks** when `osty-self` declines:
+
+| Trigger | Next step |
+|---|---|
+| Unsupported `lir-proto-lower-mir-json` or invalid self-hosted IR | `lowerMIRJSONStage0Compat` (Go stage0 emitter on the MIR JSON payload) |
+| Timeout on MIR JSON, staged size ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default 1 MiB) | Same stage0 compat path |
+| Legacy seed without MIR JSON entrypoint + `req.Source` present | Source re-lowering only if `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive byte limit (default **off**) |
+
+`OSTY_SELF_REBUILD_FORWARD_ARGS` is injected into the child `osty-self` environment
+so nested ratchet builds (`scripts/verify-self-rebuild`) can forward `build
+--backend=llvm …` argv without re-parsing the parent CLI.
+
+Debug hooks: `OSTY_LIRPROTO_KEEP_STAGED` retains temp files;
+`OSTY_LIRPROTO_DEBUG` logs staged path + subcommand to stderr.
+
+The Osty-side lowerer config (`toolchain/lir_proto.osty::LirLowerConfig`) exposes
+`packageName`, `sourcePath`, `target`, and `emitGC` — unused `featureGates`
+plumbing was removed in PR #2029.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

@@ -149,3 +149,30 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR return-type recovery |
 | (이 doc) | cross-pkg link symbol mangling wall trigger measurement |
+
+## 10. Cross-pkg interface boxing (2026-05-29 status)
+
+PRs [#2004](https://github.com/choiceoh/osty/pull/2004)–[#2010](https://github.com/choiceoh/osty/pull/2010)
+landed the first cross-package **interface** trajectory alongside the existing
+free-fn / method link walls:
+
+| Step | Scope | Status |
+|---|---|---|
+| 1 | Cross-pkg interface types lower via PascalCase name fallback instead of opaque `ptr` only | Done (#2004) |
+| 2 | MIR signature table registers cross-pkg interface methods | Partial (#2009) |
+| 3 | Struct → `Error` assign boxes aggregate on heap for `Result<_, Error>` / `Err(_)` arms | Done (#2007; `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`) |
+| 3.5 | Cross-pkg vtable injection for virtual dispatch (`err.message()`) | **Not done** — pattern-match / discriminant subset only |
+| 4 | Impl-method reach expansion for cross-pkg interfaces | Partial (#2010) |
+
+**In scope today**: construct `Err(error.new("…"))`, return
+`Result<T, Error>`, match on `Err(_)` / discriminant — boxing + GC root
+binding through LIR Proto assign coercion.
+
+**Out of scope today**: cross-pkg interface **method calls** on the boxed
+value. Tests document this explicitly in
+`internal/backend/llvm_crosspkg_iface_box_test.go` and
+`internal/backend/llvm_keychain_test.go`.
+
+Free-fn link symbol mangling (§1–§8 above) and interface boxing are orthogonal
+walls — `OSTY_CROSS_PKG_LINK=1` can link sibling `.o` files while interface
+vtable gaps remain.
