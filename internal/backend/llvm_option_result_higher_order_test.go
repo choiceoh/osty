@@ -35,7 +35,6 @@ import (
 //     MethodCall nodes for those methods — they're CallExprs
 //     against the mangled names.
 func TestInjectReachableStdlibBodiesPicksUpOptionAndResultCombinators(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	src := `fn main() {
     let opt = Some(5)
     let doubled = opt.map(|x| x * 2)
