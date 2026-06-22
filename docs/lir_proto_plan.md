@@ -77,7 +77,7 @@ Input:
 
 - A validated, monomorphic `*mir.Module`.
 - LLVM emission options that affect text shape: package, source path, target,
-  GC instrumentation, and feature gates.
+  and GC instrumentation (`LirLowerConfig.emitGC`).
 
 Output:
 

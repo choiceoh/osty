@@ -29,7 +29,9 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 
 ### CLI, toolchain, generated-output, or self-host path changes
 
-- include `just verify-selfhost`
+- include `just verify-selfhost` (narrow snapshot parity only)
+- include `just verify-self-rebuild` or `just verify-self-rebuild-gates`
+  when touching the LLVM self-host compiler, LIR Proto bridge, or ratchet wiring
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
@@ -49,6 +51,29 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+
+## Self-rebuild ratchet
+
+- `just verify-selfhost` ≠ `just verify-self-rebuild`. The former runs only
+  `SnapshotParity|CoreSnapshotParity`; the latter builds `toolchain/` through
+  successive `osty-self` stages and enforces stage2/stage3 byte parity.
+- Do not set `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` — the ratchet rejects
+  injected stage binaries.
+- `OSTY_SELF_REBUILD_FORWARD_ARGS` and `OSTY_SELF_REBUILD_HOST_BIN` are
+  internal channels used by `scripts/verify-self-rebuild` and the LIR Proto
+  bridge; do not pin them in shell profiles.
+- Stage0 audit (`OSTY_STAGE0_AUDIT=1 go test … TestStage0ToolchainAudit`) is
+  part of the ratchet gates and reports 100% function cover, but that metric
+  does not guarantee `install-self` or LIR Proto success.
+
+## LIR Proto subprocess traps
+
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults **off** — source
+  re-lowering is opt-in only.
+- `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` defaults to 1 MiB for stage0 retry
+  after MIR JSON timeouts; set `0` to disable.
+- `OSTY_LIRPROTO_KEEP_STAGED` / `OSTY_LIRPROTO_DEBUG` are debug-only.
+- `LirLowerConfig` no longer has `featureGates` (removed PR #2029).
 
 ## Common repo recipes
 

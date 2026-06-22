@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` reports **100%** function cover (PR #1858), but **audit-pass ≠ build-pass** — `install-self` / monomorph / LIR Proto can still decline. L5 is a bootstrap + diagnostic layer, not a full production substitute. See `docs/llvm-selfhost-plan.md` §3.1. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -108,14 +108,15 @@ already documented:
 1. **Toolchain simplification** — `docs/osty_self_b2_1_audit.md`
    v2 master plan, batches B2.2–B2.3. ~244 source-level mechanical
    `match → if-else` rewrites. ~10–15 hours.
-2. **Stage0 unlocks** — same document, batches B2.4–B2.7. ~4 stage0
-   phases (P21–P24) covering the basic-shape gaps that block 88.7% of
-   toolchain functions today. ~1500 lines of Go in
-   `internal/backend/stage0/`. ~1–2 weeks dedicated work.
+2. **Stage0 unlocks** — historical batches B2.4–B2.7 (P21–P24) in
+   `docs/osty_self_b2_1_audit.md`. The stage0 **audit** metric reached
+   100% (PR #1858); remaining DR2 work is about production
+   `install-self` / LIR Proto / cross-pkg walls, not the old 11.3% audit
+   figure.
 
-Combined, these two streams reach ~40% MIR coverage, which is enough
-to bootstrap a build of the current toolchain into a fresh osty-self
-binary on a single host. From that point, DR1 applies normally.
+Fresh clones should recover via `just bootstrap` (registry fetch or
+`OSTY_STAGE0_FALLBACK=1` source bootstrap) long before DR2 is needed.
+From any working `osty-self`, DR1 applies normally.
 
 DR2 is a last-resort plan, not an operational recipe. Most outages
 recover via DR1.
@@ -130,12 +131,12 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
+  prior binary. The stage0 **audit** tally is 100% (PR #1858), but
+  production `install-self` can still hit LIR Proto / monomorph /
+  cross-pkg declines — treat L5 as bootstrap + diagnosis, not a
+  drop-in replacement for a cached `osty-self`. When bootstrap breaks,
+  stage0 decline messages still pinpoint the missing MIR shape. Do not
+  retire stage0; its diagnostic value justifies the emitter in
   `internal/backend/stage0/`.
 
 - **DR2** is the only path that does not depend on any maintainer
