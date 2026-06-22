@@ -18,7 +18,6 @@ import (
 // (`isSetType`, `setElementType`) round out the symmetry with the
 // existing List/Map helpers.
 func TestLLVMBackendEmitForInSet(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	installNativeMIRPayloadStub(t)
 	cases := []struct {
 		name string

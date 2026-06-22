@@ -7285,8 +7285,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7373,8 +7372,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7597,8 +7595,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7726,8 +7723,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7888,8 +7884,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7999,8 +7994,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -8264,8 +8258,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9157,8 +9150,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9254,8 +9246,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
-	runOutput, err := runCmd.CombinedOutput()
+		runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9370,7 +9361,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1", "OSTY_GC_NURSERY_BYTES=1")
+	runCmd.Env = append(os.Environ(), "OSTY_GC_NURSERY_BYTES=1")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
