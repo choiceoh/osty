@@ -8,7 +8,7 @@
 
 "Self-hosting flip" = `cmd/osty-native-checker` (Go binary, `internal/selfhost/generated.go` frozen seed 의존) → **LLVM 으로 컴파일된 native binary** 로 production 경로 전환. 결과: `toolchain/*.osty` 모든 수정이 즉시 production 에 반영됨 (현재 dormant 작업 한 번에 활성).
 
-**현재 차단 상태**: **chicken-egg circular bootstrap**. `toolchain/*.osty` 를 LLVM 으로 컴파일하려면 `osty-self` 바이너리 필요 → 그 바이너리는 `toolchain/*.osty` 컴파일 결과. Bootstrap chain 의 stage0 가 1340 declines 로 막혀 있어 `osty install-self` 미완료.
+**현재 차단 상태 (revalidated 2026-06)**: stage0 audit **100%** + `OSTY_STAGE0_FALLBACK=1 install-self` source bootstrap **unlocked** — the historical 1340-decline audit wall is closed. Remaining flip blockers are **production-path** issues: LLVM-built `osty-native-checker` link-clean under `osty-self` LIR Proto (cross-pkg symbol mangling, `<error>`-type layouts, interface vtable reach). See [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) and [`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](llvm-selfhost-plan-cross-pkg-link-measurement.md) §10.
 
 **단일 PR 로 도전 가능한 첫 단계**: Phase A1 — `lirLowerMirType_module` 폴스루 → 명시적 `lirLowerError` 진단 (~30 LOC, `toolchain/lir_proto.osty`). 직접 효과는 없지만 이후 모든 phase 의 fail site 가시화 → blocker 정확히 겨냥 가능.
 
@@ -64,7 +64,7 @@ osty build foo.osty
 4. 그 다음 osty invocation 부터 이 binary 사용 (production flip)
 ```
 
-**Blocker**: 2단계가 실패. `osty install-self` 가 stage0 P24+ 에서 1340 declines (LLVM 미지원 MIR shape) 로 멈춤.
+**Blocker (historical — superseded)**: stage0 P24+ audit wave closed at **100%** (PR #1858); `OSTY_STAGE0_FALLBACK=1 install-self` source bootstrap unlocked. Current flip blockers are production LIR Proto / cross-pkg walls (see [`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](llvm-selfhost-plan-cross-pkg-link-measurement.md) §10).
 
 ### 2.2 Hybrid partial-flip 가능성
 
@@ -134,7 +134,7 @@ fn lirLowerMirType_module(ctx, module, typeName) {
 
 | Phase | 상태 | 다음 액션 |
 |---|---|---|
-| **0** Bootstrap chain | ⏸️ blocked (1340 declines) | Stage0 P24+ audit/fix (master plan v2) |
+| **0** Bootstrap chain | ✓ audit 100% + source bootstrap unlocked | Remaining: production LIR Proto / cross-pkg link |
 | **A** Infra | 🟡 in-progress | A1 첫 PR 준비 |
 | **B** Map/List | 🟡 in-progress | LIR Proto 검증 대기 (osty-self 필요) |
 | **C** Optional/Result | 🟡 partial-merge | C1/C2 verify (osty-self), C3/C4 coding |
@@ -147,7 +147,7 @@ fn lirLowerMirType_module(ctx, module, typeName) {
 
 **이번 세션의 dormant 작업들** (287eea05, 2ec78df1, 255552d6, 5dee3b0c, A13 toolchain scaffold) **모두 LLVM self-hosting flip 까지 production 영향 없음**. 이건 잘못된 작업이 아니라 **올바른 작업이지만 활성화 시점이 미래**. flip 자체는:
 
-1. **단일 PR 로 도전 불가능** — chicken-egg + 1340 declines + 4 phase 미완.
+1. **단일 PR 로 전체 flip 불가** — production cross-pkg + LIR Proto walls remain after stage0 audit closed.
 2. **첫 진전**: Phase A1 진단 강화 (이 세션 외 별도 PR).
 3. **전체 일정**: 10–15 stage0 PR + 4 phase code-only PR + bootstrap unblock 검증 → 수 주 단위 epic.
 

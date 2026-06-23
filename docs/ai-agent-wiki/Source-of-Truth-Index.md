@@ -34,6 +34,8 @@
 - native checker LLVM parity plan: [`/docs/llvm-selfhost-plan.md`](../../docs/llvm-selfhost-plan.md)
 - dual-target checker build/runbook: [`/cmd/osty-native-checker/README.md`](../../cmd/osty-native-checker/README.md)
 - subprocess vs embedded checker gates: [`/SUBPROCESS_SWITCHOVER.md`](../../SUBPROCESS_SWITCHOVER.md)
+- self-rebuild ratchet: [`/scripts/verify-self-rebuild`](../../scripts/verify-self-rebuild), `just verify-self-rebuild`
+- cross-pkg link measurement + interface boxing status: [`/docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](../llvm-selfhost-plan-cross-pkg-link-measurement.md) §10
 
 ## Useful code anchors
 

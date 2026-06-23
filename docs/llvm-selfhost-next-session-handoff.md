@@ -72,9 +72,9 @@ just front    # 전체 front-end 회귀
 
 ### 4.1 stage0 fallback 의 stdlib body injection wall
 
-- `OSTY_STDLIB_BODY_LOWER=0` (default): `std.json.parseValue` 등 undefined symbol (link 실패)
-- `OSTY_STDLIB_BODY_LOWER=1`: stdlib body inject 되나 stage0 패턴 매칭 부족 → `osty_std_json__asString does not match any stage0 pattern`
-- **우회**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite (`std.io.readLine → osty_rt_io_read_line` 사례). C runtime 함수가 존재해야 작동.
+- **`OSTY_STDLIB_BODY_LOWER` default ON** (PR #1998): bodied stdlib helpers inject in production. Set `=0` only to bisect injection-specific failures (`just bootstrap` no longer masks the default — PR #2013).
+- With default ON, remaining walls are usually **LIR Proto / cross-pkg** (`<error>` layouts, symbol mangling) rather than missing `osty_rt_*` stubs.
+- **우회 (historical)**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite. Still valid for runtime-only stdlib entry points.
 - **`rewriteStdlibSymbolToRuntime` 에 향후 추가**:
   ```go
   case "std.io.readAll":

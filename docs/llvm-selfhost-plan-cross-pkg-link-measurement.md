@@ -138,6 +138,29 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 
 다음 fresh session 의 PR3-G (또는 추정 이름 PR-G3/G4) 의 시작점.
 
+## 10. Cross-pkg interface boxing trajectory (2026-05-23 — 2026-05-26)
+
+Steps 1–4 of the LLVM self-host cross-pkg interface plan landed in production
+code; **vtable reach expansion (step 3.5 part 2)** remains open.
+
+| Step | PR | What shipped | Status |
+|---|---|---|---|
+| 1 | [#2004](https://github.com/choiceoh/osty/pull/2004) | Cross-pkg interface support scaffold + partial step 2 | merged |
+| 2 | [#2007](https://github.com/choiceoh/osty/pull/2007) | Struct→`Error` assign boxing for cross-pkg interfaces | merged |
+| 3 | [#2009](https://github.com/choiceoh/osty/pull/2009) | Cross-pkg interface methods in MIR signature table | merged |
+| 3.5 | [#2010](https://github.com/choiceoh/osty/pull/2010) | Cross-pkg interface impl-method reach expansion (part 2) | **partial** — more reach cases remain |
+| 4 | (step 4 in plan) | Regression guards + LIR Proto output alignment | in progress |
+
+**Still blocking link-clean `osty-native-checker`**: symbol mangling drift
+(§3–§6), `<error>`-typed dispatch fallbacks when cross-pkg signatures are
+incomplete, and remaining vtable reach gaps. `OSTY_CROSS_PKG_LINK=1` compiles
+sibling workspace packages as library objects but does not remove these
+correctness walls — see `ARCHITECTURE.md` **LLVM binary link**.
+
+**Removed dead plumbing (PR #2029)**: `LirLowerConfig.featureGates` helpers in
+the Osty lowerer and `llvmFallbackDispatchRoute` in Go — LLVM route selection
+is host dispatch only (`generateLLVMIR` → `emitLLVMFallback` / `mir-direct`).
+
 ## 9. 관련 PR 카탈로그 (\<-2 weeks)
 
 | PR | scope |
