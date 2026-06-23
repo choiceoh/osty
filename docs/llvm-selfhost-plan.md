@@ -4,7 +4,7 @@
 > **연관**:
 > - [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) — 옵션 C (stage0 fallback emitter) 결정
 > - [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) — stage0 coverage 11.3% 시점 audit (2026-04-29 측정)
-> - [docs/stage0_p24_scope.md](stage0_p24_scope.md) — 2026-05-11 시점 94.2% audit + P24 첫 target
+> - [docs/stage0_p24_scope.md](stage0_p24_scope.md) — historical 2026-05-11 scope; see §0.1 for revalidated 100% audit baseline
 > - [docs/post_1405_coverage_audit_design.md](post_1405_coverage_audit_design.md) — PR #1405가 삭제한 ~36k줄 회복 audit
 > - [docs/osty_self_artifact_design.md](osty_self_artifact_design.md) — `osty-self` artifact 캐시
 > - [SELFHOST_PORT_MATRIX.md](../SELFHOST_PORT_MATRIX.md) — frontend resolver/checker 포팅 매트릭스 (orthogonal track)

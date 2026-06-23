@@ -1,10 +1,11 @@
 # Stage0 P24 — bootstrap unblock 첫 타겟 스코프
 
-> **상태**: 작업 시작 시 참조용 스코프 문서. 실제 구현은 별도 PR.
+> **상태**: **historical scope doc** (2026-05-11 측정 기준). P24–P26 unlock PR chain + PR [#1858](https://github.com/choiceoh/osty/pull/1858) 이후 stage0 audit 는 **100%** — 아래 §0 은 당시 baseline 보존용.
+> **현재 authority**: [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md) §3.1, [`SPEC_GAPS.md`](../SPEC_GAPS.md) `cross-pkg-module-resolution` 타임라인.
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
-> **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
+> **차단 대상 (historical)**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A.
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (2026-05-11 — historical)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|
@@ -13,6 +14,16 @@
 | 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 위 audit 명령 출력 |
 
 audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
+
+### 0.1 Revalidated baseline (2026-06)
+
+| 메트릭 | 값 | 출처 |
+|---|---|---|
+| Stage0 audit cover (full `toolchain/` walk) | **100.0% (8240 / 8241)** | PR #1858; `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
+| Fresh-clone source bootstrap | **`OSTY_STAGE0_FALLBACK=1 osty install-self` succeeds** | PR #1861+ C-wrapper wave + `just bootstrap` recipe |
+| Remaining self-host walls | LIR Proto / cross-pkg link + interface boxing (steps 1–4 landed; vtable reach step 3.5 open) | [`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](llvm-selfhost-plan-cross-pkg-link-measurement.md) §10, `SPEC_GAPS.md` |
+
+**audit-pass ≠ build-pass** still applies: production `osty-self` LIR Proto can decline shapes that audit classifies as covered under different monomorph specializations.
 
 ## 1. P24 후보 함수 — shape 별 분리
 

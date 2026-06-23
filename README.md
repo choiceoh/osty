@@ -375,6 +375,27 @@ linked.
 | `OSTY_NATIVE_CHECKER_LLVM_BIN` | Absolute path to a prebuilt LLVM-built `osty-native-checker-llvm`. Consulted by `ResolveNativeCheckerLLVM` before falling back to the in-tree build output at `cmd/osty-native-checker/.osty/out/debug/llvm/`. |
 | `OSTY_BUILDING_NATIVE_CHECKER` | **Internal**, set by `buildNativeChecker` on its subprocess fork to abort nested re-entries (recursion guard). Do NOT set this manually. |
 
+**Self-rebuild ratchet** ([`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild), `just verify-self-rebuild`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REBUILD_DIR` | Staging directory for intermediate binaries and parity artifacts (default `.osty/self-rebuild`). |
+| `OSTY_SELF_REBUILD_TOOLCHAIN_DIR` | Toolchain package built through the ratchet (default `toolchain/`). |
+| `OSTY_SELF_REBUILD_STAGE1_CACHE` | Reusable `osty-self-1` cache for `--reuse-stage1` loops (default `.osty/self-rebuild-cache/osty-self-1`). |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | **Internal** — argv forwarded into `toolchain/main.osty` when the ratchet drives nested `osty build` subprocesses. Set by `verify-self-rebuild`; do not pin manually. |
+| `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` | **Rejected** — `verify-self-rebuild` fails if set; every stage must be produced by the previous stage driver. |
+
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go)):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_BIN` | Same as self-host resolver — which `osty-self` binary forks `lir-proto-lower` / `lir-proto-lower-mir-json`. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override bootstrap guard around self-hosted lowering; `"0"` disables. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Bound legacy stage0 retry after a MIR JSON timeout; `"0"` disables. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source retry when an older `osty-self` cannot handle MIR JSON; unset/`"0"` disables. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain staged input files after a lowering attempt (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged path + subcommand to stderr. |
+
 **Diagnostic & debug**:
 
 | Var | Purpose |
@@ -399,6 +420,8 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Run self-rebuild byte-parity ratchet | `just verify-self-rebuild` (or `just verify-self-rebuild-fast` to skip gates) |
+| Debug LIR Proto staging | `OSTY_LIRPROTO_DEBUG=1 OSTY_LIRPROTO_KEEP_STAGED=1` on a failing `osty build` |
 
 ### CI bootstrap gates
 
@@ -430,6 +453,29 @@ osty gc-self --older-than 720h  # remove entries older than 30 days
 toolchain — a `--keep=0` immediately after `install-self` cannot
 delete the just-built artifact. Documented in
 `docs/osty_self_artifact_design.md` (A1–A8 roadmap).
+
+### Self-rebuild ratchet
+
+[`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild) exercises the
+merged toolchain MIR pipeline end-to-end:
+
+1. Host `osty` runs gates (unless `--skip-gates` / `--gates-only`).
+2. Host builds `osty-self-1` from `toolchain/` (stage1; `--reuse-stage1`
+   can short-circuit via `.osty/self-rebuild-cache/` or the content-addressed
+   selfhost cache).
+3. `osty-self-1` and `osty-self-2` each rebuild `toolchain/` through
+   HIR → Mono → MIR → LIR Proto → LLVM IR.
+4. Byte parity asserts `osty-self-2` and `osty-self-3` match.
+
+Recipes: `just verify-self-rebuild`, `just verify-self-rebuild-fast`
+(`--skip-gates --reuse-stage1`), `just verify-self-rebuild-gates`.
+This is **broader** than `just verify-selfhost`, which only runs
+`SnapshotParity|CoreSnapshotParity` under `internal/ci` and
+`internal/runner`.
+
+Stage override env vars `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` are
+**intentionally rejected** — each stage must be produced by the prior
+driver so the ratchet cannot be short-circuited with hand-placed binaries.
 
 ## Native Checker
 
