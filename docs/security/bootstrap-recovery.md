@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` reports **100%** toolchain coverage (PR #1858). `just bootstrap` uses this path when L1–L4 miss. **audit-pass ≠ build-pass** — production `osty-self` LIR Proto can still decline monomorph specializations; see `SPEC_GAPS.md` `cross-pkg-module-resolution`. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -100,7 +100,7 @@ Trigger when:
 - The rolling release is wiped or otherwise unreachable for an extended
   period AND
 - No maintainer-side `osty-self` binary exists AND
-- L5 (`OSTY_STAGE0_FALLBACK=1`) cannot cover the current toolchain.
+- L5 (`OSTY_STAGE0_FALLBACK=1`) covers the stage0 audit surface but may still fail on production LIR Proto / cross-pkg walls after `install-self` promotes `osty-self`.
 
 This is the worst case. The procedure pulls together two work streams
 already documented:
