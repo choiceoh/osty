@@ -7285,7 +7285,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7372,7 +7372,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7595,7 +7595,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7723,7 +7723,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7884,7 +7884,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -7994,7 +7994,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -8258,7 +8258,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9150,7 +9150,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -9246,7 +9246,7 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-		runOutput, err := runCmd.CombinedOutput()
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}

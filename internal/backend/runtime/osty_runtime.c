@@ -3935,15 +3935,12 @@ static void osty_gc_note_old_allocation(size_t payload_size) {
  * existing arena's invariant. Phase 6 swaps mark-sweep on YOUNG for a
  * Cheney copy that uses these same pages as from-space + to-space.
  *
- * The flag stays opt-in (default off) until Phase 8 flips it; today
- * `osty_gc_allocate_managed` never picks the young path, so the only
- * exercise is via the debug entry points the tests use. */
-/* Phase 8 step 2: default-on cutover. Cheney_minor traces OLD
+ * Phase 8 step 2 flipped young-space routing default-on; opt out with
+ * `OSTY_GC_TINYTAG_YOUNG=0`. Cheney_minor traces OLD
  * reachability transitively (see `osty_gc_collect_minor_cheney_*`)
  * so `Map<String, _>` and other typed collections with young
  * children are correctly forwarded even when their write paths
- * (`osty_rt_map_insert_raw`, etc.) bypass `osty_gc_post_write_v1`.
- * Opt out with `OSTY_GC_TINYTAG_YOUNG=0`. */
+ * (`osty_rt_map_insert_raw`, etc.) bypass `osty_gc_post_write_v1`. */
 #define OSTY_GC_TINYTAG_YOUNG_ENV "OSTY_GC_TINYTAG_YOUNG"
 static bool osty_gc_tinytag_young_loaded = false;
 static bool osty_gc_tinytag_young_enabled = true;
