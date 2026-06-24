@@ -183,7 +183,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
 | P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
 | **P21–P23** | **unfrozen 2026-05 — 머지됨**. P21 (blocks=1 multi-param direct call → aggregate ret), P22 (for-in-list loop), P23 (for-in-list early-exit). 누적 audit cover 62.6% → 64.9% → 94.2% (`OSTY_STAGE0_AUDIT=1 ./internal/backend/`). 참조: #1571, e94ca9ac, 4878c62c, a391dd45, 8214e32b. | TestStage0ToolchainAudit |
-| **P24+** | **active — master plan v2 진행 중**. 현 `install-self` 시 `OSTY_STAGE0_LIST_ALL_DECLINES=1` → 1340 function declines (audit %에도 불구하고 부트스트랩은 unique shape × 함수 instance 단위로 cumulative). 다음 P-phase 후보는 `b2_1_audit.md §4.3` 의 master plan v2 표 참조. | 측정 중 |
+| **P24+** | **audit trajectory closed (PR #1858)** — `TestStage0ToolchainAudit` **100.0% (8240/8241)**. `OSTY_STAGE0_FALLBACK=1 install-self` source bootstrap **unlocked** (PR #1861+). Remaining blockers are **production-path** walls (LIR Proto `<error>` layouts, cross-pkg link mangling, interface vtable reach) — not the historical 1340-decline audit wave. See [`docs/llvm-selfhost-plan.md`](llvm-selfhost-plan.md) §3.1 and `SPEC_GAPS.md` `cross-pkg-module-resolution`. | TestStage0ToolchainAudit + `install-self` E2E |
 
 각 Phase는 independent PR. P0은 수십 줄. P1~P23 합산 emit.go 4253 + P21–P23 추가분 = ~5K+ 줄.
 
@@ -193,7 +193,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 |---|---|
 | 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — P21+ unfrozen**. P0–P20 + P21/P22/P23 머지됨. install-self 부트스트랩 가능까지 master plan v2 (b2_1_audit §4.3) 의 sequence 진행. surface 추가는 부트스트랩 차단 함수에 한정 (CLAUDE.md "v0.5 baseline" 규칙은 spec surface — emitter coverage는 무관). |
 | 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (15304 줄, P21–P23 포함) + emit_test.go (6783 줄) + doc.go. |
-| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — registry path 가 default. 하지만 registry 가 0 자산 (`github.com/choiceoh/osty/releases/.../osty-self-snapshots` 404 confirmed 2026-05-11) 인 상황에서는 stage0 가 유일한 fresh-clone 부트스트랩 경로. CI bootstrap-smoke 도 양쪽 모두 검증. |
+| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** for normal `osty build` / `install-self` when registry or cache hits. **`just bootstrap` bakes it in** for fresh clones (offline or registry miss). CI exercises both registry fetch (`bootstrap-smoke-test.yml`) and offline stage0 (`fresh-clone-source-bootstrap.yml`). |
 | 4. stage0 retirement 시점 | **영구 보존** — Q8. 진단 가치 + registry-down-시 DR2 부트스트랩 경로로 정당화. retirement PR 미예정. |
 
 ---

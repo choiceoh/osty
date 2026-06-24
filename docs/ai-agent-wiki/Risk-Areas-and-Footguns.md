@@ -50,6 +50,10 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` is rejected by `verify-self-rebuild` —
+  do not try to short-circuit the ratchet with hand-placed stage binaries
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is opt-in only; unset keeps MIR JSON
+  as the production lowering path (no silent source re-lowering)
 
 ## Spec traps
 

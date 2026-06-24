@@ -130,10 +130,11 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 ### Phase 0 — Bootstrap chain unblock (모든 phase 선행 필수)
 
-**상태 (2026-05-11)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능. 현재 상태:
-- 디폴트 registry (`github.com/choiceoh/osty/releases/.../osty-self-snapshots`) — 자산 0건 (404 확인).
-- `OSTY_STAGE0_FALLBACK=1` — P21–P23 머지됨에도 `install-self`가 **1340 function declines** 로 차단 (`OSTY_STAGE0_LIST_ALL_DECLINES=1` 확인).
-- 캐시/사전빌드 osty-self 없음.
+**상태 (revalidated 2026-06)**: Phase C–F closeout still needs a resolvable `osty-self` for production-path verification. Current state:
+- **Stage0 audit**: **100.0% (8240/8241)** after PR #1858 — the historical 1340-decline audit wave is closed.
+- **Fresh-clone bootstrap**: `just bootstrap` (`OSTY_STAGE0_FALLBACK=1`) builds and caches `osty-self` via the stage0 source-bootstrap path when registry fetch misses.
+- **Remaining blockers**: production LIR Proto / cross-pkg link + interface boxing (not stage0 audit %). See [`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](docs/llvm-selfhost-plan-cross-pkg-link-measurement.md) §10 and `SPEC_GAPS.md` `cross-pkg-module-resolution`.
+- Registry publish (Phase 0-B) remains the preferred steady-state path when `OSTY_SELF_REGISTRY_URL` is configured.
 
 **0-A — Stage0 P24+ unlock 진행** (master plan v2 — `docs/osty_self_b2_1_audit.md §4.3`)
 - 다음 차단 클러스터를 P-phase로 분할. `tyToRepr` / `frontTypeReprToString` / `useDeclTailAfter` / `selfCheck*` / `checkLookup*` / `checkSubst*` 등이 decline top 그룹.
