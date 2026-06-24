@@ -593,9 +593,19 @@ Key env vars (full matrix in `README.md`):
 |---|---|
 | `OSTY_SELF_BIN` | Pin which `osty-self` binary the subprocess resolves |
 | `OSTY_LIRPROTO_SELF_TIMEOUT` | Bootstrap guard around self-hosted lowering (`"0"` disables) |
-| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source retry when MIR JSON is unsupported |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Bound legacy stage0 retry after a MIR JSON timeout (`"0"` disables) |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source retry when MIR JSON is unsupported (`"0"` / unset disables) |
 | `OSTY_LIRPROTO_KEEP_STAGED` / `OSTY_LIRPROTO_DEBUG` | Debug staging paths |
 | `OSTY_SELF_REBUILD_FORWARD_ARGS` | Ratchet-only argv forwarding into `toolchain/main.osty` |
+
+MIR JSON requests (`lir-proto-lower-mir-json`) are the production path.
+When `osty-self` declines, `cmd/osty-native-lirproto` tries, in order: (1)
+in-process stage0 compat on the staged MIR payload; (2) source re-lowering
+via `lir-proto-lower` **only** when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES`
+is a positive byte limit; (3) host-side stage0 fallback in
+`internal/backend/llvm.go` when `OSTY_STAGE0_FALLBACK=1`. Timeout retries
+use `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` to gate stage0 compat on
+payload size.
 
 The `mir-backend` **manifest feature** still routes consumer builds through
 this subprocess path (`internal/backend/llvm.go`); PR #2029 removed dead
