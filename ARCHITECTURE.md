@@ -577,6 +577,46 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR emission forks `osty-native-lirproto`
+(`cmd/osty-native-lirproto/main.go`), which stages the request and execs
+`osty-self`:
+
+```
+internal/backend/llvm.go  emitLLVMFallback
+  └─ nativelirproto.Run  (internal/nativelirproto)
+      └─ osty-native-lirproto  (cmd/osty-native-lirproto)
+          └─ osty-self lir-proto-lower-mir-json <staged-mir.json>   # MIR requests
+          └─ osty-self lir-proto-lower <staged-source>              # source requests
+              └─ toolchain/lir_proto.osty
+```
+
+When `osty-self` declines or times out on a MIR JSON request,
+`lowerLegacyMIRJSON` walks a **compat fallback chain** (first success wins):
+
+1. **Stage0 MIR compat** — in-process `stage0.EmitMIRAllowNoMain` on the
+   already-lowered MIR payload (`lowerMIRJSONStage0Compat`). No env gate;
+   always attempted when the primary `lir-proto-lower-mir-json` path declines.
+2. **Source re-lowering** — `lir-proto-lower` on the original source, only when
+   `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive byte limit and
+   `req.Source` fits (default **off** since the source-compat ratchet in
+   `cf031f16`).
+3. **Timeout compat** — for timeout declines only, retry step 1 when the staged
+   MIR JSON is ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default 1 MiB; `0`
+   disables).
+
+Other subprocess knobs: `OSTY_LIRPROTO_SELF_TIMEOUT` (per-invocation timeout;
+`0` disables), `OSTY_LIRPROTO_KEEP_STAGED` (retain temp files),
+`OSTY_LIRPROTO_DEBUG` (stderr trace). Child argv forwarding uses
+`OSTY_SELF_REBUILD_FORWARD_ARGS` (set by `scripts/verify-self-rebuild`, cleared
+by `toolchain/main.osty`).
+
+`LirLowerConfig` in `toolchain/lir_proto.osty` carries `packageName`,
+`sourcePath`, `target`, and `emitGC` only — the retired `featureGates` helpers
+were removed in PR #2029; stdlib body injection is controlled host-side via
+`OSTY_STDLIB_BODY_LOWER` in `PrepareEntry`, not inside the Osty lowerer.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

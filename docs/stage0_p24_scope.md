@@ -14,6 +14,20 @@
 
 audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
 
+### 0.1 Revalidated baseline (2026-05-17+)
+
+Subsequent stage0 unlock PRs (notably [#1858](https://github.com/choiceoh/osty/pull/1858),
+[#2023](https://github.com/choiceoh/osty/pull/2023)) drove
+`TestStage0ToolchainAudit` to **100% (8240 / 8241)**. The §0 table above is
+**historical context** for P24 scoping only — do not cite 94.2% / 1340 as
+current blockers. Authoritative status: [`llvm-selfhost-plan.md`](llvm-selfhost-plan.md)
+§3.1 and [`SPEC_GAPS.md`](../SPEC_GAPS.md) (`audit-pass ≠ build-pass`).
+
+| 메트릭 | 현재 값 | 출처 |
+|---|---|---|
+| Stage0 audit cover | **100% (8240 / 8241)** | `go test -run TestStage0ToolchainAudit ./internal/backend/` |
+| Remaining self-host walls | LIR Proto / monomorph / cross-pkg link | `llvm-selfhost-plan.md`, `SPEC_GAPS.md` |
+
 ## 1. P24 후보 함수 — shape 별 분리
 
 원래 "tyToRepr / frontTypeReprToString / useDeclTailAfter 형 (match-on-enum returning struct)" 으로 묶었으나, 실제 MIR shape 측정 결과 **세 함수가 완전히 다른 패턴**:
