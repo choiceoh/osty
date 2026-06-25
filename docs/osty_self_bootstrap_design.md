@@ -214,4 +214,7 @@ host_osty (Go-built .bin/osty)
     └─ assert byte_eq(osty-self-2, osty-self-3)
 ```
 
-stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
+stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능.
+**갱신 (2026-05+):** `just bootstrap` + LIR Proto subprocess (with stage0 compat
+fallback chain documented in `ARCHITECTURE.md`) 로 stage1 이 통과한다.
+아래 chicken-and-egg 가정은 #1405 직후 historical context.
