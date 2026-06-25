@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` reached **100%** (PR #1858 / #2023). Sufficient for bootstrap emit when LIR Proto declines; not a substitute for production `osty-self` on every shape. See [`llvm-selfhost-plan.md`](../llvm-selfhost-plan.md) §3.1. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -130,13 +130,13 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
-  `internal/backend/stage0/`.
+  prior binary. Stage0 **audit** coverage reached 100% (PR #1858 / #2023),
+  but production builds still prefer the LIR Proto subprocess when
+  `osty-self` is available. Stage0 remains invaluable for diagnosis: when
+  the bootstrap is broken, stage0's decline message tells you exactly which
+  MIR shape is missing. Do not retire stage0 just because audit-pass does
+  not guarantee build-pass on every monomorphized instance; its diagnostic
+  value alone justifies keeping the emitter in `internal/backend/stage0/`.
 
 - **DR2** is the only path that does not depend on any maintainer
   asset — neither the GitHub Release, nor the maintainer's machine,

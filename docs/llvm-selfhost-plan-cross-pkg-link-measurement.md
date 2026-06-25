@@ -149,3 +149,27 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR return-type recovery |
 | (이 doc) | cross-pkg link symbol mangling wall trigger measurement |
+
+## 10. Cross-pkg interface boxing (steps 1–4, 2026-05)
+
+Separate from §2–§7 symbol-mangling drift, LLVM lowering gained
+**interface boxing** for cross-package interface values. Status as of
+PRs [#2004](https://github.com/choiceoh/osty/pull/2004)–[#2010](https://github.com/choiceoh/osty/pull/2010):
+
+| Step | PR | Status | What shipped |
+|---|---|---|---|
+| 1 | #2004 | done | PascalCase interface type fallback in MIR (`Error` → opaque `ptr`) |
+| 2 (partial) | #2004 | done | Cross-pkg interface type registration in signature table |
+| 3 | #2007 | done | `Aggregate → Ptr` assign boxing for struct→interface (e.g. `Err(error.new(...))`) |
+| 3.5 | #2009, #2010 | partial | Cross-pkg interface methods registered in MIR signature table + impl-method reach expansion |
+| 3.5 (vtable) | — | **open** | Virtual dispatch (`err.message()`) — needs vtable injection |
+| 4 | #2007 | done | Regression guard: `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct` |
+
+**Verified behavior:** `Result<Int, Error>` with `Err(error.new("oops"))` runs
+through match-on-discriminant (`Err(_) -> …`) end-to-end when
+`OSTY_REQUIRE_REAL_LLVM_EMISSION=1` and `osty-self` is cached.
+
+**Still open:** cross-pkg **vtable** dispatch (step 3.5 follow-up in
+`internal/mir/lower.go` comments). Symbol-mangling wall (§2–§7) and
+interface boxing are independent axes — fixing boxing does not unblock
+`toolchain.front*` link mismatches.
