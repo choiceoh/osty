@@ -50,6 +50,27 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
 
+### Self-rebuild ratchet (`verify-self-rebuild`)
+
+`scripts/verify-self-rebuild` (also `just verify-self-rebuild`) is the
+end-to-end self-host byte-parity gate. After PRs [#2022](https://github.com/choiceoh/osty/pull/2022) and the source-compiler ratchet completion, every stage must be built by the **previous** stage's `osty-self` binary — not by forwarding MIR-JSON or host-side compile drivers.
+
+Flow (simplified):
+
+1. Host `.bin/osty` runs gates + builds `osty-self-1` from `toolchain/`
+2. `osty-self-1` → `osty-self-2-seed` → `osty-self-2` → `osty-self-3`, each rebuilding `toolchain/` through HIR → Mono → MIR → LIR Proto → LLVM IR
+3. `osty-self-2` and `osty-self-3` are compared byte-for-byte (Mach-O UUID/signature normalized on Darwin)
+
+Each stage's driver must report `osty-self source compiler: enabled` via
+`--selfhost-doctor`, or fall back to a direct `lir-proto-lower` smoke probe.
+Forbidden paths are enforced by `TestVerifySelfRebuildRequiresSourceCompilerStages`
+in `internal/selfhost/phase0_wiring_test.go` (no `build_self_binary_with_host_mir_backend`, no MIR-JSON-only backend).
+
+Recipes: `just verify-self-rebuild` (full), `just verify-self-rebuild-gates`
+(gates only), `just verify-self-rebuild-fast` (skip gates, reuse stage1 cache).
+Use `--reuse-stage1` for iteration — it consults the content-addressed
+selfhostcache under `.osty/cache/self-host/`.
+
 ## Common repo recipes
 
 - build CLI: `go build -o .bin/osty ./cmd/osty`

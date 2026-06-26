@@ -149,3 +149,43 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR return-type recovery |
 | (이 doc) | cross-pkg link symbol mangling wall trigger measurement |
+
+## 10. Cross-pkg interface support (2026-05)
+
+Separate from free-fn link/mangling (§1–§9), cross-package **interface**
+values need nominal-type lowering, boxing, and (eventually) vtable injection
+when the interface type lives in another package (for example `Error` from
+`std.error` consumed by `std.keychain`).
+
+### Shipped steps
+
+| Step | PR | What landed | Code anchor |
+|---|---|---|---|
+| 1 | [#2004](https://github.com/choiceoh/osty/pull/2004) | Cross-pkg nominal types lower to opaque `ptr` in LIR Proto when no local layout exists (PascalCase heuristic avoids silent `int` → `ptr`) | `toolchain/lir_proto.osty` `lirLowerMirType` / `lirLowerMirType_module` |
+| 2 (partial) | [#2004](https://github.com/choiceoh/osty/pull/2004) | Cross-pkg call arg/return types no longer decline with `cross-module call arg type T is not implemented` when the nominal is external | same |
+| 3 | [#2007](https://github.com/choiceoh/osty/pull/2007) | `Aggregate → Ptr` assign coercion boxes struct values on the GC heap for cross-pkg interface slots (pattern-match / `Err(_)` subset) | `toolchain/lir_proto.osty` assign arm ~3953 |
+| 3.5a | [#2009](https://github.com/choiceoh/osty/pull/2009) | Interface methods registered in MIR signature table so call sites declare correct return/param shapes (`Error__message` → `String`, not `i64`) | `internal/mir/lower.go` InterfaceDecl case |
+| 3.5b | [#2010](https://github.com/choiceoh/osty/pull/2010) | `BuiltinTypeOwningModule("Error")` + `expandInterfaceMethodReach` inject concrete impl bodies (`BasicError.message`, etc.) | `internal/backend/stdlib_inject.go` |
+
+Regression guard: `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct`
+(`internal/backend/llvm_crosspkg_iface_box_test.go`) — `Err(error.new(...))`
+through match arm.
+
+### Remaining gap — cross-pkg vtable injection
+
+Boxing (step 3) is a **prerequisite**, not full interface dispatch. Calling a
+method on a cross-pkg interface value (for example `err.message()` on `Error`)
+still needs vtable wiring across package boundaries. Until that lands:
+
+- `Err(_)` / discriminant-only pattern arms work (boxed ptr is enough).
+- Virtual dispatch on cross-pkg interface receivers fails at LIR or link.
+
+`TestLLVMBackendStdKeychainApiKeyWrapperLowers`
+(`internal/backend/llvm_keychain_test.go`) documents the vtable gap and pins
+`OSTY_STDLIB_BODY_LOWER=0` for symbol-level coverage until vtable injection lands.
+
+### Operational note
+
+These paths assume **default-on** stdlib body injection (`OSTY_STDLIB_BODY_LOWER`
+unset). Bisect with `=0` only when isolating injection-specific failures — see
+`ARCHITECTURE.md` §Query / `OSTY_STDLIB_BODY_LOWER`.

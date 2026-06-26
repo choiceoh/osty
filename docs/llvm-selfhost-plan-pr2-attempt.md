@@ -1,6 +1,9 @@
 # LLVM self-host plan — PR2 attempt (std.json backend wall)
 
 > **상태**: 측정 + revert (이 PR).
+> **Historical note (2026-05)**: `OSTY_STDLIB_BODY_LOWER` default flipped to ON in
+> PR #1998. Attempt 1 below used the pre-flip default-off env; today unset means
+> injection ON.
 > **선행**: [docs/llvm-selfhost-plan.md](llvm-selfhost-plan.md), [docs/llvm-selfhost-plan-pr1c-1-attempt.md](llvm-selfhost-plan-pr1c-1-attempt.md), PR [#1826](https://github.com/choiceoh/osty/pull/1826) (옵션 1 — `std.io.readLine` MIR symbol rewrite).
 > **소유**: backend / toolchain.
 
