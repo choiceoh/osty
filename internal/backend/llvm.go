@@ -614,12 +614,7 @@ func joinClangOutput(stderr, stdout []byte) string {
 	return strings.Join(parts, "\n")
 }
 
-func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
-	for _, f := range features {
-		if f == "mir-backend" {
-			return false
-		}
-	}
+func useNativeOwnedLLVMIR(_ []string, emit EmitMode) bool {
 	switch emit {
 	case EmitLLVMIR, EmitObject, EmitBinary:
 		return true

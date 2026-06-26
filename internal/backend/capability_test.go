@@ -203,21 +203,6 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 	if !matrix.CanRoute(llvmDispatchNativeOwned) {
 		t.Fatal("CanRoute(native-owned) = false, want true")
 	}
-
-	matrix = newLLVMDispatchCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true}, []string{"mir-backend"}, EmitLLVMIR)
-	row, ok = capabilityRow(matrix, CapabilityNativeOwned)
-	if !ok {
-		t.Fatal("native-owned row missing when feature disables it")
-	}
-	if row.LLVMEmittable {
-		t.Fatalf("native-owned row = %+v, want LLVMEmittable=false under mir-backend feature", row)
-	}
-	if matrix.CanRoute(llvmDispatchNativeOwned) {
-		t.Fatal("CanRoute(native-owned) = true under mir-backend feature, want false")
-	}
-	if got, want := matrix.DispatchRoute(), llvmDispatchMIRDirect; got != want {
-		t.Fatalf("DispatchRoute = %q, want %q", got, want)
-	}
 }
 
 func capabilityRow(matrix CapabilityMatrix, id CapabilityID) (CapabilityRow, bool) {
