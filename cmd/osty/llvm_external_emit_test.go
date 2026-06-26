@@ -75,33 +75,3 @@ func TestTryExternalPackageLLVMArtifactsUsesCoveredExternalIR(t *testing.T) {
 		t.Fatalf("result = %#v, want object artifact", result)
 	}
 }
-
-func TestTryExternalPackageLLVMArtifactsSkipsWhenFeatureOverridesNativePath(t *testing.T) {
-	pkg := &resolve.Package{Dir: t.TempDir(), Name: "demo"}
-
-	oldTry := tryExternalPackageLLVMIR
-	t.Cleanup(func() { tryExternalPackageLLVMIR = oldTry })
-
-	called := false
-	tryExternalPackageLLVMIR = func(string, *resolve.Package) ([]byte, bool, []error, error) {
-		called = true
-		return nil, false, nil, nil
-	}
-
-	result, used, err := tryExternalPackageLLVMArtifacts(context.Background(), backend.EmitBinary, backend.Layout{
-		Root:    pkg.Dir,
-		Profile: "debug",
-	}, "app", []string{"mir-backend"}, nil, nil, "/tmp/main.osty", pkg)
-	if err != nil {
-		t.Fatalf("tryExternalPackageLLVMArtifacts() error = %v", err)
-	}
-	if used {
-		t.Fatal("used = true, want false")
-	}
-	if result != nil {
-		t.Fatalf("result = %#v, want nil", result)
-	}
-	if called {
-		t.Fatal("external runner should not be called when mir-backend disables native-owned path")
-	}
-}

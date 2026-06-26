@@ -19,6 +19,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -375,7 +376,6 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
     println(1)
 }
 `)
-	req.Features = []string{"mir-backend"}
 	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
 		return []byte("declare i32 @printf(ptr, ...)\ndefine i32 @main() { ret i32 0 }\n"), true, nil, nil
 	})
@@ -458,6 +458,20 @@ func withNativeMIRPayloadEmitter(t *testing.T, fn func(Entry, string) ([]byte, b
 	t.Cleanup(func() {
 		tryNativeOwnedMIRPayloadLLVMIRText = oldTry
 		nativeMIRPayloadEmitterTestMu.Unlock()
+	})
+}
+
+// disableNativeOwnedRoute marks the entry as carrying injected stdlib
+// bodies so the capability matrix skips the native-owned fast path and
+// routes through mir-direct. Replaces the retired `mir-backend` feature
+// flag that tests used for the same purpose.
+func disableNativeOwnedRoute(entry *Entry) {
+	if entry.IR == nil {
+		return
+	}
+	entry.IR.Decls = append(entry.IR.Decls, &ir.FnDecl{
+		Name: "osty_std_test_native_owned_blocker",
+		Body: &ir.Block{},
 	})
 }
 
@@ -736,17 +750,6 @@ func TestUseNativeOwnedLLVMIRDefaultsEnabled(t *testing.T) {
 	}
 }
 
-func TestUseNativeOwnedLLVMIRFeatureOverrides(t *testing.T) {
-	t.Parallel()
-
-	if useNativeOwnedLLVMIR([]string{"mir-backend"}, EmitLLVMIR) {
-		t.Fatal("useNativeOwnedLLVMIR(mir-backend, EmitLLVMIR) = true, want false")
-	}
-	if useNativeOwnedLLVMIR([]string{"mir-backend"}, EmitObject) {
-		t.Fatal("useNativeOwnedLLVMIR(mir-backend, EmitObject) = true, want false")
-	}
-}
-
 // TestLLVMBackendRefusesNilIR confirms the dispatcher's IR-only
 // contract: without req.Entry.IR the backend must reject the request
 // rather than silently fall through to any AST-based path (no such
@@ -815,7 +818,7 @@ func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
     println(s.len())
 }
 `)
-	req.Features = []string{"mir-backend"}
+	disableNativeOwnedRoute(&req.Entry)
 	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
 		return []byte("; mir-direct covered by test stub\n"), true, nil, nil
 	})
@@ -851,7 +854,6 @@ func TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge(t *testing.T) {
     println(1)
 }
 `)
-	req.Features = []string{"mir-backend"}
 	req.Entry.MIR = nil
 
 	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
@@ -1202,29 +1204,12 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5
-// originally tested the post-MIR/pre-LIR-Proto "MIR backend" path
-// gated on the `mir-backend` feature flag. That feature flag is still
-// observed by `toolchain/mir_generator.osty` (and other tests assert
-// the `osty LLVM MIR backend` header), but for THIS specific test
-// the routing dispatch in `internal/backend/llvm.go` now consumes
-// `mir-backend` and dispatches to the LIR Proto subprocess (the
-// `mir-direct` route in `llvmDispatchMIRDirect`). So the expected
-// header for this test is `osty LIR Proto` rather than the old
-// `osty LLVM MIR backend`. The runtime symbols
-// (`@osty_rt_strings_Chars` / `Bytes` / `ByteLen`) still land in
-// the emitted text via the LIR Proto path, so the substantive
-// coverage is preserved. LIR Proto emits `define void @main()`
-// because the runtime startup wrapper handles the C-ABI return —
-// the original `define i32 @main()` + `ret i32 0` asserts now
-// belong to the runtime wrapper, not the user `main`.
-//
-// Test name kept as-is because two other tests
-// (`TestLLVMBackendDispatchTraceReportsSelectedRoute` route map +
-// `TestLLVMBackendDocsMentionDispatchRoutes` docs guard) reference
-// it by name in `llvmDispatchMIRDirect`. Renaming would require
-// updating both references plus the docs/mir_design.md guard; a
-// follow-up cleanup could rename in one sweep.
+// TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics exercises string
+// method lowering on the mir-direct route (native-owned is skipped when
+// injected stdlib bodies are present). The LIR Proto subprocess emits
+// the runtime symbols `@osty_rt_strings_Chars` / `Bytes` / `ByteLen`.
+// LIR Proto emits `define void @main()` because the runtime startup
+// wrapper handles the C-ABI return.
 func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 	t.Parallel()
 	requireRealLLVMEmission(t)
@@ -1243,7 +1228,7 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
     }
 }
 `)
-	req.Features = []string{"mir-backend"}
+	disableNativeOwnedRoute(&req.Entry)
 
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
@@ -1293,7 +1278,7 @@ func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
     }
 }
 `)
-	req.Features = []string{"mir-backend"}
+	disableNativeOwnedRoute(&req.Entry)
 
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
@@ -1304,8 +1289,8 @@ func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
 	ir := string(irBytes)
-	if !strings.Contains(ir, "osty LLVM MIR backend") {
-		t.Fatalf("mir-backend feature did not reach MIR emitter (header missing):\n%s", ir)
+	if !strings.Contains(ir, "osty LLVM MIR backend") && !strings.Contains(ir, "osty LIR Proto") {
+		t.Fatalf("mir-direct backend did not reach emitter (header missing):\n%s", ir)
 	}
 	for _, want := range []string{
 		"@osty_rt_strings_Chars",
