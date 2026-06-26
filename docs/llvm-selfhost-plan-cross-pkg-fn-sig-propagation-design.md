@@ -1,10 +1,12 @@
 # LLVM self-host — cross-pkg fn signature propagation through IR (Task B design)
 
-> **상태**: design (architectural change — not yet implemented).
+> **상태**: **shipped** (PR [#1937](https://github.com/choiceoh/osty/pull/1937), 2026-05).
+> `UseDecl.Imports`, `ir.lowerUseDecl` population, and `useDeclFnType` recovery
+> are live. This doc remains the architectural record; see §6 for the landed
+> sub-PR split.
 > **선행**: PR #1934 (`?`-prefix synthesis), PR #1936 (Option/Result MIR
 > recovery), PR #1937 (List/Set MIR recovery + library-mode symbol
-> qualification + cross-pkg link wall measurement). 본 doc 는 cross-pkg
-> trajectory 의 다음 단계.
+> qualification + cross-pkg link wall measurement).
 > **소유**: ir / mir / check.
 
 ## 1. 30초 요약
@@ -16,10 +18,10 @@ library-mode qualification 이 link 측 mangling drift 는 해소했지만, 호�
 사이트의 return type 은 여전히 leak 가능. UseDecl 의 cross-pkg fn 시그니처
 plumbing 이 미완성.
 
-## 2. 현재 위치의 leak path
+## 2. Leak path (pre-ship; fixed in PR #1937)
 
-`internal/mir/lower.go::useDeclFnType` (line 4055) 는 `*ir.UseDecl.GoBody`
-만 walk:
+Before Task B landed, `internal/mir/lower.go::useDeclFnType` consulted only
+`*ir.UseDecl.GoBody`:
 
 ```go
 func useDeclFnType(use *ir.UseDecl, name string) *ir.FnType {
@@ -149,10 +151,13 @@ PR (B-3): useDeclFnType + MIR recovery 활성화 + integration test
 ## 6. 본 doc 의 산출물
 
 - `docs/llvm-selfhost-plan-cross-pkg-fn-sig-propagation-design.md` (이 doc)
-  — Task B 의 architectural design + sub-PR 분할 권장
-- 코드 변경 zero
+  — Task B architectural design + sub-PR 분할 기록
+- **Landed (PR #1937)**: `ir.UseDecl.Imports`, `lowerUseDecl` population from
+  `check.Result.ImportSurfaces`, `useDeclFnType` → `matchUseDeclFn(use.Imports, …)`,
+  focused tests in `internal/mir/use_decl_fn_type_imports_test.go`.
 
-다음 fresh session 의 cross-pkg trajectory 의 다음 단계 시작점.
+Follow-on cross-pkg work (interface boxing, vtable injection) is tracked in
+[`llvm-selfhost-plan-cross-pkg-link-measurement.md`](llvm-selfhost-plan-cross-pkg-link-measurement.md) §10.
 
 ## 7. 관련 PR 카탈로그
 
@@ -164,4 +169,4 @@ PR (B-3): useDeclFnType + MIR recovery 활성화 + integration test
 | [#1934](https://github.com/choiceoh/osty/pull/1934) | `?`-prefix synthesis from `ParamDefaults` |
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR recovery + library-mode symbol qualification + 본 doc 자매 doc |
-| (Task B; 이 doc) | UseDecl.Imports plumbing — cross-pkg fn sig propagation |
+| [#1937](https://github.com/choiceoh/osty/pull/1937) | **Task B shipped** — UseDecl.Imports plumbing + cross-pkg fn sig propagation |

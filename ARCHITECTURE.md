@@ -552,6 +552,14 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+**Cross-pkg interface values** (separate from free-fn link): when an interface
+type is defined in another package (for example `Error` from `std.error`),
+LIR Proto lowers unknown nominals to opaque `ptr`, boxes struct payloads on
+assign, and registers interface method signatures in MIR. Virtual dispatch
+across package boundaries (vtable injection) is still incomplete — pattern-match
+on `Err(_)` works; `err.message()` on a cross-pkg `Error` does not yet. See
+[`docs/llvm-selfhost-plan-cross-pkg-link-measurement.md`](docs/llvm-selfhost-plan-cross-pkg-link-measurement.md) §10.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
