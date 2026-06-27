@@ -21483,10 +21483,8 @@ int64_t osty_gc_debug_dispatch_via_header_total(void) {
   return osty_gc_dispatch_via_header_total;
 }
 
-/* Phase 3 scaffolding accessors. The flag is opt-in via
- * `OSTY_GC_TINYTAG_YOUNG=1`; today it gates nothing observable but the
- * hook predicate exists so the eventual Phase 5 cutover is a one-line
- * change inside `osty_gc_arena_is_young_page`. */
+/* Young-space routing accessor. Default ON since Phase 8 step 2;
+ * `OSTY_GC_TINYTAG_YOUNG=0` is the kill switch. */
 int64_t osty_gc_debug_tinytag_young_enabled(void) {
   return osty_gc_tinytag_young_now() ? 1 : 0;
 }
