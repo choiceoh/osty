@@ -30,6 +30,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 ### CLI, toolchain, generated-output, or self-host path changes
 
 - include `just verify-selfhost`
+- for end-to-end self-host parity (stage2/stage3 byte compare), also run
+  `just verify-self-rebuild` or `scripts/verify-self-rebuild --reuse-stage1`
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
@@ -49,6 +51,10 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
   only when isolating injection-specific failures
 - strict-mode failure baseline:
   [`docs/backend-test-failures-audit-2026-05-26.md`](../backend-test-failures-audit-2026-05-26.md)
+- LIR Proto subprocess env vars (`OSTY_LIRPROTO_*`) and MIR JSON fallback
+  chain: `cmd/osty-native-lirproto/main.go`, `README.md`, `ARCHITECTURE.md`
+- self-rebuild ratchet rejects `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` — do not
+  set these when running `scripts/verify-self-rebuild`
 
 ## Common repo recipes
 

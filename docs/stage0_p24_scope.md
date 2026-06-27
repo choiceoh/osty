@@ -14,6 +14,16 @@
 
 audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
 
+### 0.1 재검증 baseline (2026-06-27)
+
+| 메트릭 | 값 | 출처 |
+|---|---|---|
+| Stage0 audit cover (toolchain 전체) | **100%** (6489 / 6489) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` — gate in `scripts/verify-self-rebuild` |
+| `install-self` offline bootstrap | **통과** | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` — CI `fresh-clone-source-bootstrap.yml` |
+| Self-rebuild ratchet | **stage2/stage3 byte parity** | `just verify-self-rebuild` (PR #2022) |
+
+§0 의 94.2% / 1340-decline 수치는 P24 작업 시작 시점 스냅샷. 현 baseline 은 stage0 audit 100% + self-rebuild ratchet 통과. 남은 work 는 MIR-direct backend correctness (`docs/backend-test-failures-audit-2026-05-26.md`) 과 cross-pkg interface vtable step 3.5.
+
 ## 1. P24 후보 함수 — shape 별 분리
 
 원래 "tyToRepr / frontTypeReprToString / useDeclTailAfter 형 (match-on-enum returning struct)" 으로 묶었으나, 실제 MIR shape 측정 결과 **세 함수가 완전히 다른 패턴**:
