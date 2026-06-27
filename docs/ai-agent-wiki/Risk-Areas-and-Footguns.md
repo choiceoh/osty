@@ -50,6 +50,14 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` are **rejected** by
+  `scripts/verify-self-rebuild` — every stage must be produced by the previous
+  stage driver
+- LIR Proto timeouts on large MIR JSON payloads are expected; default timeout
+  scales to 10 minutes. Do not disable compat retries without reading
+  `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` semantics first
+- PR #2029 removed `LirLowerConfig.featureGates` — do not reintroduce
+  feature-flag plumbing around LIR Proto routing
 
 ## Spec traps
 

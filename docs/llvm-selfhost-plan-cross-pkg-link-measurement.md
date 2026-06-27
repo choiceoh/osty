@@ -149,3 +149,23 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR return-type recovery |
 | (이 doc) | cross-pkg link symbol mangling wall trigger measurement |
+
+## 10. Cross-pkg interface boxing (PRs #2004–#2010)
+
+Follow-on from the link-symbol wall (§1–§9). These PRs land cross-package
+**interface** boxing so struct→`Error` assignments and `Err(...)` constructs
+resolve through the iface ABI instead of silently mis-lowering:
+
+| PR | scope |
+|---|---|
+| [#2004](https://github.com/choiceoh/osty/pull/2004) | Step 1 + partial step 2: cross-pkg interface support scaffold |
+| [#2007](https://github.com/choiceoh/osty/pull/2007) | Step 3/4: struct→`Error` assign boxing |
+| [#2008](https://github.com/choiceoh/osty/pull/2008) | Regression guard: cross-pkg `Err` construct boxing |
+| [#2009](https://github.com/choiceoh/osty/pull/2009) | Cross-pkg interface methods in MIR signature table |
+| [#2010](https://github.com/choiceoh/osty/pull/2010) | Cross-pkg interface impl-method reach expansion (step 3.5 part 2) |
+
+**Still open**: cross-pkg **vtable injection** for interface dispatch on values
+imported from dependency packages (step 3.5 remainder). Tests such as
+`TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct` lock in the boxing
+path; full iface dispatch across package boundaries remains tracked in
+`SPEC_GAPS.md::cross-pkg-module-resolution` and the LLVM self-host plan.
