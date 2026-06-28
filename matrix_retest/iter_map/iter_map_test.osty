@@ -1,6 +1,6 @@
 // Matrix §2.1.A retest: iter.map(closure) was "FAIL". After PR
 // #1981 (closure-taking collections lowering complete), this should
-// pass with OSTY_STDLIB_BODY_LOWER=1.
+// pass with bodied stdlib injection enabled.
 
 use std.testing
 

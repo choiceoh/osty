@@ -15,7 +15,7 @@
 ```sh
 export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
 export OSTY_SELF_BIN="$PWD/toolchain/.osty/out/debug/llvm/osty-self"
-export OSTY_STDLIB_BODY_LOWER=1
+# Bodied stdlib injection is always on in PrepareEntry.
 
 for d in matrix_retest/*/; do
   [ -f "$d/osty.toml" ] || continue

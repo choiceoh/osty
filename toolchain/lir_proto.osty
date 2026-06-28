@@ -6546,7 +6546,7 @@ fn lirMapProjectionReceiverTypeName(l: LirMirFunctionLowerer, currentTypeName: S
     ""
 }
 // lirCanonBuiltinTypeName re-associates a monomorphized builtin-generic
-// struct with its surface form. `OSTY_STDLIB_BODY_LOWER` injects
+// struct with its surface form. PrepareEntry injects
 // `List<T>` / `Map<K,V>` / `Set<T>` as generic struct templates so the
 // monomorphizer can specialize their bodied methods; the resulting
 // specializations carry a mangled `_ZTS…` nominal name that the
@@ -10696,7 +10696,7 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, rawName: String) -> LirType {
         return lirLowerMirTypeCached(l, name, LirType {llvm: "ptr", className: LirTypePtr})
     }
     // A monomorphized builtin-generic struct (`_ZTS…List…`) injected by
-    // OSTY_STDLIB_BODY_LOWER is pointer-shaped exactly like the surface
+    // PrepareEntry injects pointer-shaped stdlib bodies exactly like the surface
     // `List` / `Map` / `Set` it specializes. `lirIsRefBuiltinTypeName`
     // prefix-matches, so the re-associated `List<Int>` form classifies
     // as a ref-builtin without needing a separate head extractor.
