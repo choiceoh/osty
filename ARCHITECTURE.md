@@ -577,6 +577,47 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR emission forks `osty-native-lirproto`
+(`cmd/osty-native-lirproto/`), which stages stdin JSON to a temp file and
+execs `osty-self lir-proto-lower` or `lir-proto-lower-mir-json`. A
+`declined: true` response lets `internal/backend/llvm.go` fall back to the
+stage0 emergency emitter (when `OSTY_STAGE0_FALLBACK=1`) or surface a
+structured `LLVM000` error — there is no in-process Go MIR emitter after
+PR #1405.
+
+Fallback chain when `lir-proto-lower-mir-json` declines
+(`cmd/osty-native-lirproto/main.go::lowerLegacyMIRJSON`):
+
+1. **Stage0 MIR JSON compat** — rehydrate the caller MIR via `mirjson` and
+   emit LLVM IR through `internal/backend/stage0/`.
+2. **Source compat (opt-in)** — re-run `lir-proto-lower` on the original
+   source only when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is positive and
+   the source fits; unset/`0` disables this path (ratchet default).
+3. **Timeout compat** — after a MIR JSON **timeout**, retry stage0 compat
+   when the staged payload is ≤ `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES`
+   (`0` disables).
+
+Timeout budget: base 20s plus 15s per MiB of staged MIR JSON (capped at
+10 minutes) so large `toolchain/` self-rebuild payloads can finish without
+premature stage0 fallback.
+
+Env knobs are documented in `README.md` under **LIR Proto subprocess**.
+`OSTY_SELF_REBUILD_FORWARD_ARGS` threads argv to `toolchain/main.osty`
+during ratchet builds (`scripts/verify-self-rebuild`). PR #2029 retired dead
+`LirLowerConfig.featureGates` helpers from `toolchain/lir_proto.osty`;
+dispatch routing lives in `llvm.go::generateLLVMIR` / `emitLLVMFallback`.
+
+#### Self-rebuild ratchet vs snapshot parity
+
+`just verify-selfhost` runs only `SnapshotParity|CoreSnapshotParity` under
+`internal/ci` and `internal/runner`. `just verify-self-rebuild` (see
+`scripts/verify-self-rebuild`) is the broader gate: host toolchain check,
+stage0 audit, native LIR Proto route probes, then stage1 → stage2 → stage3
+builds with **byte-identical** `osty-self-2` and `osty-self-3`. External
+stage binary overrides (`OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN`) are rejected.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
