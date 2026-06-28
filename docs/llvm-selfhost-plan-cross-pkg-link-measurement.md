@@ -149,3 +149,19 @@ package-qualified 로 rename. consumer 와 dep 양쪽 변경 zero, 단 빌드 to
 | [#1936](https://github.com/choiceoh/osty/pull/1936) | Option/Result MIR return-type recovery |
 | [#1937](https://github.com/choiceoh/osty/pull/1937) | List/Set MIR return-type recovery |
 | (이 doc) | cross-pkg link symbol mangling wall trigger measurement |
+
+## 10. Cross-pkg interface boxing (steps 1–4, 2026-05)
+
+PRs [#2004](https://github.com/choiceoh/osty/pull/2004)–[#2010](https://github.com/choiceoh/osty/pull/2010) land the first cross-pkg interface support slice:
+
+| Step | PR | Scope | Status |
+|---|---|---|---|
+| 1 | #2004 | Cross-pkg interface types lower to opaque `ptr` (PascalCase fallback) | ✓ |
+| 2 (partial) | #2009 | Register cross-pkg interface methods in MIR signature table | ✓ |
+| 3 | #2007 | Struct → `Error` assign boxes aggregate on heap (`Aggregate → Ptr`) | ✓ — `TestLLVMBackendBinaryCrossPkgInterfaceBoxingErrConstruct` |
+| 3.5 (partial) | #2010 | Cross-pkg interface impl-method reach expansion | ✓ partial |
+| 4 | #2011–#2012 | Match-arm pattern binding types from scrutinee shape | ✓ |
+
+**Still open — step 3.5 vtable injection**: `err.message()` virtual dispatch across packages needs vtable wiring (`internal/mir/lower.go` comment; `llvm_crosspkg_iface_box_test.go`). `Err(_)` pattern match is in scope today; method calls on boxed cross-pkg interfaces are not.
+
+Code anchors: `toolchain/lir_proto.osty` cross-pkg interface boxing fallback; `internal/backend/llvm_crosspkg_iface_box_test.go`.

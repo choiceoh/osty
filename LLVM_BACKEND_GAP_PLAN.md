@@ -130,10 +130,10 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 ### Phase 0 — Bootstrap chain unblock (모든 phase 선행 필수)
 
-**상태 (2026-05-11)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능. 현재 상태:
-- 디폴트 registry (`github.com/choiceoh/osty/releases/.../osty-self-snapshots`) — 자산 0건 (404 확인).
-- `OSTY_STAGE0_FALLBACK=1` — P21–P23 머지됨에도 `install-self`가 **1340 function declines** 로 차단 (`OSTY_STAGE0_LIST_ALL_DECLINES=1` 확인).
-- 캐시/사전빌드 osty-self 없음.
+**상태 (2026-06-28 갱신)**: 모든 Phase C–F closeout 작업은 `osty-self` 바이너리가 있어야 verification 가능.
+- Fresh clone: `just bootstrap` (registry fetch or `OSTY_STAGE0_FALLBACK=1` offline path) populates `.osty/cache/self-host/`.
+- Stage0 checker-bundle audit: **100%** (PR #1858). Full-binary `install-self` / production native-checker link still blocked on LIR Proto + cross-pkg walls — see `SPEC_GAPS.md` audit-pass ≠ build-pass note.
+- Historical 2026-05-11 baseline: 1340 install-self declines before audit 100% landed.
 
 **0-A — Stage0 P24+ unlock 진행** (master plan v2 — `docs/osty_self_b2_1_audit.md §4.3`)
 - 다음 차단 클러스터를 P-phase로 분할. `tyToRepr` / `frontTypeReprToString` / `useDeclTailAfter` / `selfCheck*` / `checkLookup*` / `checkSubst*` 등이 decline top 그룹.

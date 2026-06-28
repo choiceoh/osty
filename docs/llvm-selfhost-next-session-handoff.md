@@ -70,10 +70,11 @@ just front    # 전체 front-end 회귀
 
 ## 4. 알아야 할 wall + 우회 패턴
 
-### 4.1 stage0 fallback 의 stdlib body injection wall
+### 4.1 stage0 fallback 의 stdlib body injection wall (2026-06-28 갱신)
 
-- `OSTY_STDLIB_BODY_LOWER=0` (default): `std.json.parseValue` 등 undefined symbol (link 실패)
-- `OSTY_STDLIB_BODY_LOWER=1`: stdlib body inject 되나 stage0 패턴 매칭 부족 → `osty_std_json__asString does not match any stage0 pattern`
+- `OSTY_STDLIB_BODY_LOWER` **default ON** (PR #1998 / #2013): `PrepareEntry` injects bodied stdlib methods; CI and `just bootstrap` exercise the production default.
+- `OSTY_STDLIB_BODY_LOWER=0`: bisect-only — drops injection, may surface missing `osty_rt_*` / undefined stdlib symbols at link.
+- Stage0 path may still decline on injected bodies that lack stage0 patterns → `does not match any stage0 pattern` (audit-pass ≠ build-pass; see `SPEC_GAPS.md`).
 - **우회**: PR1c 옵션 1 패턴 — `internal/mir/lower.go::qualifiedSymbol` 에 stdlib → C runtime symbol rewrite (`std.io.readLine → osty_rt_io_read_line` 사례). C runtime 함수가 존재해야 작동.
 - **`rewriteStdlibSymbolToRuntime` 에 향후 추가**:
   ```go

@@ -4,15 +4,19 @@
 > **선행**: [docs/osty_self_b2_1_audit.md](osty_self_b2_1_audit.md) §4.3 master plan v2, [docs/osty_self_bootstrap_design.md](osty_self_bootstrap_design.md) §4 P21–P23 row.
 > **차단 대상**: [LLVM_BACKEND_GAP_PLAN.md](../LLVM_BACKEND_GAP_PLAN.md) Phase 0-A (모든 Phase C–F closeout 의 선행).
 
-## 0. 현 측정 (2026-05-11)
+## 0. 현 측정 (revalidated 2026-06-28)
 
 | 메트릭 | 값 | 출처 |
 |---|---|---|
-| Stage0 audit cover (toolchain checker 모듈) | 94.2% (6112 / 6489) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
-| `install-self` 실제 decline | **1340 functions** | `OSTY_STAGE0_FALLBACK=1 OSTY_STAGE0_LIST_ALL_DECLINES=1 .bin/osty install-self` |
-| 누락 클러스터 (audit top 30) | `blocks=7 params=2 ret=String feats=call,intr,fr` 류 dominate | 위 audit 명령 출력 |
+| Stage0 audit cover (toolchain checker 모듈) | **100%** (8240 / 8241) — PR [#1858](https://github.com/choiceoh/osty/pull/1858) | `OSTY_STAGE0_AUDIT=1 go test -run TestStage0ToolchainAudit -v ./internal/backend/` |
+| `install-self` / full-binary stage0 cover | **audit-pass ≠ build-pass** — monomorph + backend-bundle 함수는 audit scope 밖 | `SPEC_GAPS.md` 2026-05-17 scope note; `docs/llvm-selfhost-next-session-handoff.md` §10 |
+| Historical baseline (2026-05-11) | 94.2% audit / 1340 install-self declines | 아래 §1–§6 후보 함수 스코프는 이 시점 기준으로 작성됨 |
 
-audit % 와 install-self 실제 decline 의 격차 = audit이 toolchain checker bundle 만 측정, install-self는 binary 컴파일 → monomorphization 등으로 함수 수 1340 까지 늘어남.
+audit 100% 는 **checker bundle** (`ToolchainCheckerFiles`) 만 측정한다.
+`install-self` / `verify-self-rebuild` 는 monomorphized backend 함수
+(`mir_json`, `lir_proto`, `mir_lower` 등)까지 reach 하므로 audit % 와
+실제 부트스트랩 decline 수는 여전히 격차가 날 수 있다. 남은 wall 은
+주로 LIR Proto / cross-pkg link / production-path link parity 축이다.
 
 ## 1. P24 후보 함수 — shape 별 분리
 
