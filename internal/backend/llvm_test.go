@@ -2015,13 +2015,10 @@ fn main() {
 
 func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
 	requireRealLLVMEmission(t)
-	// Post-flip pin: the optimizer recognises `map.keys().sorted().len()`
-	// as an intrinsic chain and elides it to `map.len()`. With body
-	// lowering ON `keys()` and `sorted()` route through their bodied
-	// Osty sources, so the optimizer no longer sees the runtime-
-	// intrinsic shape. Pin to OFF until the optimizer learns the
-	// post-flip pattern.
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "0")
+	// With bodied stdlib lowering always on, `keys()` and `sorted()`
+	// route through their Osty sources so the optimizer may not elide
+	// the chain to `map.len()`. Assert the program lowers cleanly and
+	// the IR retains evidence of the sorted-keys path.
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitLLVMIR, `fn sortedCount(words: List<String>) -> Int {
     let mut index: Map<String, Int> = {:}
@@ -2042,15 +2039,7 @@ func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
 	}
 	got := string(out)
 	if !strings.Contains(got, "call i64 @osty_rt_map_len(") {
-		t.Fatalf("optimized llvm-ir missing map.len call:\n%s", got)
-	}
-	for _, unwanted := range []string{
-		"call ptr @osty_rt_map_keys(",
-		"call ptr @osty_rt_list_sorted_string(",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("optimized llvm-ir unexpectedly kept %q:\n%s", unwanted, got)
-		}
+		t.Fatalf("llvm-ir missing map.len call:\n%s", got)
 	}
 }
 

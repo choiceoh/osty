@@ -57,26 +57,14 @@ build-all: build build-checker build-lirproto
 # triggers. Override on the command line (`OSTY_STAGE0_FALLBACK= just
 # bootstrap`) when you want to verify the prebuilt-only path instead.
 bootstrap: build-all
-    # PR #2013 inlined the `Map<String, Int>.update` toolchain call
-    # sites that previously needed `OSTY_STDLIB_BODY_LOWER=0` to
-    # dodge the closure-arg-drop bug introduced by PR #1998's
-    # default-on flip. `install-self` now works under the default
-    # env, so the bootstrap recipe exercises the same path
-    # production `osty build` walks.
-    #
-    # If you hit a fresh stdlib-body lowering regression while
-    # extending this recipe, set `OSTY_STDLIB_BODY_LOWER=0 just
-    # bootstrap` from the shell as the escape hatch — same
-    # contract as before, just no longer the default. Removing the
-    # default workaround means the CI gate
-    # (`fresh-clone-source-bootstrap.yml`) now actually catches
-    # regressions that need body-lowering ON to surface, which is
-    # what reviewer feedback flagged after PR #1998 silently
-    # bypassed the gate for an entire 14-PR cycle.
+    # `install-self` exercises the production stdlib-body injection path
+    # that `PrepareEntry` always runs. The CI gate
+    # (`fresh-clone-source-bootstrap.yml`) catches regressions that only
+    # surface with bodied stdlib lowering enabled.
     #
     # `OSTY_STAGE0_FALLBACK="${VAR:-1}"` stays as documented above —
     # it's the chicken-and-egg fix from PR #1989 and is independent
-    # of the body-lowering flip.
+    # of stdlib body injection.
     OSTY_STAGE0_FALLBACK="${OSTY_STAGE0_FALLBACK:-1}" {{bin}} install-self
 
 # cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
