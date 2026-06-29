@@ -376,6 +376,7 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONUnsupported(t *testing.T) {
 	}
 
 	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(stage0FallbackEnv, "1")
 	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
 	t.Setenv("FAKE_OSTY_SELF_STDOUT", "; source fallback should not run\n")
@@ -408,6 +409,42 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONUnsupported(t *testing.T) {
 	args := readCapturedArgs(t, captureArgs)
 	if len(args) < 2 || args[0] != "lir-proto-lower-mir-json" {
 		t.Fatalf("first args = %v, want MIR JSON attempt before compat", args)
+	}
+}
+
+func TestRunMIRPayloadSkipsStage0CompatByDefault(t *testing.T) {
+	bin := buildFakeOstySelf(t)
+	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(stage0.ListAllDeclinesEnv, "1")
+	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
+
+	body, err := json.Marshal(nativelirproto.Request{
+		PackageName: "main",
+		SourcePath:  "/tmp/demo/main.osty",
+		MIR: map[string]any{
+			"version":     1,
+			"packageName": "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(body), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp nativelirproto.Response
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, stdout.String())
+	}
+	if !resp.Declined {
+		t.Fatalf("Declined = false, want stage0 compat skip: %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "stage0 MIR compat skipped") || !strings.Contains(resp.Error, stage0FallbackEnv) {
+		t.Fatalf("Error = %q, want stage0 opt-in guard", resp.Error)
+	}
+	if resp.LLVMIR != "" {
+		t.Fatalf("LLVMIR = %q, want empty when stage0 compat is not opted in", resp.LLVMIR)
 	}
 }
 
@@ -449,6 +486,7 @@ func TestRunMIRPayloadPreservesLargeIntJSONNumbers(t *testing.T) {
 	}
 
 	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(stage0FallbackEnv, "1")
 	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
 
 	body, err := json.Marshal(nativelirproto.Request{
@@ -525,6 +563,7 @@ func TestRunMIRPayloadAcceptsStage0PartialIRWhenListAllDeclines(t *testing.T) {
 	}
 
 	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(stage0FallbackEnv, "1")
 	t.Setenv("FAKE_OSTY_SELF_REJECT_MIR_JSON", "1")
 	t.Setenv(stage0.ListAllDeclinesEnv, "1")
 
@@ -596,6 +635,7 @@ func TestRunMIRPayloadUsesStage0CompatWhenMirJSONTimesOut(t *testing.T) {
 	}
 
 	t.Setenv(SelfBinEnv, bin)
+	t.Setenv(stage0FallbackEnv, "1")
 	t.Setenv(selfLowerTimeoutEnv, "500ms")
 	t.Setenv("FAKE_OSTY_SELF_SLEEP_MS", "3000")
 	t.Setenv("FAKE_OSTY_SELF_CAPTURE_ARGS", captureArgs)
