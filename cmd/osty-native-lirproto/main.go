@@ -68,6 +68,11 @@ const selfTimeoutCompatMaxBytesEnv = "OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES"
 // Unset or "0" disables source re-lowering; positive values bound it.
 const selfSourceCompatMaxBytesEnv = "OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES"
 
+// stage0FallbackEnv mirrors the explicit bootstrap gate used by `osty
+// install-self`. Stage0 MIR compat may emit partial IR with decline stubs, so
+// the lirproto subprocess must not enter it on production fallback paths.
+const stage0FallbackEnv = "OSTY_STAGE0_FALLBACK"
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -362,6 +367,12 @@ func lowerMIRJSONStage0Compat(req nativelirproto.Request) (nativelirproto.Respon
 	if req.MIR == nil {
 		return nativelirproto.Response{}, false
 	}
+	if !stage0CompatEnabled() {
+		return nativelirproto.Response{
+			Declined: true,
+			Error:    fmt.Sprintf("stage0 MIR compat skipped: set %s=1 to enable bootstrap-only stage0 fallback", stage0FallbackEnv),
+		}, true
+	}
 	encoded, err := json.Marshal(req.MIR)
 	if err != nil {
 		return nativelirproto.Response{Declined: true, Error: fmt.Sprintf("stage0 MIR compat: marshal MIR JSON: %v", err)}, true
@@ -434,6 +445,11 @@ func sourceCompatMaxBytes() int {
 		}
 	}
 	return 0
+}
+
+func stage0CompatEnabled() bool {
+	raw := strings.TrimSpace(os.Getenv(stage0FallbackEnv))
+	return raw == "1" || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes") || strings.EqualFold(raw, "on")
 }
 
 func timeoutCompatMaxBytes() int64 {
