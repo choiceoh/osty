@@ -577,6 +577,39 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production LLVM emission for supported shapes routes:
+
+```
+backend.Emit
+  → nativellvmgen (osty-native-llvmgen)
+    → nativelirproto (osty-native-lirproto)
+      → osty-self lir-proto-lower-mir-json | lir-proto-lower
+        → toolchain/lir_proto.osty
+```
+
+`cmd/osty-native-lirproto` is a thin Go shim: JSON on stdin/stdout, staging
+to temp files, `exec` of `osty-self`, and structured `declined: true`
+responses so `internal/backend` can fall back to MIR-direct Go emission
+without hard-failing when `osty-self` is missing.
+
+Compat layers (opt-in; see `README.md` bootstrap env table):
+
+1. **MIR JSON timeout** — retry Go `stage0.EmitMIR` when payload size ≤
+   `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` (default 1 MiB).
+2. **Legacy `osty-self`** — stage0 MIR JSON compat, then optional source
+   re-lowering only when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is positive.
+
+`LirLowerConfig` in `toolchain/lir_proto.osty` carries package/target/GC
+metadata only; rollout `featureGates` plumbing was removed in PR #2029 as
+dead code.
+
+Self-rebuild ratchet (`scripts/verify-self-rebuild`) exercises the source
+compiler path end-to-end: stage2+ must bundle and self-lower `toolchain/`
+without forwarding to the host `.bin/osty` compiler. Wiring tests live in
+`internal/selfhost/phase0_wiring_test.go` (`TestVerifySelfRebuildRequiresSourceCompilerStages`).
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

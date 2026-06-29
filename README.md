@@ -388,6 +388,20 @@ linked.
 |---|---|
 | `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When truthy, `requireRealLLVMEmission` **fails** tests if `osty-self` is not cached instead of skipping them. Use after `just bootstrap` (or any path that populated `.osty/cache/self-host/`) to surface MIR-direct regressions that would otherwise look like a clean skip on a fresh clone. CI sets this in [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) after the offline bootstrap step. Without it, local `go test ./internal/backend/` stays fresh-clone-friendly. Known failing baseline when strict: [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md). |
 
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — thin Go shim that forks `osty-self lir-proto-lower` / `lir-proto-lower-mir-json`):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_BIN` | Same resolver override as bootstrap (wins over cache / in-tree / fetch). |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | Newline-separated argv replay for nested `osty-self` invocations during `scripts/verify-self-rebuild` (consumed by `toolchain/main.osty`). Cleared in child env so grandchildren do not inherit stale forwarding. |
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Override the per-lowering timeout (`20s` base + size budget for MIR JSON). Set `0` to disable. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | When MIR JSON lowering times out, retry via Go `stage0.EmitMIR` if the staged payload is at most this many bytes (default `1048576`). Set `0` to disable timeout compat. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source re-lowering when an older `osty-self` lacks `lir-proto-lower-mir-json`. **Default off** (unset or `0`). Set a positive byte cap to enable; oversized sources decline with an explicit guard message. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain staged source/MIR JSON temp files after the subprocess exits (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged path + subcommand to stderr before forking `osty-self`. |
+
+MIR JSON fallback order when `osty-self` declines: (1) Go stage0 MIR compat (`lowerMIRJSONStage0Compat`), (2) optional source re-lowering only when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is positive and the source fits. Production paths use current `osty-self` with MIR JSON support; compat env vars are for bootstrap seeds and bisect only.
+
 **Common recipes** (pick one row per scenario):
 
 | Scenario | Env |
@@ -411,6 +425,30 @@ Two workflows cover the complementary fresh-clone paths (see
 | [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) | Every PR + push to `main` | `OSTY_SELF_REGISTRY_OFFLINE=1 just bootstrap` (stage0 source bootstrap, same recipe contributors run offline) |
 
 The per-PR workflow also runs `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -short ./internal/backend/` against the artifact it just built, so MIR-direct backend tests cannot silently skip when `osty-self` was missing.
+
+### Self-rebuild ratchet
+
+[`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild) is the end-to-end self-host gate: host `osty` validates toolchain sources and MIR gates, builds `osty-self-1`, then requires **stage2+** builds to use the **source compiler** path (`toolchain/main.osty` bundles `toolchain/*.osty`, self-lowers via `lir-proto-lower`, links with `clang`). `osty-self-2` and `osty-self-3` must be **byte-identical** after Mach-O link-metadata normalization.
+
+| Command | Purpose |
+|---|---|
+| `just verify-self-rebuild` | Full ratchet with `--reuse-stage1` (cached stage1 when fresh) |
+| `just verify-self-rebuild-fast` | Skip gates, reuse stage1 |
+| `just verify-self-rebuild-gates` | Gates only (`check`, snapshot parity, stage0 audit, route probes) |
+| `just verify-selfhost` | Narrower snapshot parity (`go test ./internal/ci ./internal/runner`) — does **not** replace the ratchet |
+
+Ratchet env overrides (see script header for flags):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REBUILD_DIR` | Staging dir (default `.osty/self-rebuild`) |
+| `OSTY_SELF_REBUILD_TOOLCHAIN_DIR` | Toolchain package dir (default `toolchain/`) |
+| `OSTY_SELF_REBUILD_STAGE1_CACHE` | Reusable `osty-self-1` cache (default `.osty/self-rebuild-cache/osty-self-1`) |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | Forwarded nested `build` argv for ratchet subprocesses (see LIR Proto table above) |
+
+`OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` overrides are **rejected** — every stage must be produced by the previous stage (`reject_external_stage_overrides` in the script). Stage1 clears stale in-tree `osty-self` artifacts and, when no host guard is active, runs with `OSTY_SELF_REGISTRY_OFFLINE=1` + `OSTY_STAGE0_FALLBACK=1` so fresh clones can bootstrap offline.
+
+Narrower `just verify-selfhost` is for day-to-day snapshot drift; run `just verify-self-rebuild` (or CI equivalents) before claiming the full source-compiler chain is healthy.
 
 ### Cache maintenance
 

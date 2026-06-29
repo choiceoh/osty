@@ -2,7 +2,11 @@
 
 - **Scope**: LIR prototype plan — isolated prototype for low-level IR
 - **Type**: Plan
-Status: isolated prototype in progress. No production wiring yet.
+Status: **production-wired** via `osty-native-lirproto` → `osty-self` →
+`toolchain/lir_proto.osty` (see `ARCHITECTURE.md` **LIR Proto subprocess
+bridge** and `README.md` bootstrap env table). The isolated prototype phase
+is complete; remaining work is coverage parity and cross-pkg dispatch gaps
+tracked in `SPEC_GAPS.md` / LLVM self-host plan.
 Authoring direction: new LIR Proto shape is Osty-first in
 `toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
 removed so new shape lands in Osty before production wiring.
