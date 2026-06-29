@@ -23,7 +23,12 @@ host osty (Go 부트스트랩)
 
 #1405 머지 이전에는 같은 호출 시점에 `llvmgen.GenerateFromMIR(entry.MIR, opts)` (in-process Go 코드)이 fallback이었기 때문에 `osty-self`가 없어도 MIR→LLVM이 가능했다. #1405는 그 in-process 경로를 삭제하면서 fallback도 같이 제거했다.
 
-### 1.1 현재 관찰 가능한 결과
+### 1.1 현재 관찰 가능한 결과 (historical — 2026-04 시점)
+
+> **2026-05-29 갱신**: `just bootstrap` + `OSTY_STAGE0_FALLBACK=1` + registry
+> fetch / stage0 fallback (PR #1980, #1988) 로 fresh clone 부트스트랩이
+> 복구됨. 아래 bullet 은 #1405 직후 관찰이며, 현재 운영 경로는 §2 옵션 C
+> (stage0 emitter) + registry/cache lookup.
 
 - `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
 - `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
