@@ -4364,6 +4364,14 @@ func mapGetSymbolFor(keyType scalarType) string {
 	return "osty_rt_map_get_" + suffix
 }
 
+func mapGetOrAbortSymbolFor(keyType scalarType) string {
+	suffix := runtimeSuffixForScalar(keyType)
+	if suffix == "" {
+		return ""
+	}
+	return "osty_rt_map_get_or_abort_" + suffix
+}
+
 func setContainsSymbolFor(elemType scalarType) string {
 	suffix := runtimeSuffixForScalar(elemType)
 	if suffix == "" {
@@ -12224,21 +12232,15 @@ func resolveWhileMapIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, 
 	if valueTy == scalarUnknown {
 		return "", scalarUnknown, false
 	}
-	zero, ok := valueTy.zeroValue()
-	if !ok {
-		return "", scalarUnknown, false
-	}
-	symbol := mapGetSymbolFor(keyTy)
+	symbol := mapGetOrAbortSymbolFor(keyTy)
 	if symbol == "" {
 		return "", scalarUnknown, false
 	}
 	slot := freshReg(ctx)
-	found := freshReg(ctx)
 	value := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = alloca %s\n", slot, valueTy.llvm())
-	fmt.Fprintf(out, "  store %s %s, ptr %s\n", valueTy.llvm(), zero, slot)
-	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
-	fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n", found, symbol, mapExpr, keyTy.llvm(), keyExpr, slot)
+	declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
+	fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s, ptr %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr, slot)
 	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", value, valueTy.llvm(), slot)
 	return value, valueTy, true
 }
