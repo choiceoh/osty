@@ -2,7 +2,13 @@
 
 - **Scope**: LIR prototype plan — isolated prototype for low-level IR
 - **Type**: Plan
-Status: isolated prototype in progress. No production wiring yet.
+Status: **production-wired** via `osty-native-lirproto` → `osty-self
+lir-proto-lower` / `lir-proto-lower-mir-json` → `toolchain/lir_proto.osty`.
+The historical `OSTY_LLVM_LIR_PROTO` opt-in gate and in-process Go emitter
+were removed with the #1405 / #1406 migration; production dispatch always
+routes through the subprocess chain documented in [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+(LIR Proto subprocess bridge) and [`README.md`](../README.md) (LIR Proto env
+matrix). Remaining work is coverage / decline reduction, not initial wiring.
 Authoring direction: new LIR Proto shape is Osty-first in
 `toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
 removed so new shape lands in Osty before production wiring.
@@ -1291,6 +1297,14 @@ Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
 ## Phase 7: one-shot wiring behind a gate
+
+> **Superseded (2026-05, production default)**: Phase 7 originally described an
+> `OSTY_LLVM_LIR_PROTO=1` opt-in gate and `ErrLIRProtoNotWired` scaffold.
+> Production now always routes through `osty-native-lirproto` → `osty-self`
+> without that env var. The subsection below is retained as historical design
+> context; current dispatch is documented in [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+> and [`README.md`](../README.md). PR #2029 removed unused
+> `LirLowerConfig.featureGates` from `toolchain/lir_proto.osty`.
 
 Deliverables:
 
