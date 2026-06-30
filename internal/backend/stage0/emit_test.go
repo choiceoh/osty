@@ -5403,6 +5403,52 @@ func TestStage0WhileMapGetInitializesMissPayload(t *testing.T) {
 	}
 }
 
+func TestStage0WhileMapSubscriptUsesAbortOnMiss(t *testing.T) {
+	t.Parallel()
+	mapStringInt := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := makeWhileLoopFn(
+		"subscriptWhile",
+		ir.TInt,
+		[]paramSpec{{name: "items", ty: mapStringInt}, {name: "keepGoing", ty: ir.TBool}},
+		[]localSpec{{name: "hit", ty: ir.TInt}},
+		nil,
+		nil,
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			assign(3, useRV(&mir.CopyOp{
+				Place: mir.Place{
+					Local: 1,
+					Projections: []mir.Projection{
+						&mir.IndexProj{Index: stringConst("missing"), ElemType: ir.TInt},
+					},
+				},
+				T: ir.TInt,
+			})),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+		"define i64 @subscriptWhile(ptr %items, i1 %keepGoing)",
+		"body.2:",
+		"call void @osty_rt_map_get_or_abort_string(ptr %items, ptr @.str.0, ptr %",
+		"= load i64, ptr %",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call i1 @osty_rt_map_get_string") {
+		t.Fatalf("map subscript used Option-style getter instead of aborting getter:\n%s", got)
+	}
+	if strings.Index(got, "call void @osty_rt_map_get_or_abort_string") > strings.Index(got, "= load i64, ptr ") {
+		t.Fatalf("map subscript load appears before aborting runtime call:\n%s", got)
+	}
+}
+
 func TestStage0P28WhileListIterationLoweringPieces(t *testing.T) {
 	t.Parallel()
 	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
