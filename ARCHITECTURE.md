@@ -577,6 +577,48 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR emission is owned by the Osty toolchain, not an
+in-process Go emitter. The host chain (`internal/backend/llvm.go`
+`generateLLVMIR` → `emitLLVMFallback`) is:
+
+```
+LLVMBackend.Emit
+  └─ tryNativeOwnedMIRPayloadLLVMIRText
+      └─ exec(osty-native-llvmgen)          # internal/nativellvmgen
+          └─ tryMIRRequestViaLIRProto
+              └─ exec(osty-native-lirproto)  # cmd/osty-native-lirproto
+                  └─ exec(osty-self lir-proto-lower-mir-json | lir-proto-lower)
+                      └─ toolchain/lir_proto.osty
+```
+
+`toolchain.EnsureNativeLIRProto` lazily builds the managed shim into
+`.osty/toolchain/<ver>/osty-native-lirproto` (same mtime-stamp pattern as
+`EnsureNativeLLVMGen`). The shim reads a `nativelirproto.Request` JSON
+payload on stdin and writes a `nativelirproto.Response` on stdout.
+
+**Decline handling** — when `osty-self` is missing, times out, or returns
+`declined: true`, the dispatcher appends warnings and may fall back to:
+
+1. **Stage0 MIR-json compat** — in-process `stage0.EmitMIR` on the staged
+   MIR JSON payload (`lowerMIRJSONStage0Compat` in
+   `cmd/osty-native-lirproto/main.go`).
+2. **Legacy source re-lowering** — only when
+   `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is a positive byte limit and the
+   request still carries source text (opt-in for older bootstrap seeds).
+3. **Stage0 source bootstrap** — when `OSTY_STAGE0_FALLBACK=1` and
+   `osty-self` is absent, `emitStage0FallbackForMissingOstySelf` emits
+   bootstrap LLVM IR without entering the subprocess.
+
+PR #2029 removed unused `LirLowerConfig.featureGates` plumbing from
+`toolchain/lir_proto.osty`; lowering policy is no longer gated through a
+separate feature-flag map on the lowerer config.
+
+Env-var matrix and ratchet notes: [`README.md`](README.md) (Bootstrap env-var
+reference, Self-rebuild ratchet). Historical phase plan:
+[`docs/lir_proto_plan.md`](docs/lir_proto_plan.md).
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other

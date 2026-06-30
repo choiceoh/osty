@@ -50,6 +50,13 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- Stage0 audit **100%** (PR #1858) does not imply production `install-self`
+  or LIR Proto builds are clean — audit-pass ≠ build-pass
+  ([`SPEC_GAPS.md`](../../SPEC_GAPS.md))
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` must be explicitly positive to
+  enable legacy source re-lowering; default is MIR-json path only
+- Do not set `OSTY_SELF_REBUILD_STAGE{1,2,3}_BIN` — `verify-self-rebuild`
+  rejects them to preserve ratchet integrity
 
 ## Spec traps
 

@@ -3,6 +3,8 @@
 > **상태**: 제안 (draft). 합의 후 별도 PR에서 구현.
 > **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구).
 > **소유**: backend / toolchain.
+>
+> **Historical banner (2026-06)**: §1.1 아래 관찰은 2026-04–05 초기 draft 시점 스냅샷이다. 이후 `just bootstrap`, stage0 audit 100% (PR #1858), `OSTY_STAGE0_FALLBACK=1` 단일 게이트, registry fetch, 그리고 `verify-self-rebuild` source-compiler ratchet (#2022) 가 fresh-clone 경로를 닫았다. 현행 env-var / lookup / CI 매트릭스는 [`README.md`](../README.md) **Bootstrapping `osty-self`** 와 [`docs/security/bootstrap-recovery.md`](security/bootstrap-recovery.md) 가 authoritative.
 
 ## 1. 문제 정의
 
