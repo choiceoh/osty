@@ -233,10 +233,14 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
     let lowerOut = lirModuleWithStringPoolEntries(resolvedPackageName, path, target, lowerStringPoolEntries)
     let lowerDiagnostics: List<LirDiagnostic> = []
     lirLowerMirModuleListsInto(lowerCfg, lowerStringPoolEntries, resolvedPackageName, checkedMir.functions, checkedMir.globals, checkedMir.uses, checkedMir.layouts, checkedMir.span, lowerOut, lowerDiagnostics)
+    let lowerResult = LirLowerResult {module: lowerOut, diagnostics: lowerDiagnostics}
     if lowerDiagnostics.len() != 0 {
         selfhostMirDriverPrintLowerDiagnostics(lowerDiagnostics)
     }
-    print(lirRenderModule(lowerOut))
+    if !lirLowerOK(lowerResult) {
+        return 1
+    }
+    print(lirRenderModule(lowerResult.module))
     0
 }
 

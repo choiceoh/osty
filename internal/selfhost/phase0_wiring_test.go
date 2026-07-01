@@ -577,6 +577,26 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 	}
 }
 
+// TestSelfhostMIRDriverDeclinesOnLIRLowerErrors pins the bundled MIR-only
+// selfhost driver to the same fail-closed contract as toolchain/main.osty.
+// The Go bridge treats exit 0 plus non-empty IR as success, so a LIR Proto
+// error must return non-zero before any rendered partial module can be accepted.
+func TestSelfhostMIRDriverDeclinesOnLIRLowerErrors(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "toolchain", "selfhost_mir_driver.osty"))
+	if err != nil {
+		t.Fatalf("read selfhost_mir_driver.osty: %v", err)
+	}
+	text := string(src)
+	failClosed := regexp.MustCompile(`(?s)fn selfhostMirDriverRunLowerMirJson\(args: List<String>\) -> Int \{.*lirLowerMirModuleListsInto\(.*let lowerResult = LirLowerResult \{module: lowerOut, diagnostics: lowerDiagnostics\}.*if !lirLowerOK\(lowerResult\) \{\s*return 1\s*\}.*print\(lirRenderModule\(lowerResult\.module\)\)`)
+	if !failClosed.MatchString(text) {
+		t.Fatalf("selfhost MIR driver must return non-zero on LIR lowering errors before rendering IR")
+	}
+}
+
 // TestSelfhostDoctorRunsBackendProbe pins the `--selfhost-doctor`
 // source probe so the status cannot drift back to a text-only Phase 0
 // claim, or to a MIR-JSON-only backend pass, while the real source ->
