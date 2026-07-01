@@ -1292,12 +1292,16 @@ it at slice-add time.
 
 ## Phase 7: one-shot wiring behind a gate
 
+> **Status (2026-07):** The interim `OSTY_LLVM_LIR_PROTO` env gate described
+> below was retired in PR #2029. LIR Proto is now the production dispatch
+> path; this section is kept as historical design context.
+
 Deliverables:
 
 - Add an explicit gate, for example:
 
 ```text
-OSTY_LLVM_LIR_PROTO=1
+OSTY_LLVM_LIR_PROTO=1   # retired — see note above
 ```
 
 - Route only the selected backend entry point through LIR Proto when the gate
@@ -1312,30 +1316,11 @@ Exit criteria:
 - Gate on: selected fixtures use LIR Proto and pass.
 - Unsupported prototype shapes fall back cleanly.
 
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
-
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
-
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
+Design decision (historical): the first Phase-7 slice landed a gate
+scaffold (`OSTY_LLVM_LIR_PROTO`, `LIRProtoSelected()`, `ErrLIRProtoNotWired`)
+without the runner. That interim env gate and its dispatch telemetry tests
+were **retired in PR #2029** once LIR Proto wiring became the production
+path — the gate added no behavior beyond warning noise.
 
 The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
 runner — at that point the `ErrLIRProtoNotWired` return is replaced with
