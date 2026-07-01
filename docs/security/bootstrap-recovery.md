@@ -108,14 +108,18 @@ already documented:
 1. **Toolchain simplification** — `docs/osty_self_b2_1_audit.md`
    v2 master plan, batches B2.2–B2.3. ~244 source-level mechanical
    `match → if-else` rewrites. ~10–15 hours.
-2. **Stage0 unlocks** — same document, batches B2.4–B2.7. ~4 stage0
-   phases (P21–P24) covering the basic-shape gaps that block 88.7% of
-   toolchain functions today. ~1500 lines of Go in
-   `internal/backend/stage0/`. ~1–2 weeks dedicated work.
+2. **Stage0 unlocks** — same document, batches B2.4–B2.7. The original
+   plan targeted P21–P24 stage0 phases for the pre–PR #1858 audit gap
+   (~11% covered). Stage0 **audit** later reached **100%** of
+   `toolchain/*.osty` shapes (PR #1858), but production `install-self` /
+   LIR Proto builds can still decline — audit-pass ≠ build-pass. DR2
+   stage0 work now means closing those **build-path** walls, not replaying
+   the closed audit trajectory.
 
-Combined, these two streams reach ~40% MIR coverage, which is enough
-to bootstrap a build of the current toolchain into a fresh osty-self
-binary on a single host. From that point, DR1 applies normally.
+Combined, the historical plan estimated ~40% MIR coverage as enough to
+bootstrap a fresh `osty-self` on one host. Re-evaluate against current
+[`SPEC_GAPS.md`](../SPEC_GAPS.md) before invoking DR2; most outages
+recover via DR1 once any maintainer-side binary exists.
 
 DR2 is a last-resort plan, not an operational recipe. Most outages
 recover via DR1.
