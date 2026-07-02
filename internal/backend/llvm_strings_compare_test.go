@@ -16,11 +16,11 @@ func warningContaining(warnings []error, substr string) error {
 	return nil
 }
 
-// TestPrepareEntryInjectsStdlibWhenFlagOn verifies injection actually
-// runs in the real PrepareEntry path by inspecting entry.IR directly —
-// bypasses the llvmgen/AST legacy bridge so we see the HIR-level result
-// without any downstream transformations.
-func TestPrepareEntryInjectsStdlibWhenFlagOn(t *testing.T) {
+// TestPrepareEntryInjectsStdlibBodies verifies injection runs in the
+// real PrepareEntry path by inspecting entry.IR directly — bypasses
+// the llvmgen/AST legacy bridge so we see the HIR-level result without
+// any downstream transformations.
+func TestPrepareEntryInjectsStdlibBodies(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {
@@ -49,7 +49,6 @@ fn main() {
 				names = append(names, fn.DeclName())
 			}
 		}
-		t.Logf("flag read: %v", stdlibBodyLoweringEnabled())
 		t.Fatalf("entry.IR has no osty_std_strings__* decl; have: %v", names)
 	}
 	// Confirm the user callsite was rewritten: walk every FnDecl in
@@ -72,21 +71,19 @@ fn main() {
 	}
 }
 
-// TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn verifies that the
-// body-injection pipeline pulls in stdlib `pub let` definitions
-// (top-level globals) referenced by injected fn bodies. Concrete case:
-// `strings.graphemes` chains through `graphemeBreakProperty` which
-// reads `graphemeBreakCR` (a `pub let`) — without this pass the
-// emitted `.ll` references `@graphemeBreakCR` undefined and clang
-// fails at link time.
+// TestPrepareEntryInjectsStdlibGlobals verifies that the body-injection
+// pipeline pulls in stdlib `pub let` definitions (top-level globals)
+// referenced by injected fn bodies. Concrete case: `strings.graphemes`
+// chains through `graphemeBreakProperty` which reads `graphemeBreakCR`
+// (a `pub let`) — without this pass the emitted `.ll` references
+// `@graphemeBreakCR` undefined and clang fails at link time.
 //
-// The verification is structural: after PrepareEntry, the user
-// module's IR must contain at least one mangled
-// `osty_std_strings__graphemeBreak*` LetDecl, and no injected fn
-// body may still carry a bare `Ident{Kind: IdentGlobal, Name:
-// "graphemeBreakCR"}` — every reference must resolve to the
-// mangled name.
-func TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn(t *testing.T) {
+// The verification is structural: after PrepareEntry, the user module's
+// IR must contain at least one mangled `osty_std_strings__graphemeBreak*`
+// LetDecl, and no injected fn body may still carry a bare
+// `Ident{Kind: IdentGlobal, Name: "graphemeBreakCR"}` — every
+// reference must resolve to the mangled name.
+func TestPrepareEntryInjectsStdlibGlobals(t *testing.T) {
 	req := newBackendRequest(t, EmitBinary, `use std.strings
 
 fn main() {
