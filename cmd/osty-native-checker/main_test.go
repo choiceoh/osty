@@ -93,7 +93,7 @@ func TestRunChecksPackageStructuredRequest(t *testing.T) {
 		t.Fatalf("marshal request: %v", err)
 	}
 	reqText := string(reqBody)
-	if !strings.Contains(reqText, `"source":"fn helper() -> Int { 1 }\n"`) {
+	if !strings.Contains(reqText, `"source":"fn helper() -\u003e Int { 1 }\n"`) {
 		t.Fatalf("request body = %s, want raw UTF-8 source string", reqText)
 	}
 	if strings.Contains(reqText, base64.StdEncoding.EncodeToString(fileA)) {
