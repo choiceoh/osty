@@ -400,6 +400,29 @@ linked.
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
 
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto`](./cmd/osty-native-lirproto/main.go) → `osty-self lir-proto-lower` / `lir-proto-lower-mir-json`):
+
+Production MIR → LLVM IR always routes through the managed
+`osty-native-lirproto` shim, which stages a request and forks `osty-self`.
+When lowering declines, the backend falls back to the in-process stage0
+emitter when `OSTY_STAGE0_FALLBACK=1` is set (see
+[`internal/backend/llvm.go`](./internal/backend/llvm.go) `emitLLVMFallback`).
+
+| Var | Purpose |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-invocation timeout override (`0` disables). Default scales with staged MIR JSON size (up to 10 minutes for large toolchain payloads). |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | After a MIR-JSON timeout, retry through the stage0 compat path only when the staged payload is at most this many bytes. Unset or `0` disables the retry. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | **Opt-in** legacy fallback: when an older `osty-self` lacks `lir-proto-lower-mir-json`, re-run `lir-proto-lower` on the original source. Unset or `0` keeps source re-lowering disabled (default). |
+| `OSTY_LIRPROTO_KEEP_STAGED` | When set, retain staged temp files after the subprocess exits (debugging decline payloads). |
+| `OSTY_LIRPROTO_DEBUG` | Print staged path + subcommand to stderr. |
+| `OSTY_SELF_REBUILD_FORWARD_ARGS` | **Internal** — `osty-native-lirproto` forwards the child argv here so nested `osty-self` invocations during `verify-self-rebuild` preserve the ratchet driver. Do not set manually. |
+
+Fallback order for MIR-JSON requests when `osty-self` declines:
+stage0 MIR-json compat (`lowerMIRJSONStage0Compat`) → optional source
+re-lowering (only when `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` is positive).
+Authoritative design notes: [`docs/lir_proto_plan.md`](./docs/lir_proto_plan.md),
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) (LIR Proto subprocess bridge).
+
 ### CI bootstrap gates
 
 Two workflows cover the complementary fresh-clone paths (see
@@ -860,6 +883,50 @@ error[E0500]: undefined name `name`
 
   1 error(s), 0 warning(s)
 ```
+
+## Self-rebuild ratchet
+
+`just verify-selfhost` is a **narrow** gate: it runs
+`SnapshotParity|CoreSnapshotParity` under `internal/ci` and
+`internal/runner` only. It does **not** exercise the merged toolchain MIR
+→ LIR Proto → LLVM pipeline.
+
+`just verify-self-rebuild` (wrapper around
+[`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild)) is the
+**end-to-end self-host ratchet**:
+
+1. Host `osty` validates toolchain sources and current MIR gates.
+2. Host `osty` builds `osty-self-1` from `toolchain/`.
+3. `osty-self-1` rebuilds `toolchain/` through HIR → Mono → MIR → LIR Proto → LLVM IR.
+4. `osty-self-2` and `osty-self-3` are compared byte-for-byte (Mach-O UUID /
+   code-signature slots normalized on macOS).
+
+| Recipe | When to use |
+|---|---|
+| `just verify-selfhost` | Fast snapshot parity after front-end / CI-core edits |
+| `just verify-self-rebuild` | Full ratchet after backend, `toolchain/lir_proto*.osty`, or bootstrap changes |
+| `just verify-self-rebuild-fast` | Ratchet with `--skip-gates --reuse-stage1` |
+| `just verify-self-rebuild-gates` | Gates only (`--gates-only`) |
+| `just verify-self-rebuild-stage1` | Stage-1 build only |
+
+Ratchet env overrides (see script header for flags):
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REBUILD_DIR` | Staging dir (default `.osty/self-rebuild`) |
+| `OSTY_SELF_REBUILD_TOOLCHAIN_DIR` | Toolchain package dir (default `toolchain`) |
+| `OSTY_SELF_REBUILD_STAGE1_CACHE` | Reusable `osty-self-1` cache (default `.osty/self-rebuild-cache/osty-self-1`) |
+
+**Rejected overrides** — the script fails fast if any of these are set:
+`OSTY_SELF_REBUILD_STAGE1_BIN`, `OSTY_SELF_REBUILD_STAGE2_BIN`,
+`OSTY_SELF_REBUILD_STAGE3_BIN`. Every stage must be produced by the
+previous stage in the ratchet; pinning intermediate binaries bypasses the
+guarantee the script enforces.
+
+`--reuse-stage1` consults the content-addressed selfhost cache
+(`.osty/cache/self-host/<sha>-<triple>/`) when available so repeated
+stage-2/parity loops skip the slow first build. Disable with
+`--no-selfhostcache`.
 
 ## Testing
 
