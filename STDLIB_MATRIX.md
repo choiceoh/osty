@@ -359,7 +359,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | # | 항목 | 작업 |
 |---|---|---|
 | 14 | unspec 모듈 (62개) | LANG_SPEC_v0.5/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
-| 15 | OSTY_STDLIB_BODY_LOWER | ✅ default-on (2026-05-23, PR3-C 종착점). escape hatch (`OSTY_STDLIB_BODY_LOWER=0`) 유지 → 다음 PR 에서 게이트 자체 제거 |
+| 15 | OSTY_STDLIB_BODY_LOWER | ✅ gate removed (2026-07). Stdlib body injection is unconditional in `PrepareEntry`. |
 | 16 | `Set` 빈약 / `Deque`/`PriorityQueue` 부재 | spec §10.6 확장 제안  |
 
 ## 5. 평가 함정 카탈로그 (재정리)
