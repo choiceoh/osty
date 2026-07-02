@@ -1,0 +1,12 @@
+use std.testing
+
+fn testSelfhostMirDriverDoesNotRenderIrAfterLoweringError() {
+    let errors = [lirDiagnosticError(LirDiagLoweringBug, "partial IR is unsafe", "")]
+    testing.assert(!selfhostMirDriverShouldRenderLoweredIR(errors))
+
+    let warnings = [lirDiagnostic(LirDiagValidation, LirSeverityWarning, "non-fatal note", "")]
+    testing.assert(selfhostMirDriverShouldRenderLoweredIR(warnings))
+
+    let none: List<LirDiagnostic> = []
+    testing.assert(selfhostMirDriverShouldRenderLoweredIR(none))
+}

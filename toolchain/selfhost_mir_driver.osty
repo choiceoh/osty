@@ -192,6 +192,10 @@ fn selfhostMirDriverPrintLowerDiagnostics(diags: List<LirDiagnostic>) {
     selfhostMirDriverPrintLowerDiagnosticAt(diags, 7)
 }
 
+fn selfhostMirDriverShouldRenderLoweredIR(diags: List<LirDiagnostic>) -> Bool {
+    !(lirLowerHasErrorDiagnostics(diags))
+}
+
 fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
     let commandOffset = selfhostMirDriverCommandOffset(args, "lir-proto-lower-mir-json")
     let pathIndex = if commandOffset == 2 { 2 } else { 1 }
@@ -235,6 +239,9 @@ fn selfhostMirDriverRunLowerMirJson(args: List<String>) -> Int {
     lirLowerMirModuleListsInto(lowerCfg, lowerStringPoolEntries, resolvedPackageName, checkedMir.functions, checkedMir.globals, checkedMir.uses, checkedMir.layouts, checkedMir.span, lowerOut, lowerDiagnostics)
     if lowerDiagnostics.len() != 0 {
         selfhostMirDriverPrintLowerDiagnostics(lowerDiagnostics)
+        if !selfhostMirDriverShouldRenderLoweredIR(lowerDiagnostics) {
+            return 1
+        }
     }
     print(lirRenderModule(lowerOut))
     0

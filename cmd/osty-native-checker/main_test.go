@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -90,6 +91,13 @@ func TestRunChecksPackageStructuredRequest(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
+	}
+	reqText := string(reqBody)
+	if !strings.Contains(reqText, `"source":"fn helper() -> Int { 1 }\n"`) {
+		t.Fatalf("request body = %s, want raw UTF-8 source string", reqText)
+	}
+	if strings.Contains(reqText, base64.StdEncoding.EncodeToString(fileA)) {
+		t.Fatalf("request body = %s, must not base64-encode package source", reqText)
 	}
 
 	var stdout bytes.Buffer
