@@ -3,6 +3,7 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
