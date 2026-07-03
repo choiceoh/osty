@@ -2361,9 +2361,20 @@ func (bs *bodyState) lowerForInMap(f *ir.ForStmt, iterT Type) {
 
 	keyOp := &CopyOp{Place: Place{Local: keyLocal}, T: keyT}
 	valueLocal := bs.newLocal("_value", valueT, false, f.SpanV)
-	valuePlace := Place{Local: iter, Projections: []Projection{
-		&IndexProj{Index: keyOp, ElemType: valueT},
-	}}
+	optValueT := &ir.OptionalType{Inner: valueT}
+	optValueLocal := bs.newLocal("_value_opt", optValueT, false, f.SpanV)
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: optValueLocal},
+		Kind:  IntrinsicMapGet,
+		Args:  []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}, keyOp},
+		SpanV: f.SpanV,
+	})
+	valuePlace := Place{Local: optValueLocal}.Project(&VariantProj{
+		Variant:  int(someTagOf(optValueT)),
+		Name:     "Some",
+		FieldIdx: 0,
+		Type:     valueT,
+	})
 	bs.emit(&AssignInstr{
 		Dest:  Place{Local: valueLocal},
 		Src:   &UseRV{Op: &CopyOp{Place: valuePlace, T: valueT}},

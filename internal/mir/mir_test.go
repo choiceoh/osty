@@ -1914,8 +1914,14 @@ func TestLowerForInMonomorphizedMap(t *testing.T) {
 	if !strings.Contains(text, "intrinsic map_keys(") {
 		t.Fatalf("expected map_keys snapshot in for-in over map, got:\n%s", text)
 	}
-	if !strings.Contains(text, "[_") || !strings.Contains(text, ".0") || !strings.Contains(text, ".1") {
-		t.Fatalf("expected map key lookup and tuple destructure, got:\n%s", text)
+	if !strings.Contains(text, "intrinsic map_get(") {
+		t.Fatalf("expected map_get value lookup in for-in over map, got:\n%s", text)
+	}
+	if strings.Contains(text, `use _1[_`) {
+		t.Fatalf("for-in over map must not index the map handle directly, got:\n%s", text)
+	}
+	if !strings.Contains(text, ".0") || !strings.Contains(text, ".1") {
+		t.Fatalf("expected tuple destructure, got:\n%s", text)
 	}
 }
 
