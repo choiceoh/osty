@@ -552,6 +552,38 @@ cross-package dispatch trajectory tracked in `SPEC_GAPS.md` and the LLVM
 self-host plan. Treat the flag as a **small-dep experiment** until those gaps
 close.
 
+#### LIR Proto subprocess bridge (production MIR → LLVM IR)
+
+Normal LLVM backend dispatch does **not** emit IR in-process. After MIR is
+prepared, `generateLLVMIR` (`internal/backend/llvm.go`) delegates to the
+native-owned subprocess boundary:
+
+```text
+nativellvmgen.TryMIR  →  osty-native-llvmgen  →  nativelirproto.Run
+  →  osty-native-lirproto  →  osty-self lir-proto-lower-mir-json
+       →  toolchain/lir_proto.osty (+ mir_generator.osty inside osty-self)
+```
+
+There is no host-side `OSTY_LLVM_LIR_PROTO` gate — the subprocess path is
+always-on for MIR-owned emission. When `osty-self` is missing, the shim returns
+`declined: true` and install-self bootstrap may use stage0 (`OSTY_STAGE0_FALLBACK=1`);
+normal `osty build` does not silently downgrade.
+
+`cmd/osty-native-lirproto` compat / debug env vars (authoritative defaults in
+`main.go`):
+
+| Var | Role |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-invocation timeout (`0` = off) |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | Stage0 retry after MIR JSON timeout (default 1 MiB; `0` = off) |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in legacy source re-lower for old `osty-self` seeds (default off) |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Preserve temp staged files |
+| `OSTY_LIRPROTO_DEBUG` | Log staged paths |
+
+Plan history and Phase 8 parity work: [`docs/lir_proto_plan.md`](docs/lir_proto_plan.md).
+PR #2029 removed unused `LirLowerConfig.featureGates` plumbing from
+`toolchain/lir_proto.osty` — do not assume per-feature rollout flags exist.
+
 #### Stdlib body injection (`OSTY_STDLIB_BODY_LOWER`)
 
 `PrepareEntry` (`internal/backend/entry.go`) optionally monomorphizes and
