@@ -388,6 +388,18 @@ linked.
 |---|---|
 | `OSTY_REQUIRE_REAL_LLVM_EMISSION` | When truthy, `requireRealLLVMEmission` **fails** tests if `osty-self` is not cached instead of skipping them. Use after `just bootstrap` (or any path that populated `.osty/cache/self-host/`) to surface MIR-direct regressions that would otherwise look like a clean skip on a fresh clone. CI sets this in [`fresh-clone-source-bootstrap.yml`](.github/workflows/fresh-clone-source-bootstrap.yml) after the offline bootstrap step. Without it, local `go test ./internal/backend/` stays fresh-clone-friendly. Known failing baseline when strict: [`docs/backend-test-failures-audit-2026-05-26.md`](./docs/backend-test-failures-audit-2026-05-26.md). |
 
+**LIR Proto subprocess** ([`cmd/osty-native-lirproto/main.go`](./cmd/osty-native-lirproto/main.go) — production MIR → LLVM IR shim):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | `20s` base + `15s`/MiB for `lir-proto-lower-mir-json` (cap `10m`) | Wall-clock guard around `osty-self` lowering. `0` disables. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | `1048576` (1 MiB) | When a MIR JSON request **times out**, retry through in-process stage0 compat if staged payload ≤ this size. `0` disables timeout compat. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | `0` (off) | Opt-in: when an older `osty-self` lacks `lir-proto-lower-mir-json`, allow bounded **source** re-lowering (`lir-proto-lower`) up to N bytes. Unset/`0` keeps MIR-json-only behavior. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | off | Keep temp staged MIR/source files after a run (debug). |
+| `OSTY_LIRPROTO_DEBUG` | off | Print staged path + subcommand to stderr. |
+
+Fallback order inside the shim: primary `lir-proto-lower-mir-json` → (on timeout, if within byte budget) stage0 MIR compat → (opt-in only) legacy source compat. See [`docs/lir_proto_plan.md`](./docs/lir_proto_plan.md) Phase 7.
+
 **Common recipes** (pick one row per scenario):
 
 | Scenario | Env |
@@ -399,6 +411,27 @@ linked.
 | CI staging a prebuilt LLVM-built checker across worktrees | `OSTY_NATIVE_CHECKER_LLVM_BIN=/path/to/osty-native-checker-llvm` |
 | Reproduce CI strict backend gate locally | `just bootstrap` then `OSTY_REQUIRE_REAL_LLVM_EMISSION=1 go test -count=1 -short ./internal/backend/` |
 | Bisect stdlib body injection | `OSTY_STDLIB_BODY_LOWER=0` on `osty build` / `install-self` |
+| Debug LIR Proto staging / timeouts | `OSTY_LIRPROTO_DEBUG=1` and/or `OSTY_LIRPROTO_KEEP_STAGED=1` |
+| Reproduce self-rebuild ratchet locally | `just verify-self-rebuild` (needs `just build-all` first) |
+
+### Self-rebuild ratchet (`verify-self-rebuild`)
+
+`scripts/verify-self-rebuild` is the **end-to-end self-host compiler ratchet** —
+distinct from `just verify-selfhost`, which only runs Go snapshot parity tests
+in `internal/ci` and `internal/runner`.
+
+| Recipe | What it runs |
+|---|---|
+| `just verify-selfhost` | `SnapshotParity` / `CoreSnapshotParity` — frozen seed / adapter byte checks |
+| `just verify-self-rebuild` | Host gates → build `osty-self-1` → rebuild toolchain through HIR → Mono → MIR → **LIR Proto** → LLVM IR → byte-compare `osty-self-2` vs `osty-self-3` |
+| `just verify-self-rebuild-gates` | Gates only (fast policy smoke) |
+| `just verify-self-rebuild-fast` | Skip gates, reuse cached stage1 |
+| `just backend-loop` | Backend tests + fast self-rebuild |
+
+Use `--reuse-stage1` (default in `just verify-self-rebuild`) to cache
+`osty-self-1` under `.osty/self-rebuild-cache/` and integrate with
+`selfhostcache` when available (`--no-selfhostcache` for legacy mtime cache).
+Authoritative script header: [`scripts/verify-self-rebuild`](./scripts/verify-self-rebuild).
 
 ### CI bootstrap gates
 

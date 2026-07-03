@@ -50,6 +50,11 @@
   claiming a backend fix is CI-safe
 - `OSTY_STDLIB_BODY_LOWER=0` in a shell profile can mask production defaults;
   `just bootstrap` no longer forces `=0` (PR #2013)
+- `docs/lir_proto_plan.md` header still says "isolated prototype" in older
+  sections — read the **Status (2026-07)** banner; production routes through
+  `osty-native-lirproto` with no `OSTY_LLVM_LIR_PROTO` gate
+- `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` defaults **off** — only opt in when
+  debugging legacy `osty-self` seeds; production expects MIR JSON lowering
 
 ## Spec traps
 

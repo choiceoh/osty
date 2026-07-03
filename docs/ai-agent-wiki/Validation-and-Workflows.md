@@ -29,7 +29,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 
 ### CLI, toolchain, generated-output, or self-host path changes
 
-- include `just verify-selfhost`
+- include `just verify-selfhost` for frozen snapshot parity (`internal/ci`, `internal/runner`)
+- include `just verify-self-rebuild` (or `just backend-loop`) when touching MIR/LIR Proto lowering or the full compiler rebuild ratchet (`scripts/verify-self-rebuild`)
 - include `just ci`
 - consider `just repair-check`
 - for `osty build` / `osty install-self` wall-clock splits (front-end vs MIR/IR vs link), opt in with `OSTY_BUILD_PHASE_TIMING=1` (stderr `phase-timing:` lines; see `README.md` and `internal/backend/phase_timing.go`)
@@ -54,7 +55,8 @@ If `just` is unavailable, mirror the matching recipes from `/justfile`.
 
 - build CLI: `go build -o .bin/osty ./cmd/osty`
 - build native checker: `go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker`
-- verify self-host snapshots: `go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner`
+- verify self-host snapshots: `go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner` (same as `just verify-selfhost`)
+- verify self-rebuild ratchet (slow; needs `just build-all`): `just verify-self-rebuild` or `bash scripts/verify-self-rebuild --reuse-stage1 .bin/osty`
 - update diagnostic golden output: `go test ./internal/diag/ -run TestGolden -update`
 
 ## Validation strategy

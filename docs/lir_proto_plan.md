@@ -1,21 +1,26 @@
 # LIR Proto plan
 
-- **Scope**: LIR prototype plan — isolated prototype for low-level IR
-- **Type**: Plan
-Status: isolated prototype in progress. No production wiring yet.
-Authoring direction: new LIR Proto shape is Osty-first in
-`toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
-removed so new shape lands in Osty before production wiring.
+- **Scope**: LIR prototype plan — low-level IR between MIR and LLVM text
+- **Type**: Plan (historical phases below) + **production status** (current)
+- **Status (2026-07)**: **Production-wired.** Normal LLVM backend dispatch routes
+  MIR → LLVM IR through `internal/nativellvmgen` → `cmd/osty-native-lirproto` →
+  `osty-self lir-proto-lower-mir-json` (MIR JSON) or `lir-proto-lower` (source).
+  There is no host-side `OSTY_LLVM_LIR_PROTO` gate anymore (`internal/backend/llvm.go`
+  documents the env gate removal). `toolchain/lir_proto.osty` is the Osty source of
+  truth; the Go `internal/llvmgen` package is gone (PR #1405).
+- **Authoring direction**: Osty-first in `toolchain/lir_proto.osty`; new lowering
+  surface lands there and ships through the subprocess chain above.
 
-LIR Proto is the working name for a low-level prototype between
-`internal/mir` and backend text emission. It starts LLVM-aware because the
-current backend pressure is LLVM text generation, but it lives independently so
-it can grow into a real low-level compiler layer instead of remaining a helper
-package hidden under `internal/llvmgen`.
+LIR Proto is the working name for a low-level layer between `internal/mir` and
+backend text emission. It starts LLVM-aware because the current backend pressure
+is LLVM text generation, but it lives independently so it can grow into a real
+low-level compiler layer instead of remaining a helper hidden under a monolithic
+Go emitter.
 
-The immediate goal is to finish the prototype as an isolated path, verify it
-against MIR fixtures and existing LLVM output, and wire it into production in
-one deliberate switch behind an explicit gate.
+Phases 1–6 below record the isolated prototype trajectory. Phase 7 shipped as
+the always-on subprocess bridge; Phase 8 (default-on / duplicate removal) is
+still open — see [Verification loop](#verification-loop) and
+[`docs/post_1405_coverage_audit_design.md`](post_1405_coverage_audit_design.md).
 
 ## Why this exists
 
@@ -75,27 +80,28 @@ the eventual self-hosted backend should not require a second translation pass.
 
 Input:
 
-- A validated, monomorphic `*mir.Module`.
+- A validated, monomorphic `*mir.Module` (production path: MIR JSON over stdin
+  to `osty-native-lirproto`, staged for `osty-self`).
 - LLVM emission options that affect text shape: package, source path, target,
-  GC instrumentation, and feature gates.
+  and GC instrumentation.
 
 Output:
 
-- A deterministic `LirModule`.
-- A renderer that can emit LLVM text from that module.
-- A structured unsupported diagnostic when the selected surface is not covered.
+- A deterministic `LirModule` (in-process in `osty-self`) rendered to LLVM text.
+- A structured unsupported / `declined` diagnostic when the selected surface is
+  not covered — the Go shim may fall back to stage0 compat paths; see
+  [`README.md`](../README.md) (LIR Proto subprocess env vars).
 
-The production emitter remains authoritative until the final wiring phase.
+Production dispatch is wired; remaining work is coverage parity and deleting
+duplicate legacy paths (Phase 8), not flipping a host gate.
 
-## One-shot wiring rule
+## One-shot wiring rule (historical — Phase 7 shipped)
 
-Phases 1 through 6 may add packages, tests, fixtures, renderers, and dual
-emission helpers, but they must not change normal backend dispatch.
-
-Production wiring starts only in Phase 7, behind an explicit gate. If Phase 7
-finds that a required surface is missing, the answer is to go back to the
-earlier phase and complete the isolated prototype rather than partially wiring
-the production path.
+Phases 1 through 6 added packages, tests, fixtures, and renderers without
+changing normal backend dispatch. Phase 7 landed the subprocess bridge
+(`nativellvmgen` / `nativelirproto` / `osty-self`) as the default route. When
+production declines a shape, extend `toolchain/lir_proto.osty` (and MIR lowering
+if needed) rather than partially wiring a second host-side emitter.
 
 ## Prototype shape
 
@@ -1290,57 +1296,40 @@ baseline (16 manual / 9 source). Catalog drift now surfaces as a failing
 Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
-## Phase 7: one-shot wiring behind a gate
+## Phase 7: production subprocess bridge (shipped)
 
-Deliverables:
-
-- Add an explicit gate, for example:
+**Status**: shipped. The planned `OSTY_LLVM_LIR_PROTO` host gate and
+`ErrLIRProtoNotWired` scaffold were superseded by the always-on subprocess chain:
 
 ```text
-OSTY_LLVM_LIR_PROTO=1
+internal/backend/llvm.go::generateLLVMIR
+  → nativellvmgen.TryMIR (managed osty-native-llvmgen)
+    → nativelirproto.Run (managed osty-native-lirproto)
+      → osty-self lir-proto-lower-mir-json | lir-proto-lower
+        → toolchain/lir_proto.osty (+ mir_generator.osty inside osty-self)
 ```
 
-- Route only the selected backend entry point through LIR Proto when the gate
-  is enabled.
-- Keep automatic fallback to the current MIR emitter on structured unsupported
-  diagnostics.
-- Add focused backend dispatch tests.
+Deliverables (done):
 
-Exit criteria:
+- `cmd/osty-native-lirproto` — JSON stdin/stdout shim staging MIR or source.
+- `internal/nativelirproto` — wire contract + tests with fake binaries.
+- `internal/nativellvmgen` — package/library mode for cross-pkg link experiments.
+- Focused backend dispatch tests (`TestLLVMBackendDispatchTraceReportsSelectedRoute`,
+  `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`).
 
-- Gate off: output is unchanged.
-- Gate on: selected fixtures use LIR Proto and pass.
-- Unsupported prototype shapes fall back cleanly.
+Exit criteria (met):
 
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
+- Default builds route MIR-owned LLVM emission through the subprocess.
+- Missing `osty-self` returns `declined: true` so bootstrap can use stage0 when
+  `OSTY_STAGE0_FALLBACK=1` (install-self only — not normal `osty build`).
+- Unsupported prototype shapes surface structured diagnostics; no silent HIR bridge.
 
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
+**Retired in PR #2029**: `LirLowerConfig.featureGates` helpers in
+`toolchain/lir_proto.osty` — nothing in the lowerer read them after production
+flip. Do not reintroduce host-side rollout flags without a new design note.
 
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
+Operational env vars for the shim live in [`README.md`](../README.md) and
+[`cmd/osty-native-lirproto/main.go`](../cmd/osty-native-lirproto/main.go).
 
 ## Phase 8: default-on decision
 
@@ -1371,7 +1360,8 @@ go run ./cmd/osty parse toolchain/lir_proto_test.osty >/tmp/lir_proto_test.parse
 go run ./cmd/osty fmt --check toolchain/lir_proto.osty
 go run ./cmd/osty fmt --check toolchain/lir_proto_parity.osty
 go run ./cmd/osty fmt --check toolchain/lir_proto_test.osty
-go test -count=1 -vet=off ./internal/llvmgen -run 'GenerateFromMIR'
+go test -count=1 -vet=off ./internal/nativelirproto/...
+go test -count=1 -vet=off ./internal/backend/ -run 'LIRProto|LLVMBackend'
 ```
 
 Until the native test runner supports `toolchain`'s existing `main` package
@@ -1401,10 +1391,9 @@ The current implementation slice is Osty-first:
   parity catalog and manual check result surface.
 - `toolchain/lir_proto_test.osty` owns parser/formatter smoke coverage for the
   ported model, renderer, lowerer, and parity catalog shapes.
-- `internal/llvmgen/lir_proto_shadow_parity_test.go` wires the
-  `current-generator` source fixture subset into the current `GenerateFromMIR`
-  path as the first shadow parity harness.
+- `toolchain/lir_proto_parity.osty` + backend/LIR tests exercise shadow parity;
+  the removed `internal/llvmgen` package is not part of the current harness.
 
-This gives the project a self-hosted place to land future pieces without
-touching backend dispatch. Production wiring still waits for the explicit
-Phase-7 gate.
+This gives the project a self-hosted place to land future lowering pieces.
+Production wiring is live via the subprocess bridge (Phase 7); extend
+`toolchain/lir_proto.osty` when the production path declines a MIR shape.
