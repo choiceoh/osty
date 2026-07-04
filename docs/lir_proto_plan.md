@@ -1290,57 +1290,33 @@ baseline (16 manual / 9 source). Catalog drift now surfaces as a failing
 Go test before either the manual-MIR or source-fixture runners would catch
 it at slice-add time.
 
-## Phase 7: one-shot wiring behind a gate
+## Phase 7: production wiring (shipped)
 
-Deliverables:
+> **Status (2026-07)**: Phase 7 is complete. PR [#2029](https://github.com/choiceoh/osty/pull/2029) removed the transitional `OSTY_LLVM_LIR_PROTO` gate, `internal/llvmgen/lir_proto_gate.go`, and `LirLowerConfig.featureGates`. Production dispatch always routes MIR → LLVM IR through the native subprocess bridge.
 
-- Add an explicit gate, for example:
+Deliverables (done):
 
-```text
-OSTY_LLVM_LIR_PROTO=1
-```
+- `internal/backend/llvm.go::generateLLVMIR` delegates to
+  `nativellvmgen.TryMIR` → `nativelirproto.Run` →
+  `cmd/osty-native-lirproto` → `osty-self lir-proto-lower-mir-json` (MIR
+  requests) or `lir-proto-lower` (source requests).
+- Structured `declined: true` responses fall back to stage0 or skeleton IR
+  instead of hard-failing the build.
+- Managed artifact under `.osty/toolchain/<ver>/osty-native-lirproto`
+  (`internal/toolchain.EnsureNativeLIRProto`).
 
-- Route only the selected backend entry point through LIR Proto when the gate
-  is enabled.
-- Keep automatic fallback to the current MIR emitter on structured unsupported
-  diagnostics.
-- Add focused backend dispatch tests.
+Exit criteria (met):
 
-Exit criteria:
+- No env gate required — default builds use LIR Proto.
+- Unsupported shapes decline cleanly with dispatcher warnings.
+- Env overrides for bisect/debug documented in `README.md` and
+  `ARCHITECTURE.md` (`OSTY_LIRPROTO_*`, `OSTY_NATIVE_LIRPROTO_BIN`).
 
-- Gate off: output is unchanged.
-- Gate on: selected fixtures use LIR Proto and pass.
-- Unsupported prototype shapes fall back cleanly.
-
-Design decision: the first Phase-7 slice lands the gate scaffold without
-the runner. `internal/llvmgen/lir_proto_gate.go` exposes `LIRProtoEnvVar`
-(`OSTY_LLVM_LIR_PROTO`), `LIRProtoSelected()` (env-var read with the
-project's standard truthy/falsy rules), and `ErrLIRProtoNotWired` (a
-sentinel that says "you asked for LIR Proto; the Go-side runner that
-would call into `toolchain/lir_proto.osty` does not exist yet; falling
-back to the current path").
-
-`internal/backend/llvm.go::generateLLVMIR` reads the gate at the very top
-of the dispatcher: when set, `ErrLIRProtoNotWired` is appended to the
-warnings slice and the dispatcher continues through whichever fallback
-path it would have chosen (native-owned fast path or MIR-direct), so
-flipping the gate on early stays safe — production output is unchanged
-but the gate selection is visible in build logs and test output. The
-native-owned fast path was simultaneously fixed to forward the outer
-warnings instead of overwriting them, so the Phase-7 warning is never
-silently dropped on the shorter dispatch route.
-
-Pinned by two Go tests: `TestLLVMDispatchAppendsLIRProtoFallbackWarning`
-asserts the gate-on path emits the sentinel; the negative pin
-`TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff` asserts the default
-behavior is unchanged so a regression that always-on'd the warning would
-fail the test instead of silently noisifying every build. Five env-var
-unit tests cover the truthy/falsy parsing rules.
-
-The next Phase-7 slice lands the actual MIR -> LIR Proto -> LLVM text
-runner — at that point the `ErrLIRProtoNotWired` return is replaced with
-a real call into the Osty-owned lowerer plus a structured unsupported-
-diagnostic fallback when the prototype declines.
+Historical note: early Phase-7 slices landed a gate scaffold
+(`OSTY_LLVM_LIR_PROTO`, `ErrLIRProtoNotWired`) that appended a warning and
+continued through the legacy MIR emitter. That scaffold was retired once the
+subprocess runner stabilized; do not reintroduce a parallel opt-in gate without
+a new design review.
 
 ## Phase 8: default-on decision
 
@@ -1406,5 +1382,5 @@ The current implementation slice is Osty-first:
   path as the first shadow parity harness.
 
 This gives the project a self-hosted place to land future pieces without
-touching backend dispatch. Production wiring still waits for the explicit
-Phase-7 gate.
+touching backend dispatch. Production wiring is complete — see **Phase 7**
+above and `ARCHITECTURE.md` **LIR Proto subprocess bridge**.
