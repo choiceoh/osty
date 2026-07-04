@@ -748,11 +748,81 @@ fn frontDecodeJsonStringAt(bs: List<Byte>, pos: Int, len: Int) -> FrontJsonStrin
         } else if b < 0x20 {
             return FrontJsonStringScan {value: "", next: len}
         } else {
-            out = out + b.toChar().toString()
-            i = i + 1
+            let width = frontJsonUtf8WidthAt(bs, i, len)
+            if width <= 0 {
+                return FrontJsonStringScan {value: "", next: len}
+            }
+            out = out + strings.slice(encoded, i, i + width)
+            i = i + width
         }
     }
     FrontJsonStringScan {value: "", next: len}
+}
+fn frontJsonUtf8Cont(b: Int) -> Bool {
+    b >= 0x80 && b <= 0xBF
+}
+fn frontJsonUtf8WidthAt(bs: List<Byte>, i: Int, len: Int) -> Int {
+    let b = bs[i].toInt()
+    if b < 0x80 {
+        return 1
+    }
+    if b >= 0xC2 && b <= 0xDF {
+        if i + 1 < len && frontJsonUtf8Cont(bs[i + 1].toInt()) {
+            return 2
+        }
+        return 0
+    }
+    if b == 0xE0 {
+        if i + 2 < len {
+            let b2 = bs[i + 1].toInt()
+            let b3 = bs[i + 2].toInt()
+            if b2 >= 0xA0 && b2 <= 0xBF && frontJsonUtf8Cont(b3) {
+                return 3
+            }
+        }
+        return 0
+    }
+    if (b >= 0xE1 && b <= 0xEC) || (b >= 0xEE && b <= 0xEF) {
+        if i + 2 < len && frontJsonUtf8Cont(bs[i + 1].toInt()) && frontJsonUtf8Cont(bs[i + 2].toInt()) {
+            return 3
+        }
+        return 0
+    }
+    if b == 0xED {
+        if i + 2 < len {
+            let b2 = bs[i + 1].toInt()
+            let b3 = bs[i + 2].toInt()
+            if b2 >= 0x80 && b2 <= 0x9F && frontJsonUtf8Cont(b3) {
+                return 3
+            }
+        }
+        return 0
+    }
+    if b == 0xF0 {
+        if i + 3 < len {
+            let b2 = bs[i + 1].toInt()
+            if b2 >= 0x90 && b2 <= 0xBF && frontJsonUtf8Cont(bs[i + 2].toInt()) && frontJsonUtf8Cont(bs[i + 3].toInt()) {
+                return 4
+            }
+        }
+        return 0
+    }
+    if b >= 0xF1 && b <= 0xF3 {
+        if i + 3 < len && frontJsonUtf8Cont(bs[i + 1].toInt()) && frontJsonUtf8Cont(bs[i + 2].toInt()) && frontJsonUtf8Cont(bs[i + 3].toInt()) {
+            return 4
+        }
+        return 0
+    }
+    if b == 0xF4 {
+        if i + 3 < len {
+            let b2 = bs[i + 1].toInt()
+            if b2 >= 0x80 && b2 <= 0x8F && frontJsonUtf8Cont(bs[i + 2].toInt()) && frontJsonUtf8Cont(bs[i + 3].toInt()) {
+                return 4
+            }
+        }
+        return 0
+    }
+    0
 }
 fn frontParseHex4(bs: List<Byte>, pos: Int) -> Int {
     let mut acc = 0
