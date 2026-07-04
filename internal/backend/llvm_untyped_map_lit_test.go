@@ -50,7 +50,6 @@ import (
 // separate "println of non-primitive V" wall on the unwrapOr
 // result, deferred to a follow-up.
 func TestLLVMBackendEmitUntypedMapLitFor(t *testing.T) {
-	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
 	installNativeMIRPayloadStub(t)
 	cases := []struct {
 		name string

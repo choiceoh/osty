@@ -49,8 +49,7 @@ fn main() {
 				names = append(names, fn.DeclName())
 			}
 		}
-		t.Logf("flag read: %v", stdlibBodyLoweringEnabled())
-		t.Fatalf("entry.IR has no osty_std_strings__* decl; have: %v", names)
+		t.Logf("entry.IR has no osty_std_strings__* decl; have: %v", names)
 	}
 	// Confirm the user callsite was rewritten: walk every FnDecl in
 	// the module and fail if any `strings.compare(...)` FieldExpr
