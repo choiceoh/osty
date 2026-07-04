@@ -19,7 +19,7 @@ without operator action:
 | **L2** `OSTY_SELF_BIN` env override | User-supplied path | Set explicitly; never fails by surprise. |
 | **L3** In-tree dev build | `toolchain/.osty/out/{debug,release}/llvm/osty-self` | Present only in active dev worktrees. |
 | **L4** Network fetch | `<OSTY_SELF_REGISTRY_URL>` (or `DefaultRegistryURL`) | Registry down, network blocked, key rotation in flight. |
-| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | Per `docs/osty_self_b2_1_audit.md` — covers ~11.3% of toolchain functions. Insufficient for a full toolchain build today. |
+| **L5** `OSTY_STAGE0_FALLBACK=1` | Go-side stage0 emergency emitter | `TestStage0ToolchainAudit` reports **100%** audit cover (PR [#1858](https://github.com/choiceoh/osty/pull/1858)); see historical 11.3% snapshot in `docs/osty_self_b2_1_audit.md`. **Audit-pass ≠ build-pass** — `install-self` / monomorph / LIR Proto can still decline shapes the audit probe accepts. L5 remains a diagnostic + chicken-and-egg bootstrap layer, not the production emit path. |
 | **DR1** Manual hand-publish | This document, §3 below | Recovery procedure for a registry outage. |
 | **DR2** Toolchain rewrite | `docs/osty_self_b2_1_audit.md` v2 master plan | Last-resort reconstruction (~2–4 weeks). |
 
@@ -108,14 +108,16 @@ already documented:
 1. **Toolchain simplification** — `docs/osty_self_b2_1_audit.md`
    v2 master plan, batches B2.2–B2.3. ~244 source-level mechanical
    `match → if-else` rewrites. ~10–15 hours.
-2. **Stage0 unlocks** — same document, batches B2.4–B2.7. ~4 stage0
-   phases (P21–P24) covering the basic-shape gaps that block 88.7% of
-   toolchain functions today. ~1500 lines of Go in
-   `internal/backend/stage0/`. ~1–2 weeks dedicated work.
+2. **Stage0 unlocks** — same document, batches B2.4–B2.7. Historical
+   plan for P21–P24 stage0 phases. **Status (2026-05-17)**: stage0 audit
+   cover reached 100% via PR [#1858](https://github.com/choiceoh/osty/pull/1858);
+   remaining bootstrap walls are tracked under LIR Proto / cross-package
+   dispatch (`SPEC_GAPS.md`), not stage0 surface gaps.
 
-Combined, these two streams reach ~40% MIR coverage, which is enough
-to bootstrap a build of the current toolchain into a fresh osty-self
-binary on a single host. From that point, DR1 applies normally.
+Combined, these streams were the pre-#1858 path to ~40% MIR coverage.
+Today DR2 is retained as documentation of last-resort reconstruction, but
+operators should prefer DR1 (registry hand-publish) or an in-tree
+`osty-self` build before attempting a multi-week rewrite.
 
 DR2 is a last-resort plan, not an operational recipe. Most outages
 recover via DR1.
@@ -130,13 +132,13 @@ fails — and expensive to re-create after deletion.
 In particular:
 
 - **L5** (`stage0`) is the only layer that requires no network and no
-  prior binary. Its 11.3% coverage is "almost useless" for production
-  but invaluable for diagnosis: when the bootstrap is broken, stage0's
-  decline message tells you exactly which MIR shape is missing
-  (`docs/osty_self_b2_1_audit.md` §3 enumerates the dominant ones).
-  Do not retire stage0 just because it cannot fully bootstrap; its
-  diagnostic value alone justifies keeping the ~6K lines in
-  `internal/backend/stage0/`.
+  prior binary. Audit cover is **100%** today, but production builds
+  still route through `osty-self` + LIR Proto; stage0 remains invaluable
+  for diagnosis when that path declines (`docs/osty_self_b2_1_audit.md` §3
+  lists dominant historical decline shapes). Do not retire stage0 just
+  because audit hit 100% — **audit-pass ≠ build-pass**, and the ~6K lines
+  in `internal/backend/stage0/` still backstop `OSTY_STAGE0_FALLBACK=1`
+  bootstrap.
 
 - **DR2** is the only path that does not depend on any maintainer
   asset — neither the GitHub Release, nor the maintainer's machine,
