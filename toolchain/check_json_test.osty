@@ -597,10 +597,10 @@ fn testNativeCheckerRequestSourceIgnoresNestedAndEscapedKeys() {
 }
 fn testNativeCheckerRequestSourcePreservesUtf8() {
     let raw = "\{\"source\":\"fn main() \{ let text = \\\"한글 \u{1F600}\\\" \}\\n\"\}"
-    testing.assertEq(frontNativeCheckerSourceFromRequest(raw), "fn main() { let text = \"한글 \u{1F600}\" }\n")
+    testing.assertEq(frontNativeCheckerSourceFromRequest(raw), "fn main() \{ let text = \"한글 \u{1F600}\" \}\n")
 
     let escaped = "\{\"source\":\"fn main() \{ let text = \\\"\\uD55C\\uAE00 \\uD83D\\uDE00\\\" \}\\n\"\}"
-    testing.assertEq(frontNativeCheckerSourceFromRequest(escaped), "fn main() { let text = \"한글 \u{1F600}\" }\n")
+    testing.assertEq(frontNativeCheckerSourceFromRequest(escaped), "fn main() \{ let text = \"한글 \u{1F600}\" \}\n")
 }
 fn testNativeCheckerPackageRequestRequiresTopLevelObject() {
     let sourceOnly = "\{\"source\":\"fn main() \{ let label = \\\"package\\\" \}\\n\"\}"
