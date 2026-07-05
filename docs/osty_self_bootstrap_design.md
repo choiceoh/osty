@@ -3,6 +3,11 @@
 > **상태**: 제안 (draft). 합의 후 별도 PR에서 구현.
 > **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구).
 > **소유**: backend / toolchain.
+> **2026-07 note**: §1.1 아래 관찰은 #1405 직후 시점 스냅샷이다. Fresh clone 은
+> `just bootstrap` (registry fetch 또는 `OSTY_STAGE0_FALLBACK=1` stage0 path) 로
+> 복구 가능 — [`docs/security/bootstrap-recovery.md`](security/bootstrap-recovery.md),
+> [`README.md`](../README.md) bootstrap env-var reference. End-to-end ratchet:
+> `just verify-self-rebuild`.
 
 ## 1. 문제 정의
 
