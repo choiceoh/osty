@@ -3,6 +3,12 @@
 > **상태**: 제안 (draft). 합의 후 audit 단계별 개별 PR.
 > **연관 PR**: #1405 (Go MIR emitter 제거; 124개 테스트 파일, ~36k줄 삭제), #1406 (디스패처 회귀 봉합 + 추가 12개 obsolete 테스트 삭제).
 > **소유**: backend / toolchain.
+> **2026-07 partial resolution**: LIR Proto is production-wired (no
+> `OSTY_LLVM_LIR_PROTO` gate; PR [#2029](https://github.com/choiceoh/osty/pull/2029)).
+> `just verify-self-rebuild` exercises the merged HIR → Mono → MIR → LIR Proto →
+> LLVM pipeline and is the primary indirect coverage ratchet for many deleted
+> integration tests. Category-by-category port/archive decisions in §2–§5 remain
+> open — this doc tracks intentional gaps, not current bootstrap status.
 
 ## 1. 문제 정의
 

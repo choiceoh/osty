@@ -577,6 +577,49 @@ hide behind skips. Other tests install deterministic stubs via
 failures are catalogued in
 [`docs/backend-test-failures-audit-2026-05-26.md`](docs/backend-test-failures-audit-2026-05-26.md).
 
+#### LIR Proto subprocess bridge
+
+Production MIR → LLVM IR emission is always routed through the
+native-owned subprocess chain — there is no host-side
+`OSTY_LLVM_LIR_PROTO` gate (removed in PR #2029). The dispatcher in
+`internal/backend/llvm.go::generateLLVMIR` calls
+`nativellvmgen.TryMIR`, which shells out to `osty-native-llvmgen` and
+then `nativelirproto.Run` (`internal/nativelirproto/exec.go`).
+
+Wire shape:
+
+```
+backend.generateLLVMIR
+  → nativellvmgen.TryMIR (JSON request)
+    → osty-native-llvmgen
+      → nativelirproto.Run
+        → osty-native-lirproto (stdin JSON)
+          → osty-self lir-proto-lower-mir-json | lir-proto-lower
+            → toolchain/{lir_proto,mir_generator,llvmgen}.osty
+```
+
+Managed artifact: `internal/toolchain.EnsureNativeLIRProto` lazily
+builds `cmd/osty-native-lirproto` into
+`.osty/toolchain/<tool-version>/osty-native-lirproto`, mirroring the
+native checker slot. `OSTY_NATIVE_LIRPROTO_BIN` overrides the path.
+
+Subprocess env vars (authoritative: `cmd/osty-native-lirproto/main.go`):
+
+| Var | Default / behavior |
+|---|---|
+| `OSTY_LIRPROTO_SELF_TIMEOUT` | Per-request timeout around `osty-self` lowering. Default 20s + 15s/MiB of staged MIR JSON (max 10m). `0` disables. |
+| `OSTY_LIRPROTO_TIMEOUT_COMPAT_MAX_BYTES` | On MIR JSON timeout, retry stage0 compat when staged size ≤ limit. Default 1 MiB; `0` disables. |
+| `OSTY_LIRPROTO_SOURCE_COMPAT_MAX_BYTES` | Opt-in source re-lowering for `osty-self` builds predating `lir-proto-lower-mir-json`. Unset/`0` = off. |
+| `OSTY_LIRPROTO_KEEP_STAGED` | Keep temp staged files after lowering (debug). |
+| `OSTY_LIRPROTO_DEBUG` | Log staged path + subcommand to stderr. |
+
+When `osty-self` is missing or the subprocess returns `declined: true`,
+the dispatcher appends structured warnings and may fall back to the
+stage0 emergency emitter (`OSTY_STAGE0_FALLBACK=1` bootstrap paths) or
+render unsupported skeleton IR. Cross-package library compiles
+(`OSTY_CROSS_PKG_LINK=1`) can stall on large trees because each
+dependency package re-enters this subprocess.
+
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven
 rewrite phases to automatically fix common code patterns from other
